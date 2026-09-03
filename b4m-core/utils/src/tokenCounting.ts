@@ -7,6 +7,7 @@ import { type ILogger } from '@bike4mind/observability';
 export interface ITokenizer {
   countTokens(text: string | string[], modelId?: string): Promise<number>;
   encodeTokens(text: string, modelId?: string): Promise<number[]>;
+  decodeTokens(tokens: number[], modelId?: string): Promise<string>;
 }
 
 /**
@@ -76,6 +77,25 @@ export class TiktokenTokenizer implements ITokenizer {
   }
 
   /**
+   * Decode token ids back to text through the same encoder encodeTokens used, so an
+   * encode -> slice -> decode round trip yields real text rather than the ids themselves.
+   * @param tokens - Token ids, typically a slice of an encodeTokens result
+   * @param modelId - Model ID to determine encoding (must match the one used to encode)
+   * @returns Promise<string> - The decoded text
+   *
+   * tiktoken's wasm decode() hands back raw UTF-8 bytes. A slice that ends mid-character therefore
+   * decodes to a trailing U+FFFD; callers that sliced are expected to trim it.
+   */
+  async decodeTokens(tokens: number[], modelId?: string, logger?: ILogger): Promise<string> {
+    if (this.isShuttingDown) {
+      throw new Error('TiktokenTokenizer is shutting down');
+    }
+
+    const encoder = await this.getEncoder(modelId, logger);
+    return new TextDecoder().decode(encoder.decode(new Uint32Array(tokens)));
+  }
+
+  /**
    * Returns a lightweight ITokenizer proxy that delegates WASM encoder operations
    * to this instance (preserving the shared encoder cache) but routes log output
    * through the provided logger. Useful for attaching per-request context (e.g.
@@ -85,6 +105,7 @@ export class TiktokenTokenizer implements ITokenizer {
     return {
       countTokens: (text, modelId) => this.countTokens(text, modelId, logger),
       encodeTokens: (text, modelId) => this.encodeTokens(text, modelId, logger),
+      decodeTokens: (tokens, modelId) => this.decodeTokens(tokens, modelId, logger),
     };
   }
 

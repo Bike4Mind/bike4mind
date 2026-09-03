@@ -21,14 +21,15 @@ vi.mock('@server/websocket/utils', () => ({ sendToConnection: mockSendToConnecti
 const mockProcessQuest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProcessQuest }));
 
-// questRepository.update - used in the error path; connectDB/mongoose unused by /process.
-// The remaining repos are pulled in by the completions route (executeCompletion + credit
-// attribution); stubbed so importing the route doesn't drag in real DB models.
-const mockQuestUpdate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+// questRepository.settleIfUnfinished - the error path's status-guarded terminal write.
+// connectDB/mongoose unused by /process. The remaining repos are pulled in by the completions
+// route (executeCompletion + credit attribution); stubbed so importing the route doesn't drag
+// in real DB models.
+const mockQuestSettleIfUnfinished = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   mongoose: { connection: { readyState: 1 } },
-  questRepository: { update: mockQuestUpdate },
+  questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished },
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key1', name: 'Test Key' }) },
   adminSettingsRepository: {},
   apiKeyRepository: {},
@@ -87,6 +88,7 @@ vi.mock('@bike4mind/utils', () => ({ registerProcessErrorHandlers: vi.fn() }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
 import { createApp } from './server';
+import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
@@ -146,6 +148,49 @@ describe('ChatCompletion /process', () => {
     expect(json).toMatchObject({ accepted: true, questId: 'q1' });
     expect(mockProcessQuest).toHaveBeenCalledTimes(1);
     expect(mockProcessQuest.mock.calls[0][0]).toMatchObject(VALID_BODY);
+  });
+
+  it('does not touch the quest when processing succeeds', async () => {
+    mockProcessQuest.mockResolvedValueOnce(undefined);
+    await post(VALID_BODY, { authorization: AUTH });
+    await vi.waitFor(() => expect(mockProcessQuest).toHaveBeenCalledTimes(1));
+    expect(mockQuestSettleIfUnfinished).not.toHaveBeenCalled();
+  });
+
+  // The generic reply must never be written unconditionally: ChatCompletionProcess persists the
+  // provider's own message and marks the quest terminal before rethrowing, so an unguarded write
+  // would replace a specific diagnostic with a useless one. The status predicate lives in
+  // settleIfUnfinished, so the contract this route owns is that it routes through it.
+  it('settles a failed quest through the status-guarded write, not an unconditional update', async () => {
+    mockProcessQuest.mockRejectedValueOnce(new Error('boom'));
+    await post(VALID_BODY, { authorization: AUTH });
+
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    expect(mockQuestSettleIfUnfinished).toHaveBeenCalledWith('q1', {
+      status: 'stopped',
+      type: 'error',
+      reply: GENERIC_PROCESSING_FAILURE_REPLY,
+    });
+  });
+
+  it('leaves the processor-persisted reply alone when the quest is already settled', async () => {
+    mockProcessQuest.mockRejectedValueOnce(new Error('A maximum of 4 blocks with cache_control may be provided.'));
+    mockQuestSettleIfUnfinished.mockResolvedValueOnce(false);
+
+    await post(VALID_BODY, { authorization: AUTH });
+
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    // No second, unguarded write once the guarded one reports it did not match.
+    expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1);
+  });
+
+  it('survives a write failure while settling a failed quest', async () => {
+    mockProcessQuest.mockRejectedValueOnce(new Error('boom'));
+    mockQuestSettleIfUnfinished.mockRejectedValueOnce(new Error('mongo down'));
+
+    const res = await post(VALID_BODY, { authorization: AUTH });
+    expect(res.status).toBe(202);
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
   });
 });
 

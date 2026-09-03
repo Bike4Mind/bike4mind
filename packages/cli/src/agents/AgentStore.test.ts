@@ -52,7 +52,7 @@ describe('MODEL_ALIASES', () => {
     it('should map short Gemini aliases', () => {
       expect(MODEL_ALIASES['gemini']).toBe('gemini-2.5-pro');
       expect(MODEL_ALIASES['gemini-pro']).toBe('gemini-2.5-pro');
-      expect(MODEL_ALIASES['gemini-flash']).toBe('gemini-2.5-flash');
+      expect(MODEL_ALIASES['gemini-flash']).toBe('gemini-3.5-flash');
     });
 
     it('should map version-specific Gemini aliases', () => {
@@ -117,7 +117,7 @@ describe('resolveModelAlias', () => {
 
     it('should resolve Gemini aliases', () => {
       expect(resolveModelAlias('gemini', testAgent, testPath).model).toBe('gemini-2.5-pro');
-      expect(resolveModelAlias('gemini-flash', testAgent, testPath).model).toBe('gemini-2.5-flash');
+      expect(resolveModelAlias('gemini-flash', testAgent, testPath).model).toBe('gemini-3.5-flash');
     });
   });
 

@@ -124,6 +124,29 @@ export interface LakeAccessHistoryEntry {
 }
 
 /**
+ * How often reads of this lake ran against a truncated candidate listing - projected from
+ * `ILakeAccessEvent.candidateCapReached` over the SAME event window as `history`.
+ *
+ * `turnsWithSignal` is what keeps the pair honest: only some surfaces report the field at all, so
+ * `turnsAtCap: 0` on its own cannot distinguish "no read hit the cap" from "nothing measured it".
+ * Rows written before the field, and rows from surfaces that do not report it, raise neither
+ * counter. Presentation surfaces must show both numbers, or say "not reported" when
+ * `turnsWithSignal` is 0.
+ *
+ * Attribution is APPROXIMATE and a LOWER BOUND, for the reasons `history` documents plus one more:
+ * the cap applies to a turn's whole mixed candidate listing, not to this lake alone. Read it as
+ * "turns that read this lake hit the cap", never "this lake caused the cap".
+ */
+export interface LakeCandidateCapPressure {
+  /** Reads in the window whose surface reported a candidate-cap state either way. */
+  turnsWithSignal: number;
+  /** Of those, the reads whose candidate listing was truncated before scoring. */
+  turnsAtCap: number;
+  /** Newest at-cap read in the window; absent when `turnsAtCap` is 0. */
+  lastAtCapAt?: Date;
+}
+
+/**
  * The assembled owner-facing access view. Combines persisted grants, the gate-based access
  * channels, and the read history into one exportable compliance artifact.
  *
@@ -159,6 +182,9 @@ export interface LakeAccessView {
    * instant, not all-time - so a consumer (JSON or CSV) can qualify those numbers rather than read
    * them as absolute. Absent when the window is the whole retained trail. */
   windowStartsAt?: Date;
+  /** Candidate-cap pressure over the same window as `history` - always present (the counters carry
+   * the "nothing reported" state themselves), qualified by `historyTruncated` the same way. */
+  candidateCapPressure: LakeCandidateCapPressure;
   /** When the view was assembled - the instant grant expiry (`status`) was resolved against. */
   generatedAt: Date;
 }

@@ -1,0 +1,36 @@
+name: Help Content Guard
+
+# Runs .husky/check-help-content.sh unconditionally on any PR that touches it.
+#
+# check-help-content.sh enforces the Help AI chat's "every indexed article has a
+# vector" invariant, but it is a .husky/ file: the `changes` job's shared filter
+# treats all of .husky/** as non-deployable (hooks aren't runtime app code) and
+# docs-paths only covers docs-site/**, so a diff that touches ONLY this script is
+# both deployable=false and docs-changed=false. Any job gated on either flag
+# (core-build's own invocation of this same script included) skips, and a skipped
+# required check counts as passing - the one file that is itself a CI-enforced
+# guard has no CI path that actually runs it. This workflow is that path,
+# independent of the `changes` job's outputs entirely, following the same pattern
+# as gitleaks-config-guard.yml for .gitleaks.toml.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.husky/check-help-content.sh'
+      - '.github/workflows/check-help-content-guard.yml'
+  # Also run on the merge queue so the check reports there if it later becomes a
+  # required branch-protection check (see semantic-pr-title.yml for why a required
+  # check must run on merge_group).
+  merge_group:
+    branches: [main]
+
+jobs:
+  check:
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check help content
+        run: sh .husky/check-help-content.sh

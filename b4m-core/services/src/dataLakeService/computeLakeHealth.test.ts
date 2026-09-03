@@ -12,11 +12,14 @@ vi.mock('../settings/resolveScopedSetting', async orig => ({
 
 import { computeLakeHealth } from './computeLakeHealth';
 
-// Mirrors IFabFileRepository.findDataLakeHealthMembers' row shape EXACTLY (incl. vectorizedChunkCount
-// + error) - if this drifts from the interface, the in-flight/errored gate silently no-ops in tests.
+// Mirrors IFabFileRepository.findDataLakeHealthMembers' row shape EXACTLY (incl. vectorizedChunkCount,
+// error, fileSize, serverTextHash) - if this drifts from the interface, the in-flight/errored gate or
+// the duplicate-report fields silently no-op in tests.
 type Member = {
   fabFileId: string;
   fileName?: string;
+  fileSize: number | null;
+  serverTextHash: string | null;
   chunkCount: number;
   vectorizedChunkCount: number | null;
   error: string | null;
@@ -28,6 +31,8 @@ type Member = {
 
 const healthyMember = (id: string): Member => ({
   fabFileId: id,
+  fileSize: null,
+  serverTextHash: null,
   chunkCount: 3,
   vectorizedChunkCount: 3, // settled, fully vectorized
   error: null,
@@ -38,6 +43,8 @@ const healthyMember = (id: string): Member => ({
 });
 const brokenMember = (id: string): Member => ({
   fabFileId: id,
+  fileSize: null,
+  serverTextHash: null,
   chunkCount: 1,
   vectorizedChunkCount: 1, // oversized chunk reaches terminal -> settled, so P3 genuinely fails
   error: null,
@@ -81,7 +88,7 @@ describe('computeLakeHealth', () => {
     expect(health.affectedMembers).toHaveLength(0);
     expect(health.scanTruncated).toBe(false);
     expect(adapters.db.fabFiles.findDataLakeHealthMembers).toHaveBeenCalledWith(
-      { datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'u1' },
+      { kind: 'owned', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'u1' },
       25_000
     );
   });
@@ -125,6 +132,8 @@ describe('computeLakeHealth', () => {
   it('reports null reachableShare (not 0%) when the lake is entirely unmeasured', async () => {
     const unmeasured: Member = {
       fabFileId: 'legacy',
+      fileSize: null,
+      serverTextHash: null,
       chunkCount: 5,
       vectorizedChunkCount: 5, // legacy: fully vectorized long ago, just never char-backfilled
       error: null,
@@ -148,6 +157,8 @@ describe('computeLakeHealth', () => {
     // gate would silently no-op and this member would drag the share to ~0 - exactly what B2 guards.
     const indexing: Member = {
       fabFileId: 'indexing',
+      fileSize: null,
+      serverTextHash: null,
       chunkCount: 3,
       vectorizedChunkCount: 0,
       error: null,
@@ -170,6 +181,8 @@ describe('computeLakeHealth', () => {
     // reads unhealthy rather than the neutral "not measured".
     const failed: Member = {
       fabFileId: 'failed',
+      fileSize: null,
+      serverTextHash: null,
       chunkCount: 4,
       vectorizedChunkCount: 1, // stuck below chunkCount forever
       error: 'embedding provider rejected the request',
@@ -184,5 +197,58 @@ describe('computeLakeHealth', () => {
     expect(health.coverage).toEqual({ measuredMembers: 1, membersWithChunks: 1 });
     expect(health.predicates.fullyVectorized.fail).toBe(1);
     expect(health.affectedMembers[0].failed).toContain('fullyVectorized');
+  });
+
+  it('reports duplicateMembers for two upload generations sharing a fileName (#2239)', async () => {
+    const older: Member = { ...healthyMember('gen1'), fileName: 'contract.pdf', fileSize: 1000 };
+    const newer: Member = { ...healthyMember('gen2'), fileName: 'contract.pdf', fileSize: 1200 };
+    const unique: Member = { ...healthyMember('solo'), fileName: 'solo.txt', fileSize: 5 };
+    const health = await computeLakeHealth(lake, makeAdapters([older, newer, unique]) as never);
+
+    expect(health.duplicateMembers.memberCount).toBe(2);
+    expect(health.duplicateMembers.groupCount).toBe(1);
+    expect(health.duplicateMembers.groups).toEqual([
+      {
+        fileName: 'contract.pdf',
+        members: [
+          { fabFileId: 'gen1', fileSize: 1000 },
+          { fabFileId: 'gen2', fileSize: 1200 },
+        ],
+        memberCount: 2,
+        contentComparison: 'differing',
+      },
+    ]);
+  });
+
+  it('reports an empty duplicateMembers report when no fileName repeats', async () => {
+    const health = await computeLakeHealth(lake, makeAdapters([healthyMember('a'), healthyMember('b')]) as never);
+    expect(health.duplicateMembers).toEqual({ memberCount: 0, groupCount: 0, groups: [] });
+  });
+
+  it('excludes a member the raw scan admits but selectLakeHealthMembers would drop from duplicate grouping', async () => {
+    // A chunkless, unmarked row (never had passages) reaches the raw scan only if a caller's own
+    // $match is looser than the shared filter - exercised here directly against the pure function to
+    // prove findDuplicateMembers is called with the same filtered set summarizeLakeHealth grades, not
+    // the raw rows.
+    const chunkless: Member = { ...healthyMember('ghost'), fileName: 'contract.pdf', chunkCount: 0 };
+    const real: Member = { ...healthyMember('gen1'), fileName: 'contract.pdf' };
+    const health = await computeLakeHealth(lake, makeAdapters([chunkless, real]) as never);
+
+    expect(health.duplicateMembers.memberCount).toBe(0);
+  });
+
+  it("caps the duplicate-groups list and each group's member list, keeping exact counts", async () => {
+    const manyGroups = Array.from({ length: 60 }, (_, g) =>
+      Array.from({ length: 3 }, (_, i) => ({ ...healthyMember(`g${g}-m${i}`), fileName: `dup${g}.txt` }))
+    ).flat();
+    const bigGroup = Array.from({ length: 25 }, (_, i) => ({ ...healthyMember(`big-m${i}`), fileName: 'big.txt' }));
+    const health = await computeLakeHealth(lake, makeAdapters([...manyGroups, ...bigGroup]) as never);
+
+    expect(health.duplicateMembers.groupCount).toBe(61);
+    expect(health.duplicateMembers.groups).toHaveLength(50);
+    expect(health.duplicateMembers.memberCount).toBe(60 * 3 + 25);
+    const big = health.duplicateMembers.groups.find(g => g.fileName === 'big.txt');
+    expect(big?.memberCount).toBe(25);
+    expect(big?.members).toHaveLength(20);
   });
 });

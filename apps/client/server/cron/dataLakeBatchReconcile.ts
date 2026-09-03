@@ -16,22 +16,13 @@
  * Schedule: daily. Enabled: production + dev.
  */
 
-import {
-  adminSettingsRepository,
-  connectDB,
-  dataLakeBatchRepository,
-  dataLakeRepository,
-  FabFile,
-  fabFileRepository,
-} from '@bike4mind/database';
+import { connectDB, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
-import { sendToQueue } from '@server/utils/sqs';
+import { runChunkRescueSweep } from '@server/worker/chunkRescueSweep';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
@@ -40,40 +31,6 @@ const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 const MAX_PER_RUN = 500;
 /** Cap per daily run for the un-chunked rescue sweep; a large backlog drains gradually. */
 const CHUNK_RESCUE_MAX_PER_RUN = 500;
-
-/**
- * Hosted counterpart of the self-host worker's fabFileChunkScan (worker/main.ts): re-enqueue
- * files that completed upload but were never chunked, so they stop being silently unsearchable
- * (#1420 - e.g. uploads that landed while enableAutoChunk was off, or whose S3 event was lost).
- * The shared filter excludes terminal outcomes (no-text note, chunk error), so a file is swept
- * at most once per cause; a repeat appearance means the queue message itself was lost.
- */
-async function rescueUnchunkedFiles(): Promise<number> {
-  if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return 0;
-
-  const now = Date.now();
-  const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
-  const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
-  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
-    .select('_id userId batchId')
-    .limit(CHUNK_RESCUE_MAX_PER_RUN)
-    .lean();
-
-  // Enqueue the selected ids directly. No producer-side claim: the chunk worker's compare-and-set
-  // (fabFileChunk.ts) is the single point of mutual exclusion, so a file already in flight loses
-  // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
-  // file is not re-sent every pass.
-  const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
-  const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
-  for (const id of userById.keys()) {
-    await sendToQueue(Resource.fabFileChunkQueue.url, {
-      fabFileId: id,
-      userId: userById.get(id)!,
-      ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
-    });
-  }
-  return userById.size;
-}
 
 /**
  * Find + reconcile stuck data-lake batches. The hosted daily cron (handler(), below) and the
@@ -130,9 +87,12 @@ export async function handler() {
   });
 
   // Isolated so a rescue failure never blocks the batch reconciliation above.
-  const rescuedChunkFiles = await rescueUnchunkedFiles().catch(err => {
+  const { enqueued: rescuedChunkFiles, failed: rescueFailures } = await runChunkRescueSweep({
+    limit: CHUNK_RESCUE_MAX_PER_RUN,
+    logger,
+  }).catch(err => {
     logger.error(`[DataLakeBatchReconcile] un-chunked rescue sweep failed: ${err}`);
-    return 0;
+    return { enqueued: 0, failed: 0 };
   });
 
   // Heartbeat every run (even zero-work) so a stopped/broken cron alarms on absence of data.
@@ -144,6 +104,7 @@ export async function handler() {
     taxonomyCandidates: stuckTaxonomy.length,
     taxonomyForced: forcedTaxonomy.length,
     rescuedChunkFiles,
+    rescueFailures,
   });
   return {
     statusCode: 200,
@@ -153,6 +114,7 @@ export async function handler() {
       taxonomyCandidates: stuckTaxonomy.length,
       taxonomyForced: forcedTaxonomy.length,
       rescuedChunkFiles,
+      rescueFailures,
     }),
   };
 }

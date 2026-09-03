@@ -40,6 +40,13 @@ const SAVE_SKIPPED_MESSAGES: Record<NonNullable<TtsBase64Response['saveSkippedRe
 interface ParsedError {
   status?: number;
   message: string;
+  /**
+   * The message the SERVER sent, absent when the body carried none. `message`
+   * above always has a value because it falls back to a synthesized "Error: 422",
+   * which is useless in a toast - so a branch that wants to substitute its own
+   * friendlier line has to read this instead.
+   */
+  bodyMessage?: string;
   errorCode?: string;
   saved?: boolean;
   fabFileId?: string;
@@ -72,9 +79,12 @@ async function parseError(error: unknown): Promise<ParsedError> {
     fileUrl?: string;
   };
 
+  const bodyMessage = body.error || body.message || undefined;
+
   return {
     status,
-    message: body.error || body.message || getErrorMessage(error),
+    message: bodyMessage ?? getErrorMessage(error),
+    bodyMessage,
     errorCode: body.additionalInfo?.errorCode ?? body.errorCode,
     saved: body.saved,
     fabFileId: body.fabFileId,
@@ -234,15 +244,11 @@ export function useGenerateAudio() {
           toast.error(`${parsed.message}. Try a different provider in the audio settings.`);
         } else if (parsed.status === 401) {
           toast.error('No provider API key is configured. Ask your administrator to set one up.');
-        } else if (parsed.status === 402 || parsed.errorCode === 'insufficient_credits') {
+        } else if (parsed.errorCode === 'insufficient_credits') {
           // Prefer the server's specific "you have X, need Y" message when it
-          // carries the figures (sound-effects route); the plain 402 TTS body
-          // has no such detail, so fall back to the generic line.
-          toast.error(
-            parsed.errorCode === 'insufficient_credits' && parsed.message
-              ? parsed.message
-              : 'You do not have enough credits to generate this audio.'
-          );
+          // carries the figures (sound-effects route). `bodyMessage`, not
+          // `message`: the latter would substitute a bare "Error: 422".
+          toast.error(parsed.bodyMessage ?? 'You do not have enough credits to generate this audio.');
         } else {
           toast.error(parsed.message);
         }

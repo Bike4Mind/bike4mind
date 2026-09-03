@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { cloneSession } from './clone';
 
+// ObjectId-shaped: createSession drops knowledgeIds that cannot address a row, and the lake
+// derivation reads them through `_id: { $in: ... }`.
+const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
+
 /**
  * Regression for cgtorniado's 4th review: `findAccessibleById` matches on ownership OR a
  * share grant (users[]/groups[] read/write), so a read-only share holder can clone a session
@@ -10,8 +14,9 @@ import { cloneSession } from './clone';
  * share/subscribe boundary promptMetaRedaction.ts documents is bypassed entirely.
  */
 describe('cloneSession - redaction at the copy boundary', () => {
-  const makeAdapters = (sessionOwnerId: string) => {
+  const makeAdapters = (sessionOwnerId: string, knowledgeIds: string[] = []) => {
     const created: Array<Record<string, unknown>> = [];
+    const createdSessions: Array<Record<string, unknown>> = [];
     return {
       db: {
         users: { findById: vi.fn().mockResolvedValue({ id: 'caller-1' }) },
@@ -21,14 +26,23 @@ describe('cloneSession - redaction at the copy boundary', () => {
               id: 'session-1',
               userId: sessionOwnerId,
               name: 'Original',
-              knowledgeIds: [],
+              knowledgeIds,
               tags: [],
             }),
           },
-          create: vi.fn().mockResolvedValue({ id: 'cloned-session-1' }),
+          create: vi.fn(async (data: Record<string, unknown>) => {
+            createdSessions.push(data);
+            return { id: 'cloned-session-1' };
+          }),
         },
         projects: {},
-        fabFiles: {},
+        // A real reader: with `fabFiles: {}` the ownership arm threw a TypeError that the derivation
+        // swallows, so anything asserting DERIVED scope passed for the wrong reason. Defaults to
+        // "sees nothing"; individual tests override to model a readable shared lake file.
+        fabFiles: {
+          shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) },
+          search: vi.fn().mockResolvedValue({ data: [] }),
+        },
         chatHistories: {
           findAllBySessionId: vi.fn().mockResolvedValue([
             {
@@ -55,8 +69,122 @@ describe('cloneSession - redaction at the copy boundary', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
       } as any,
       created,
+      createdSessions,
     };
   };
+
+  /**
+   * Same reason as the fork case: a clone is a NEW session holding the source's lake files, so it must
+   * carry the source's scope rather than re-derive it through the ownership arm alone (which cannot
+   * see a teammate-authored organization-lake file, derives [], and an empty list reads downstream as
+   * NO tag filter). Asserts the PERSISTED payload, so it also pins that secureParameters keeps the
+   * field and that createSession's explicit-wins arm does not re-derive over it.
+   */
+  it('carries the source session retrievalTags onto the clone', async () => {
+    const { db } = makeAdapters();
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [LAKE_FILE_ID],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
+
+  /**
+   * Same boundary as this file's docblock, one field further along: a share grant lets you READ the
+   * source, not inherit its lake scope. The cloner may not reach that lake, and the explicit-wins arm
+   * in createSession skips the derivation, so nothing on this path would check. Inheriting it would
+   * narrow the clone to a lake it cannot read and switch off its personal-corpus fallback (a
+   * non-empty retrievalTags reads as "already lake-scoped"), which the user cannot undo from the UI.
+   */
+  it('does NOT inherit the lake scope when the caller only holds a share', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: [LAKE_FILE_ID],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    // Exact: `not.objectContaining` would also pass if some OTHER tag had been written, which is a
+    // different (and worse) outcome than the absence this asserts.
+    expect(db.sessions.create.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
+  });
+
+  /**
+   * The two halves together. The ownership gate routes a non-owner into the derivation rather than
+   * letting them inherit the owner's tags; forwarding `resolveLakeAccess` is what gives that
+   * derivation a reachability check.
+   *
+   * Only the FIRST case below pins both halves - it fails if either the gate or the forwarding is
+   * removed. The second passes at the parent commit too (with no resolver the derivation returns its
+   * tags unintersected, which is the same result); it earns its place by pinning the intersection's
+   * POLARITY, so an inverted predicate cannot pass the pair. Both assert the PERSISTED payload.
+   */
+  it('drops an inherited-looking lake tag when the share-holder cannot reach that lake', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: [LAKE_FILE_ID],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+    // The shared file IS readable by the cloner, so the ownership arm scrapes its lake tag...
+    db.fabFiles.shareable.findAllAccessibleByIds.mockResolvedValueOnce([
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
+    ]);
+    // ...but the cloner reaches a different lake, so the intersection must discard it.
+    const resolveLakeAccess = vi.fn().mockResolvedValue({
+      dataLakeTags: ['datalake:other'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakeViewComplete: true,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveLakeAccess } as never);
+
+    expect(resolveLakeAccess).toHaveBeenCalled();
+    // Exact: `not.objectContaining` would also pass if some OTHER tag had been written, which is a
+    // different (and worse) outcome than the absence this asserts.
+    expect(db.sessions.create.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
+  });
+
+  it('keeps the derived lake tag when the share-holder CAN reach that lake', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1',
+      name: 'Original',
+      knowledgeIds: [LAKE_FILE_ID],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+    db.fabFiles.shareable.findAllAccessibleByIds.mockResolvedValueOnce([
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
+    ]);
+    const resolveLakeAccess = vi.fn().mockResolvedValue({
+      dataLakeTags: ['datalake:acme'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakeViewComplete: true,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveLakeAccess } as never);
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
 
   it('strips returnValue/error when the caller only holds a share, not ownership', async () => {
     const { db, created } = makeAdapters('owner-1');
@@ -108,5 +236,20 @@ describe('cloneSession - redaction at the copy boundary', () => {
       returnValue: 'private tool output',
       error: 'boom',
     });
+  });
+
+  /**
+   * createSession DROPS a knowledge id that is not ObjectId-shaped rather than rejecting it, and
+   * cloning re-submits the source list. Without the filter at the copy boundary the query throws,
+   * so a legacy notebook becomes impossible to clone rather than merely awkward to export.
+   * Asserts the real path, not just the helper.
+   */
+  it('clones a notebook holding a legacy unresolvable knowledgeId, keeping only the usable ids', async () => {
+    const GOOD = '507f1f77bcf86cd799439011';
+    const { db, createdSessions } = makeAdapters('caller-1', [GOOD, 'legacy-uuid-not-an-objectid']);
+
+    await expect(cloneSession('caller-1', { id: 'session-1' }, { db })).resolves.toBeDefined();
+
+    expect(createdSessions[0].knowledgeIds).toEqual([GOOD]);
   });
 });

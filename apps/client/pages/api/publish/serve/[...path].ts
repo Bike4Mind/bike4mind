@@ -33,6 +33,7 @@ import {
   usercontentHostFor,
   publicIdFromUsercontentHost,
   isAppWrapperHost,
+  VIEWER_SANDBOX,
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 import {
@@ -73,7 +74,7 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  *
  * Bundles are served inside a sandboxed iframe: the `/p/...` HTML response
  * is a minimal trusted wrapper page whose only content is an
- * `<iframe sandbox="allow-scripts" srcdoc=...>` (NO `allow-same-origin`). The
+ * `<iframe sandbox={VIEWER_SANDBOX} srcdoc=...>` (NO `allow-same-origin`). The
  * bundle therefore runs on an opaque (`null`) origin - author inline JS executes,
  * but it cannot read the app origin's localStorage/cookies or call `/api/*` with
  * the viewer's credentials. The visibility check still runs on the app origin
@@ -90,7 +91,7 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * script reads the app's localStorage JWT and re-fetches this same route with
  * `?raw=1` + Authorization: Bearer, then injects the rendered srcdoc into the
  * sandboxed iframe client-side. The opaque-origin model is unchanged: the
- * bundle still runs in `sandbox="allow-scripts"` with NO allow-same-origin, the
+ * bundle still runs in `sandbox={VIEWER_SANDBOX}` with NO allow-same-origin, the
  * token is read only by the trusted shell on the app origin (never the iframe),
  * and the visibility gate still runs for the HTML AND every asset. `?raw=1` is
  * served as inert text/plain so direct navigation can't execute it on the app origin.
@@ -98,10 +99,14 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * The loader shell covers bundles AND reply/fabfile. A gated reply/fabfile navigated with no
  * credential gets the same shell, which re-fetches `?raw=1` and injects the rendered page as the
  * iframe srcdoc; `renderViewerPage` carries a `script-src 'none'` CSP meta so it stays
- * script-free inside the shell's `allow-scripts` iframe. Tradeoff: inside the shelled (gated)
- * render, links obey the iframe sandbox (no `allow-popups`/`allow-top-navigation`), so
- * `target=_blank`/top-nav links won't open - acceptable versus the prior hard 401, and the
- * direct (public, non-shelled) render is unaffected (its links work normally).
+ * script-free inside the shell's sandboxed iframe.
+ *
+ * Outbound links: a framed render (shelled or not, public or gated) obeys the iframe sandbox,
+ * and framing another origin stays refused by `frame-src`. So `VIEWER_SANDBOX` carries
+ * `allow-popups`/`allow-popups-to-escape-sandbox` and `renderSandboxedBundle` retargets a
+ * bundle's off-origin `<a href>`s to a new tab. Two things are still framed-only breakage:
+ * author JS that assigns `location` off-origin, and a plain (no `target`) off-origin link in
+ * a reply/fabfile body, which renders as markdown rather than through the bundle path.
  */
 
 // Bearer-JWT first (browser/client loader), then X-API-Key (programmatic). apiKeyAuth
@@ -925,8 +930,8 @@ function liveryBarMark(brandName: string): string {
  *     `{publicId}.usercontent.app.<domain>`. The separate origin is the isolation boundary;
  *     `allow-same-origin` is SAFE here (resolves to the usercontent origin, not the app).
  *   - Fallback (no isolatedSrc - SERVER_DOMAIN unset): the same-origin sandboxed
- *     `srcdoc` model - `sandbox="allow-scripts"` WITHOUT `allow-same-origin` (opaque
- *     origin; NEVER add allow-same-origin here - it would reclaim the app origin -> ATO).
+ *     `srcdoc` model - `VIEWER_SANDBOX` WITHOUT `allow-same-origin` (opaque origin;
+ *     NEVER add allow-same-origin here - it would reclaim the app origin -> ATO).
  */
 function renderBundleWrapper(
   artifact: PublishedArtifactLean,
@@ -952,13 +957,14 @@ function renderBundleWrapper(
   const srcdocAttr = srcdoc.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   // Approach B: cross-origin src. `allow-same-origin` is REQUIRED (and safe) here - it keeps
   // the framed doc on its usercontent origin (isolated from the app by SOP), which is what
-  // lets the bundle load its own `<base>`-relative assets same-origin. The sandbox is kept
-  // minimal otherwise: NO allow-forms (the isolated CSP sets `form-action 'none'`, so it'd be
-  // dead capability) and NO allow-popups (matches the Approach A `allow-scripts`-only posture).
+  // lets the bundle load its own `<base>`-relative assets same-origin. Still NO allow-forms
+  // (the isolated CSP sets `form-action 'none'`, so it'd be dead capability).
   // Fallback: opaque-origin srcdoc (no allow-same-origin - that would reclaim the app origin).
   const iframeTag = isolatedSrc
-    ? `<iframe sandbox="allow-scripts allow-same-origin" title="${titleHtml}" src="${escapeHtml(isolatedSrc)}"></iframe>`
-    : `<iframe sandbox="allow-scripts" title="${titleHtml}" srcdoc="${srcdocAttr}"></iframe>`;
+    ? `<iframe sandbox="${VIEWER_SANDBOX} allow-same-origin" title="${titleHtml}" src="${escapeHtml(
+        isolatedSrc
+      )}"></iframe>`
+    : `<iframe sandbox="${VIEWER_SANDBOX}" title="${titleHtml}" srcdoc="${srcdocAttr}"></iframe>`;
   // Hash bridge (srcdoc mode only): forwards the page fragment into the sandboxed
   // bundle (initial deep link + hashchange) and mirrors in-bundle fragment jumps
   // back into the address bar. Approach B's wrapper CSP drops 'unsafe-inline', so
@@ -1198,8 +1204,8 @@ function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: stri
 
 /**
  * CSP for a reply's embedded-artifact sub-document (`/p/r/{publicId}?a={i}`). Author inline JS
- * is ALLOWED here (an HTML/SVG artifact is meant to run), but the `sandbox allow-scripts`
- * directive forces an OPAQUE origin with NO `allow-same-origin` - so even a DIRECT navigation
+ * is ALLOWED here (an HTML/SVG artifact is meant to run), but the `sandbox` directive
+ * forces an OPAQUE origin with NO `allow-same-origin` - so even a DIRECT navigation
  * to this URL can never read the app origin's token/cookies (the sandbox, not script-src, is the
  * ATO boundary, exactly as on the bundle path). Blessed libs load from their absolute app-host
  * URLs (renderSandboxedBundle absolutizes them); everything else is self-contained/data:.
@@ -1218,7 +1224,7 @@ function buildReplyArtifactCsp(req: Request): string {
     "form-action 'none'",
     "frame-ancestors 'self'",
     // Opaque origin even on direct navigation; allow-scripts re-enables the artifact's own JS.
-    'sandbox allow-scripts',
+    `sandbox ${VIEWER_SANDBOX}`,
   ].join('; ');
 }
 
@@ -1425,7 +1431,7 @@ function cleanViewerTitle(rawTitle: string | undefined, artifacts: ParsedArtifac
  * same parseArtifactsWithFallback result the `?a` handler indexes into.
  *
  * `standalone` (the `?export=html` download) has no `?a=` route to point at, so an html/svg
- * artifact is inlined as an iframe `srcdoc` instead - same `sandbox="allow-scripts"` opaque-origin
+ * artifact is inlined as an iframe `srcdoc` instead - same `VIEWER_SANDBOX` opaque-origin
  * posture, but self-contained, so the saved file renders offline.
  */
 function renderArtifactBlock(
@@ -1441,11 +1447,11 @@ function renderArtifactBlock(
     // `<`/`>` are literal data. Escaping them would corrupt the framed document (see the
     // identical note in renderBundleWrapper). `&` first so it can't double-escape `&quot;`.
     const doc = artifact.content.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-    return `<iframe class="b4m-artifact" sandbox="allow-scripts" title="${title}" srcdoc="${doc}"></iframe>`;
+    return `<iframe class="b4m-artifact" sandbox="${VIEWER_SANDBOX}" title="${title}" srcdoc="${doc}"></iframe>`;
   }
   if (canFrame && selfPath && (artifact.type === 'html' || artifact.type === 'svg')) {
     const src = escapeHtml(`${selfPath}?a=${index}`);
-    return `<iframe class="b4m-artifact" sandbox="allow-scripts" loading="lazy" title="${title}" src="${src}"></iframe>`;
+    return `<iframe class="b4m-artifact" sandbox="${VIEWER_SANDBOX}" loading="lazy" title="${title}" src="${src}"></iframe>`;
   }
   return `<div class="b4m-artifact-card"><strong>${title}</strong><span>${escapeHtml(
     artifact.type

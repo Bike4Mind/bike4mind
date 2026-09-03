@@ -12,7 +12,7 @@ import type {
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
-import { resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
+import { grantedLakeIdsFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
 
 /** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
 type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
@@ -42,47 +42,6 @@ const grantsByLakeIdFor = async (
     byLake.set(row.dataLakeId, list);
   }
   return byLake;
-};
-
-/**
- * Lake ids the caller can reach via an active grant - fed to findAccessible so a transferred,
- * delegated, or shared lake lists. Stays in lockstep with the single read gate (#1673):
- *  - USER owner/curator ALWAYS included: the gate admits them via `canManageLake`.
- *  - USER reader AND any ORG-principal grant (for an org the caller is a MEMBER of) included ONLY
- *    when `includeReaders` (the enforced read-time grant cutover), matching resolveReadGrant at the
- *    gate. In report-only the gate returns the legacy decision, so a lake reachable only by these
- *    would 404 on open - listing it would be incoherent, so it is excluded until enforce.
- * The org arm keys off MEMBERSHIP (`organizationIds`), distinct from the org-MANAGE rung (admin
- * rights); org membership never crosses orgs regardless (epic decision 12).
- */
-const grantedLakeIdsFor = async (
-  userId: string,
-  organizationIds: string[],
-  grants?: GrantLookup,
-  includeReaders = false
-): Promise<string[]> => {
-  if (!grants) return [];
-  const activeAsOf = new Date();
-  const ids = new Set<string>();
-
-  const userRows = await grants.listByPrincipal('user', userId, { activeAsOf });
-  for (const row of userRows) {
-    if (row.role === 'owner' || row.role === 'curator' || (includeReaders && row.role === 'reader')) {
-      ids.add(row.dataLakeId);
-    }
-  }
-
-  // Org-principal grants resolve only under enforce: membership in an org holding ANY grant on a
-  // lake grants read (mirrors the gate's org read arm). One query per membership org - bounded by
-  // how many orgs the caller belongs to.
-  if (includeReaders && organizationIds.length > 0) {
-    const orgRowSets = await Promise.all(
-      organizationIds.map(orgId => grants.listByPrincipal('organization', orgId, { activeAsOf }))
-    );
-    for (const rows of orgRowSets) for (const row of rows) ids.add(row.dataLakeId);
-  }
-
-  return Array.from(ids);
 };
 
 /**
@@ -123,6 +82,13 @@ interface ListDataLakesAdapters {
      * graceful degrade.
      */
     fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
+    /**
+     * Optional proposal repo. When present, each MANAGEABLE lake carries `pendingProposalCount` - the
+     * feature's only discovery surface, since nothing else tells a reviewer that work is waiting.
+     * One extra aggregate for the whole page, never per lake. Omitted by the content-scope resolver
+     * and Slack, which render no queue and must not pay for the read.
+     */
+    dataLakeProposals?: { countPendingByLakes: (ids: string[]) => Promise<Record<string, number>> };
   };
   /**
    * Optional, and only `listAllDataLakes` reads it: the fallback-overlay batch degrades silently on
@@ -200,6 +166,24 @@ const resolveFallbackSettings = async (
 };
 
 /**
+ * Pending review counts for the lakes on this page, or an empty map when no proposal repo is wired.
+ * One aggregate for the whole list - see the adapter's doc for why this is not per-lake.
+ */
+const pendingCountsFor = async (
+  lakes: Pick<IDataLakeDocument, 'id'>[],
+  proposals?: { countPendingByLakes: (ids: string[]) => Promise<Record<string, number>> }
+): Promise<Record<string, number>> => {
+  if (!proposals || lakes.length === 0) return {};
+  // Never let a queue-count read break the lake list: the count is a discovery hint, the list is the
+  // page. Same tolerance the surrounding reads already apply to a missing collection.
+  try {
+    return await proposals.countPendingByLakes(lakes.map(l => l.id));
+  } catch {
+    return {};
+  }
+};
+
+/**
  * The one place a list response may carry an editor-only field: the shared config, the caller's
  * manage flag, and `systemPrompt` ONLY when that flag holds. `toDataLakeConfig` has no actor and
  * so cannot carry it (see ManageableDataLakeConfig); the raw-document exits use the sibling
@@ -211,7 +195,8 @@ const toManageableConfig = (
   dl: IDataLakeDocument,
   manageable: boolean,
   isOwn: boolean,
-  ownerDisplayName?: string
+  ownerDisplayName?: string,
+  pendingProposalCount?: number
 ): ManageableDataLakeConfig => ({
   ...toConfig(dl),
   canManage: manageable,
@@ -229,6 +214,9 @@ const toManageableConfig = (
   // Editor-only, same gate as systemPrompt. An empty stored value means "no preferred prompt",
   // so it is reported as absent (never '') - the picker then shows "None".
   ...(manageable && dl.preferredSystemPromptId ? { preferredSystemPromptId: dl.preferredSystemPromptId } : {}),
+  // Editor-only, same gate as the fields above, and omitted at zero so the client can treat presence
+  // as "there is work here" without a count comparison.
+  ...(manageable && pendingProposalCount ? { pendingProposalCount } : {}),
   // Editor-only, same gate as the prompt fields. Surfaced so the settings picker can seed the
   // current selection; absent for a non-editor OR a lake predating the field (the picker then
   // falls back to the default mode, matching how the resolver treats an absent value).
@@ -330,15 +318,23 @@ export const listDataLakes = async (
   // content-scope resolver passes no `users` adapter and this resolves to an empty map).
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
-  const dynamicConfigs = dynamicLakes.map(dl => {
-    const grants = grantsByLake.get(dl.id);
-    return toManageableConfig(
+  // Manage flags resolved BEFORE the queue-count aggregate so it spans only the lakes this caller may
+  // manage. `toManageableConfig` drops the count for the rest anyway, so narrowing the aggregate both
+  // saves the discarded work and keeps a count the caller must not see out of this function entirely.
+  const manageableById = new Map(dynamicLakes.map(dl => [dl.id, canManageLake(dl, ctx, grantsByLake.get(dl.id))]));
+  const pendingCounts = await pendingCountsFor(
+    dynamicLakes.filter(dl => manageableById.get(dl.id)),
+    db.dataLakeProposals
+  );
+  const dynamicConfigs = dynamicLakes.map(dl =>
+    toManageableConfig(
       dl,
-      canManageLake(dl, ctx, grants),
-      isEffectiveOwner(dl, ctx, grants),
-      ownerNames.get(dl.createdByUserId)
-    );
-  });
+      manageableById.get(dl.id) ?? false,
+      isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      ownerNames.get(dl.createdByUserId),
+      pendingCounts[dl.id]
+    )
+  );
 
   // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
@@ -377,10 +373,17 @@ export const listAllDataLakes = async (
 
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
+  const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
   // Admin manages every DB lake (canManage: true), but isOwn stays the true effective-owner test so
   // the "you" label still means ownership, not the admin's blanket manage power.
   const dynamicConfigs = dynamicLakes.map(dl =>
-    toManageableConfig(dl, true, isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)), ownerNames.get(dl.createdByUserId))
+    toManageableConfig(
+      dl,
+      true,
+      isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      ownerNames.get(dl.createdByUserId),
+      pendingCounts[dl.id]
+    )
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
   const hardcodedFallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id));

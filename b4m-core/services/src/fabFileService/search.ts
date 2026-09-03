@@ -57,17 +57,24 @@ const DEFAULT_PAGE_LIMIT = 20;
  * `dataLakeTagPrefixes` in particular is an un-ANDed bypass arm that must only ever come from the
  * hardcoded DATA_LAKES registry. A separate argument keeps the whole set un-forgeable.
  *
- * `lakeMembership` additionally names the user whose OWNED files the lake's prefix arm matches, so
- * a forged value would name any user; `restrictToDataLake` DROPS the ownership arms entirely.
+ * `lakeMemberships` additionally names, per lake, the user whose OWNED files that lake's prefix arm
+ * matches, so a forged value would name any user; `restrictToDataLake` DROPS the ownership arms
+ * entirely.
  */
 export interface SearchFabFilesServerOptions {
   includeShared?: boolean;
   userGroups?: string[];
   dataLakeTags?: string[];
   dataLakeTagPrefixes?: string[];
-  scopedTagPrefixes?: string[];
   restrictToDataLake?: boolean;
-  lakeMembership?: DataLakeMembershipScope;
+  lakeMemberships?: DataLakeMembershipScope[];
+  /**
+   * Narrow to the lake members carrying no tag under ANY of these prefixes - the "Uncategorized"
+   * bucket. Server-supplied with the rest of the scope because it only means "one lake's bucket"
+   * next to the `restrictToDataLake` + lake arms that fix the population; alone it would narrow
+   * the caller's whole file list instead.
+   */
+  lacksContentPrefixTags?: string[];
 }
 
 export const search = async (
@@ -114,9 +121,9 @@ export const search = async (
       userGroups: serverOptions?.userGroups,
       dataLakeTags: serverOptions?.dataLakeTags,
       dataLakeTagPrefixes: serverOptions?.dataLakeTagPrefixes,
-      scopedTagPrefixes: serverOptions?.scopedTagPrefixes,
       restrictToDataLake: serverOptions?.restrictToDataLake,
-      lakeMembership: serverOptions?.lakeMembership,
+      lakeMemberships: serverOptions?.lakeMemberships,
+      lacksContentPrefixTags: serverOptions?.lacksContentPrefixTags,
     }
   );
 

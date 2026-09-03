@@ -1,5 +1,5 @@
 import AdminSettingsTab from '@client/app/components/admin/AdminSettingsTab';
-import FeedbackTab from '@client/app/components/admin/Feedbacks';
+import FeedbackTab from '@client/app/components/admin/Feedback';
 import AdminFilesTab from '@client/app/components/admin/FilesTab';
 import WorldTimeTab from '@client/app/components/admin/WorldTime';
 import SystemPromptsTab from '@client/app/components/admin/SystemPromptsTab';
@@ -92,6 +92,7 @@ const SlackMetricsPage = dynamic(() => import('./SlackMetrics'), { ssr: false })
 const GitHubConnectionTab = dynamic(() => import('./GitHubConnectionTab'), { ssr: false });
 const HelpAnalyticsTab = dynamic(() => import('./HelpAnalyticsTab'), { ssr: false });
 const ContextInspectorTab = dynamic(() => import('./ContextInspectorTab'), { ssr: false });
+const RetrievalRateTab = dynamic(() => import('./RetrievalRateTab'), { ssr: false });
 const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
@@ -464,7 +465,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
                 {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
               </TabPanel>
               <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
-              <TabPanel value={AdminTab.Feedbacks}>{activeTab === AdminTab.Feedbacks && <FeedbackTab />}</TabPanel>
+              <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
               <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
               <TabPanel value={AdminTab.RegistrationInvites} sx={{ padding: 0 }}>
                 {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
@@ -527,6 +528,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
                 {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.RetrievalRate}>
+                {activeTab === AdminTab.RetrievalRate && <RetrievalRateTab />}
               </TabPanel>
               <TabPanel value={AdminTab.EventMetrics}>
                 {activeTab === AdminTab.EventMetrics && <EventMetricsTab />}

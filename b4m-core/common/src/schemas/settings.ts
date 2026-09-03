@@ -19,7 +19,11 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
-import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '../constants/knowledgeBaseSearch';
+import {
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+} from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
@@ -304,6 +308,8 @@ export const SettingKeySchema = z.enum([
   'dataLakeSearchMaxChunks',
   'forcedRetrievalCharBudget',
   'kbSearchDefaultResults',
+  'kbSearchResultTokenBudget',
+  'kbSearchMinRelevancePct',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -312,6 +318,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeEmbeddingBudgetPerPeriodUsd',
   'dataLakeEmbeddingBudgetPeriodHours',
   'dataLakeEmbeddingMaxCallsPerMinute',
+  'dataLakeEmbeddingMaxTokensPerMinute',
   'dataLakeVectorizeChunkBatchSize',
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
@@ -482,12 +489,12 @@ export const OrchestrationDefaultsSchema = z.object({
     // so it is safe for agent mode - lets agents stamp an action at execution
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block. Mirrored client-side via
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'current_datetime',
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
     // to expose. Mirrored client-side in
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'image_generation',
     'edit_image',
     'music_generation',
@@ -771,6 +778,21 @@ export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
+/**
+ * The TOKEN half of the throughput cap, and the one that maps to what providers actually meter.
+ * A call cap alone does not bound tokens: one call carries up to
+ * DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT passages of DEFAULT_PASSAGE_TOKEN_TARGET tokens, so
+ * 120 calls/min permits ~3.1M tokens/min - several times the smallest paid embeddings tier. The two
+ * levers are complementary: calls/min bounds RPM, this bounds TPM, and a call must fit both.
+ *
+ * Default is 60% of OpenAI's published Tier-1 embeddings quota (1M TPM), which is the floor across
+ * the supported cloud providers. The other 40% is deliberate headroom for QUERY-side embedding,
+ * which is exempt from this gate (see enforceEmbeddingSpendGate's doc comment): a retrieval query
+ * must not queue behind a backfill. Operators on a higher tier raise it to their own dashboard
+ * number, minus that same headroom.
+ */
+export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT = 600_000;
+export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX = 50_000_000;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
 
@@ -1405,6 +1427,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeSearchMaxChunks', order: 3 },
       { key: 'forcedRetrievalCharBudget', order: 4 },
       { key: 'kbSearchDefaultResults', order: 5 },
+      { key: 'kbSearchResultTokenBudget', order: 6 },
+      { key: 'kbSearchMinRelevancePct', order: 7 },
     ],
   },
   DATA_LAKE_COST: {
@@ -1422,9 +1446,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeEmbeddingBudgetPerPeriodUsd', order: 4 },
       { key: 'dataLakeEmbeddingBudgetPeriodHours', order: 5 },
       { key: 'dataLakeEmbeddingMaxCallsPerMinute', order: 6 },
-      { key: 'dataLakeVectorizeChunkBatchSize', order: 7 },
-      { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 8 },
-      { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 9 },
+      { key: 'dataLakeEmbeddingMaxTokensPerMinute', order: 7 },
+      { key: 'dataLakeVectorizeChunkBatchSize', order: 8 },
+      { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 9 },
+      { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 10 },
     ],
   },
   VOICE_SESSION: {
@@ -1951,7 +1976,7 @@ export const settingsMap = {
     name: 'Data Lakes: Pause background convergence work',
     defaultValue: false,
     description:
-      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
+      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running - including overriding a platform-wide pause back OFF for one lake. Every producer honors the override, the global chunk rescue sweep included: it resolves each candidate against the lake it belongs to (#2157), so a file in no lake at all follows the platform value, which is correct for it. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 93,
@@ -3215,9 +3240,9 @@ export const settingsMap = {
   }),
   bflApiKey: makeStringSetting({
     key: 'bflApiKey',
-    name: 'BlackForest Labs API Key',
+    name: 'Black Forest Labs API Key',
     defaultValue: '',
-    description: 'The API Key for BlackForest Labs image generation service.',
+    description: 'The API Key for Black Forest Labs image generation service.',
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.IMAGE_GENERATION.id,
@@ -3303,14 +3328,67 @@ export const settingsMap = {
     max: 10,
     description:
       'Passages the search_knowledge_base tool returns when a model call omits max_results, ' +
-      'which is most calls. Raising it admits more of a growing knowledge base per call, at the ' +
-      "cost of prompt tokens on every search. Does NOT raise the tool's advertised ceiling (10) - " +
-      "a model that reads max_results up to 10 from its own tool schema won't ask for more than " +
-      'that regardless of this setting. Platform-only for now: this read does not go through the ' +
-      'scoped-settings resolver, so a `settableAt` block here would be inert metadata at best.',
+      'which is most calls. This is the exact bound while kbSearchResultTokenBudget is unset (0). ' +
+      'Once a token budget is set, it takes over as the primary bound for search results (this ' +
+      "setting's own value is then unused there, though it still governs the keyword-search " +
+      'fallback, and the count served if token pricing itself fails). Does NOT raise the ' +
+      "tool's hard ceiling of 10 passages per call - a model that reads max_results up to 10 " +
+      "from its own tool schema won't ask for more than that regardless of this setting.",
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 5,
+    // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
+    // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
+    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  kbSearchResultTokenBudget: makeNumberSetting({
+    key: 'kbSearchResultTokenBudget',
+    name: 'Knowledge Base Search Result Token Budget',
+    defaultValue: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+    min: 0,
+    // Above this, kbSearchDefaultResults' safety ceiling (KB_SEARCH_MAX_RESULTS, the tool's hard
+    // maximum of 10 passages) always binds first, so a larger value could never be reached:
+    // KB_SEARCH_MAX_RESULTS (10) x SERVE_CHUNK_CHARS_CEILING (8000, chunking.ts), at ~4 chars/token.
+    // Deliberately NOT the codebase's own CHARS_PER_TOKEN_SERVE_BOUND (6, chunking.ts) - that
+    // constant upper-bounds chars-per-token to keep a CHARACTER budget generous; a token CEILING
+    // needs the opposite direction (fewer chars per token -> more tokens for the same text), so 6
+    // would understate the true worst case and let a real value slip past this write-time cap.
+    max: 20_000,
+    description:
+      'Approximate tokens of served passage TEXT (post-trim, post-clip - what the model actually ' +
+      'receives, not the raw stored chunk) the search_knowledge_base tool may return in one call. ' +
+      'Counted with a fixed tokenizer as a proxy, not billed against any specific model. Replaces a ' +
+      'passage count as the primary bound once set, since it is invariant to chunk size - a lake ' +
+      'chunked smaller no longer silently returns less material for the same setting. 0 (default) ' +
+      'disables it: search_knowledge_base then serves exactly kbSearchDefaultResults passages, ' +
+      'unchanged from before this setting existed. The FIRST matching passage is always returned ' +
+      'even if it alone exceeds the budget - a search that found something never returns nothing.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 6,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  kbSearchMinRelevancePct: makeNumberSetting({
+    key: 'kbSearchMinRelevancePct',
+    name: 'Knowledge Base Search Minimum Relevance (%)',
+    defaultValue: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    description:
+      'Minimum cosine relevance, as a percent, a passage must clear to be returned by ' +
+      'search_knowledge_base. 0 (default) matches current behavior (no relevance floor beyond a ' +
+      'non-negative cosine score). Raising it lets breadth adapt per query - a narrow question can ' +
+      'return fewer, more relevant passages instead of always padding out to the configured count. ' +
+      'Cosine similarity is not comparable across embedding models: a floor tuned for one model can ' +
+      'filter out an entire alternate model, when a lake mixes embedding models, more aggressively ' +
+      "than intended. Start low and raise gradually while watching the tool's own retrieval-" +
+      'skipped notices.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 7,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',
@@ -3440,6 +3518,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 6,
   }),
+  dataLakeEmbeddingMaxTokensPerMinute: makeNumberSetting({
+    key: 'dataLakeEmbeddingMaxTokensPerMinute',
+    name: 'Embedding Max Tokens Per Minute',
+    defaultValue: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX,
+    description:
+      'Most provider embedding TOKENS per minute across all data-lake work, which is the quantity providers actually meter. The calls-per-minute lever alone does not bound this: one call carries a whole batch of passages. Set it from your provider dashboard TPM, leaving headroom for query-side embedding (exempt, so a search never queues behind a backfill). 0 stops all calls.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 7,
+  }),
   dataLakeVectorizeChunkBatchSize: makeNumberSetting({
     key: 'dataLakeVectorizeChunkBatchSize',
     name: 'Vectorize Chunk Batch Size',
@@ -3450,7 +3540,7 @@ export const settingsMap = {
       'How many chunks the chunk handler packs into one vectorize-queue message. Smaller batches smooth the fan-out; not a spend value, so min 1.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
-    order: 7,
+    order: 8,
   }),
   // Cost tiers (#1675). Multipliers, not budgets, so the tunable value is the RATIO between the
   // two economic cases. Same spend-lever discipline as the budgets they scale: 0 is a valid stop.
@@ -3466,7 +3556,7 @@ export const settingsMap = {
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
-    order: 8,
+    order: 9,
   }),
   dataLakeEmbeddingTierMultiplierOrganization: makeNumberSetting({
     key: 'dataLakeEmbeddingTierMultiplierOrganization',
@@ -3480,7 +3570,7 @@ export const settingsMap = {
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
-    order: 9,
+    order: 10,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({

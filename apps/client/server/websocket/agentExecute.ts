@@ -14,19 +14,12 @@
  */
 
 import { withWebSocketContext } from '@server/websocket/utils';
-import {
-  adminSettingsRepository,
-  agentExecutionRepository,
-  organizationRepository,
-  sessionRepository,
-  Quest,
-  type AgentExecutionStatus,
-} from '@bike4mind/database';
+import { adminSettingsRepository, agentExecutionRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
-import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
+import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
@@ -52,17 +45,6 @@ async function sendAgentEvent(connectionId: string, endpoint: string, payload: R
     })
   );
 }
-
-/**
- * Per-user, in-Lambda sweep memoization. The stale-active sweep is an
- * `updateMany` against MongoDB on every `handleStart`; a user firing many
- * starts in quick succession (form refreshes, rapid prompts) would otherwise
- * pay that DB write each time. Skip when we've already swept this user in
- * the last `SWEEP_MEMO_TTL_MS`. Map lives in module scope so it survives
- * across warm-Lambda invocations of the same handler instance.
- */
-const SWEEP_MEMO_TTL_MS = 60 * 1000;
-const lastSweptAtByUser = new Map<string, number>();
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -127,6 +109,11 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // the same context-window optimization quest_processor offers. Persisted on
   // the AgentExecution doc so it survives Lambda handoffs / continuations.
   enableLattice: z.boolean().optional(),
+  // Artifact parity with chat_completion's `enableArtifacts` body field: the caller's per-request
+  // intent, which the executor ANDs with the admin `EnableArtifacts` setting via
+  // `resolveArtifactsEnabled`. Absent means "no preference" (admin setting decides); only an
+  // explicit `false` opts out. Persisted on the doc so continuations and dispatched children see it.
+  enableArtifacts: z.boolean().optional(),
   // User's selected image-generation config (#agent-mode-image-gen). Forwarded
   // so the image_generation / edit_image tools have a model to run with - the
   // executor path otherwise passes no image config and the tool short-circuits
@@ -179,17 +166,6 @@ const ReconnectCommandSchema = BaseMessageSchema.extend({
 // ---------------------------------------------------------------------------
 
 const lambdaClient = new LambdaClient({});
-
-/**
- * Maximum concurrent agent executions per user.
- * Subagent executions (created by `delegate_to_agent`) are excluded from this count
- * because they're a downstream effect of an already-counted parent.
- *
- * TODO: Make this configurable per organization or plan tier.
- *
- * The value itself lives in `@server/utils/executionLimits` so the QuestMaster
- * v5 node runner enforces the same cap - see that module.
- */
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -282,246 +258,46 @@ async function handleStart(
   endpoint: string,
   logger: Logger
 ): Promise<void> {
-  // Validate session ownership before creating execution
-  const session = await sessionRepository.findById(cmd.sessionId);
-  if (!session || session.userId !== userId) {
-    logger.warn('[Start] Session ownership validation failed', { sessionId: cmd.sessionId, userId });
-    await sendAgentEvent(connectionId, endpoint, {
-      action: 'agent_error',
-      message: 'Session not found or unauthorized',
-    });
-    return;
-  }
-
-  // Validate organization membership. Without this, a client could
-  // pass another tenant's organizationId and bill executions to that org's
-  // credit pool.
-  if (cmd.organizationId) {
-    const org = await organizationRepository.findById(cmd.organizationId);
-    const isOwner = org?.userId === userId;
-    const isManager = org?.managerId === userId;
-    const isMember = org?.users?.some(u => u.userId === userId) ?? false;
-    if (!org || (!isOwner && !isManager && !isMember)) {
-      logger.warn('[Start] Organization membership validation failed', {
-        organizationId: cmd.organizationId,
-        userId,
-      });
-      await sendAgentEvent(connectionId, endpoint, {
-        action: 'agent_error',
-        message: 'Organization not found or unauthorized',
-      });
-      return;
-    }
-  }
-
-  // Sweep stale active executions before counting - `pending` / `running` /
-  // `continuing` / `awaiting_permission` / `paused` that the executor
-  // Lambda never finished (SQS handoff dropped, Lambda crashed, SST live-
-  // lambda tunnel disconnected, user closed the tab on a permission card).
-  // Accumulating those locks the user out of new runs (we saw this hit demo
-  // prep). Mongoose `updatedAt` slipping past the threshold is the cleanest
-  // "this is dead" signal - a healthy run writes the doc on every step.
-  // `awaiting_subagent` is intentionally excluded - see `cleanupStaleActive`
-  // docstring for the multi-hour-orchestration rationale.
-  //
-  // Memoized per-user in this Lambda instance to avoid an `updateMany` on
-  // every single start; for a user firing N starts in a row, only the first
-  // pays the DB hit. Threshold cooperates with the 20-min sweep window -
-  // a 60s memo can't hide a stale execution from the next sweep more than
-  // 60s past its eligibility.
-  const now = Date.now();
-  const lastSweptAt = lastSweptAtByUser.get(userId) ?? 0;
-  if (now - lastSweptAt > SWEEP_MEMO_TTL_MS) {
-    const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
-    lastSweptAtByUser.set(userId, now);
-    if (swept > 0) {
-      logger.info('[Start] Swept stale active executions before count', { userId, swept });
-    }
-  }
-
-  // Concurrent execution cap (Phase 2): cap top-level executions per user.
-  // We count then create - a tiny race window can let a 4th slip in under heavy
-  // parallel start. The cap is a guard rail, not a billing-grade lock; the next
-  // start will see the right count and reject.
-  const activeCount = await agentExecutionRepository.countActiveByUserId(userId);
-  if (activeCount >= MAX_CONCURRENT_EXECUTIONS_PER_USER) {
-    logger.info('[Start] Concurrent execution cap reached', { userId, activeCount });
-    const message = `${MAX_CONCURRENT_EXECUTIONS_PER_USER} agents already running. Wait for one to finish before starting another.`;
-    await sendAgentEvent(connectionId, endpoint, {
-      action: 'agent_error',
-      reason: 'concurrent_limit',
-      message,
-    });
-    // Also write the rejection into chat history so the session isn't left
-    // looking empty after a refresh - the user already saw their prompt
-    // bubble + concurrent_limit toast in the live UI, but without a Quest
-    // the next page load shows an empty notebook with no explanation.
-    // Prefix with a marker so the bubble is visually distinguishable from a
-    // real assistant reply on refresh - without it, a user scrolling back
-    // through history reads "3 agents already running..." as if the model
-    // said it.
-    // Best-effort: a Quest write failure must not turn this rejection
-    // into a Lambda error. Failures log but swallow.
-    const replyText = `⚠️ **System:** ${message}`;
-    try {
-      await Quest.create({
-        sessionId: cmd.sessionId,
-        type: 'message',
-        prompt: cmd.query,
-        replies: [replyText],
-        timestamp: new Date(),
-        status: 'done',
-      });
-    } catch (err) {
-      logger.warn('[Start] Failed to write concurrent-limit Quest — chat history will not reflect this rejection', {
-        userId,
-        sessionId: cmd.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    return;
-  }
-
-  // Create AgentExecution document
-  const execution = await agentExecutionRepository.create({
-    userId,
-    organizationId: cmd.organizationId,
-    sessionId: cmd.sessionId,
-    questId: cmd.questId,
-    query: cmd.query,
-    model: cmd.model,
-    status: 'pending' as AgentExecutionStatus,
-    connectionId,
-    approvedTools: [],
-    deniedTools: [],
-    iterationBilling: [],
-    totalCreditsUsed: 0,
-    lambdaInvocationCount: 1,
-    childExecutionIds: [],
-    // Snapshot the forwarded context on the doc so continuation Lambdas
-    // reconstruct the same first-iteration materialization.
-    messageFileIds: cmd.messageFileIds,
-    sessionFabFileIds: cmd.sessionFabFileIds,
-    temperature: cmd.temperature,
-    maxTokens: cmd.maxTokens,
-    thinking: cmd.thinking,
-    enableMementos: cmd.enableMementos,
-    enableLattice: cmd.enableLattice,
-    // Snapshot the user's image config so image tools resolve a model on the
-    // first AND continuation iterations (#agent-mode-image-gen).
-    imageConfig: cmd.imageConfig,
-    // Snapshot the user's audio config so the audio_generation tool resolves the
-    // saved provider/voice/format on the first AND continuation iterations.
-    audioConfig: cmd.audioConfig,
-  });
-
-  const executionId = execution.id;
-
-  // Persist the user's prompt as a Quest immediately so the bubble survives a
-  // mid-run reload. Without this, the client's optimistic prompt
-  // bubble lives only in React Query cache and disappears on reload, leaving
-  // the replayed iteration trace with no visible originating message. The
-  // completion handler (`persistRunAsQuest`) later patches `replies` onto
-  // this same doc by `agentExecutionId`.
-  //
-  // Best-effort: a Quest write failure must not block dispatch - the user
-  // already saw their prompt in the optimistic bubble, and the AgentExecution
-  // doc carries the query for the completion handler. Failures log and fall
-  // back to the legacy `cmd.questId` (sessionId-as-questId) for the Lambda
-  // payload, matching pre-fix behavior.
-  let persistedQuestId: string | undefined;
-  try {
-    const quest = await Quest.create({
+  // Guards, document creation and Lambda dispatch are shared with the public REST
+  // route (`pages/api/v1/agent-executions/index.ts`) so the two transports cannot
+  // drift; this handler only translates the outcome into `agent_error` frames.
+  const result = await startAgentExecution(
+    {
+      userId,
       sessionId: cmd.sessionId,
-      type: 'message',
-      prompt: cmd.query,
-      replies: [],
-      timestamp: new Date(),
-      // `pending` (not `done`) so Slack completion pollers
-      // (CommandHandler / WorkflowStepHandler) don't false-trigger on an
-      // empty `replies` array between dispatch and `persistRunAsQuest`.
-      // `persistRunAsQuest` flips this to `done` once `replies` is filled.
-      status: 'pending',
-      agentExecutionId: executionId,
+      questId: cmd.questId,
+      query: cmd.query,
+      model: cmd.model,
+      connectionId,
+      organizationId: cmd.organizationId,
+      agentId: cmd.agentId,
+      enabledTools: cmd.enabledTools,
+      maxIterations: cmd.maxIterations,
+      messageFileIds: cmd.messageFileIds,
+      sessionFabFileIds: cmd.sessionFabFileIds,
+      temperature: cmd.temperature,
+      maxTokens: cmd.maxTokens,
+      thinking: cmd.thinking,
+      enableMementos: cmd.enableMementos,
+      enableLattice: cmd.enableLattice,
+      enableArtifacts: cmd.enableArtifacts,
+      imageConfig: cmd.imageConfig,
+      audioConfig: cmd.audioConfig,
       routingSource: cmd.routingSource,
-    });
-    persistedQuestId = quest.id;
-  } catch (err) {
-    logger.warn('[Start] Failed to persist user prompt Quest — bubble will not survive a mid-run reload', {
-      executionId,
-      sessionId: cmd.sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+    },
+    logger
+  );
 
-  logger.info('[Start] Created execution, invoking Lambda', { executionId, persistedQuestId });
+  if (result.ok) return;
 
-  // Invoke Agent Executor Lambda (async - don't wait for completion).
-  // If the invoke throws (throttle, IAM, network), tear down the dispatch-
-  // time Quest so we don't leak a `pending`-status bubble with no reply and
-  // no iteration trace - that would be a worse UX than the pre-fix empty
-  // chat (which at least prompted a retry). The AgentExecution doc still
-  // lingers as `pending` forever in that case; the stale-active sweep at
-  // the top of `handleStart` reaps it on the next start by the same user.
-  try {
-    await lambdaClient.send(
-      new InvokeCommand({
-        FunctionName: Resource.AgentExecutor.name,
-        InvocationType: 'Event', // Async invocation
-        Payload: Buffer.from(
-          JSON.stringify({
-            executionId,
-            userId,
-            sessionId: cmd.sessionId,
-            // The real Quest id - only included when `Quest.create` above
-            // succeeded. The Lambda forwards it on `execution_started` so the
-            // client can swap its optimistic bubble for the real id. We
-            // intentionally do NOT fall back to `cmd.questId` here because that
-            // value is the sessionId (a back-ref hack from the client) and would
-            // mis-key the optimistic swap on the client.
-            questId: persistedQuestId,
-            query: cmd.query,
-            model: cmd.model,
-            connectionId,
-            organizationId: cmd.organizationId,
-            agentId: cmd.agentId,
-            enabledTools: cmd.enabledTools,
-            maxIterations: cmd.maxIterations,
-            // Forwarded in the start payload *and* persisted on the doc (above),
-            // unlike `enableMementos` which is doc-only. The executor resolves
-            // `startPayload?.enableLattice ?? execution.enableLattice ?? false`,
-            // so the doc alone would cover continuations - this start-payload
-            // channel is defense-in-depth so the first iteration never depends
-            // on the doc write having landed first.
-            enableLattice: cmd.enableLattice,
-          })
-        ),
-      })
-    );
-  } catch (invokeErr) {
-    logger.error('[Start] Lambda invoke failed — cleaning up dispatch-time Quest', {
-      executionId,
-      persistedQuestId,
-      error: invokeErr instanceof Error ? invokeErr.message : String(invokeErr),
-    });
-    if (persistedQuestId) {
-      await Quest.deleteOne({ _id: persistedQuestId }).catch(deleteErr => {
-        logger.warn('[Start] Failed to clean up dispatch-time Quest after Lambda invoke failure', {
-          executionId,
-          persistedQuestId,
-          error: deleteErr instanceof Error ? deleteErr.message : String(deleteErr),
-        });
-      });
-    }
-    await sendAgentEvent(connectionId, endpoint, {
-      action: 'agent_error',
-      executionId,
-      message: 'Failed to start agent execution. Please try again.',
-    });
-    return;
-  }
-
-  logger.info('[Start] Lambda invoked', { executionId });
+  await sendAgentEvent(connectionId, endpoint, {
+    action: 'agent_error',
+    // `concurrent_limit` is the one reason the client branches on (it renders a
+    // dedicated toast rather than the generic error), so it keeps its `reason` key.
+    ...(result.reason === 'concurrent_limit' ? { reason: 'concurrent_limit' } : {}),
+    ...(result.executionId ? { executionId: result.executionId } : {}),
+    message: result.message,
+  });
 }
 
 async function handleAbort(

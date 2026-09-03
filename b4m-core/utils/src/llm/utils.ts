@@ -5,7 +5,6 @@ import {
   FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItemRepository,
-  IExtendedMessage,
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
@@ -497,6 +496,7 @@ export async function fetchAndProcessPreviousMessages(
   {
     db,
     verbatimTokenBudget,
+    excludeCurrentPrompt = false,
     model,
   }: {
     db: {
@@ -509,6 +509,13 @@ export async function fetchAndProcessPreviousMessages(
      * contextSummary. Omit to keep the legacy count-only behavior.
      */
     verbatimTokenBudget?: number;
+    /**
+     * Drop the newest quest - the turn being processed - even when it is the only one in the
+     * window. History normally pops it, but a session's first turn used to be exempt, so its
+     * prompt reached the model both as history and as the current user message. Callers whose
+     * contract is a bare completion (API promptMode raw) set this to get the message exactly once.
+     */
+    excludeCurrentPrompt?: boolean;
     /**
      * The model this history is being fetched for. Used to decide whether Priority 2
      * tool-pairing reconstruction is safe for the TARGET backend - currently, Gemini is
@@ -575,8 +582,9 @@ export async function fetchAndProcessPreviousMessages(
   // Reverse the chat history items and remove the last item (the current prompt)
   chatHistoryItems.reverse();
 
-  // Keep the current prompt if it is the only item, so a session's first prompt stays in history.
-  if (chatHistoryItems.length > 1) {
+  // Keep the current prompt if it is the only item, so a session's first prompt stays in history -
+  // unless the caller needs history to hold no part of the current turn (see excludeCurrentPrompt).
+  if (chatHistoryItems.length > 1 || excludeCurrentPrompt) {
     chatHistoryItems.pop();
   }
 
@@ -783,23 +791,32 @@ export async function fetchAgentConversationHistory(
   }, new Array<{ role: 'user' | 'assistant'; content: string }>());
 }
 
+/**
+ * Resolves attachment ids to documents, and reports the ones it could NOT resolve. The missing set
+ * is the point: `getAccessibleFiles` applies a permission scope and simply omits what it rejects, so
+ * an id dropped by the scope filter or by a delete/upload race used to leave no trace anywhere - the
+ * turn ran as though the file had never been attached (#2228). Callers report `missingIds` through
+ * the same channel as the per-file notices rather than inferring the drop from a shorter array.
+ */
 export async function fetchAndConvertFabFiles(
   fabFileIds: string[],
   { scope }: { scope: Record<string, unknown> },
   {
     db,
     storage,
+    logger,
   }: {
     db: {
       fabfiles: Pick<IFabFileRepository, 'getAccessibleFiles'>;
       caches: ICacheRepository;
     };
     storage: BaseStorage;
+    logger?: Logger;
   }
-): Promise<IFabFileDocument[]> {
+): Promise<{ files: IFabFileDocument[]; missingIds: string[] }> {
   const fabFiles = await db.fabfiles.getAccessibleFiles(fabFileIds, scope);
 
-  const convertedFabFiles: IFabFileDocument[] = await Promise.all(
+  const files: IFabFileDocument[] = await Promise.all(
     fabFiles.map(async (file: any) => {
       return {
         ...file,
@@ -807,7 +824,17 @@ export async function fetchAndConvertFabFiles(
       };
     })
   );
-  return convertedFabFiles;
+
+  const returnedIds = new Set(files.map(file => String(file.id)));
+  const missingIds = Array.from(new Set(fabFileIds)).filter(id => !returnedIds.has(String(id)));
+  if (missingIds.length > 0) {
+    logger?.warn(
+      `[fetchAndConvertFabFiles] ${missingIds.length} of ${fabFileIds.length} requested file id(s) were not returned ` +
+        `by getAccessibleFiles and contribute nothing to this turn: ${missingIds.join(', ')}`
+    );
+  }
+
+  return { files, missingIds };
 }
 
 export async function getCachedSignedUrl(
@@ -1204,6 +1231,38 @@ async function cosineSearch(
 }
 
 /**
+ * Why an attached file did not reach the model whole. Coarse on purpose: the band is what the
+ * per-turn delivery summary tallies and what an operator greps for, while `message` carries the
+ * user-facing sentence. `truncated` is the one band that is still a delivery.
+ */
+export type FabFileNoticeBand =
+  | 'unresolved'
+  | 'audio'
+  | 'image_not_serveable'
+  | 'image_too_large'
+  | 'vision_unsupported'
+  | 'unsupported_backend'
+  | 'unsupported_type'
+  | 'read_failed'
+  | 'no_readable_content'
+  | 'truncated';
+
+/**
+ * One per-file statement about delivery, produced at every site that can drop or shorten an
+ * attachment. Replaces the `errorMessages` these sites used to (mostly not) emit: the caller had
+ * commented the destructure out, so a dropped attachment reached neither the prompt nor the user and
+ * the model answered as though the file were present (#2228). `delivered: true` means content DID
+ * reach the prompt and the notice describes what is missing from it.
+ */
+export interface FabFileNotice {
+  fabFileId: string;
+  fileName: string;
+  band: FabFileNoticeBand;
+  message: string;
+  delivered: boolean;
+}
+
+/**
  * Downscales an image to fit the model's dimension limit. Injected into
  * processFabFilesServer (see its deps) rather than imported here so this module -
  * and thus the @bike4mind/utils barrel - carries no jimp dependency. Server callers
@@ -1246,18 +1305,22 @@ export async function processFabFilesServer(
   progressCallback?: (progress: number, total: number) => Promise<void>
 ): Promise<{
   userMessages: IMessage[];
-  errorMessages: IExtendedMessage[];
+  fileNotices: FabFileNotice[];
   deliveredFileIds: string[];
   fullyDeliveredFileIds: string[];
 }> {
   if (!fabFiles || fabFiles.length === 0) {
-    return { userMessages: [], errorMessages: [], deliveredFileIds: [], fullyDeliveredFileIds: [] };
+    return { userMessages: [], fileNotices: [], deliveredFileIds: [], fullyDeliveredFileIds: [] };
   }
 
   const fileProcessingStartTime = Date.now();
   let systemContent = '';
   const userMessages: IMessage[] = [];
-  const errorMessages: IExtendedMessage[] = [];
+  // One entry per file that was dropped or shortened. Every early `return` inside
+  // processFileInParallel below must push one, and the sweep after the Promise.all catches any that
+  // did not - the caller turns these into a statement to the model and to the user, so a silent
+  // drop here is the whole defect this exists to prevent (#2228).
+  const fileNotices: FabFileNotice[] = [];
   // Ids that actually contributed content below - NOT every id in `fabFiles`. A file can be
   // silently skipped (audio, an unserveable/oversized/unsupported-backend image, an unsupported
   // file type, a corrupted/404 read) with no content ever reaching a message. Callers that need
@@ -1357,6 +1420,13 @@ export async function processFabFilesServer(
         logger.warn(
           `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
         );
+        fileNotices.push({
+          fabFileId: file.id,
+          fileName: file.fileName,
+          band: 'audio',
+          message: `"${noticeFileName(file.fileName)}" is an audio file and was not sent: no model accepts audio as input.`,
+          delivered: false,
+        });
         return;
       }
 
@@ -1366,6 +1436,13 @@ export async function processFabFilesServer(
           logger.warn(
             `[processFabFilesServer] Skipping image file ${file.fileName} — held pending moderation or blocked (#9776 Q2b).`
           );
+          fileNotices.push({
+            fabFileId: file.id,
+            fileName: file.fileName,
+            band: 'image_not_serveable',
+            message: `Image "${noticeFileName(file.fileName)}" was not sent: it is held pending moderation or has been blocked.`,
+            delivered: false,
+          });
           return;
         }
 
@@ -1427,9 +1504,12 @@ export async function processFabFilesServer(
                 await sendStatusUpdate(errorMsg);
 
                 // Skip this image but continue processing other files
-                errorMessages.push({
-                  role: 'error',
-                  content: errorMsg,
+                fileNotices.push({
+                  fabFileId: file.id,
+                  fileName: file.fileName,
+                  band: 'image_too_large',
+                  message: errorMsg,
+                  delivered: false,
                 });
 
                 return;
@@ -1482,7 +1562,13 @@ export async function processFabFilesServer(
                 const errorMsg = `⚠️ Image "${file.fileName}" (${encodedMB}MB encoded) is too large for ${modelInfo.name}. Max ~3MB. Please delete this file and re-upload a smaller image.`;
                 logger.warn(errorMsg);
                 await sendStatusUpdate(errorMsg);
-                errorMessages.push({ role: 'error', content: errorMsg });
+                fileNotices.push({
+                  fabFileId: file.id,
+                  fileName: file.fileName,
+                  band: 'image_too_large',
+                  message: errorMsg,
+                  delivered: false,
+                });
                 return;
               }
 
@@ -1500,6 +1586,13 @@ export async function processFabFilesServer(
               logger.warn(
                 `Vision support for the model ${modelInfo.id} is not implemented. Skipping image processing.`
               );
+              fileNotices.push({
+                fabFileId: file.id,
+                fileName: file.fileName,
+                band: 'vision_unsupported',
+                message: `Image "${noticeFileName(file.fileName)}" was not sent: image input is not implemented for ${modelInfo.name ?? modelInfo.id}.`,
+                delivered: false,
+              });
             }
 
             break;
@@ -1546,10 +1639,24 @@ export async function processFabFilesServer(
 
           default:
             logger.error(`Unsupported backend for model ${modelInfo.id} backend ${modelInfo?.backend ?? 'undefined'}`);
+            fileNotices.push({
+              fabFileId: file.id,
+              fileName: file.fileName,
+              band: 'unsupported_backend',
+              message: `Image "${noticeFileName(file.fileName)}" was not sent: this model's backend does not accept image attachments.`,
+              delivered: false,
+            });
             break;
         }
       } else if (!supportsVision && isImageAttachment(file.mimeType)) {
         logger.warn(`File ${file.fileName} is an image but model does not support vision. Skipping...`);
+        fileNotices.push({
+          fabFileId: file.id,
+          fileName: file.fileName,
+          band: 'vision_unsupported',
+          message: `Image "${noticeFileName(file.fileName)}" was not sent: ${modelInfo?.name ?? modelInfo?.id ?? 'this model'} cannot read images.`,
+          delivered: false,
+        });
       } else {
         // Files without embeddingModel are old files that were vectorized with the default embedding
         // model, which is text-embedding-ada-002.
@@ -1713,9 +1820,20 @@ export async function processFabFilesServer(
                 (canCosineSearch
                   ? "None of its vectorized chunks could be searched with this turn's embedding model, so it was sent as raw text and truncated. Re-vectorize it under the current embedding model, or select a model with a higher context window."
                   : 'Vectorize your large file or select a model with higher context window.');
-              errorMessages.push({
-                role: 'error',
-                content: errorMsg,
+              // Deliberately NOT errorMsg: that string is the operator-facing value persisted to
+              // fabfiles.error (other UI reads it) and reads as internal jargon. The notice is what
+              // the user and the model see, so it says the same thing in plain language.
+              fileNotices.push({
+                fabFileId: file.id,
+                fileName: file.fileName,
+                band: 'truncated',
+                message:
+                  `"${noticeFileName(file.fileName)}" was too large to send whole; only the first ` +
+                  // Floored: the budget is tokens * CHARS_PER_TOKEN, so it is routinely fractional, and
+                  // `substring` truncates toward the integer anyway. A user-facing "106949.5 characters"
+                  // reads as a bug; the persisted fabfiles.error string above keeps its exact wording.
+                  `${Math.floor(finalMaxFileSize)} characters of ${originalFileSize} reached this conversation.`,
+                delivered: true,
               });
             } else {
               // clear error message if the file fits
@@ -1738,6 +1856,13 @@ export async function processFabFilesServer(
             // Don't throw an error for unsupported file types
             if (e instanceof BadRequestError && e.message.includes('Unsupported file type')) {
               logger.warn(`Unsupported file type: ${file.fileName}`);
+              fileNotices.push({
+                fabFileId: file.id,
+                fileName: file.fileName,
+                band: 'unsupported_type',
+                message: `"${noticeFileName(file.fileName)}" was not sent: its file type (${file.mimeType}) cannot be read as text.`,
+                delivered: false,
+              });
             } else if (isAxiosError(e) && e.response?.status === 404) {
               await sendStatusUpdate(`Skipping file ${file.fileName}. File might be corrupted or deleted`);
               await db.fabfiles.update({
@@ -1745,11 +1870,25 @@ export async function processFabFilesServer(
                 error:
                   'This file appears to be corrupted or may have been deleted. Please try uploading the file again.',
               });
+              fileNotices.push({
+                fabFileId: file.id,
+                fileName: file.fileName,
+                band: 'read_failed',
+                message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: it appears to be corrupted or deleted. Try uploading it again.`,
+                delivered: false,
+              });
             } else if (e instanceof CorruptedFileError) {
               await sendStatusUpdate(`Skipping corrupted file ${file.fileName}. Please try re-uploading`);
               await db.fabfiles.update({
                 id: file.id,
                 error: e.message,
+              });
+              fileNotices.push({
+                fabFileId: file.id,
+                fileName: file.fileName,
+                band: 'read_failed',
+                message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: ${e.message}`,
+                delivered: false,
               });
             } else {
               logger.updateMetadata({ filePath: file.filePath });
@@ -1781,6 +1920,27 @@ export async function processFabFilesServer(
       )
     )
   );
+
+  // Structural backstop for the acceptance criterion. Every drop site above pushes its own notice,
+  // but "every site remembers to" is a promise a future branch can break silently - which is exactly
+  // how an attachment came to vanish with no content and no error (#2228). Anything that neither
+  // delivered nor explained itself gets a generic notice here, so the set of undelivered ids and the
+  // set of reported ids cannot diverge.
+  const noticedFileIds = new Set(fileNotices.map(notice => notice.fabFileId));
+  for (const file of fabFiles) {
+    if (deliveredFileIds.has(file.id) || noticedFileIds.has(file.id)) continue;
+    logger.warn(
+      `[processFabFilesServer] "${file.fileName}" (${file.id}) contributed no content and produced no notice; ` +
+        'reporting it as undelivered.'
+    );
+    fileNotices.push({
+      fabFileId: file.id,
+      fileName: file.fileName,
+      band: 'no_readable_content',
+      message: `"${noticeFileName(file.fileName)}" was not sent: no readable content could be extracted from it.`,
+      delivered: false,
+    });
+  }
 
   if (imageContent.length > 0) {
     userMessages.push({
@@ -1821,7 +1981,7 @@ export async function processFabFilesServer(
   logger.info(`📁 File processing completed in ${fileProcessingTime}ms for ${fabFiles.length} files`);
   return {
     userMessages,
-    errorMessages,
+    fileNotices,
     deliveredFileIds: Array.from(deliveredFileIds),
     fullyDeliveredFileIds: Array.from(fullyDeliveredFileIds),
   };

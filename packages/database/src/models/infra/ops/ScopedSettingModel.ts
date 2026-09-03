@@ -63,6 +63,12 @@ ScopedSettingSchema.index(
   { unique: true, partialFilterExpression: { deletedAt: null } }
 );
 
+// Performance index for `findBySettingName`, which cannot ride the unique index above: `settingName`
+// is that key's LAST field, not a prefix, so a by-setting read would scan the collection. Small
+// today, but the table grows per (rung, setting) - "a value per lake" is the shape it is designed for
+// - and the caller is a sweep that runs every 60s on self-host.
+ScopedSettingSchema.index({ settingName: 1 });
+
 export const ScopedSetting =
   (mongoose.models.ScopedSetting as IScopedSettingsModel) ??
   mongoose.model<IScopedSetting, IScopedSettingsModel>('ScopedSetting', ScopedSettingSchema);
@@ -79,6 +85,13 @@ class ScopedSettingsRepository extends BaseRepository<IScopedSetting> implements
       $or: scopes.map(s => ({ scopeLevel: s.scopeLevel, scopeId: s.scopeId })),
       settingName: { $in: settingNames },
     });
+    return result.map(r => r.toJSON());
+  }
+
+  async findBySettingName(settingName: SettingKey): Promise<IScopedSetting[]> {
+    // softDeletePlugin's find pre-hook adds `deletedAt: null`, so tombstones are excluded here the
+    // same way they are for findOverrides.
+    const result = await this.model.find({ settingName });
     return result.map(r => r.toJSON());
   }
 

@@ -148,7 +148,10 @@ describe('ImageEditService.process model dispatch', () => {
       fabFileStorage: { getSignedUrl: vi.fn(async () => 'https://example.invalid/mask.png') } as never,
     } as never);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).tokenizer = { encodeTokens: vi.fn(async () => ['token']) };
+    (service as any).tokenizer = {
+      encodeTokens: vi.fn(async () => [1, 2, 3]),
+      decodeTokens: vi.fn(async () => 'make it blue'),
+    };
     return { service, quest };
   };
 

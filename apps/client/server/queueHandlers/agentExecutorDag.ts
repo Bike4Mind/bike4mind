@@ -29,6 +29,7 @@ import {
 import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services';
 import { agentExecutionRepository, type AgentExecutionStatus, type IDagSpec } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { inheritedArtifactFields } from '../utils/artifactGate';
 import { Resource } from 'sst';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
@@ -48,8 +49,17 @@ export function makeDagDispatcher(args: {
     organizationId?: string;
     sessionId: string;
     questId: string;
+    /** The parent's real Quest id, inherited so a DAG child's lake-access audit rows join to the
+     *  turn. NOT `questId` above, which holds different things per dispatch lineage (#1867). */
+    linkedQuestId?: string;
     /** Pulled from the parent execution doc - used for audit lineage. */
     spawnedByExecutionId?: string;
+    /**
+     * The parent's per-request artifact intent. Inherited so a caller opt-out survives fan-out -
+     * see the matching note on `baseFields` in `agentExecutor.ts`. `undefined` leaves the admin
+     * `EnableArtifacts` setting as the only gate for the node.
+     */
+    enableArtifacts?: boolean;
   };
   logger: Logger;
 }): DagDispatcher {
@@ -79,6 +89,7 @@ export function makeDagDispatcher(args: {
         organizationId: nodeDefaults.organizationId,
         sessionId: nodeDefaults.sessionId,
         questId: nodeDefaults.questId,
+        linkedQuestId: nodeDefaults.linkedQuestId,
         model,
         query: node.description,
         status: 'pending' as AgentExecutionStatus,
@@ -101,6 +112,7 @@ export function makeDagDispatcher(args: {
           thoroughness,
           maxIterations,
         },
+        ...inheritedArtifactFields(nodeDefaults.enableArtifacts),
       });
       return { childExecutionId: child.id, dagNodeId: node.id };
     },

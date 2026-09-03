@@ -61,6 +61,7 @@ import {
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
 import axios from 'axios';
@@ -144,10 +145,6 @@ interface IImageGenerationServiceOptions {
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
   imageModerationService?: ImageModerationService;
 }
-
-// TODO make these adminSettings
-const TRUNCATE_THRESHOLD = 1000;
-const TRUNCATE_TO = 980;
 
 async function downloadImage(url: string) {
   // Handle data URLs (base64 images) from GPT-Image-1
@@ -243,12 +240,15 @@ export class ImageGenerationService {
         height: rest.height,
         aspect_ratio: rest.aspect_ratio,
         response_format: rest.response_format,
-        // BFL-specific parameters - these may not be available in GenerateImageRequestBodySchema
-        safety_tolerance: (parsedBody as any).safety_tolerance,
-        prompt_upsampling: (parsedBody as any).prompt_upsampling,
-        seed: (parsedBody as any).seed,
-        output_format: (parsedBody as any).output_format,
-      }).filter(([_, value]) => value !== undefined)
+        // BFL-specific parameters
+        safety_tolerance: rest.safety_tolerance,
+        prompt_upsampling: rest.prompt_upsampling,
+        seed: rest.seed,
+        output_format: rest.output_format,
+        // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
+        // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
+        // client's own default) fails /api/feedback's validation when a bug report posts it back.
+      }).filter(([_, value]) => value !== undefined && value !== null)
     );
 
     // Get session message history to build proper context
@@ -739,19 +739,26 @@ export class ImageGenerationService {
         }
       }
 
-      let truncatedPrompt = prompt;
+      const {
+        prompt: truncatedPrompt,
+        tokenCount: sentPromptTokens,
+        truncated,
+      } = await truncateImagePrompt({
+        prompt,
+        promptTokens,
+        maxTokens: models.find(m => m.id === model)?.max_tokens,
+        tokenizer: this.tokenizer,
+        modelId: model,
+        logger,
+      });
 
-      const modelMaxTokens = models.find(m => m.id === model)?.max_tokens ?? TRUNCATE_THRESHOLD;
-
-      // Check if prompt exceeds the threshold and truncate if necessary
-      if (promptTokens.length > modelMaxTokens) {
+      if (truncated) {
         this.addStatusToQuest(quest, 'Trimming the prompt...');
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
           action: 'streamed_chat_completion',
           quest: parseQuestToStreamPayload(quest),
           statusMessage: 'Trimming the prompt...',
         });
-        truncatedPrompt = promptTokens.slice(0, TRUNCATE_TO).join(' ');
       }
 
       this.addStatusToQuest(quest, 'Now painting...');
@@ -924,9 +931,11 @@ export class ImageGenerationService {
             aspect_ratio,
             output_format,
             safety_tolerance,
-            // GeminiImageService maps this to Google's `enhancePrompt`. Only the text-to-image path
-            // honours it: `edit()` takes ImageEditOptions and does not build a generation config.
+            // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
+            // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
+            // forward them to Google's API, since it rejects their mere presence.
             prompt_upsampling,
+            seed,
           });
         }
       } else if (BFL_IMAGE_MODELS.includes(model as any)) {
@@ -1317,10 +1326,10 @@ export class ImageGenerationService {
             feature: 'image_generation',
             provider: modelInfo.backend,
             model,
-            // Prompt tokens actually sent to the model: the full encoded prompt, or TRUNCATE_TO
-            // when it was trimmed above (see the modelMaxTokens branch). Image models bill
-            // per-image (costUsd/units), so this is analytics-only completeness, not billing.
-            inputTokens: promptTokens.length > modelMaxTokens ? TRUNCATE_TO : promptTokens.length,
+            // Prompt tokens actually sent to the model, as reported by truncateImagePrompt. Image
+            // models bill per-image (costUsd/units), so this is analytics-only completeness, not
+            // billing.
+            inputTokens: sentPromptTokens,
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,

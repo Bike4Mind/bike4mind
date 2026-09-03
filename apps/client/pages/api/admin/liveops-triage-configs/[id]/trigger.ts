@@ -16,7 +16,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import type { LiveOpsTriageJobMessage } from '@server/cron/liveopsTriageDispatcher';
 
@@ -29,13 +29,6 @@ const TriggerRequestSchema = z.object({
   dryRun: z.boolean().optional().default(false),
   lookbackHours: z.number().int().min(1).max(168).optional(),
 });
-
-/**
- * Validate ObjectId format
- */
-function isValidObjectId(id: string): boolean {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-}
 
 const handler = baseApi().post(async (req, res) => {
   try {

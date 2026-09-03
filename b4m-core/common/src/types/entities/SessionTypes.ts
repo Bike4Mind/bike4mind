@@ -7,6 +7,7 @@ import { SearchOptions } from '../../search';
 import { ChatModelName } from '../../models';
 import { MessageContentObject } from './MessageTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
+import type { ApiErrorCode } from '../../apiErrorCodes';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -84,8 +85,17 @@ export type SessionProps = {
  * so the client can branch to a targeted error UI (see `IChatHistoryItem.errorCode`).
  * Single source of truth: the streamed-action Zod enum in `schemas/actions.ts`
  * derives its values from this tuple, so the two can never drift.
+ *
+ * SSE-frame scoped, and a NARROWING of the platform-wide `API_ERROR_CODES`: a
+ * quest fails for billing reasons, never for the provider-configuration reasons
+ * the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
+ * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
+ * fails the build.
  */
-export const QUEST_ERROR_CODES = ['insufficient_credits', 'spend_cap_exceeded'] as const;
+export const QUEST_ERROR_CODES = [
+  'insufficient_credits',
+  'spend_cap_exceeded',
+] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
 export interface IChatHistoryItem {
@@ -293,6 +303,14 @@ export interface IChatHistoryItem {
     messageTs: string; // Message timestamp to edit
     isPaintCommand?: boolean; // Whether this quest was triggered by /paint command
   };
+
+  /**
+   * User-facing lines for attachments submitted with this turn that did not arrive intact - not
+   * found, unreadable, unsupported, or delivered only in part. Rendered under the reply; the same
+   * text is also given to the model in a system message, so an attachment failure is never silent
+   * and never surface-specific.
+   */
+  attachmentNotices?: string[];
 
   /**
    * Navigation intents from the navigate_view tool.

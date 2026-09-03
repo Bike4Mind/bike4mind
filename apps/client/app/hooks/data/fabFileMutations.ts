@@ -215,6 +215,39 @@ export function useChunkFile(options: { onSuccess?: () => void } = {}) {
   });
 }
 
+/**
+ * Hook: reset a fabFile's chunk state and re-run chunking + vectorization.
+ *
+ * Distinct from useChunkFile: POST /api/files/chunk deliberately leaves the processing flags
+ * alone, so the queue handler's duplicate-delivery guard drops the message for any file that is
+ * already chunked. /api/files/reprocess clears those flags first, which is what makes a rebuild
+ * (e.g. re-embedding under a new embedding model) actually happen. Chunk size is not sent - the
+ * rebuild inherits the owner-altitude DefaultChunkSize policy resolved server-side.
+ *
+ * A 200 is only the queue ack, not a finished rebuild. The invalidation below picks the end state
+ * up for react-query consumers; a caller holding files somewhere else (e.g. the zustand workbench
+ * store) is not reconciled by it and needs its own update_file_chunk_vector_status subscriber,
+ * which no caller has yet.
+ */
+export function useReprocessFile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (fabFileId: string) => {
+      const res = await api.post<{ messageId: string }>('/api/files/reprocess', { fabFileId });
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
+    },
+    // No toast here - callers own the wording. Log anyway so a caller that forgets its own
+    // onError leaves a trace instead of failing silently.
+    onError: error => {
+      console.error(error);
+    },
+  });
+}
+
 export function useUploadKnowledgeFromUrl() {
   const queryClient = useQueryClient();
 

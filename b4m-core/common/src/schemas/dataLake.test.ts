@@ -1,8 +1,58 @@
 import { describe, it, expect } from 'vitest';
-import { CreateDataLakeRequestInput, ApplyTaxonomyRequestInput, UpdateDataLakeRequestInput } from './dataLake';
+import {
+  CreateDataLakeRequestInput,
+  ApplyTaxonomyRequestInput,
+  UpdateDataLakeRequestInput,
+  SetLakeFileTagsRequestInput,
+} from './dataLake';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import {
+  MIN_DATA_LAKE_SLUG_LENGTH,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  DATA_LAKE_SLUG_REGEX,
+  MAX_LAKE_FILE_TAG_NAME_LENGTH,
+  MAX_TAG_PREFIX_LENGTH,
+  MAX_TAXONOMY_TAG_SUFFIX_LENGTH,
+  MAX_TAXONOMY_TAGS,
+} from '../constants/dataLakes';
 
 const input = (fileTagPrefix: string) => ({ name: 'Lake', slug: 'my-lake', fileTagPrefix });
+
+const withSlug = (slug: string) => ({ name: 'Lake', slug, fileTagPrefix: 'acme:' });
+
+// The wizard slugifies a lake NAME and gates on the result before this schema runs, so both
+// sides size by MIN/MAX_DATA_LAKE_SLUG_LENGTH. Written against the constants, not the numbers:
+// this asserts the schema still reads them, which a literal-based test could not.
+describe('CreateDataLakeRequestInput.slug', () => {
+  // Deliberately NOT phrased as "the .min() rejects this": DATA_LAKE_SLUG_REGEX needs a leading
+  // and a trailing alphanumeric in separate positions, so at these values the PATTERN is what
+  // refuses a 1-char slug and .min() is unobservable through parse. Asserting the two agree is
+  // the honest test - it fires if either the constant or the pattern's effective floor moves,
+  // whereas a "below the minimum is rejected" case passes with .min() deleted.
+  it('refuses a slug shorter than the shared minimum, and the pattern floor agrees with it', () => {
+    const tooShort = 'a'.repeat(MIN_DATA_LAKE_SLUG_LENGTH - 1);
+    expect(CreateDataLakeRequestInput.safeParse(withSlug(tooShort)).success).toBe(false);
+    expect(tooShort).not.toMatch(DATA_LAKE_SLUG_REGEX);
+    expect(CreateDataLakeRequestInput.safeParse(withSlug('a'.repeat(MIN_DATA_LAKE_SLUG_LENGTH))).success).toBe(true);
+  });
+
+  it('accepts a slug at the shared maximum and rejects one past it', () => {
+    expect(CreateDataLakeRequestInput.safeParse(withSlug('a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH))).success).toBe(true);
+    expect(CreateDataLakeRequestInput.safeParse(withSlug('a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH + 1))).success).toBe(
+      false
+    );
+  });
+
+  it('rejects a slug the shared pattern refuses, naming the rule', () => {
+    for (const bad of ['My-Lake', 'my_lake', '-my-lake', 'my-lake-']) {
+      const result = CreateDataLakeRequestInput.safeParse(withSlug(bad));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => /lowercase alphanumeric with hyphens/.test(i.message))).toBe(true);
+      }
+    }
+  });
+});
 
 describe('CreateDataLakeRequestInput.fileTagPrefix', () => {
   it('accepts an ordinary namespaced prefix', () => {
@@ -137,5 +187,48 @@ describe('UpdateDataLakeRequestInput.requiredPassageTokenTarget', () => {
     expect(parse(MIN_PASSAGE_TOKEN_TARGET).success).toBe(true);
     expect(parse(MIN_PASSAGE_TOKEN_TARGET - 1).success).toBe(false);
     expect(parse(null).success).toBe(true);
+  });
+});
+
+describe('SetLakeFileTagsRequestInput', () => {
+  // Pinned to its derivation rather than a literal 130, so a future edit to either summand is
+  // caught here instead of silently drifting the schema away from the constant it is supposed
+  // to track.
+  it('MAX_LAKE_FILE_TAG_NAME_LENGTH is derived from the prefix and taxonomy-suffix caps', () => {
+    expect(MAX_LAKE_FILE_TAG_NAME_LENGTH).toBe(MAX_TAG_PREFIX_LENGTH + MAX_TAXONOMY_TAG_SUFFIX_LENGTH);
+  });
+
+  it('requires `tags` - an absent field must never read as the empty set', () => {
+    expect(SetLakeFileTagsRequestInput.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts an empty array (a real, deliberate "clear everything under this prefix" request)', () => {
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags: [] }).success).toBe(true);
+  });
+
+  it(`rejects more than ${MAX_TAXONOMY_TAGS} tags`, () => {
+    const tags = Array.from({ length: MAX_TAXONOMY_TAGS + 1 }, (_, i) => `lk:t${i}`);
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags }).success).toBe(false);
+  });
+
+  it(`accepts exactly ${MAX_TAXONOMY_TAGS} tags`, () => {
+    const tags = Array.from({ length: MAX_TAXONOMY_TAGS }, (_, i) => `lk:t${i}`);
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags }).success).toBe(true);
+  });
+
+  it('accepts a name exactly at MAX_LAKE_FILE_TAG_NAME_LENGTH and rejects one character over', () => {
+    const atLimit = `lk:${'x'.repeat(MAX_LAKE_FILE_TAG_NAME_LENGTH - 'lk:'.length)}`;
+    expect(atLimit).toHaveLength(MAX_LAKE_FILE_TAG_NAME_LENGTH);
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags: [atLimit] }).success).toBe(true);
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags: [`${atLimit}x`] }).success).toBe(false);
+  });
+
+  it('rejects an empty-string name', () => {
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags: [''] }).success).toBe(false);
+  });
+
+  it('rejects a name containing a newline', () => {
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags: ['lk:a\nb'] }).success).toBe(false);
+    expect(SetLakeFileTagsRequestInput.safeParse({ tags: ['lk:a\rb'] }).success).toBe(false);
   });
 });

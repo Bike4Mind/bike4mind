@@ -11,11 +11,13 @@ const h = vi.hoisted(() => ({
   releasePurgingToDeleted: vi.fn(),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
+  releaseDriveConnectionForLake: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {},
+  dataLakeProposalRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
@@ -24,6 +26,9 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
+vi.mock('@server/integrations/google/drive/common', () => ({
+  releaseDriveConnectionForLake: h.releaseDriveConnectionForLake,
+}));
 
 import { dispatch } from './dataLakeCleanup';
 
@@ -34,14 +39,20 @@ const payload = { dataLakeId: 'lake1', actor: { userId: 'u1', isAdmin: false } }
 describe('dataLakeCleanup consumer', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('parses the message and runs the cleanup service with the four repos + logger', async () => {
+  it('parses the message and runs the cleanup service with the lake repos + logger', async () => {
     h.cleanup.mockResolvedValue(undefined);
     await dispatch(makeEvent(payload), {} as never, logger);
     expect(h.cleanup).toHaveBeenCalledWith(
       { userId: 'u1', isAdmin: false },
       'lake1',
       expect.objectContaining({
-        db: expect.objectContaining({ dataLakes: expect.anything(), fabFileChunks: expect.anything() }),
+        db: expect.objectContaining({
+          dataLakes: expect.anything(),
+          fabFileChunks: expect.anything(),
+          // The acquisition queue is swept alongside the grants (#1671) - a proposal outliving its
+          // lake is unreviewable, so an unwired repo here would leave orphans behind every purge.
+          dataLakeProposals: expect.anything(),
+        }),
         logger,
       })
     );
@@ -71,6 +82,27 @@ describe('dataLakeCleanup consumer', () => {
       'lake1',
       expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
     );
+  });
+
+  it('wires the Drive release port, so a purge frees the folder claim it was holding', async () => {
+    // Unwired, the connection row outlives its lake and its globally-unique driveFolderId can never
+    // be claimed again by anyone - there is no surface left that can reach the row to release it.
+    h.cleanup.mockResolvedValue(undefined);
+    h.releaseDriveConnectionForLake.mockResolvedValue(true);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    const port = h.cleanup.mock.calls[0][2].releaseDriveConnection;
+    await port({ dataLakeId: 'lake1' });
+    expect(h.releaseDriveConnectionForLake).toHaveBeenCalledWith('lake1');
+    // The claim "that folder is free again" is only checkable after the fact if it is logged.
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('folder claim'), { dataLakeId: 'lake1' });
+  });
+
+  it('stays quiet when the purged lake had no Drive connection', async () => {
+    h.cleanup.mockResolvedValue(undefined);
+    h.releaseDriveConnectionForLake.mockResolvedValue(false);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    await h.cleanup.mock.calls[0][2].releaseDriveConnection({ dataLakeId: 'lake1' });
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('folder claim'), expect.anything());
   });
 
   it('releases an accepted purge its own guard refused, and says so at ERROR (#1744)', async () => {

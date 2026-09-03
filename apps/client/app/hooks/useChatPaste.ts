@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { IFabFileDocument, ISessionDocument, KnowledgeType, isImageAttachment } from '@bike4mind/common';
 import { QueryClient } from '@tanstack/react-query';
@@ -84,148 +84,18 @@ function addFileToWorkbench(
 }
 
 export function useChatPaste(deps: UseChatPasteDeps) {
-  const {
-    currentSession,
-    currentSessionId,
-    chatHistory,
-    chatInputValue,
-    setChatInputValue,
-    setWorkBenchFiles,
-    setCurrentSession,
-    queryClient,
-    lexicalInputRef,
-  } = deps;
+  // Latest-ref so the returned handler is permanently stable. PasteHandlerPlugin
+  // keys its PASTE_COMMAND registration on the identity, and `chatInputValue` /
+  // `chatHistory` change on every keystroke - as a dep array that re-registered
+  // the command once per character typed. Reading at fire time is also strictly
+  // more correct for a paste handler: it sees the current draft, not the draft as
+  // of the render that produced the handler.
+  const depsRef = useRef(deps);
+  // eslint-disable-next-line react-hooks/refs
+  depsRef.current = deps;
 
-  return useCallback(
-    async (e: React.ClipboardEvent<HTMLTextAreaElement> | ClipboardEvent): Promise<boolean> => {
-      const clipboardData = e.clipboardData;
-      if (!clipboardData) return false;
-      const items = clipboardData.items;
-
-      // Check for image paste
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (isImageAttachment(item.type)) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            const loadingToast = toast.loading('Uploading image...');
-
-            const smartFileName = await generateSmartFileName('', 'image', {
-              hasSession: !!currentSession,
-              chatHistory,
-            });
-            console.log('Generated smart filename for image:', smartFileName);
-            const renamedFile = new File([file], smartFileName, { type: file.type });
-
-            try {
-              const fabFile = await createFabFileOnServerWithUpload(
-                {
-                  type: KnowledgeType.FILE,
-                  fileName: renamedFile.name,
-                  mimeType: renamedFile.type,
-                  fileSize: renamedFile.size,
-                },
-                renamedFile
-              );
-
-              addFileToWorkbench(fabFile, { currentSessionId, currentSession, setWorkBenchFiles, setCurrentSession });
-              addToFileBrowserCache(queryClient, fabFile);
-
-              toast.dismiss(loadingToast);
-              toast.success('Image uploaded successfully');
-
-              const fileTag = `[[${fabFile.fileName}]]`;
-              insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
-            } catch (error) {
-              queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
-              console.error('Failed to upload pasted image:', error);
-              toast.dismiss(loadingToast);
-              toast.error('Failed to upload image');
-            }
-            return true;
-          }
-        }
-      }
-
-      // Check for text paste
-      const pastedContent = clipboardData.getData('text');
-      const lines = pastedContent.split('\n');
-
-      // if already wrapped with snippet meta, skip processing
-      if (pastedContent.includes('<!--snippet-meta')) {
-        return false;
-      }
-
-      // Handle large text (more than 30 lines) as file upload
-      if (lines.length > 30) {
-        e.preventDefault();
-
-        const loadingToast = toast.loading(`Uploading ${lines.length} lines of text as file...`);
-
-        const smartFileName = await generateSmartFileName(pastedContent, 'text');
-        console.log('Generated smart filename for text:', smartFileName);
-
-        const blob = new Blob([pastedContent], { type: 'text/plain' });
-        const file = new File([blob], smartFileName, { type: 'text/plain' });
-
-        try {
-          const fabFile = await createFabFileOnServerWithUpload(
-            {
-              type: KnowledgeType.FILE,
-              fileName: file.name,
-              mimeType: 'text/plain',
-              fileSize: file.size,
-            },
-            file
-          );
-
-          addFileToWorkbench(fabFile, { currentSessionId, currentSession, setWorkBenchFiles, setCurrentSession });
-          addToFileBrowserCache(queryClient, fabFile);
-
-          toast.dismiss(loadingToast);
-          toast.success(`Large text (${lines.length} lines) uploaded as file`);
-
-          const fileTag = `[[${fabFile.fileName}]]`;
-          insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
-        } catch (error) {
-          queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
-          console.error('Failed to upload pasted text as file:', error);
-          toast.dismiss(loadingToast);
-          toast.error('Failed to upload text as file');
-        }
-        return true;
-      }
-
-      // Original behavior for smaller text (20-30 lines) - create code block
-      if (lines.length > 20) {
-        e.preventDefault();
-
-        const contentType = detectContentType(pastedContent);
-        const contentWithNewline = pastedContent.endsWith('\n') ? pastedContent : `${pastedContent}\n`;
-        const codeBlock = `\`\`\`${contentType}\n${contentWithNewline}\`\`\``;
-
-        if (lexicalInputRef.current) {
-          try {
-            lexicalInputRef.current.insertContent(codeBlock);
-          } catch (error) {
-            console.error('Failed to insert code block:', error);
-            toast.error('Failed to add code block to input');
-            const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${codeBlock}` : codeBlock;
-            setChatInputValue(newValue);
-          }
-        } else {
-          const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${codeBlock}` : codeBlock;
-          setChatInputValue(newValue);
-        }
-
-        return true;
-      }
-
-      // Small text - let Lexical handle it normally
-      return false;
-    },
-    [
+  return useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement> | ClipboardEvent): Promise<boolean> => {
+    const {
       currentSession,
       currentSessionId,
       chatHistory,
@@ -235,6 +105,133 @@ export function useChatPaste(deps: UseChatPasteDeps) {
       setCurrentSession,
       queryClient,
       lexicalInputRef,
-    ]
-  );
+    } = depsRef.current;
+
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) return false;
+    const items = clipboardData.items;
+
+    // Check for image paste
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (isImageAttachment(item.type)) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) {
+          const loadingToast = toast.loading('Uploading image...');
+
+          const smartFileName = await generateSmartFileName('', 'image', {
+            hasSession: !!currentSession,
+            chatHistory,
+          });
+          console.log('Generated smart filename for image:', smartFileName);
+          const renamedFile = new File([file], smartFileName, { type: file.type });
+
+          try {
+            const fabFile = await createFabFileOnServerWithUpload(
+              {
+                type: KnowledgeType.FILE,
+                fileName: renamedFile.name,
+                mimeType: renamedFile.type,
+                fileSize: renamedFile.size,
+              },
+              renamedFile
+            );
+
+            addFileToWorkbench(fabFile, { currentSessionId, currentSession, setWorkBenchFiles, setCurrentSession });
+            addToFileBrowserCache(queryClient, fabFile);
+
+            toast.dismiss(loadingToast);
+            toast.success('Image uploaded successfully');
+
+            const fileTag = `[[${fabFile.fileName}]]`;
+            insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
+          } catch (error) {
+            queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
+            console.error('Failed to upload pasted image:', error);
+            toast.dismiss(loadingToast);
+            toast.error('Failed to upload image');
+          }
+          return true;
+        }
+      }
+    }
+
+    // Check for text paste
+    const pastedContent = clipboardData.getData('text');
+    const lines = pastedContent.split('\n');
+
+    // if already wrapped with snippet meta, skip processing
+    if (pastedContent.includes('<!--snippet-meta')) {
+      return false;
+    }
+
+    // Handle large text (more than 30 lines) as file upload
+    if (lines.length > 30) {
+      e.preventDefault();
+
+      const loadingToast = toast.loading(`Uploading ${lines.length} lines of text as file...`);
+
+      const smartFileName = await generateSmartFileName(pastedContent, 'text');
+      console.log('Generated smart filename for text:', smartFileName);
+
+      const blob = new Blob([pastedContent], { type: 'text/plain' });
+      const file = new File([blob], smartFileName, { type: 'text/plain' });
+
+      try {
+        const fabFile = await createFabFileOnServerWithUpload(
+          {
+            type: KnowledgeType.FILE,
+            fileName: file.name,
+            mimeType: 'text/plain',
+            fileSize: file.size,
+          },
+          file
+        );
+
+        addFileToWorkbench(fabFile, { currentSessionId, currentSession, setWorkBenchFiles, setCurrentSession });
+        addToFileBrowserCache(queryClient, fabFile);
+
+        toast.dismiss(loadingToast);
+        toast.success(`Large text (${lines.length} lines) uploaded as file`);
+
+        const fileTag = `[[${fabFile.fileName}]]`;
+        insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
+      } catch (error) {
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
+        console.error('Failed to upload pasted text as file:', error);
+        toast.dismiss(loadingToast);
+        toast.error('Failed to upload text as file');
+      }
+      return true;
+    }
+
+    // Original behavior for smaller text (20-30 lines) - create code block
+    if (lines.length > 20) {
+      e.preventDefault();
+
+      const contentType = detectContentType(pastedContent);
+      const contentWithNewline = pastedContent.endsWith('\n') ? pastedContent : `${pastedContent}\n`;
+      const codeBlock = `\`\`\`${contentType}\n${contentWithNewline}\`\`\``;
+
+      if (lexicalInputRef.current) {
+        try {
+          lexicalInputRef.current.insertContent(codeBlock);
+        } catch (error) {
+          console.error('Failed to insert code block:', error);
+          toast.error('Failed to add code block to input');
+          const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${codeBlock}` : codeBlock;
+          setChatInputValue(newValue);
+        }
+      } else {
+        const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${codeBlock}` : codeBlock;
+        setChatInputValue(newValue);
+      }
+
+      return true;
+    }
+
+    // Small text - let Lexical handle it normally
+    return false;
+  }, []);
 }

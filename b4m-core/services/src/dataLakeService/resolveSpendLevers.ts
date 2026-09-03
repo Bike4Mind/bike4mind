@@ -10,6 +10,8 @@ import {
   DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX,
   DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
   DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX,
+  DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
+  DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX,
   DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT,
   DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
   DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT,
@@ -38,6 +40,7 @@ export const DATA_LAKE_SPEND_LEVER_KEYS = [
   'dataLakeEmbeddingBudgetPerPeriodUsd',
   'dataLakeEmbeddingBudgetPeriodHours',
   'dataLakeEmbeddingMaxCallsPerMinute',
+  'dataLakeEmbeddingMaxTokensPerMinute',
   'dataLakeVectorizeChunkBatchSize',
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
@@ -57,6 +60,9 @@ export interface DataLakeSpendLevers {
   perPeriodBudgetMicroUsd: number;
   periodHours: number;
   maxCallsPerMinute: number;
+  /** The TPM half of the throughput cap. Untiered and platform-wide, like maxCallsPerMinute: it
+   *  protects the provider quota, which no lake owns a share of. */
+  maxTokensPerMinute: number;
   vectorizeChunkBatchSize: number;
   /** The tier factor the two budgets above were scaled by. Returned so a caller can log it. */
   tierMultiplier: number;
@@ -170,6 +176,13 @@ export async function resolveSpendLevers(
       DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
       DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX,
       'dataLakeEmbeddingMaxCallsPerMinute',
+      logger
+    ),
+    maxTokensPerMinute: nonNegativeIntLever(
+      values.dataLakeEmbeddingMaxTokensPerMinute,
+      DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
+      DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX,
+      'dataLakeEmbeddingMaxTokensPerMinute',
       logger
     ),
     vectorizeChunkBatchSize: positiveIntLever(

@@ -88,9 +88,9 @@ describe('HelpModal', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(toast.warning).not.toHaveBeenCalled();
-    expect(h.logEventMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: { id: 'fb1', content: 'great app' } })
-    );
+    // Content must never reach the analytics event - CounterLog has no TTL, and logging the
+    // verbatim report text there would defeat the 90-day retention the FeedbackText split enforces.
+    expect(h.logEventMutate).toHaveBeenCalledWith(expect.objectContaining({ metadata: { id: 'fb1' } }));
   });
 
   it('shows a warning toast instead of success when nothing was delivered', async () => {
@@ -115,6 +115,56 @@ describe('HelpModal', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('warns the reporter when their content was truncated, even though delivery succeeded', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      content: 'a very long report cut at the cap',
+      contentTruncated: true,
+      delivery: { delivered: true, channels: {} },
+    });
+    renderModal();
+
+    submitFeedback('a very long report cut at the cap');
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('trim'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('combines the truncation and delivery-failure warnings when both happen on the same submission', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      content: 'a very long report cut at the cap',
+      contentTruncated: true,
+      delivery: { delivered: false, channels: {} },
+    });
+    renderModal();
+
+    submitFeedback('a very long report cut at the cap');
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const [warningText] = vi.mocked(toast.warning).mock.calls[0];
+    expect(warningText).toContain('trimmed');
+    expect(warningText).toContain('could not notify');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('warns the reporter when the text itself failed to save', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      contentStored: false,
+      delivery: { delivered: true, channels: {} },
+    });
+    renderModal();
+
+    submitFeedback('great app');
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('could not save'));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('does not call the API or toast for empty/whitespace-only content', () => {

@@ -31,12 +31,23 @@ const useLakeConfigHistoryMock = vi.fn(() => ({
   error: null,
   refetch: vi.fn(),
 }));
+// Steady state for the tests that don't care about the acquisition queue: an empty queue, which
+// keeps the Proposals tab hidden. The proposals suite below overrides it per test.
+const useDataLakeProposalsMock = vi.fn(() => ({
+  data: [] as unknown[],
+  isLoading: false,
+  isForbidden: false,
+  error: null,
+}));
+const reviewProposalMutate = vi.fn();
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
   useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
   useDataLakeSpend: (...args: unknown[]) => useDataLakeSpendMock(...args),
   useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
+  useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
+  useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
 }));
 
 // The picker's options come from an async react-query hook. Mock it so the modal renders
@@ -915,5 +926,136 @@ describe('DataLakeSettingsModal - required passage size', () => {
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
     expect(screen.getByTestId('datalake-passage-target-help').textContent).toContain('between 64 and 1500');
     expect(updateMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('DataLakeSettingsModal - Proposals tab visibility', () => {
+  const manageableLake = { ...openLake, id: 'lake-prop-1' };
+  const readerLake = { ...openLake, id: 'lake-prop-2', canManage: false };
+
+  const queued = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'prop-1',
+      dataLakeId: 'lake-prop-1',
+      status: 'pending',
+      sourceUrl: 'https://example.com/report',
+      canonicalSourceKey: 'https://example.com/report',
+      title: 'Quarterly report',
+      proposedTags: [],
+      provenance: { producer: 'research_run', retrievedAt: new Date('2026-08-01') },
+      ...over,
+    }) as never;
+
+  const withQueue = (proposals: unknown[], over: Record<string, unknown> = {}) =>
+    useDataLakeProposalsMock.mockReturnValue({
+      data: proposals,
+      isLoading: false,
+      isForbidden: false,
+      error: null,
+      ...over,
+    });
+
+  beforeEach(() => {
+    useDataLakeProposalsMock.mockClear();
+    reviewProposalMutate.mockClear();
+    withQueue([]);
+  });
+
+  it('hides the tab while the queue is empty - a permanently empty tab reads as broken', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-proposals')).not.toBeInTheDocument();
+  });
+
+  it('shows the tab with a count once something is waiting', () => {
+    withQueue([queued(), queued({ id: 'prop-2' })]);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (2)');
+  });
+
+  // Ruling on the last proposal used to make the tab vanish under the reviewer mid-action, silently
+  // relocating them to the Settings form - it read as the app losing their place, and hid the
+  // confirmation that they had finished the queue.
+  it('keeps the tab for the rest of the session once the queue empties', () => {
+    withQueue([queued()]);
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (1)');
+
+    withQueue([]);
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (0)');
+  });
+
+  it('never fetches the queue for a caller who cannot manage the lake', () => {
+    withQueue([queued()]);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(useDataLakeProposalsMock).toHaveBeenCalledWith('lake-prop-2', 'pending', { enabled: false });
+    expect(screen.queryByTestId('datalake-settings-tab-proposals')).not.toBeInTheDocument();
+  });
+
+  it('removes the tab retroactively on a 403 and shows no error paint', () => {
+    withQueue([queued()], { isForbidden: true, error: new Error('403') });
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-proposals')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-proposals-error')).not.toBeInTheDocument();
+  });
+
+  it('records an approval through the review mutation', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-approve-btn'));
+
+    expect(reviewProposalMutate).toHaveBeenCalledWith({ proposalId: 'prop-1', decision: 'approve' });
+  });
+
+  it('hides the Settings form actions while the Proposals tab is open (nothing to save there)', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
   });
 });

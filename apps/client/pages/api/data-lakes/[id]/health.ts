@@ -16,6 +16,8 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
  *
  * Returns the four retrievability predicates and the reachable-content headline as RAW per-predicate
  * results; the UI derives the badge, so this contract stays stable when the presentation changes.
+ * Also returns `duplicateMembers` (#2239): members sharing an exact fileName with a sibling in this
+ * lake, report-only - no repair/removal action exists here yet.
  * Health is advisory and never blocks anything.
  *
  * Same read gate as GET /api/data-lakes/:id (owner/org/tag/public), with the not-found-style denial

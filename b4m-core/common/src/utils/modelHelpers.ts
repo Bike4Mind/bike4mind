@@ -32,7 +32,7 @@ export function isGeminiImageModel(model?: string | null): boolean {
   return (GEMINI_IMAGE_MODELS as readonly string[]).includes(model);
 }
 
-/** Returns true for BlackForest Labs image models; derives from BFL_IMAGE_MODELS so it never drifts. */
+/** Returns true for Black Forest Labs image models; derives from BFL_IMAGE_MODELS so it never drifts. */
 export function isBflImageModel(model: string): model is BFLImageModel;
 export function isBflImageModel(model?: string | null): boolean;
 export function isBflImageModel(model?: string | null): boolean {
@@ -41,10 +41,13 @@ export function isBflImageModel(model?: string | null): boolean {
 }
 
 /**
- * Image models offering a prompt-enhancement toggle, where the provider rewrites and expands the
- * prompt before generating. BFL takes it as `prompt_upsampling`; GeminiImageService maps the same
- * flag onto Google's `enhancePrompt` (text-to-image only - its `edit()` path builds no generation
- * config). OpenAI discards the parameter, so GPT-Image and DALL-E are excluded.
+ * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
+ * rewrite and expand the prompt before generating. BFL takes it as `prompt_upsampling` and honors
+ * it. Gemini models are still included here for historical/UI-grouping reasons, but
+ * GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
+ * `generateImages` rejects the mere presence of `enhancePrompt`, so the toggle is a no-op for
+ * Gemini today. Do not reintroduce a Gemini enhancePrompt mapping without confirming Google's API
+ * accepts it. OpenAI discards the parameter, so GPT-Image and DALL-E are excluded.
  *
  * One predicate on purpose: the settings UI, the reset defaults and the image-template snapshot all
  * have to agree about this field, and they previously did so through three separate BFL checks.

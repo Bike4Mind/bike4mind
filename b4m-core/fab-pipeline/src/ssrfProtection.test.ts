@@ -207,6 +207,186 @@ describe('SSRF - IPv6 families that bypassed the guard (site-local, 6to4, Teredo
 });
 
 /**
+ * The two spellings per-hextet prefix matching did not cover. Neither is reachable through the callers
+ * in this file - both canonicalise before the predicate sees an address - but this module is offered as
+ * a reusable primitive, so it has to hold for input those callers never produce.
+ *
+ * fe00::/9 is IETF-reserved and unassigned, which is exactly why no arm ever claimed it: the list of
+ * arms grew from `fe8`-`feb` to `fec`-`fef` and still stopped short of fe00-fe7f. The mapped form is
+ * the same defect one level down, since `::ffff:` is only one of several legal spellings of that
+ * prefix. Both are now closed by testing the range instead of listing spellings: one `fe` prefix for
+ * the whole /8, and canonicalizing to RFC 5952 before dispatch.
+ */
+describe('SSRF - IPv6 spellings missed by per-hextet prefix arms (fe00::/9, uncompressed mapped form)', () => {
+  it.each([
+    ['reserved fe00::/9, low end', 'http://[fe00::1]/'],
+    ['reserved fe00::/9, midpoint', 'http://[fe40::1]/'],
+    ['reserved fe00::/9, high end', 'http://[fe7f::1]/'],
+    // Non-differentiating on purpose, and worth knowing why: WHATWG hexifies the dotted tail, so this
+    // arrives as `[::ffff:7f00:1]` and was already refused before the predicate was fixed. It pins the
+    // feeder's canonicalisation, not the fix - the predicate-level case below is what demonstrates that.
+    ['uncompressed IPv4-mapped loopback', 'http://[0:0:0:0:0:ffff:127.0.0.1]/'],
+  ])('refuses %s', async (_label, url) => {
+    await expect(validateUrlForFetch(url)).resolves.toMatchObject({ valid: false });
+  });
+
+  it('blocks the whole fe00::/8 rather than the ranges someone remembered to list', () => {
+    // Boundaries of the span that was open, bracketed by the two arms it used to sit between.
+    expect(isPrivateIP('fe00::1')).toBe(true);
+    expect(isPrivateIP('fe40::1')).toBe(true);
+    expect(isPrivateIP('fe7f::1')).toBe(true);
+    expect(isPrivateIP('fe80::1')).toBe(true);
+    expect(isPrivateIP('fec0::1')).toBe(true);
+    expect(isPrivateIP('feff::1')).toBe(true);
+  });
+
+  it('judges the uncompressed IPv4-mapped spelling by its embedded IPv4, both ways', () => {
+    // The mapped arm matches on `::ffff:`, so a written-out zero run fell through every branch and read
+    // as public. Canonicalizing first makes both spellings the same case - including the negative one:
+    // the dotted tail is still decoded exactly rather than blanket-refused.
+    expect(isPrivateIP('0:0:0:0:0:ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('0:0:0:0:0:ffff:169.254.169.254')).toBe(true);
+    expect(isPrivateIP('0000:0000:0000:0000:0000:ffff:10.0.0.1')).toBe(true);
+    expect(isPrivateIP('0:0:0:0:0:ffff:8.8.8.8')).toBe(false);
+  });
+
+  it('lands other written-out spellings on the arms that already cover them', () => {
+    expect(isPrivateIP('0:0:0:0:0:0:0:1')).toBe(true);
+    expect(isPrivateIP('0100:0000:0000:0000:0000:0000:0000:0001')).toBe(true);
+    expect(isPrivateIP('0064:ff9b:0:0:0:0:1:2')).toBe(true);
+    expect(isPrivateIP('2001:0db8:0:0:0:0:0:1')).toBe(true);
+  });
+
+  it('leaves public addresses alone, which is what bounds both widenings', () => {
+    // Global unicast is 2000::/3, so no public address carries a leading-zero first hextet and none can
+    // canonicalise into a `::`-leading or `fe`-leading form. These pin that claim, so a future widening
+    // of either rule cannot silently start over-blocking.
+    expect(isPrivateIP('2001:4860::8888')).toBe(false);
+    expect(isPrivateIP('2606:4700::1111')).toBe(false);
+    expect(isPrivateIP('2a00:1450:4001:81b::200e')).toBe(false);
+    expect(isPrivateOrInternalHostname('[2001:4860::8888]')).toBe(false);
+  });
+
+  it('blocks the new spellings at the hostname level too', () => {
+    expect(isPrivateOrInternalHostname('[fe00::1]')).toBe(true);
+    expect(isPrivateOrInternalHostname('[0:0:0:0:0:ffff:127.0.0.1]')).toBe(true);
+  });
+
+  it('keeps refusing the reserved low space when canonicalisation moves the zero run', () => {
+    // The trap in canonicalising before dispatch: RFC 5952 compresses the LONGEST zero run, not the
+    // leading one, so these lose the leading `::` the compatible-form arm matches on - `::1:0:0:0:0:0`
+    // becomes `0:0:1::`. They are inside the reserved 0000::/16 either way, and were refused before
+    // canonicalisation existed, so allowing them would be a regression rather than a new gap.
+    expect(isPrivateIP('::1:0:0:0:0:0')).toBe(true);
+    expect(isPrivateIP('::ffff:0:0:0:0')).toBe(true);
+    expect(isPrivateIP('::fe80:0:0:0:0')).toBe(true);
+    expect(isPrivateIP('0:0:1::')).toBe(true);
+  });
+
+  it('still refuses zero-padded spellings that are too malformed to canonicalise', () => {
+    // `normalizeIpv6` returns input it cannot parse untouched, which is the only path that still reaches
+    // the zero-padded prefix arms. Without them these read as public, so this is the guard against
+    // deleting those arms as unreachable. An over-long hextet is the reason they bail out here; garbage
+    // carrying non-hex letters is refused earlier by the charset gate instead (see below).
+    expect(isPrivateIP('2001:0db8:12345::1')).toBe(true);
+    expect(isPrivateIP('2001:0000:12345::1')).toBe(true);
+    expect(isPrivateIP('0064:ff9b:12345::1')).toBe(true);
+    expect(isPrivateIP('0100::12345:1')).toBe(true);
+    // Non-hex garbage is not an address in any spelling, so it is not this predicate's `true` to give.
+    expect(isPrivateIP('2001:0db8:zz::1')).toBe(false);
+  });
+
+  it('refuses the special-purpose ranges IANA assigned after the arm list was written', () => {
+    // RFC 9637 documentation and RFC 9602 SRv6 SID space, both 2024. Same category as the 2001:db8::/32
+    // arm that already exists, and the reason the list needs range tests rather than remembered prefixes.
+    expect(isPrivateIP('3fff::1')).toBe(true);
+    expect(isPrivateIP('3fff:fff:ffff::1')).toBe(true);
+    expect(isPrivateIP('5f00::1')).toBe(true);
+    expect(isPrivateIP('5f00:ffff::1')).toBe(true);
+    // The /20 boundary matters: above it is unassigned global unicast IANA can still allocate, so a
+    // `3fff:` prefix test would over-block it.
+    expect(isPrivateIP('3fff:1000::1')).toBe(false);
+    expect(isPrivateIP('3fff:ffff::1')).toBe(false);
+    expect(isPrivateIP('5f01::1')).toBe(false);
+  });
+
+  it('only decodes an embedded IPv4 from an exact dotted quad', () => {
+    // `::ffff:1:2:3:8.8.8.8` is inside reserved 0000::/16 and is NOT a mapped address - hextets 4-6 are
+    // non-zero. Judging it by its trailing quad alone let it pass as public.
+    expect(isPrivateIP('::ffff:1:2:3:8.8.8.8')).toBe(true);
+    expect(isPrivateIP('::1:2:3:8.8.8.8')).toBe(true);
+    // The real mapped and compatible forms still resolve through their embedded IPv4, both ways.
+    expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
+    expect(isPrivateIP('::169.254.169.254')).toBe(true);
+    expect(isPrivateIP('::ffff:a9fe:a9fe')).toBe(true);
+  });
+
+  it('reads a literal the same whether it carries a port or a zone index', () => {
+    // `stripIpv6Brackets` needs the string to END in `]`, so a bracketed literal with a port used to
+    // reach the arms still bracketed and match nothing. A zone index is not part of the address either.
+    expect(isPrivateIP('[fe80::1]:8080')).toBe(true);
+    expect(isPrivateIP('[0:0:0:0:0:ffff:127.0.0.1]:443')).toBe(true);
+    expect(isPrivateIP('fe80::1%eth0')).toBe(true);
+    expect(isPrivateIP('[2606:4700::1111]:443')).toBe(false);
+  });
+
+  it('refuses a dotted quad anywhere but the tail, whatever precedes it', () => {
+    // A quad is legal only as the last two hextets. Bailing out on the head-half shape was not enough:
+    // with no hex hextet in front, nothing downstream matched and the address read as PUBLIC - the cloud
+    // metadata endpoint among them. The shape is refused outright now.
+    expect(isPrivateIP('127.0.0.1::')).toBe(true);
+    expect(isPrivateIP('169.254.169.254::')).toBe(true);
+    expect(isPrivateIP('10.0.0.1::')).toBe(true);
+    expect(isPrivateIP('8.8.8.8::')).toBe(true);
+    expect(isPrivateIP('2001:db8:1.2.3.4::')).toBe(true);
+    expect(isPrivateIP('2606:4700:1.2.3.4::')).toBe(true);
+    expect(isPrivateIP('0:1.2.3.4::')).toBe(true);
+    expect(isPrivateIP('0:0:1.2.3.4::')).toBe(true);
+    // The legal placement still resolves through the embedded address, in both directions, and an IPv4
+    // literal with a port stays on the IPv4 path rather than being refused as a misplaced quad.
+    expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('8.8.8.8:443')).toBe(false);
+    expect(isPrivateIP('10.0.0.1:8080')).toBe(true);
+  });
+
+  it('refuses a bracketed literal whose spelling the port strip does not recognise', () => {
+    // The strip handles exactly `[addr]:port`. Every neighbouring shape leaves a stray bracket, and those
+    // used to fall through the charset gate as public - including `fe80::1]`, which was refused before that
+    // gate existed. An address-shaped string this module cannot parse is refused, not waved through.
+    expect(isPrivateIP('[fe80::1]:8080:9090')).toBe(true);
+    expect(isPrivateIP('[fe80::1]:')).toBe(true);
+    expect(isPrivateIP('[fe80::1')).toBe(true);
+    expect(isPrivateIP('fe80::1]')).toBe(true);
+    expect(isPrivateIP('[2606:4700::1111')).toBe(true);
+    // The spellings it does recognise still resolve by address, so a public host is not caught.
+    expect(isPrivateIP('[2606:4700::1111]')).toBe(false);
+    expect(isPrivateIP('[2606:4700::1111]:443')).toBe(false);
+  });
+
+  it('does not read a hostname as an address in a family whose letters it shares', () => {
+    // Every family arm is a prefix test and `isPrivateIP` sends all non-dotted-quad input to the IPv6
+    // path, so a name starting with the same characters used to match one: `fetch.` and `fe.` hit
+    // fe00::/8, `ffmpeg.org` hit multicast, `fdic.gov` hit ULA. Requiring a colon is what separates a
+    // spelling of an address from a name that merely looks like one.
+    expect(isPrivateIP('fetch.example.com')).toBe(false);
+    expect(isPrivateIP('fe.example.com')).toBe(false);
+    expect(isPrivateIP('ffmpeg.org')).toBe(false);
+    expect(isPrivateIP('fdic.gov')).toBe(false);
+    expect(isPrivateIP('fedex.com:8080')).toBe(false);
+    // The addresses those names were being confused with are still refused.
+    expect(isPrivateIP('fe00::1')).toBe(true);
+    expect(isPrivateIP('ff02::1')).toBe(true);
+    expect(isPrivateIP('fd00::1')).toBe(true);
+    // And name-based blocking still belongs to the hostname predicate, which is unaffected.
+    expect(isPrivateOrInternalHostname('localhost')).toBe(true);
+    expect(isPrivateOrInternalHostname('metadata.google.internal')).toBe(true);
+  });
+});
+
+/**
  * The connect-time pin. `validateUrlForFetch` resolving a hostname proves nothing about the address
  * the socket later dials, because the HTTP client resolves it again - so a name answering public then
  * private (DNS rebinding) defeated every URL-level check the module had. These tests drive the two
@@ -320,5 +500,162 @@ describe('SSRF - connect-time lookup pin (DNS rebinding)', () => {
     expect(agentOptions(ssrfSafeHttpsAgent).lookup).toBe(ssrfSafeLookup);
     expect(agentOptions(ssrfSafeHttpAgent).keepAlive).toBe(false);
     expect(agentOptions(ssrfSafeHttpsAgent).keepAlive).toBe(false);
+  });
+});
+
+/**
+ * The generated-corpus checks. Every gap found in this module was a verdict that depended on the SPELLING
+ * of an address rather than the address itself, and every one was found by generating spellings and
+ * comparing verdicts rather than by reading the code. Hand-picked cases only ever prove the cases someone
+ * thought of, so these assert the two properties the arms are supposed to have:
+ *
+ *   1. spelling invariance - all legal spellings of one address get one verdict, with ONE deliberate
+ *      exception named and pinned below: the two v4-embedding branches judge a dotted tail exactly and
+ *      refuse a hex tail undecoded;
+ *   2. range coverage - a family is refused across its WHOLE prefix, not at the hextets someone listed.
+ *
+ * Keep these table-driven and cheap. They are the regression net for the defect class, not for a case.
+ */
+describe('SSRF - IPv6 verdicts follow the address, not its spelling', () => {
+  const SPELLINGS: Array<[string, string[], boolean]> = [
+    [
+      'fe80::1',
+      [
+        'FE80::1',
+        'fe80:0:0:0:0:0:0:1',
+        'fe80:0000:0000:0000:0000:0000:0000:0001',
+        '[fe80::1]',
+        '[fe80::1]:8080',
+        'fe80::1%eth0',
+      ],
+      true,
+    ],
+    ['fe00::1', ['fe00:0:0:0:0:0:0:1', '[fe00::1]', 'FE00::1'], true],
+    ['::1', ['0:0:0:0:0:0:0:1', '0000:0000:0000:0000:0000:0000:0000:0001', '[::1]', '[::1]:8080'], true],
+    [
+      '::ffff:127.0.0.1',
+      ['0:0:0:0:0:ffff:127.0.0.1', '0000:0000:0000:0000:0000:ffff:127.0.0.1', '[::ffff:127.0.0.1]'],
+      true,
+    ],
+    ['::ffff:169.254.169.254', ['0:0:0:0:0:ffff:169.254.169.254', '::ffff:a9fe:a9fe'], true],
+    ['::ffff:8.8.8.8', ['0:0:0:0:0:ffff:8.8.8.8', '[::ffff:8.8.8.8]'], false],
+    ['3fff::1', ['3fff:0:0:0:0:0:0:1', '[3fff::1]'], true],
+    ['5f00::1', ['5f00:0:0:0:0:0:0:1', '[5f00::1]'], true],
+    ['2606:4700::1111', ['2606:4700:0:0:0:0:0:1111', '[2606:4700::1111]', '[2606:4700::1111]:443'], false],
+    ['2001:4860::8888', ['2001:4860:0:0:0:0:0:8888', '[2001:4860::8888]'], false],
+  ];
+
+  it.each(SPELLINGS)('reads %s identically in every legal spelling', (canonical, alternates, expected) => {
+    expect(isPrivateIP(canonical)).toBe(expected);
+    for (const spelling of alternates) {
+      expect(isPrivateIP(spelling), `${spelling} should match ${canonical}`).toBe(expected);
+    }
+  });
+
+  it('refuses each named family across its whole prefix, not just the listed hextets', () => {
+    const hex = (n: number) => n.toString(16).padStart(4, '0');
+    const refused: string[] = [];
+    // fe00::/8 - every first hextet, which is what the fe8-feb and fec-fef lists kept missing parts of.
+    for (let h = 0xfe00; h <= 0xfeff; h++) refused.push(`${hex(h)}::1`);
+    // fc00::/7 unique-local and ff00::/8 multicast, sampled across each prefix.
+    for (let h = 0xfc00; h <= 0xfdff; h += 7) refused.push(`${hex(h)}::1`);
+    for (let h = 0xff00; h <= 0xffff; h += 7) refused.push(`${hex(h)}::1`);
+    // 3fff::/20 documentation (RFC 9637) - the in-range half only.
+    for (let second = 0x0000; second <= 0x0fff; second += 37) refused.push(`3fff:${hex(second)}::1`);
+    // 5f00::/16 SRv6 SIDs (RFC 9602).
+    for (let second = 0x0000; second <= 0xffff; second += 271) refused.push(`5f00:${hex(second)}::1`);
+
+    const permitted = refused.filter(ip => !isPrivateIP(ip));
+    expect(permitted, `these should be refused: ${permitted.slice(0, 8).join(', ')}`).toEqual([]);
+  });
+
+  it('judges a hex tail strictly and a dotted tail exactly, on purpose', () => {
+    // The one place spelling invariance does NOT hold, and it must not be "fixed" to satisfy the property.
+    // A dotted tail is decoded through `isPrivateIPv4`; a hex tail is refused undecoded. So these pairs are
+    // the same address with opposite verdicts. Decoding the hex tail instead is the over-block the mapped-arm
+    // comment rules out: an `ffff` hextet appears in ordinary public addresses, and `validateUrlForFetch`
+    // refuses a host when ANY resolved IP is private, so it would sink a dual-stack host's healthy A record.
+    expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::ffff:808:808')).toBe(true);
+    expect(isPrivateIP('::8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::808:808')).toBe(true);
+    // The strictness is only about DECODING, not about which addresses are private: a private embedded quad
+    // is refused in either spelling.
+    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
+    expect(isPrivateIP('::ffff:a9fe:a9fe')).toBe(true);
+  });
+
+  it('keeps internal-name suffixes blocked, zone-looking characters and all', () => {
+    // These suffix arms had exactly one assertion in the whole suite, which is why an unconditional `%`
+    // strip could truncate a NAME (`x%y.local` -> `x`) and silently stop them firing. A `%` is a forbidden
+    // domain code point, so WHATWG rejects these before either feeder sees them - but both predicates are
+    // re-exported as a general primitive, so the names have to survive the strip.
+    for (const name of [
+      'x.local',
+      'a.cluster.local',
+      'p.svc.cluster.local',
+      'q.pod.cluster.local',
+      'r.localhost',
+      'localhost',
+    ]) {
+      expect(isPrivateOrInternalHostname(name), name).toBe(true);
+    }
+    for (const name of [
+      'x%y.local',
+      'a%b.cluster.local',
+      'pod%1.svc.cluster.local',
+      'my%thing.pod.cluster.local',
+      'host%0.localhost',
+    ]) {
+      expect(isPrivateOrInternalHostname(name), name).toBe(true);
+    }
+    // A zone index on a real literal is still stripped, which is what the helper exists for.
+    expect(isPrivateIP('fe80::1%eth0')).toBe(true);
+    expect(isPrivateIP('127.0.0.1%eth0')).toBe(true);
+    expect(isPrivateIP('8.8.8.8%eth0')).toBe(false);
+    expect(isPrivateOrInternalHostname('[fe80::1]')).toBe(true);
+    // And an ordinary public name is still not private, with or without a stray `%`.
+    expect(isPrivateOrInternalHostname('example.com')).toBe(false);
+    expect(isPrivateOrInternalHostname('ex%ample.com')).toBe(false);
+  });
+
+  it('keeps every exported gate agreeing about what counts as IPv4', () => {
+    // The port strip lives in one shared helper for this reason: when it went into `isPrivateIP` alone,
+    // `8.8.8.8:443` came back public from one export and private from the other, which is the same
+    // gates-disagree shape that produced the original bracketed-IPv6 hole.
+    for (const host of ['8.8.8.8:443', '1.2.3.4:80', '10.0.0.1:8080', '127.0.0.1:80', '169.254.169.254:8080']) {
+      expect(isPrivateOrInternalHostname(host), host).toBe(isPrivateIP(host));
+    }
+    expect(isPrivateIP('8.8.8.8:443')).toBe(false);
+    expect(isPrivateIP('10.0.0.1:8080')).toBe(true);
+    // Zone indexes travel through the same helper, so a bare quad with one is still judged as IPv4.
+    expect(isPrivateIP('127.0.0.1%eth0')).toBe(true);
+    expect(isPrivateIP('169.254.169.254%1')).toBe(true);
+    expect(isPrivateIP('8.8.8.8%eth0')).toBe(false);
+  });
+
+  it('refuses an address-shaped string it cannot parse, whatever the tail looks like', () => {
+    // Found by a reviewer sweep at 7c49de04: nine hextets' worth, so canonicalisation bails on the width
+    // check, and the end-anchored quad test then waved it past as public. The whole-string match closes it.
+    expect(isPrivateIP('1:2:3:4:5:6:7:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('169.254.169.254:1.2.3.4')).toBe(true);
+    expect(isPrivateIP('dead:beef:1.2.3.4')).toBe(true);
+    expect(isPrivateIP('a:b:c:d:e:f:127.0.0.1')).toBe(true);
+  });
+
+  it('leaves global unicast alone outside the prefixes it names', () => {
+    const hex = (n: number) => n.toString(16).padStart(4, '0');
+    const public6: string[] = [];
+    // 2000::/3 is global unicast. Skip the first hextets this module refuses for a stated reason: 2001:
+    // (Teredo / documentation / the 2001::/23 special-purpose block), 2002: (6to4) and 3fff: (documentation).
+    for (let h = 0x2000; h <= 0x3fff; h += 11) {
+      if (h === 0x2001 || h === 0x2002 || h === 0x3fff) continue;
+      public6.push(`${hex(h)}:4700::1111`);
+    }
+    // Above the 3fff::/20 ceiling is ordinary unassigned global unicast IANA can still allocate.
+    for (let second = 0x1000; second <= 0xffff; second += 271) public6.push(`3fff:${hex(second)}::1`);
+
+    const blocked = public6.filter(ip => isPrivateIP(ip));
+    expect(blocked, `these should be permitted: ${blocked.slice(0, 8).join(', ')}`).toEqual([]);
   });
 });

@@ -67,9 +67,6 @@ interface SessionLayoutProps {
   dockedChatTitle?: React.ReactNode;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
-  /** When true, the top toolbar bar renders transparent (no solid background) so a surface's
-   *  own backdrop shows through - used by the chat-first Data Lake surface. (#836) */
-  transparentTop?: boolean;
 }
 
 /**
@@ -192,7 +189,6 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   floatingChatHeaderActions,
   dockedChatTitle,
   onSessionCreated,
-  transparentTop,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const { changeSession, currentSessionId: contextSessionId, setCurrentSessionId, setCurrentSession } = useSessions();
@@ -431,12 +427,35 @@ const SessionContainer: FC<SessionLayoutProps> = ({
     setShowPinnedOnly(false);
   }, [currentSessionId, setShowPinnedOnly]);
 
+  // The side-by-side split (KnowledgeViewer beside the chat). Mobile collapses it to a
+  // stack, so it is not one there.
+  const isVerticalSplit = layout === 'vertical' && !isMobile;
+  // Mirrors the guard on the KnowledgeViewer Box below: where that renders, the chat's own
+  // top bar has a header to line up with, so it joins the app-chrome band (56px, level1
+  // ground, 16px gutters, contents centred vertically). In the default full-width chat it
+  // keeps its original loose 60px header - framing it there moves the Data Lakes button.
+  const isKnowledgeViewerOpen = layout !== 'hide' && layout !== 'dockRight' && layout !== 'dockBottom';
+  // Only the edge FACING the splitter is padded here - the notebook layout already puts an
+  // 8px gutter around the outside of the content, and paying it twice reads as a wide frame.
+  // The row is reversed, so the chat sits left (inner edge = right) and the viewer right
+  // (inner edge = left). Both panes carry their own 1px/8px frame already; this is only the
+  // space between them.
+  const chatPanePadding = isVerticalSplit ? { paddingRight: '8px' } : {};
+  const knowledgePanePadding = isVerticalSplit ? { paddingLeft: '8px' } : {};
+
   return (
     <ChatCompletionProvider sessionId={currentSessionId ?? null}>
       <Box
         sx={{
           display: 'flex',
-          flexDirection: layout === 'horizontal' || (isMobile && layout === 'vertical') ? 'column' : 'row',
+          // row-reverse in the split: the chat sits LEFT and the KnowledgeViewer right.
+          // DOM order stays knowledge -> splitter -> chat, which ResizableSplitter's
+          // children[0]/[2] lookup depends on; it flips the drag sign instead.
+          flexDirection: isVerticalSplit
+            ? 'row-reverse'
+            : layout === 'horizontal' || (isMobile && layout === 'vertical')
+              ? 'column'
+              : 'row',
           rowGap: layout === 'horizontal' || (isMobile && layout === 'vertical') ? '10px' : '0px',
           p: isMobile ? '0px' : '0px',
           height: '100%',
@@ -446,7 +465,10 @@ const SessionContainer: FC<SessionLayoutProps> = ({
         }}
       >
         {layout !== 'hide' && layout !== 'dockRight' && layout !== 'dockBottom' && (
-          <Box ref={knowledgeRef} sx={{ transition: 'all 0.3s ease', ...layoutStyles.knowledge }}>
+          <Box
+            ref={knowledgeRef}
+            sx={{ transition: 'all 0.3s ease', ...layoutStyles.knowledge, ...knowledgePanePadding }}
+          >
             <KnowledgeViewer autoHideOnEmpty={autoHideOnEmpty} />
           </Box>
         )}
@@ -461,6 +483,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
             opacity: 1,
             ...(layout === 'pip' ? {} : layoutStyles.chat),
             ...layoutStyles.session,
+            ...chatPanePadding,
             position: layout === 'pip' ? 'fixed' : 'relative',
           }}
         >
@@ -483,11 +506,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                 position: 'relative',
                 display: 'flex',
                 flexDirection: 'column',
-                // overflow: 'hidden', // Prevent content from escaping flex container on mobile
-                pt: {
-                  xs: project ? '60px' : 0,
-                  sm: '60px',
-                },
+                overflow: 'hidden', // clips children to the frame's 8px radius
               }}
             >
               {/* SessionTop header. Skipped in floatingChat/dock like the chat content below:
@@ -496,26 +515,26 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               {layout !== 'floatingChat' && layout !== 'dockRight' && layout !== 'dockBottom' && (
                 <Box
                   sx={theme => ({
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
+                    // In flow, not absolute: it is the first row of the column, so it reserves
+                    // its own height instead of needing a matching pt on the parent.
                     width: '100%',
-                    height: '60px',
+                    flexShrink: 0,
+                    // Only in the band: the full-width chat's bar is not a chrome header and
+                    // a rule under it just cuts the pane in two.
+                    borderBottom: isKnowledgeViewerOpen ? '1px solid' : 'none',
                     borderColor: 'divider',
-                    background: transparentTop ? 'transparent' : theme.palette.background.body,
+                    background: isKnowledgeViewerOpen ? theme.palette.background.level1 : theme.palette.background.body,
                     zIndex: 1,
-                    padding: 0,
+                    padding: '8px 8px 16px',
                     display: {
-                      xs: project ? 'block' : 'none',
-                      sm: 'block',
+                      xs: project ? (isKnowledgeViewerOpen ? 'flex' : 'block') : 'none',
+                      sm: isKnowledgeViewerOpen ? 'flex' : 'block',
                     },
+                    // Only the band is a fixed 56px; outside it the bar is content-sized.
+                    ...(isKnowledgeViewerOpen ? { height: '56px', alignItems: 'center', px: '16px', pb: '8px' } : {}),
                   })}
                 >
-                  <SessionTop
-                    listClosed={listClosed}
-                    onChatWidthToggle={setIsFullWidth}
-                    transparentTop={transparentTop}
-                  />
+                  <SessionTop listClosed={listClosed} onChatWidthToggle={setIsFullWidth} />
                 </Box>
               )}
               {/* Skip rendering chat content when floatingChat/dock is active — FloatingChatWindow
@@ -691,7 +710,16 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               {/* px aligns the message/status content with the input row (SessionBottom
                   pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
               <Box
-                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '24px' }}
+                sx={{
+                  flex: 1,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  pl: '16px',
+                  // Narrower on the right: the message list's own scrollbar already sits there.
+                  pr: '8px',
+                  pb: '24px',
+                }}
               >
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />

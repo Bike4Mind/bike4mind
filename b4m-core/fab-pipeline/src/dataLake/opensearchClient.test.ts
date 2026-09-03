@@ -33,6 +33,7 @@ import {
   OpenSearchClient,
   isTransientOpenSearchError,
   isIndexAlreadyExistsError,
+  isIndexNotFoundError,
   getOpenSearchRetryAfterMs,
 } from './opensearchClient';
 
@@ -106,6 +107,42 @@ describe('isIndexAlreadyExistsError', () => {
   });
 });
 
+describe('isIndexNotFoundError', () => {
+  it('detects a 404 with an index_not_found_exception body', () => {
+    const err = Object.assign(new Error('no such index [x]'), {
+      statusCode: 404,
+      body: { error: { type: 'index_not_found_exception' } },
+    });
+    expect(isIndexNotFoundError(err)).toBe(true);
+  });
+
+  it('detects it from the message alone when the body is absent', () => {
+    expect(isIndexNotFoundError(new Error('index_not_found_exception: no such index'))).toBe(true);
+  });
+
+  it('does not flag an unrelated 404', () => {
+    // The purge treats this error as a satisfied removal, so keeping it keyed to the TYPE rather
+    // than the status code is what stops it swallowing a genuine failure (#2087).
+    const err = Object.assign(new Error('resource_not_found_exception'), {
+      statusCode: 404,
+      body: { error: { type: 'resource_not_found_exception' } },
+    });
+    expect(isIndexNotFoundError(err)).toBe(false);
+  });
+
+  it('does not flag a transient error', () => {
+    expect(isIndexNotFoundError(responseError(503))).toBe(false);
+  });
+
+  it('is disjoint from isIndexAlreadyExistsError', () => {
+    const exists = Object.assign(new Error('resource_already_exists_exception'), {
+      statusCode: 400,
+      body: { error: { type: 'resource_already_exists_exception' } },
+    });
+    expect(isIndexNotFoundError(exists)).toBe(false);
+  });
+});
+
 describe('getOpenSearchRetryAfterMs', () => {
   it('reads numeric Retry-After seconds from error.headers', () => {
     const err = Object.assign(new Error('429'), { headers: { 'retry-after': '2' } });
@@ -128,6 +165,30 @@ describe('getOpenSearchRetryAfterMs', () => {
   it('returns null when there is no Retry-After header', () => {
     expect(getOpenSearchRetryAfterMs(new Error('429'))).toBeNull();
     expect(getOpenSearchRetryAfterMs(Object.assign(new Error('429'), { headers: {} }))).toBeNull();
+  });
+
+  // #2118: withRetry treats any non-null return as authoritative OVER its backoff, so a zero is not
+  // "wait a moment" - it is "abandon the backoff and retry immediately", five times, against a
+  // cluster that only sends Retry-After when it is already struggling.
+  it.each([
+    ['an explicit zero', '0'],
+    ['a negative value', '-5'],
+  ])('returns null for %s rather than disabling the backoff', (_label, value) => {
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': value } });
+    expect(getOpenSearchRetryAfterMs(err)).toBeNull();
+  });
+
+  it('returns null for an HTTP date that has already elapsed', () => {
+    // Needs no misbehaving server: clock skew, or seconds of queueing between the cluster writing
+    // the header and this code reading it, is enough. Math.max(0, ...) used to floor this to zero.
+    const past = new Date(Date.now() - 5000).toUTCString();
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': past } });
+    expect(getOpenSearchRetryAfterMs(err)).toBeNull();
+  });
+
+  it('still honours a positive hint, so the fix does not just disable Retry-After', () => {
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': '1' } });
+    expect(getOpenSearchRetryAfterMs(err)).toBe(1000);
   });
 });
 
