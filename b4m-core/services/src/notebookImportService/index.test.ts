@@ -274,17 +274,22 @@ describe('notebook import: artifacts', () => {
     expect(result.importedAttachments).toBe(1);
   });
 
-  it('leaves the id to the creation path without preserveIds, and records the one it returns', async () => {
-    // The pair matters: an id that is minted but not the one recorded leaves the notebook pointing
-    // at an artifact nobody can read.
-    //
-    // No `id` is passed at all. The import's `generateId` port is a bare uuid shared with knowledge
-    // storage keys, and an artifact id has to carry the `artifact_{type}_{identifier}_{timestamp}_
-    // {index}` shape the client parses - so only the creation path can mint one.
+  it('remints the id without preserveIds but carries the source identifier across', async () => {
+    // `abc` is the identifier segment of the fixture's source id, and it has to survive the remint:
+    // the imported reply still names it, and that is what the rendered card looks the row up by.
+    // A slug of the title ("my-chart") would only match when the two happen to agree.
     const { adapters } = await importArtifact(ARTIFACT);
 
     const [payload] = (adapters.createArtifact as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(payload.id).toBeUndefined();
+    expect(payload.id).not.toBe(ARTIFACT.id);
+    expect(payload.id.split('_')[2]).toBe('abc');
+  });
+
+  it('records the id the creation path returns, not the one it was handed', async () => {
+    // The pair matters: an id that is stored but not the one recorded leaves the notebook pointing
+    // at an artifact nobody can read.
+    const { adapters } = await importArtifact(ARTIFACT);
+
     expect(adapters.sessionRepository.updateById).toHaveBeenCalledWith(
       'new-session-id',
       expect.objectContaining({ artifactIds: ['artifact_code_red-circle-a1b2c3_1700000000000_0'] })

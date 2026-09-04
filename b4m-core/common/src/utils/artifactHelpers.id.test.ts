@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createArtifactId } from './artifactHelpers';
+import { createArtifactId, getArtifactIdentifier } from './artifactHelpers';
 
 /**
  * Guards the id shape createArtifactId promises to the client - see its JSDoc for why the five
@@ -14,7 +14,28 @@ describe('createArtifactId', () => {
     expect(id.startsWith('artifact_')).toBe(true);
     expect(segments(id).length).toBeGreaterThanOrEqual(5);
     // Called with nothing, the defaults still fill both leading segments.
-    expect(createArtifactId()).toMatch(/^artifact_generated_artifact-/);
+    expect(createArtifactId()).toMatch(/^artifact_generated_artifact_/);
+  });
+
+  it('leaves the identifier segment a clean slug so the rendered card can adopt the row', () => {
+    // See createArtifactId's doc for why segment 2 has to stay comparable.
+    expect(segments(createArtifactId('svg', 'Red Circle'))[2]).toBe('red-circle');
+  });
+
+  it('keeps the index segment an integer', () => {
+    // The other minter of this shape (generateCompleteArtifactId) uses the index for idempotency,
+    // so the random tail gets a segment of its own rather than riding on this one.
+    expect(segments(createArtifactId('svg', 'Red Circle'))[4]).toBe('0');
+  });
+
+  it('round-trips its identifier segment through getArtifactIdentifier', () => {
+    // This pair is the invariant the notebook import depends on: reminting an id for a copy has to
+    // preserve the identifier the original carried, since the copy's reply still names it.
+    const original = createArtifactId('react', 'Todo App');
+    const reminted = createArtifactId('react', getArtifactIdentifier(original) ?? 'wrong');
+
+    expect(getArtifactIdentifier(reminted)).toBe(getArtifactIdentifier(original));
+    expect(reminted).not.toBe(original);
   });
 
   it('puts a parseable timestamp in the position the viewer reads', () => {
@@ -32,12 +53,13 @@ describe('createArtifactId', () => {
     // the timestamp at index 3.
     const id = createArtifactId('my_type', 'A_title with spaces');
 
-    expect(segments(id).length).toBe(5);
+    expect(segments(id).length).toBe(6);
     expect(Number.isNaN(Number(segments(id)[3]))).toBe(false);
   });
 
   it('does not collide for two artifacts minted in the same millisecond', () => {
-    // The timestamp alone does not separate them; the random suffix on the identifier segment does.
+    // `id` is globally unique in the DB and the timestamp alone does not separate them, so a
+    // same-title batch would throw on insert without the random suffix.
     const ids = new Set(Array.from({ length: 200 }, () => createArtifactId('code', 'Same Title')));
 
     expect(ids.size).toBe(200);

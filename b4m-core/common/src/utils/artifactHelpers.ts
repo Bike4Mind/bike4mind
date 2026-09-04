@@ -67,15 +67,29 @@ export function createDefaultPermissions(userId: string): ArtifactPermissions {
   };
 }
 
+/** Index of the identifier field in an `artifact_`-shaped id. */
+const IDENTIFIER_SEGMENT = 2;
+
 /**
- * Mints an artifact id in the shape the client parses: `artifact_{type}_{identifier}_{timestamp}_{index}`.
+ * Mints an artifact id in the shape the client parses:
+ * `artifact_{type}_{identifier}_{timestamp}_{index}_{random}`.
  *
- * All five segments matter: `useArtifactVersions` (app/hooks/data/artifacts.ts) treats a shorter id
- * as legacy and skips fetching version history, and `getStableTimestamp` (KnowledgeViewer) reads
- * segment 3 as a number - so `type` and `identifier` are stripped of `_` to keep positions honest.
+ * Each of the first five positions is read by name somewhere, so none of them can move:
+ * `useArtifactVersions` (app/hooks/data/artifacts.ts) treats an id with fewer than five segments
+ * as legacy and skips fetching version history; `getStableTimestamp` (KnowledgeViewer,
+ * knowledgeViewerSorting) reads segment 3 as a number; and `findExistingArtifactId`
+ * (app/utils/artifactPersistence.ts) compares segment 2 for equality against the identifier the
+ * rendered card parsed out of the reply, which is how that card adopts this row instead of minting
+ * an id of its own. `type` and `identifier` are stripped of `_` to keep the later positions honest.
  *
- * Not collision-proof: the random suffix on the identifier segment, not the timestamp, is what
- * separates two artifacts minted in the same millisecond.
+ * `id` is globally unique in the DB and the timestamp does not separate two artifacts minted in the
+ * same millisecond, so the random tail does. It is a segment of its own rather than a suffix on an
+ * existing one because every earlier position already has a reader that compares it whole.
+ *
+ * `apps/client/app/utils/artifactParser.ts` exports `generateCompleteArtifactId`, which mints the
+ * same shape for artifacts parsed out of a reply. The two are a known fork - see
+ * `persistAgentArtifacts.ts` for why they are not interchangeable - but the shape has to stay in
+ * sync across both, and the identifier segment is the one the client compares.
  */
 export function createArtifactId(type: string = 'generated', identifier?: string): string {
   const segment = (value: string, fallback: string) =>
@@ -85,8 +99,22 @@ export function createArtifactId(type: string = 'generated', identifier?: string
       .replace(/^-+|-+$/g, '')
       .slice(0, 40) || fallback;
 
-  const suffix = Math.random().toString(36).slice(2, 8);
-  return `artifact_${segment(type, 'generated')}_${segment(identifier ?? '', 'artifact')}-${suffix}_${Date.now()}_0`;
+  const random = Math.random().toString(36).slice(2, 8);
+  return `artifact_${segment(type, 'generated')}_${segment(identifier ?? '', 'artifact')}_${Date.now()}_0_${random}`;
+}
+
+/**
+ * The identifier segment of an `artifact_`-shaped id, or undefined when `id` is not that shape.
+ *
+ * This is the field `findExistingArtifactId` matches on, so it is what has to survive when an id is
+ * reminted for a copy of an existing artifact: the reply the copy is rendered from still carries the
+ * original `<artifact identifier=...>` attribute, and that attribute is what this segment holds.
+ */
+export function getArtifactIdentifier(id: string): string | undefined {
+  const segments = id.split('_');
+  return id.startsWith('artifact_') && segments.length > IDENTIFIER_SEGMENT
+    ? segments[IDENTIFIER_SEGMENT] || undefined
+    : undefined;
 }
 
 // Validation helpers
