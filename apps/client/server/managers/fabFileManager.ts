@@ -95,10 +95,16 @@ export const updateFabFile = async (
       const metadata = await getFilesStorage().getMetadata(fileKey);
       if (metadata.size !== undefined) {
         updatedFabFile.fileSize = metadata.size;
-        await updatedFabFile.save({ session });
+        // Modified-only: this save intends `fileSize` alone, and mongoose otherwise validates every
+        // path on the hydrated doc. During a staggered deploy that means an old instance loading a row
+        // whose enum-valued field carries a value only the NEW schema lists (e.g. chunkStallReason)
+        // fails validation here and silently drops the size.
+        await updatedFabFile.save({ session, validateModifiedOnly: true });
       }
     } catch (error) {
-      Logger.warn('Failed to retrieve file metadata from S3:', error);
+      // Names this block, not S3: a mongoose ValidationError never reached the network, and blaming
+      // the download sent readers looking in the wrong place.
+      Logger.warn('Failed to record file size from S3 metadata:', error);
     }
   }
 
