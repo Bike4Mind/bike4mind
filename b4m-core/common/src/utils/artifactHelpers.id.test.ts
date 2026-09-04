@@ -22,10 +22,17 @@ describe('createArtifactId', () => {
     expect(segments(createArtifactId('svg', 'Red Circle'))[2]).toBe('red-circle');
   });
 
-  it('keeps the index segment an integer', () => {
-    // The other minter of this shape (generateCompleteArtifactId) uses the index for idempotency,
-    // so the random tail gets a segment of its own rather than riding on this one.
-    expect(segments(createArtifactId('svg', 'Red Circle'))[4]).toBe('0');
+  it('keeps the id five segments with both trailing ones numeric', () => {
+    // The sibling minter (generateCompleteArtifactId) records a real integer index in the last
+    // position, so this one keeps that position an integer too rather than reusing it for a base-36
+    // tail: agreeing on where a segment sits is not enough if the two disagree on what it holds.
+    // The by-id prefix fallback, `^<requested id>_\d+_\d+$`, assumes the same shape.
+    const id = createArtifactId('svg', 'Red Circle');
+    const identifierPrefix = segments(id).slice(0, 3).join('_');
+
+    expect(segments(id)[3]).toMatch(/^\d+$/);
+    expect(segments(id)[4]).toMatch(/^\d+$/);
+    expect(new RegExp(`^${identifierPrefix}_\\d+_\\d+$`).test(id)).toBe(true);
   });
 
   it('round-trips its identifier segment through getArtifactIdentifier', () => {
@@ -53,7 +60,7 @@ describe('createArtifactId', () => {
     // the timestamp at index 3.
     const id = createArtifactId('my_type', 'A_title with spaces');
 
-    expect(segments(id).length).toBe(6);
+    expect(segments(id).length).toBe(5);
     expect(Number.isNaN(Number(segments(id)[3]))).toBe(false);
   });
 

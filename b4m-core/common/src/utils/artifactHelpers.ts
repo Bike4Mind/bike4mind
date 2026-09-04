@@ -71,25 +71,29 @@ export function createDefaultPermissions(userId: string): ArtifactPermissions {
 const IDENTIFIER_SEGMENT = 2;
 
 /**
- * Mints an artifact id in the shape the client parses:
- * `artifact_{type}_{identifier}_{timestamp}_{index}_{random}`.
+ * Mints an artifact id in the shape the client parses: `artifact_{type}_{identifier}_{timestamp}_{index}`.
  *
- * Each of the first five positions is read by name somewhere, so none of them can move:
+ * Every position is read by name somewhere, so none can move and none can change type:
  * `useArtifactVersions` (app/hooks/data/artifacts.ts) treats an id with fewer than five segments
  * as legacy and skips fetching version history; `getStableTimestamp` (KnowledgeViewer,
- * knowledgeViewerSorting) reads segment 3 as a number; and `findExistingArtifactId`
+ * knowledgeViewerSorting) reads segment 3 as a number; `findExistingArtifactId`
  * (app/utils/artifactPersistence.ts) compares segment 2 for equality against the identifier the
  * rendered card parsed out of the reply, which is how that card adopts this row instead of minting
- * an id of its own. `type` and `identifier` are stripped of `_` to keep the later positions honest.
+ * an id of its own. `type` and `identifier` are stripped of `_` so the later positions cannot shift.
  *
  * `id` is globally unique in the DB and the timestamp does not separate two artifacts minted in the
- * same millisecond, so the random tail does. It is a segment of its own rather than a suffix on an
- * existing one because every earlier position already has a reader that compares it whole.
+ * same millisecond, so the index position carries a random integer instead: this minter writes one
+ * artifact at a time and so has no batch index to record there. It stays an INTEGER, and the id
+ * stays five segments, because `generateCompleteArtifactId` (the sibling minter) records a real
+ * integer index in that position - the two have to agree on what every position holds, not just
+ * where it sits. The by-id route also has a fallback matching a short `artifact_{type}_{identifier}`
+ * request against `^<request>_\d+_\d+$`, which assumes the same thing, though it is unreachable
+ * today: `artifactService.get` throws on a miss instead of returning the null it tests for.
  *
  * `apps/client/app/utils/artifactParser.ts` exports `generateCompleteArtifactId`, which mints the
- * same shape for artifacts parsed out of a reply. The two are a known fork - see
- * `persistAgentArtifacts.ts` for why they are not interchangeable - but the shape has to stay in
- * sync across both, and the identifier segment is the one the client compares.
+ * same shape for artifacts parsed out of a reply and does record a real batch index there. The two
+ * are a known fork - see `persistAgentArtifacts.ts` for why they are not interchangeable - but the
+ * shape has to stay in sync across both, and the identifier segment is the one the client compares.
  */
 export function createArtifactId(type: string = 'generated', identifier?: string): string {
   const segment = (value: string, fallback: string) =>
@@ -99,8 +103,8 @@ export function createArtifactId(type: string = 'generated', identifier?: string
       .replace(/^-+|-+$/g, '')
       .slice(0, 40) || fallback;
 
-  const random = Math.random().toString(36).slice(2, 8);
-  return `artifact_${segment(type, 'generated')}_${segment(identifier ?? '', 'artifact')}_${Date.now()}_0_${random}`;
+  const discriminator = Math.floor(Math.random() * 1e12);
+  return `artifact_${segment(type, 'generated')}_${segment(identifier ?? '', 'artifact')}_${Date.now()}_${discriminator}`;
 }
 
 /**
