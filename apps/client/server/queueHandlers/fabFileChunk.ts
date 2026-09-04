@@ -404,13 +404,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // background work already on the queue. Gated before any DB read, so a user upload (origin absent)
   // short-circuits with zero I/O.
   //
-  // Dropping the message is NOT the whole job. By the time this runs, the producer has already reset
-  // the wave's chunk state, so the file sits at chunkCount 0 with no error. The reset stamps
-  // `chunkRebuildRequestedAt` (#1939), so that state is not invisible - but it reads as "rebuilding,
-  // returns on its own", which is now false: nothing will rebuild this file until an administrator
-  // lifts the switch. So upgrade the stamp to `chunkStallReason: 'rechunkPaused'`, the marker every
+  // Dropping the message is NOT the whole job. The file sits at chunkCount 0 with no error, which
+  // reads as an image or a pending upload, so it needs a chunk-arm stall reason - the marker every
   // reader keys on to say "halted, needs intervention". Mirrors what the vectorize handler already
   // does for its half of the same switch.
+  //
+  // WHICH reason depends on how the file got here, and `markConvergencePaused` decides inside the
+  // write (it must: the discriminator is a field the same write clears). A wave's producer resets the
+  // chunk state before its messages are handled, stamping `chunkRebuildRequestedAt` (#1939) - that
+  // state is not invisible, but it reads as "rebuilding, returns on its own", which is now false, so
+  // it is upgraded to `rechunkPaused`. The rescue sweep instead selects on chunkCount 0 and enqueues
+  // without resetting, so its files arrive with nothing removed and get `unchunkedPaused`.
   if (
     await isConvergenceHalted(
       { origin, lakeId },
@@ -452,11 +456,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // already selects.
     for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
       try {
-        await fabFileRepository.update({
-          id: fabFileId,
-          chunkStallReason: 'rechunkPaused',
-          chunkRebuildRequestedAt: null,
-        });
+        await fabFileRepository.markConvergencePaused(fabFileId);
         break;
       } catch (err) {
         if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {

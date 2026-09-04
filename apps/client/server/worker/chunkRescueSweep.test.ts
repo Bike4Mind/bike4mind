@@ -276,7 +276,10 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
     expect(limitSpy).toHaveBeenCalledWith(50);
   });
 
-  it('stamps convergence provenance only on files that belong to a batch', async () => {
+  it('sends every file unstamped, batch or not', async () => {
+    // Unlike the un-chunked sweep, these files are already chunked: the handler's halt branch runs
+    // above the already-chunked resume, so a stamped message would route a healthy file into a
+    // paused-marker write over its own committed passages. Must match the hosted twin.
     withCandidates([
       { _id: 'ff1', userId: 'u1', batchId: 'b1' },
       { _id: 'ff2', userId: 'u2' },
@@ -287,7 +290,6 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
     expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
       fabFileId: 'ff1',
       userId: 'u1',
-      origin: 'convergence',
     });
     expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
       fabFileId: 'ff2',

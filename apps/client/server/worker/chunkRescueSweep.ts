@@ -23,7 +23,6 @@ import { adminSettingsRepository, DataLakeModel, FabFile, scopedSettingsReposito
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { sendToQueue } from '@server/utils/sqs';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import {
   buildFabFileChunkScanFilter,
   buildStrandedVectorizeScanFilter,
@@ -184,10 +183,16 @@ export async function runStrandedVectorizeRescue(runLogger: Logger): Promise<num
   let sent = 0;
   for (const file of candidates) {
     try {
+      // Deliberately UNSTAMPED, unlike the un-chunked sweep above (#2309): these files are already
+      // chunked, and the handler's halt branch (fabFileChunk.ts, isConvergenceHalted) runs ABOVE the
+      // already-chunked resume. Stamping `origin: convergence` would therefore route a healthy
+      // chunked file into that branch with the switch on, marking it paused over committed passages
+      // and then throwing - so the resume never runs and this sweep re-sends the file every tick
+      // until each message burns its retry ladder into the DLQ. Must stay in sync with the hosted
+      // twin's identical reasoning in dataLakeBatchReconcile.ts.
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: String(file._id),
         userId: String(file.userId),
-        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
       });
       sent += 1;
     } catch (err) {

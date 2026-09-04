@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { FabFile } from '@bike4mind/database';
-import { CHUNK_STALL_NOTICES } from '@bike4mind/common';
+import { CHUNK_STALL_NOTICES, CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 import { buildDataLakeMembershipFilter } from '@bike4mind/database';
 import {
   buildFabFileChunkScanFilter,
@@ -388,8 +388,8 @@ describe('buildFabFileChunkScanFilter - scoped pause against real Mongo (#2157)'
     const viaNor = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_ON });
     const viaNin = {
       ...buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_OFF }),
-      chunkStallReason: { $nin: ['vectorizePaused', 'rechunkPaused'] },
-      notes: { $nin: Object.values(CHUNK_STALL_NOTICES) },
+      chunkStallReason: { $nin: [...CHUNK_STALL_REASONS] },
+      notes: { $nin: [...LEGACY_CHUNK_STALL_NOTES] },
     };
 
     expect(await selectedNames(viaNor)).toEqual(['reason-missing', 'reason-null']);

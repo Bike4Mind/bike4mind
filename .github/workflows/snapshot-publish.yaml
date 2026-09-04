@@ -98,7 +98,7 @@ jobs:
             echo "has-changes=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Sanitize branch name for npm tag
+      - name: Derive npm dist-tag from branch name
         if: steps.changes.outputs.has-changes == 'true'
         id: branch
         env:
@@ -106,9 +106,18 @@ jobs:
         run: |
           # Pass the branch name via env to prevent shell injection (backticks/$() in branch names)
           # See: https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
-          SANITIZED=$(echo "$BRANCH" | sed 's/[^a-zA-Z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | cut -c1-50)
-          echo "tag=$SANITIZED" >> $GITHUB_OUTPUT
-          echo "Sanitized branch name: $SANITIZED"
+          #
+          # Budget: 41 chars of branch + the 9-char "snapshot-" prefix keeps the
+          # final tag within the 50 chars this step has always bounded it to.
+          SANITIZED=$(echo "$BRANCH" | sed 's/[^a-zA-Z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | cut -c1-41 | sed 's/-$//')
+          # Every snapshot tag carries a fixed prefix, so no branch name can ever
+          # resolve to a consumer-facing dist-tag (latest/next/beta/canary). The
+          # prefix is applied AFTER sanitization: sanitizing afterwards could
+          # rewrite the prefix itself. A branch that sanitizes away to nothing
+          # still needs a valid tag, hence the fallback.
+          TAG="snapshot-${SANITIZED:-branch}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Branch $BRANCH -> dist-tag $TAG"
 
       - name: Generate changeset for changed packages
         if: steps.changes.outputs.has-changes == 'true'
@@ -192,14 +201,17 @@ jobs:
           # entries with commit/PR/contributor info. Without this token the step
           # fails with: "Please create a GitHub personal access token..."
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pnpm changeset version --snapshot ${{ steps.branch.outputs.tag }}
+          SNAPSHOT_TAG: ${{ steps.branch.outputs.tag }}
+        run: pnpm changeset version --snapshot "$SNAPSHOT_TAG"
 
       - name: Publish snapshot
         if: steps.changes.outputs.has-changes == 'true' && steps.generate.outputs.has-publishable-packages != 'false'
         id: publish
+        env:
+          SNAPSHOT_TAG: ${{ steps.branch.outputs.tag }}
         run: |
           set -o pipefail
-          TAG="${{ steps.branch.outputs.tag }}"
+          TAG="$SNAPSHOT_TAG"
 
           # `changeset publish` publishes the changed packages in quick succession. The npm
           # registry intermittently returns "E409 Conflict - Failed to save packument" for a

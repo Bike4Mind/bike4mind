@@ -45,12 +45,70 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Both dispatch inputs are load-bearing: `stage` selects which ingest host
+      # receives the summarized report, and `target` is fetched with the WAF
+      # bypass token attached. Constrain them before anything reads them, and
+      # publish the resolved target so later steps consume the checked value
+      # rather than re-deriving it.
+      - name: Validate scan inputs
+        id: inputs
+        env:
+          PREVIEW_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
+          PROD_TARGET_URL: ${{ vars.OWASP_ZAP_TARGET_PROD }}
+        run: |
+          if [ -n "$ZAP_STAGE" ] && ! printf '%s' "$ZAP_STAGE" | grep -qxE '(dev|production|pr[0-9]+)'; then
+            echo "::error::stage must be dev, production or prNNN"
+            exit 1
+          fi
+
+          TARGET="${ZAP_TARGET_URL:-$DEFAULT_ZAP_TARGET_URL}"
+          if [ -z "$TARGET" ]; then
+            echo "::error::no scan target: pass the target input or set the OWASP_ZAP_TARGET variable"
+            exit 1
+          fi
+
+          # https only, then strip scheme/path/port to get the bare host. A
+          # userinfo trick (https://allowed@evil.test/) leaves the "@" in HOST,
+          # which matches nothing in the allowlist below and so is rejected.
+          case "$TARGET" in
+            https://*) ;;
+            *) echo "::error::target must be an https:// URL"; exit 1 ;;
+          esac
+          HOST="${TARGET#https://}"; HOST="${HOST%%/*}"; HOST="${HOST%%:*}"
+          if ! printf '%s' "$HOST" | grep -qxE '[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?'; then
+            echo "::error::target host is not a plain hostname"
+            exit 1
+          fi
+
+          # Allowlist: the two configured scan targets, plus any preview host
+          # under the preview domain. Empty variables must never widen this, so
+          # each arm is guarded on its source being set.
+          ALLOWED=false
+          for CONFIGURED in "$DEFAULT_ZAP_TARGET_URL" "$PROD_TARGET_URL"; do
+            [ -n "$CONFIGURED" ] || continue
+            CONFIGURED_HOST="${CONFIGURED#https://}"; CONFIGURED_HOST="${CONFIGURED_HOST#http://}"
+            CONFIGURED_HOST="${CONFIGURED_HOST%%/*}"; CONFIGURED_HOST="${CONFIGURED_HOST%%:*}"
+            [ -n "$CONFIGURED_HOST" ] && [ "$HOST" = "$CONFIGURED_HOST" ] && ALLOWED=true
+          done
+          if [ -n "$PREVIEW_DOMAIN" ]; then
+            case "$HOST" in
+              *".$PREVIEW_DOMAIN") ALLOWED=true ;;
+            esac
+          fi
+          if [ "$ALLOWED" != "true" ]; then
+            echo "::error::target host $HOST is not an allowlisted scan target"
+            exit 1
+          fi
+
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Validated target: $TARGET"
+
       - name: Verify target is reachable (2xx/3xx only)
         id: pre-check
         env:
           ZAP_BYPASS_TOKEN: ${{ secrets.ZAP_WAF_BYPASS_TOKEN }}
+          TARGET: ${{ steps.inputs.outputs.target }}
         run: |
-          TARGET="${{ env.ZAP_TARGET_URL || env.DEFAULT_ZAP_TARGET_URL }}"
           echo "Target URL: $TARGET"
           REACHABLE=false
           for attempt in 1 2 3; do
@@ -86,7 +144,7 @@ jobs:
         env:
           ZAP_BYPASS_TOKEN: ${{ secrets.ZAP_WAF_BYPASS_TOKEN }}
         with:
-          target: ${{ env.ZAP_TARGET_URL || env.DEFAULT_ZAP_TARGET_URL }}
+          target: ${{ steps.inputs.outputs.target }}
           cmd_options: '-a -T 180'
           artifact_name: 'zap-scan'
           allow_issue_writing: false
@@ -94,10 +152,13 @@ jobs:
 
       - name: Debug - Check ZAP scan results
         if: always()
+        env:
+          ZAP_OUTCOME: ${{ steps.zap-scan.outcome }}
+          ZAP_CONCLUSION: ${{ steps.zap-scan.conclusion }}
         run: |
           echo "=== ZAP Scan Step Outcome ==="
-          echo "Outcome: ${{ steps.zap-scan.outcome }}"
-          echo "Conclusion: ${{ steps.zap-scan.conclusion }}"
+          echo "Outcome: $ZAP_OUTCOME"
+          echo "Conclusion: $ZAP_CONCLUSION"
           echo ""
           echo "=== Current Directory Contents ==="
           ls -lah

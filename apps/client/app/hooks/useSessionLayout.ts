@@ -94,6 +94,12 @@ interface SessionLayoutControlState {
   // Docked chat panel sizing (percentage)
   dockChatWidth: number; // Width % for dockRight mode (default 40)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
+  // Which dock "Hide chat" sent the panel to the launcher pill from, so expanding the pill
+  // puts it back there instead of leaving it floating where it never was. Written only by
+  // the hide action; every other layout write clears it (see setSessionLayout), because
+  // choosing a layout deliberately ends the hide episode. Not persisted - a reload starts
+  // over, the same reason floatingChatMinimized is left out below.
+  hiddenFromLayout?: 'dockRight' | 'dockBottom';
   // Optimistic first-message: holds the user's prompt while the new session is being
   // confirmed by the server. Cleared on session.created. Not persisted.
   pendingFirstMessage: string | null;
@@ -186,7 +192,13 @@ export const setSessionLayout = (
   const currentState = useSessionLayout.getState();
 
   // If it's a function, call it with current state
-  const newState = typeof newStateOrUpdater === 'function' ? newStateOrUpdater(currentState) : newStateOrUpdater;
+  let newState = typeof newStateOrUpdater === 'function' ? newStateOrUpdater(currentState) : newStateOrUpdater;
+
+  // Any layout write that does not itself set the hide marker ends the hide episode, so a
+  // remembered dock can never outlive the user moving the chat somewhere else.
+  if (newState.layout !== undefined && !('hiddenFromLayout' in newState)) {
+    newState = { ...newState, hiddenFromLayout: undefined };
+  }
 
   // If artifactData is provided, add to recentArtifacts
   if (newState.artifactData) {

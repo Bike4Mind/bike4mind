@@ -1110,6 +1110,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     Array<{
       fabFileId: string;
       fileName?: string;
+      // Byte size, for the duplicate-members check: a same-fileName pair with differing size is
+      // confirmed to differ in content (a same-length substitution can still hide behind equal
+      // size, so equality is evidence, not proof).
+      fileSize: number | null;
+      // Server-verified content hash, for the same check: a same-fileName pair with matching hashes
+      // is confirmed IDENTICAL, and with differing hashes is confirmed to differ - proof `fileSize`
+      // alone cannot offer either direction of.
+      serverTextHash: string | null;
       chunkCount: number;
       // vectorizedChunkCount + error drive the in-flight vs settled decision in the pure evaluator;
       // omitting them here would silently disable that gate (rows arrive without them -> treated as
@@ -1238,6 +1246,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * back in for a file the rescue sweep has written off.
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  /**
+   * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
+   * chunkless reasons by whether a producer actually removed its passages, and clearing the
+   * pending-rebuild stamp in the SAME write so the file is never both paused and pending.
+   *
+   * A dedicated method rather than an `update` from the caller because the reason to write depends on
+   * a field the same statement clears - see the implementation for why that has to be one statement
+   * and why it has to be idempotent.
+   */
+  markConvergencePaused(id: string): Promise<void>;
   /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
