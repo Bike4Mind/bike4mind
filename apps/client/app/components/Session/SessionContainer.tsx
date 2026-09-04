@@ -430,11 +430,6 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   // The side-by-side split (KnowledgeViewer beside the chat). Mobile collapses it to a
   // stack, so it is not one there.
   const isVerticalSplit = layout === 'vertical' && !isMobile;
-  // Mirrors the guard on the KnowledgeViewer Box below: where that renders, the chat's own
-  // top bar has a header to line up with, so it joins the app-chrome band (56px, level1
-  // ground, 16px gutters, contents centred vertically). In the default full-width chat it
-  // keeps its original loose 60px header - framing it there moves the Data Lakes button.
-  const isKnowledgeViewerOpen = layout !== 'hide' && layout !== 'dockRight' && layout !== 'dockBottom';
   // Only the edge FACING the splitter is padded here - the notebook layout already puts an
   // 8px gutter around the outside of the content, and paying it twice reads as a wide frame.
   // The row is reversed, so the chat sits left (inner edge = right) and the viewer right
@@ -473,7 +468,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
           </Box>
         )}
         {/* Resizable splitter - only show in vertical layout when KnowledgeViewer is visible (and not on mobile) */}
-        {layout === 'vertical' && !isMobile && <ResizableSplitter />}
+        {isVerticalSplit && <ResizableSplitter />}
         <Box
           ref={chatContainerRef}
           display="flex"
@@ -521,17 +516,17 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                     flexShrink: 0,
                     // Only in the band: the full-width chat's bar is not a chrome header and
                     // a rule under it just cuts the pane in two.
-                    borderBottom: isKnowledgeViewerOpen ? '1px solid' : 'none',
+                    borderBottom: isVerticalSplit ? '1px solid' : 'none',
                     borderColor: 'divider',
-                    background: isKnowledgeViewerOpen ? theme.palette.background.level1 : theme.palette.background.body,
+                    background: isVerticalSplit ? theme.palette.background.level1 : theme.palette.background.body,
                     zIndex: 1,
                     padding: '8px 8px 16px',
                     display: {
-                      xs: project ? (isKnowledgeViewerOpen ? 'flex' : 'block') : 'none',
-                      sm: isKnowledgeViewerOpen ? 'flex' : 'block',
+                      xs: project ? (isVerticalSplit ? 'flex' : 'block') : 'none',
+                      sm: isVerticalSplit ? 'flex' : 'block',
                     },
                     // Only the band is a fixed 56px; outside it the bar is content-sized.
-                    ...(isKnowledgeViewerOpen ? { height: '56px', alignItems: 'center', px: '16px', pb: '8px' } : {}),
+                    ...(isVerticalSplit ? { height: '56px', alignItems: 'center', px: '16px', pb: '8px' } : {}),
                   })}
                 >
                   <SessionTop listClosed={listClosed} onChatWidthToggle={setIsFullWidth} />
