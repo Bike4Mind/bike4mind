@@ -541,9 +541,10 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                       <ReplyStatus renderSpinnerStatusNull={false} status="Running..." />
                     </Box>
                   )}
-                  {/* Streaming status — ReplyStatus spinner and rapid reply content.
-                      The streaming quest's MessageContent is in the data array (not here)
-                      to avoid DOM remount flicker on streaming completion. */}
+                  {/* Streaming status: the ReplyStatus spinner only. The streaming quest's
+                      MessageContent (which now also renders the rapid reply, so it sits above
+                      the streaming body) lives in the data array, not here, to avoid DOM
+                      remount flicker on streaming completion. */}
                   {streamingMessageData && (
                     <Box sx={{ flexShrink: 0, mt: 0 }}>
                       <Box
@@ -575,40 +576,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                           }
                         />
                       </Box>
-                      {chatCompletion?.rapidReply &&
-                        chatCompletion.rapidReply.status !== 'replaced' &&
-                        chatCompletion?.statusMessage && (
-                          <>
-                            <Box
-                              className="rapid-reply-container"
-                              data-testid="rapid-reply-container"
-                              sx={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                width: '100%',
-                                mt: 2,
-                                mb: 1,
-                                p: 2,
-                                backgroundColor: 'chatbox.replyBg',
-                                borderRadius: '8px',
-                                position: 'relative',
-                              }}
-                            >
-                              <Typography
-                                level="body-md"
-                                sx={{
-                                  color: 'text.primary',
-                                  whiteSpace: 'pre-wrap',
-                                  lineHeight: 1.5,
-                                  '& p:last-child': { mb: '0 !important' },
-                                }}
-                              >
-                                {chatCompletion.rapidReply.content}
-                              </Typography>
-                            </Box>
-                            <ReplyStatus renderSpinnerStatusNull={false} status={null} />
-                          </>
-                        )}
                     </Box>
                   )}
                   {/* Live voice-call status — a quiet "…Listening" line while a Voice v2
