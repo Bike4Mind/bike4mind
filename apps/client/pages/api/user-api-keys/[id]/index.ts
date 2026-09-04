@@ -1,6 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { organizationRepository } from '@bike4mind/database';
+import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
@@ -79,7 +79,7 @@ const handler = baseApi().patch(
     const updated = await userApiKeyService.updateEmbedKey(
       userId,
       { keyId, agentId, allowedOrigins: embedOrigins, branding: gatedBranding },
-      { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
+      { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository, agents: agentRepository } }
     );
 
     await logEvent(

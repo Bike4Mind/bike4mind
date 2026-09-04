@@ -45,7 +45,12 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
   it('rotated key validates successfully and prefix length matches KEY_PREFIX_LENGTH', async () => {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     const { key: originalKey } = await createUserApiKey('sys-1', mintParams, {
       ...adapters,
@@ -69,7 +74,12 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
   it('rotation preserves spendCap and accumulated spend (rotating the secret must not reset the meter)', async () => {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     await createUserApiKey(
       'sys-1',
@@ -97,7 +107,12 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
   it('original key is invalid after rotation', async () => {
     const { repo } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     const { key: originalKey } = await createUserApiKey('sys-1', mintParams, {
       ...adapters,
@@ -129,12 +144,39 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
 
-      const { key } = await rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
+      const { key, previousOwnerUserId } = await rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
 
       expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
       expect(repo.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
       expect(key).toMatch(/^b4m_live_/);
       expect(repo.update).toHaveBeenCalled();
+
+      // The rotated credential must authenticate as the admin who now holds it,
+      // not as the teammate who minted it.
+      expect(stored.userId).toBe('admin-user');
+      expect(previousOwnerUserId).toBe('minter');
+    });
+
+    it('leaves ownership alone when the minter rotates their own key', async () => {
+      const stored = {
+        id: 'key-1',
+        name: 'Own key',
+        userId: 'minter',
+        keyPrefix: 'b4m_live_orig000',
+      } as unknown as IUserApiKeyDocument;
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(stored),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
+        update: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue([]) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      const { previousOwnerUserId } = await rotateUserApiKey('minter', { keyId: 'key-1' }, adapters);
+
+      expect(stored.userId).toBe('minter');
+      expect(previousOwnerUserId).toBeUndefined();
     });
 
     it('throws NotFound when the caller neither minted nor administers the key', async () => {

@@ -5,7 +5,9 @@ import {
   CreditHolderType,
   EmbedBrandingSchema,
   EmbedOriginsSchema,
+  IAgentRepository,
   IEmbedBranding,
+  isAgentOwnedByEmbedKey,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
@@ -60,6 +62,12 @@ export type CreateUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
 interface CreateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
+    /**
+     * Required so an `embed:chat` mint can verify the agent it binds. Not optional:
+     * an absent adapter would silently skip the ownership check on the one key class
+     * that ships in public HTML.
+     */
+    agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
 }
@@ -125,6 +133,13 @@ export const createUserApiKey = async (
   if (isEmbedKey && !params.agentId) {
     throw new BadRequestError('agentId is required for embed:chat scope');
   }
+  // An embed key is published in page HTML, so it must authorize the widget and
+  // nothing else. Pairing embed:chat with any other scope would hand every widget
+  // visitor whatever else the minter attached - and the runtime gate confines such a
+  // key anyway, so the extra scope buys nothing but risk.
+  if (isEmbedKey && params.scopes.length > 1) {
+    throw new BadRequestError('embed:chat must be the only scope on an embed key');
+  }
   // Embed keys bill a bounded Organization pool, never a user's. Enforce the org
   // pairing at mint so an incoherent key is never created (e.g. a forged/scripted
   // request bypassing the admin UI). Must match assertEmbedCredential in
@@ -134,6 +149,18 @@ export const createUserApiKey = async (
       'embed:chat scope requires organization billing (billingOwnerType Organization with an organizationId)'
     );
   }
+  // Bind-time ownership: the agent must belong to the org this key bills or to the
+  // minter. Previously deferred to the runtime consumer, which left a key bindable
+  // to another tenant's agent and that agent's name readable through embed/serve.
+  // Enforced here so an incoherent key is never persisted; the runtime checks stay,
+  // since a bound agent can change hands after the mint.
+  if (isEmbedKey && params.agentId) {
+    const agent = await db.agents.findById(params.agentId);
+    if (!agent || !isAgentOwnedByEmbedKey(agent, { organizationId: params.organizationId, userId })) {
+      throw new BadRequestError('agentId must reference an agent owned by the billing organization or the minter');
+    }
+  }
+
   if (
     !isEmbedKey &&
     (params.agentId !== undefined ||

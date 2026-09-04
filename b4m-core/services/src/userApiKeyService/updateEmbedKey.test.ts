@@ -15,11 +15,22 @@ const makeOrgs = (administeredOrgIds: string[] = []) =>
     findIdsAdministeredBy: vi.fn().mockResolvedValue(administeredOrgIds),
   }) as unknown as { findIdsAdministeredBy: (userId: string) => Promise<string[]> };
 
-const deps = (repo: IUserApiKeyRepository, orgs = makeOrgs()) => ({ db: { userApiKeys: repo, organizations: orgs } });
+// Bind-time ownership resolves the agent, so every rebind needs this adapter.
+// Default: an agent personally owned by the key owner (`user1`).
+const makeAgents = (agent: { userId?: string; organizationId?: string } | null = { userId: 'user1' }) => ({
+  findById: vi.fn().mockResolvedValue(agent),
+});
+
+const deps = (repo: IUserApiKeyRepository, orgs = makeOrgs(), agents = makeAgents()) => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: { userApiKeys: repo, organizations: orgs, agents: agents as any },
+});
 
 const embedKey = (): Partial<IUserApiKeyDocument> => ({
   id: 'key-1',
   name: 'Embed key',
+  userId: 'user1',
+  organizationId: 'org-1',
   scopes: [ApiKeyScope.EMBED_CHAT],
   agentId: 'agent-1',
   allowedOrigins: ['https://example.com'],
@@ -143,5 +154,48 @@ describe('userApiKeyService - updateEmbedKey', () => {
 
     await expect(updateEmbedKey('user1', { keyId: 'key-1', branding }, deps(repo))).rejects.toThrow();
     expect(repo.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('userApiKeyService - updateEmbedKey agent ownership', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects a rebind to an agent owned by neither the org nor the key owner', async () => {
+    const repo = makeRepo(embedKey());
+    const foreign = makeAgents({ userId: 'someone-else', organizationId: 'other-org' });
+
+    await expect(
+      updateEmbedKey('user1', { keyId: 'key-1', agentId: 'agent-2' }, deps(repo, makeOrgs(), foreign))
+    ).rejects.toThrow(/owned by the billing organization or the key owner/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rebind to a system/global agent that has no owner at all', async () => {
+    const repo = makeRepo(embedKey());
+    // Both clauses must fail closed - a mismatch-only check would let this through.
+    const systemAgent = makeAgents({});
+
+    await expect(
+      updateEmbedKey('user1', { keyId: 'key-1', agentId: 'agent-2' }, deps(repo, makeOrgs(), systemAgent))
+    ).rejects.toThrow(/owned by the billing organization or the key owner/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rebind to a missing agent', async () => {
+    const repo = makeRepo(embedKey());
+
+    await expect(
+      updateEmbedKey('user1', { keyId: 'key-1', agentId: 'nope' }, deps(repo, makeOrgs(), makeAgents(null)))
+    ).rejects.toThrow(/owned by the billing organization or the key owner/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('accepts an org-shared agent of the org the key bills', async () => {
+    const stored = embedKey();
+    const repo = makeRepo(stored);
+    const orgAgent = makeAgents({ organizationId: 'org-1' });
+
+    await updateEmbedKey('user1', { keyId: 'key-1', agentId: 'agent-2' }, deps(repo, makeOrgs(), orgAgent));
+    expect(stored.agentId).toBe('agent-2');
   });
 });

@@ -57,8 +57,9 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { createUserApiKey: (...a: unknown[]) => mockCreateKey(...a) },
 }));
 
+const mockLogEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({
-  logEvent: vi.fn().mockResolvedValue(undefined),
+  logEvent: (...a: unknown[]) => mockLogEvent(...a),
 }));
 
 import '../generate-api-key';
@@ -129,6 +130,27 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreateKey).toHaveBeenCalled();
+  });
+
+  it('records the acting admin, so the key is not readable as a self-service mint', async () => {
+    const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    // The key belongs to the target user, so `userId` is theirs - the acting admin
+    // is only recoverable from metadata.
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ metadata: expect.objectContaining({ createdByUserId: 'caller' }) }),
+      expect.anything()
+    );
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'target-user',
+        metadata: expect.objectContaining({ createdByUserId: 'caller', createdByUsername: 'admin-user' }),
+      }),
+      expect.anything()
+    );
   });
 
   it('rejects with BadRequestError when the target user does not exist', async () => {

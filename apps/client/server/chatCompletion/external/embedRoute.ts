@@ -9,6 +9,7 @@ import {
   SSE_KEEPALIVE,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
+  isAgentOwnedByEmbedKey,
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -360,15 +361,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       if (!agent || agent.deletedAt) {
         return res.status(404).json({ error: 'not_found', error_description: 'Bound agent not found' });
       }
-      // Require POSITIVE ownership by the key, fail-closed: the bound agent must be
-      // an org-shared agent of the key's org, or a personal agent of the key owner.
-      // Checking only for a mismatch would let a system/global agent (isSystem, with
-      // neither organizationId nor userId set) through both clauses - an embed key
-      // must never run an agent it does not own. An org-shared agent is the usual
-      // case; the admin UI that mints embed keys (#634) surfaces that constraint.
-      const ownedByOrg = agent.organizationId != null && agent.organizationId === ctx.organizationId;
-      const ownedByUser = agent.userId != null && agent.userId === ctx.userId;
-      if (!ownedByOrg && !ownedByUser) {
+      // Require POSITIVE ownership by the key, fail-closed. Shared with bind-time
+      // validation and GET /api/embed/serve so the rule cannot drift between them.
+      if (!isAgentOwnedByEmbedKey(agent, ctx)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Agent is not owned by the embed key' });
       }
 
