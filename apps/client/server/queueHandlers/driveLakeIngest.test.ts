@@ -875,17 +875,70 @@ describe('driveLakeIngest consumer', () => {
       );
     });
 
-    it('does not heal the connection when the claim was taken away mid-slice', async () => {
-      // Someone else owns the connection now (a stale-claim reclaim). Healing it to 'connected' here
-      // would release a claim this run no longer holds, letting a second walk run alongside theirs.
+    it('tolerates a release that loses its CAS when the claim was taken away mid-slice', async () => {
+      // Someone else owns the connection now (a stale-claim reclaim). The release still RUNS - it is a
+      // compare-and-set on this run's token, so it misses the new owner's document and heals nothing,
+      // which is what keeps a second walk from starting alongside theirs. What is pinned here is that
+      // the handler tolerates the null: a lost release is an expected outcome, not a failure.
       h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
       h.fetchDriveFileContent.mockResolvedValue(okBytes());
       h.renewSyncClaim.mockResolvedValue(null);
+      h.releaseSyncClaim.mockResolvedValue(null);
 
       await run({ connectionId: 'conn1' }, contextAllowingFiles(1));
 
       expect(h.sendToQueue).not.toHaveBeenCalled();
-      expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+    });
+
+    it('releases when a renew is rejected while this run STILL holds the claim', async () => {
+      // A renew can be rejected without the claim having moved: a continuation whose adopt WON but
+      // whose batch is no longer adoptable (settled meanwhile) plans a FRESH batch, so it renews a
+      // batch id the connection's pointer does not match and misses both $or arms while its token is
+      // still live. Returning without releasing would park a connection this run genuinely owns at
+      // 'syncing' until the chained-stale window reclaims it an hour later - no poll can pick it up
+      // in the meantime (findDueForPoll filters on 'connected') and disconnect 409s while syncing.
+      h.adoptSyncClaim.mockResolvedValue('token-adopt');
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+      // Terminal, so adoptedBatch is null and the run plans a fresh batch under a live adopted claim.
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'completed',
+        totalFiles: 2,
+        skippedFiles: 0,
+        files: [],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+      h.renewSyncClaim.mockResolvedValue(null);
+
+      await run(
+        { connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' },
+        contextAllowingFiles(1)
+      );
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-adopt', null);
+    });
+
+    it('releases with the ROTATED token when the continuation enqueue fails after a successful renew', async () => {
+      // The renew rotated the stored token, so the pre-rotation one this run arrived with is no longer
+      // the claim. If the enqueue then throws, the catch must release on the ROTATED value or the CAS
+      // misses its own connection: nothing is released, no continuation was enqueued, and the
+      // connection sits at 'syncing' with every recovery route closed until the 60-minute chained-stale
+      // window - a transient SQS blip turned into a wedge that needs a human.
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+      // Once, not a standing rejection: vi.clearAllMocks() clears calls but not implementations, so a
+      // standing one would leak into every later test in this file.
+      h.sendToQueue.mockRejectedValueOnce(new Error('sqs throttled'));
+
+      await expect(run({ connectionId: 'conn1' }, contextAllowingFiles(1))).rejects.toThrow('sqs throttled');
+
+      expect(h.renewSyncClaim).toHaveBeenCalledWith('conn1', expect.any(String), 'token-claim');
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-renew', 'sqs throttled');
     });
 
     it('falls back to a fresh claim when a continuation finds its chain claim already gone', async () => {
@@ -1048,10 +1101,12 @@ describe('driveLakeIngest consumer', () => {
     });
 
     it.each([
-      ['the connection', () => h.connFindById.mockResolvedValue(null)],
-      ['the target data lake', () => h.lakeFindById.mockResolvedValue(null)],
-      ['the connecting user', () => h.userFindById.mockResolvedValue(null)],
-    ])('settles an adopted batch even when %s cannot be resolved', async (_label, breakLookup) => {
+      // The connection exit runs BEFORE the claim is taken, so it has nothing to release; the other two
+      // sit after it and must hand the claim back or the connection stays 'syncing' with no owner.
+      ['the connection', () => h.connFindById.mockResolvedValue(null), false],
+      ['the target data lake', () => h.lakeFindById.mockResolvedValue(null), true],
+      ['the connecting user', () => h.userFindById.mockResolvedValue(null), true],
+    ])('settles an adopted batch even when %s cannot be resolved', async (_label, breakLookup, releases) => {
       // These exits sit ABOVE where adoptedBatch is normally resolved, so a continuation reaching one
       // of them (a connection deleted mid-chain, a purged lake, a deleted connecting user) must still
       // settle the batch it was adopting via resumeBatchId directly - otherwise it strands in
@@ -1071,6 +1126,10 @@ describe('driveLakeIngest consumer', () => {
       await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
 
       expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+      // Asserted explicitly because settleChainedBatch runs FIRST on both exits: without this, deleting
+      // either release leaves the suite green.
+      if (releases) expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-adopt', null);
+      else expect(h.releaseSyncClaim).not.toHaveBeenCalled();
     });
 
     it('forwards the chain identity when a continuation loses the claim race and must defer', async () => {

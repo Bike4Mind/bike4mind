@@ -379,12 +379,19 @@ class OrgGoogleDriveConnectionRepository
    * (which is renewing precisely to name its batch for the first time), and on a later slice it is
    * fixed for the whole chain, so it cannot tell "my own live chain" apart from "a chain I used to hold
    * and lost to a reclaim/disconnect/reconnect" - both read back the same id once a new owner renews or
-   * adopts. Hence the $or is only over the batch pointer, and describes the two states a legitimate
-   * token-holder can be in:
+   * adopts. Hence the $or is only over the batch pointer, and covers the two states a token-holder
+   * renewing its OWN batch can be in:
    *   - null - a first slice straight off its own claimForSync, about to point the connection at the
    *     batch it just planned (also the state a continuation lands in when its adopt lost and it fell
    *     back to a fresh claim);
    *   - the same id - a later slice re-renewing the chain it is already running.
+   *
+   * It is deliberately NOT an enumeration of every state a token-holder can reach. A continuation whose
+   * adopt WON the claim but could not adopt its batch (settled meanwhile, or belonging to another lake)
+   * plans a fresh batch while the connection still points at the old id, and renews with a third tuple
+   * that matches neither arm. That caller is a genuine holder and is still rejected - correctly, since
+   * silently re-pointing a live chain's batch is the thing this guard exists to stop. It is the
+   * CALLER's job to treat a null return as "stop and release", not as "I lost the claim".
    *
    * Always mints a fresh `ingestClaimToken` on success and returns it - the caller carries it into the
    * next slice's continuation payload for adoptSyncClaim to present.

@@ -1016,12 +1016,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           ingestClaimToken
         );
         if (renewedToken) {
+          // The renew rotated the stored token, so the one this run was holding is no longer the claim.
+          // Adopt the rotated value BEFORE the enqueue can throw: the catch releases on whatever this
+          // holds, and releasing on a superseded token is a silent no-op that would strand the
+          // connection at 'syncing' with no continuation ever enqueued.
+          ingestClaimToken = renewedToken;
           await sendToQueue(Resource.driveLakeIngestQueue.url, {
             connectionId,
             resumeBatchId: batch.id,
             slice: slice + 1,
             claimToken: renewedToken,
           });
+          // Handed off: the continuation owns the claim from here, so a later throw (the `finally`
+          // below) must NOT release it out from under that slice.
+          ingestClaimToken = undefined;
           logger.info('[driveLakeIngest] out of time; enqueued continuation slice', {
             connectionId,
             batchId: batch.id,
@@ -1031,17 +1039,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           // Deliberately NOT releasing the claim, and NOT finalizing: the chain owns both until it ends.
           return;
         }
-        // The claim went while this slice ran (a stale-claim reclaim, a disconnect). Someone else owns
-        // the connection now: settle the batch, but touch NOTHING on the connection - healing it to
-        // 'connected' here would release a claim this run no longer holds.
+        // Either the claim went while this slice ran (a stale-claim reclaim, a disconnect), or this run
+        // still holds it but renewed a batch id the connection's pointer does not match - an adopt that
+        // won the claim and then could not adopt its batch plans a fresh one (see the warn above the
+        // batch resolution). Settle the batch and release: the release is a compare-and-set, so the
+        // genuine loser no-ops and logs, while the still-holding case heals the connection now instead
+        // of leaving it at 'syncing' until the chained-stale window reclaims it an hour later.
         logger.warn('[driveLakeIngest] lost the sync claim mid-slice; ending the chain', {
           connectionId,
           batchId: batch.id,
           slice,
           deferred,
         });
-        ingestClaimToken = undefined;
         await settleChainedBatch(batch.id);
+        await releaseClaim(null);
+        ingestClaimToken = undefined;
         return;
       } else if (deferred > 0) {
         // Chain ceiling. Coverage is not lost - the files this chain uploaded stop being candidates
