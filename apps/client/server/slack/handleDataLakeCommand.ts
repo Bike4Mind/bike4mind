@@ -161,8 +161,10 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
     // `listDataLakes` degrades both of its grant reads to empty, so a curator-granted or
     // transferred lake neither enters the row set nor earns a manage label, and `list` omits a lake
     // `add` accepts. Deliberately NO `settings` adapter alongside it: that flag is what admits
-    // READER and org-principal grants, and a reader cannot write, so passing it would advertise
-    // lakes `add` then refuses - the #2022 failure in a new place.
+    // READER grants specifically, and a reader cannot write, so passing it would advertise lakes
+    // `add` then refuses - the #2022 failure in a new place. (An org-principal owner/curator grant
+    // - canManageLake's fifth rung - CAN write; nothing mints that principal type yet, so this is a
+    // bound on today's system, not a rung this omission is meant to guard against.)
     { db: { dataLakes: params.deps.dataLakes, dataLakeAccessGrants: params.deps.dataLakeAccessGrants } }
   );
   // Order matters, and it mirrors `add`: resolve the slug's winning lake FIRST, then apply the write
