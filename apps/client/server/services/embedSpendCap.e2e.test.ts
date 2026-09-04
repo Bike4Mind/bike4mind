@@ -23,7 +23,16 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let mongoServer: MongoMemoryServer;
 
-const adapters = { db: { userApiKeys: userApiKeyRepository } };
+// Real userApiKeys repo: this file exists to prove the spend-cap field, accumulator and
+// validation projection line up against a real schema. The agent lookup is incidental to
+// that - createUserApiKey requires the adapter to bind an embed key, so stub it with an
+// agent owned by the org below; agent-ownership itself is covered in create.test.ts.
+const adapters = {
+  db: {
+    userApiKeys: userApiKeyRepository,
+    agents: { findById: async () => ({ organizationId: 'org-1', userId: 'owner-1' }) },
+  },
+};
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
