@@ -9,9 +9,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(async (req,
     throw new ForbiddenError();
   }
 
+  // No `previousKey` here on purpose: a caller-submitted value cannot be shown to
+  // have ever been the real secret, and the rotation grace window trusts it to verify
+  // tokens. The server captures it itself on renew (see ../renewed.ts).
   const schema = z.object({
     id: z.string(),
-    previousKey: z.string().optional(),
     rotationIntervalDays: z.number().min(1).max(365).optional(),
     description: z.string().optional(),
   });

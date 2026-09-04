@@ -35,7 +35,6 @@ export default function SecretsRotationTab() {
   const [openEditModal, setOpenEditModal] = useState(false);
   const [currentSecret, setCurrentSecret] = useState<ISecretRotationDocument | null>(null);
   const [editFormData, setEditFormData] = useState({
-    previousKey: '',
     rotationIntervalDays: 30,
     description: '',
   });
@@ -50,7 +49,7 @@ export default function SecretsRotationTab() {
   });
 
   const editMutation = useMutation({
-    mutationFn: (data: { id: string; previousKey?: string; rotationIntervalDays?: number; description?: string }) =>
+    mutationFn: (data: { id: string; rotationIntervalDays?: number; description?: string }) =>
       api.put(`/api/secret-rotations/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['secrets-rotation'] });
@@ -130,14 +129,6 @@ export default function SecretsRotationTab() {
                 name="description"
                 value={editFormData.description}
                 onChange={e => setEditFormData({ ...editFormData, description: e.target.value })}
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Previous Key</FormLabel>
-              <Input
-                name="previousKey"
-                value={editFormData.previousKey}
-                onChange={e => setEditFormData({ ...editFormData, previousKey: e.target.value })}
               />
             </FormControl>
             <FormControl>
@@ -261,7 +252,6 @@ export default function SecretsRotationTab() {
                       onClick={() => {
                         setCurrentSecret(secret);
                         setEditFormData({
-                          previousKey: secret.previousKey || '',
                           rotationIntervalDays: secret.rotationIntervalDays,
                           description: secret.description || '',
                         });
