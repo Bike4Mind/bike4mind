@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { randomUUID } from 'crypto';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
@@ -207,7 +208,9 @@ describe('notebook round trip: artifacts', () => {
         getSignedUrl: async () => null,
       },
       logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
-      generateId: () => `artifact_${new mongoose.Types.ObjectId().toString()}`,
+      // Bare uuid, matching production - an `artifact_`-shaped stub would mask the import minting
+      // ids from this port instead of from createArtifact.
+      generateId: () => randomUUID(),
     } as never).importNotebooks(
       USER,
       { exportVersion: '1.0.0', notebooks: [exported] } as never,

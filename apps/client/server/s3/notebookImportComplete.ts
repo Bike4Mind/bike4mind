@@ -124,13 +124,13 @@ export const createArtifactWrites = (session?: ClientSession) => ({
     ...params
   }: {
     userId: string;
-    id: string;
+    id?: string;
     sessionId: string;
     type: ArtifactType;
     title: string;
     content: string;
     metadata?: Record<string, unknown>;
-  }) => {
+  }): Promise<string> => {
     const written = await artifactService.create(
       userId,
       {
@@ -149,7 +149,9 @@ export const createArtifactWrites = (session?: ClientSession) => ({
         },
       }
     );
-    return written;
+    // Read back off the stored row, not off the payload: when no id was supplied the creation path
+    // minted one, and that is the id readers resolve the artifact by.
+    return String((written.artifact as unknown as { id: string }).id);
   },
 });
 

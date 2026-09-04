@@ -25,6 +25,11 @@ import type { Logger } from '@bike4mind/observability';
 // `findExistingArtifactId` (app/utils/artifactPersistence.ts) matches positionally
 // so the rendered card adopts this row instead of minting a fresh id. The two
 // parsers are a known fork; consolidating them is a separate change.
+//
+// Not interchangeable with `createArtifactId` (@bike4mind/common) despite the matching shape: this
+// one keeps `identifier` verbatim, which is what makes the row adoptable, while that one slugifies
+// it and appends a random suffix precisely so its rows are NOT adopted. Swapping either for the
+// other breaks one of the two behaviours.
 import {
   checkHasDefaultExport,
   extractReactDependencies,
