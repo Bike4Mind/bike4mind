@@ -56,6 +56,13 @@ describe('NotebookExportRequestSchema - notebookIds', () => {
     expect(parsed.fromDate).toBe('2026-01-15T08:30:00Z');
   });
 
+  it('accepts an offset-bearing timestamp, which the message says is valid', () => {
+    // z.iso.datetime() defaults to offset: false, so this 400d under a message naming it as one of
+    // the two accepted forms.
+    const parsed = NotebookExportRequestSchema.parse({ fromDate: '2026-01-15T08:30:00+09:00' });
+    expect(parsed.fromDate).toBe('2026-01-15T08:30:00+09:00');
+  });
+
   it('still rejects a date that is neither form', () => {
     const bad = NotebookExportRequestSchema.safeParse({ fromDate: '15/01/2026' });
     expect(bad.success).toBe(false);

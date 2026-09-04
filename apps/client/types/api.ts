@@ -109,10 +109,12 @@ export const ProjectInviteRequestSchema = z.object({
   available: z.number().positive().optional(),
 });
 
+// `offset: true` because the default rejects "+09:00", which the docs table advertises and a
+// zone-aware caller is the most likely one to send.
 // Labelled deliberately: a bare union reports only zod's generic "Invalid input", losing the
 // "Invalid ISO datetime" a lone datetime schema gave. The route copies issue.message into errors[]
 // and the modal renders it, so this string is what an API caller sending "15/01/2026" actually reads.
-const DATE_OR_DATETIME = z.union([z.iso.date(), z.iso.datetime()], {
+const DATE_OR_DATETIME = z.union([z.iso.date(), z.iso.datetime({ offset: true })], {
   error: 'must be YYYY-MM-DD or a full ISO datetime',
 });
 
