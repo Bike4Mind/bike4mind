@@ -456,6 +456,12 @@ export const web = new sst.aws.Nextjs(
         if ($app.stage === 'dev') {
           args.concurrency = { reserved: 150 };
         }
+        // Bound how long request logs live. Without this the server's log group defaults to
+        // "never expire", so anything a handler ever printed is retained indefinitely - the
+        // widest possible window for anything sensitive that slips into a log line. A week
+        // still covers the debugging this group is actually used for; every other function in
+        // infra/ sets 3 days to 1 week the same way.
+        args.logging = { retention: '1 week' };
       },
     },
     // Order the frontend deploy strictly AFTER the database migration Invocation (CI only). The
