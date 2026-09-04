@@ -10,7 +10,8 @@ import {
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { ApiKeyScope, redactUserSecretsForSelf } from '@bike4mind/common';
+import { getApiKeyScopes, isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 import * as z from 'zod';
@@ -103,6 +104,15 @@ const handler = baseApi().put(
     }
 
     if (currentUser.isAdmin) {
+      // The admin branch writes credits, roles and email, so it needs the ADMIN
+      // scope - but this route cannot declare `requiredScopes`, because it is also
+      // every ordinary user's own profile update. The gate therefore lives on the
+      // branch instead. JWT callers are unaffected; an admin driving their own
+      // profile update with a narrow key now needs an admin-scoped one.
+      if (isApiKeyAuth(req) && !getApiKeyScopes(req).includes(ApiKeyScope.ADMIN)) {
+        return res.status(403).json({ error: 'Insufficient API key permissions' });
+      }
+
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
       // id comes from the route param; the spread ensures it wins over any id in the body.
       const body = userService.adminUpdateUserSchema.parse({ ...(req.body as Record<string, unknown>), id: userId });

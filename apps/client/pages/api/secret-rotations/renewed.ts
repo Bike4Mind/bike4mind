@@ -1,4 +1,4 @@
-import { Permission } from '@bike4mind/common';
+import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { calculateNextRotationDate } from '@client/lib/secretRotation/utils';
@@ -9,16 +9,16 @@ const renewRequestSchema = z.object({
   id: z.string(),
 });
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.ability?.can(Permission.update, SecretRotation)) {
-    return new ForbiddenError();
+    throw new ForbiddenError();
   }
 
   const { id } = renewRequestSchema.parse(req.body);
 
   const secret = await secretRotationRepository.findById(id);
   if (!secret) {
-    return new NotFoundError('Secret rotation not found');
+    throw new NotFoundError('Secret rotation not found');
   }
 
   try {

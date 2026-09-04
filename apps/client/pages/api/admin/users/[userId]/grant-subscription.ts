@@ -8,7 +8,7 @@ import {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
-import { CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
 import {
   ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
@@ -42,7 +42,7 @@ interface RequestQuery {
   userId: string;
 }
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     // Check admin authorization
     if (!req.user?.isAdmin) {
