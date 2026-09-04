@@ -385,12 +385,12 @@ describe('handleDataLakeCommand', () => {
       ingestSlackFilesIntoLake.mockResolvedValue({
         ok: false,
         reason: 'not_authorized',
-        message: 'You can only add files to a data lake you created.',
+        message: 'You do not have permission to add files to `ghost`.',
       });
 
       const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1' }] }));
 
-      expect(reply).toBe('You can only add files to a data lake you created.');
+      expect(reply).toBe('You do not have permission to add files to `ghost`.');
     });
 
     it('ingests BOTH when a message carries a file and a link, reporting each', async () => {
