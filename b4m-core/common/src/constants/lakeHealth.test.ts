@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, CHARS_PER_TOKEN_SERVE_BOUND, SERVE_CHUNK_CHARS_CEILING } from './chunking';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  CHARS_PER_TOKEN_SERVE_BOUND,
+  CHUNKLESS_STALL_REASONS,
+  SERVE_CHUNK_CHARS_CEILING,
+} from './chunking';
 import {
   resolveLakeHealthPolicy,
   evaluateMemberHealth,
+  selectLakeHealthMembers,
   summarizeLakeHealth,
   findDuplicateMembers,
   type LakeHealthMemberInput,
@@ -451,12 +457,18 @@ describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, no
     ...over,
   });
 
-  it('fails P3 on its proven zero rather than grading unknown', () => {
-    const r = evaluateMemberHealth(stranded(), DEFAULT_POLICY);
-    expect(r.status.fullyVectorized).toBe('fail');
-    expect(r.failed).toContain('fullyVectorized');
-    expect(r.reachableChars).toBe(0);
-    expect(r.measured).toBe(true);
+  // Driven from the subset rather than `stranded()`'s default alone. A file that arrived empty
+  // (`unchunkedPaused`) and one a wave emptied (`rechunkPaused`) are the same halted state by the time
+  // they reach this grader, so they must grade identically - and a loop keeps a future chunk-arm
+  // reason covered without editing this test.
+  it('fails P3 on its proven zero rather than grading unknown, for every chunk-arm reason', () => {
+    for (const chunkStallReason of CHUNKLESS_STALL_REASONS) {
+      const r = evaluateMemberHealth(stranded({ chunkStallReason }), DEFAULT_POLICY);
+      expect(r.status.fullyVectorized).toBe('fail');
+      expect(r.failed).toContain('fullyVectorized');
+      expect(r.reachableChars).toBe(0);
+      expect(r.measured).toBe(true);
+    }
   });
 
   it('is named in the drill-down, and drops the lake off a fully-passing predicate tally', () => {
@@ -486,6 +498,18 @@ describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, no
   it('leaves the vectorize-arm marker alone - it has chunks, so it grades on its real rollups', () => {
     const r = evaluateMemberHealth(stranded({ chunkCount: 0, chunkStallReason: 'vectorizePaused' }), DEFAULT_POLICY);
     expect(r.status.fullyVectorized).toBe('unknown');
+  });
+
+  // The ADMISSION half of the same fix, and inert without it either way round: grading a chunkless
+  // member correctly buys nothing if the selector drops it before the grader sees it, which is why
+  // both key on the same subset. The unmarked row is the control - nothing distinguishes it from an
+  // image or a pending upload, so it stays out.
+  it('admits every chunk-arm reason into the graded set, and still leaves an unmarked chunkless member out', () => {
+    for (const chunkStallReason of CHUNKLESS_STALL_REASONS) {
+      expect(selectLakeHealthMembers([stranded({ chunkStallReason })])).toHaveLength(1);
+    }
+    expect(selectLakeHealthMembers([stranded({ chunkStallReason: 'vectorizePaused' })])).toEqual([]);
+    expect(selectLakeHealthMembers([stranded({ chunkStallReason: null })])).toEqual([]);
   });
 });
 
