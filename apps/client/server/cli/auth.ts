@@ -162,8 +162,39 @@ function toApiKeyInfo(v: {
 }
 
 /**
+ * The account-state gates `apiKeyAuth` applies on the `baseApi` surface, mirrored
+ * for the contract/CLI/Fargate/WebSocket paths, which reach a key without ever
+ * touching that middleware. Without this a banned, charged-back or suspended
+ * owner's key kept working on exactly the surfaces that spend money.
+ *
+ * MUST STAY IN SYNC with the equivalent block in
+ * apps/client/server/middlewares/apiKeyAuth.ts - same lookup, same order, same
+ * messages.
+ *
+ * This is the `User.findById` the consent gate above deliberately declines to pay
+ * on the api-key path. Account state is not the same trade: consent can be proven
+ * at mint time and never changes underneath a key, whereas a ban, chargeback or
+ * suspension lands *after* the key exists and must take effect on the surfaces
+ * that spend money.
+ */
+async function assertOwnerAccountUsable(userId: string): Promise<void> {
+  const user = await User.findById(userId);
+
+  if (!user || user.isBanned) {
+    throw new Error('User not found or banned');
+  }
+  if (user.disputePending) {
+    throw new Error('Account suspended pending dispute resolution. Please contact support.');
+  }
+  if (user.moderation?.status === 'suspended') {
+    throw new Error('Your account is suspended for repeated content-policy violations.');
+  }
+}
+
+/**
  * Verify API key from headers
- * @throws Error if API key is invalid, expired, or missing required scope
+ * @throws Error if API key is invalid, expired, missing required scope, or owned by
+ * a banned/disputed/suspended account
  */
 export async function verifyApiKey(
   headers: Record<string, string | undefined>,
@@ -191,6 +222,8 @@ export async function verifyApiKey(
       const list = requiredScopes.join(' or ');
       throw new Error(`API key does not have permission for this endpoint (requires ${list})`);
     }
+
+    await assertOwnerAccountUsable(validation.userId);
 
     return toApiKeyInfo(validation);
   } catch (error) {
@@ -264,6 +297,7 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
 
   const info = toApiKeyInfo(validation);
   assertEmbedCredential(info);
+  await assertOwnerAccountUsable(info.userId);
   return info;
 }
 

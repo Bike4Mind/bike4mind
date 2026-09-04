@@ -68,8 +68,26 @@ describe('GET /api/embed/serve - public widget page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO });
-    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot' });
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot', organizationId: 'org-1' });
     mockOwnerHasEntitlement.mockResolvedValue(false);
+  });
+
+  it('does not disclose the name of an agent the key does not own', async () => {
+    // Bound to a foreign agent: the page still renders, but the agent's name must
+    // not leak through it. Same ownership predicate the chat route applies.
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot', organizationId: 'other-org' });
+    const res = await run({ k: 'b4m_live_good' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).not.toContain('Sales Bot');
+  });
+
+  it('does not disclose the name of a system agent, which no key owns', async () => {
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot' });
+    const res = await run({ k: 'b4m_live_good' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).not.toContain('Sales Bot');
   });
 
   it('renders the agent name into the page config and survives a failed lookup', async () => {
@@ -230,7 +248,7 @@ describe('GET /api/embed/serve - white-label branding (epic #41 Phase D)', () =>
     vi.clearAllMocks();
     vi.stubEnv('APP_NAME', 'Bike4Mind');
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO });
-    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot' });
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot', organizationId: 'org-1' });
     mockOwnerHasEntitlement.mockResolvedValue(false);
   });
 
