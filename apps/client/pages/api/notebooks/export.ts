@@ -129,8 +129,8 @@ const handler = baseApi().post(
         return res.status(error.statusCode).json({ success: false, message: error.message, code: error.code });
       }
 
-      // The 4xx branch above logs exactly once; this one does not. It repeats the service's own
-      // error line for a genuine 500.
+      // Deliberately a second error line: the service already logged this one at error, so a
+      // genuine 500 totals two. The 4xx branch above adds none, so a rejection stays at one.
       req.logger.error('Notebook export failed', { userId, error });
 
       return res.status(500).json({

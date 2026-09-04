@@ -338,9 +338,10 @@ describe('notebook export - notebookIds shape', () => {
     expect(adapters.sessionRepository.find).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [UPPER] } }));
   });
 
-  it('covers the whole of a date-only toDate, not just its midnight', async () => {
+  it('anchors a date-only fromDate to midnight and stretches a date-only toDate to end of day', async () => {
     // `new Date('2026-01-20')` is that day at 00:00Z, so an inclusive `$lte` on it returns nothing
-    // from the day the caller named - and a date input can only send this form.
+    // from the day the caller named. The modal resolves the picked day itself, so this form is what
+    // an API caller sends.
     const { adapters } = makeAdapters();
     await new NotebookExportService(adapters).exportNotebooks('user-1', {
       ...OPTIONS,

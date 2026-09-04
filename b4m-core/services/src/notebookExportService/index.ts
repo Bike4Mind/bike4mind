@@ -251,8 +251,8 @@ export class NotebookExportService {
     }
 
     // Date range filtering. A bare "2026-01-15" parses to that day's midnight, so an inclusive
-    // `$lte` on it would return nothing from the day the caller actually named - the `<input
-    // type="date">` in the export modal sends exactly that form.
+    // `$lte` on it would return nothing from the day the caller actually named. Reached by API
+    // callers, not the modal - that resolves the picked day in the viewer's zone before sending.
     if (options.fromDate || options.toDate) {
       query.lastUpdated = {};
       if (options.fromDate) {

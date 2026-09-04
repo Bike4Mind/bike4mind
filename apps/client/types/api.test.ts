@@ -43,8 +43,9 @@ describe('NotebookExportRequestSchema - notebookIds', () => {
   });
 
   it('accepts the date-only value an <input type="date"> produces', () => {
-    // The export modal's Date Range sends "2026-01-15"; a datetime-only schema 400d every date a
-    // user could pick, and the toast named none of it.
+    // A datetime-only schema 400d every date a user could pick, and the toast named none of it.
+    // The modal now resolves the picked day in the viewer's zone before sending, so this form
+    // arrives from API callers.
     const parsed = NotebookExportRequestSchema.parse({ fromDate: '2026-01-15', toDate: '2026-01-20' });
     expect(parsed.fromDate).toBe('2026-01-15');
     expect(parsed.toDate).toBe('2026-01-20');
