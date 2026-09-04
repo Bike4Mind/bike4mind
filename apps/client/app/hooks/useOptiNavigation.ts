@@ -11,6 +11,14 @@ interface OptiNavigationState {
   /** Optional sub-tab within the family (e.g., "solvers", "gantt") */
   pendingSubTab: string | null;
   /**
+   * True when the request came from someone clicking a navigate_view button, false when
+   * it came from a side effect that REPLAYS on session load. Consumers drop a replayed
+   * request on views that own their own layout but must honour a deliberate click, and
+   * they cannot tell the two apart by their own state: the click writes this store
+   * before its navigation commits, so the consumer still sees the view being left.
+   */
+  pendingUserInitiated: boolean;
+  /**
    * Prompt to send to the docked chat, dispatched by deck components
    * (FamilyConsole, PatternLearnTab, SchedulerTab). OptiHashiPage consumes it
    * via handleAskAbout, which creates the OptiHashi session first when none
@@ -19,7 +27,7 @@ interface OptiNavigationState {
    */
   pendingPrompt: string | null;
   /** Request navigation to a specific opti family, optionally with a sub-tab */
-  requestFamily: (familyId: string, subTab?: string) => void;
+  requestFamily: (familyId: string, subTab?: string, opts?: { userInitiated?: boolean }) => void;
   /** Ask OptiHashiPage to send a prompt to the chat, creating a session if needed */
   requestChatPrompt: (prompt: string) => void;
   /** Clear pending family and sub-tab after OptiHashiPage consumes them */
@@ -31,9 +39,11 @@ interface OptiNavigationState {
 export const useOptiNavigation = create<OptiNavigationState>(set => ({
   pendingFamily: null,
   pendingSubTab: null,
+  pendingUserInitiated: false,
   pendingPrompt: null,
-  requestFamily: (familyId: string, subTab?: string) => set({ pendingFamily: familyId, pendingSubTab: subTab ?? null }),
+  requestFamily: (familyId: string, subTab?: string, opts?: { userInitiated?: boolean }) =>
+    set({ pendingFamily: familyId, pendingSubTab: subTab ?? null, pendingUserInitiated: opts?.userInitiated === true }),
   requestChatPrompt: (prompt: string) => set({ pendingPrompt: prompt }),
-  clearPending: () => set({ pendingFamily: null, pendingSubTab: null }),
+  clearPending: () => set({ pendingFamily: null, pendingSubTab: null, pendingUserInitiated: false }),
   clearPendingPrompt: () => set({ pendingPrompt: null }),
 }));
