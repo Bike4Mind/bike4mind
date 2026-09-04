@@ -11,11 +11,17 @@ interface OptiNavigationState {
   /** Optional sub-tab within the family (e.g., "solvers", "gantt") */
   pendingSubTab: string | null;
   /**
-   * True when the request came from someone clicking a navigate_view button, false when
-   * it came from a side effect that REPLAYS on session load. Consumers drop a replayed
-   * request on views that own their own layout but must honour a deliberate click, and
-   * they cannot tell the two apart by their own state: the click writes this store
-   * before its navigation commits, so the consumer still sees the view being left.
+   * True only when the request came from someone clicking a navigate_view button.
+   * Consumers need it because they cannot tell a click apart by their own state: the
+   * click writes this store before its navigation commits, so the consumer still sees
+   * the view being left.
+   *
+   * False is NOT the same as "replayed on session load" - it also covers the live
+   * follow-to-console after a just-completed formulate/solve, because that path
+   * dispatches from a mount effect and cannot distinguish a fresh reply from a
+   * persisted one. A consumer that drops everything with `!pendingUserInitiated`
+   * therefore kills the intended live follow too; gate on the effect's own
+   * freshness for that, and use this flag only to force a click through.
    */
   pendingUserInitiated: boolean;
   /**

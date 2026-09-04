@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useOptiNavigation } from './useOptiNavigation';
 
 // pendingUserInitiated is the seam the /opti consumer reads to tell a clicked
-// navigate_view button apart from a side effect that replays on session load.
-// Defaulting it to true anywhere would let a replay yank the user off a view
-// that owns its own layout, which is the bug this flag exists to prevent.
+// navigate_view button apart from every other dispatch. Defaulting it to true
+// anywhere would let a replay yank the user off a view that owns its own layout,
+// which is the bug this flag exists to prevent.
 describe('useOptiNavigation', () => {
   beforeEach(() => {
     useOptiNavigation.getState().clearPending();

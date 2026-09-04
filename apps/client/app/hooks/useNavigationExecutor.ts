@@ -58,9 +58,10 @@ export function useNavigationExecutor() {
           }
           // Name the target view in the search params rather than leaving the route to
           // its default, which would render the wrong view for a frame before the
-          // consumer switches.
+          // consumer switches. The updater form is required: router-core passes a plain
+          // search object straight through, replacing every other param on the way in.
           // @ts-expect-error - /opti is a premium route, not in static route tree
-          navigate({ to: '/opti', search: { mode: 'optimize' } });
+          navigate({ to: '/opti', search: prev => ({ ...prev, mode: 'optimize' }) });
           break;
         }
       }
