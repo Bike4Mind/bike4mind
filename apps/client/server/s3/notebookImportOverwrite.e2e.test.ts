@@ -102,7 +102,7 @@ function makeService() {
     // the real thing, not a copy
     chatHistoryRepository: createChatHistoryWrites(),
     knowledgeRepository: { create: async () => null },
-    artifactExists: async () => false,
+    artifactIdTaken: async () => false,
     createArtifact: async () => null,
     toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
     agentRepository: { create: async () => null },

@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { createArtifactId, getArtifactIdentifier } from './artifactHelpers';
+import { createArtifactId, getArtifactIdentifier, remintArtifactId } from './artifactHelpers';
+
+const segments = (id: string) => id.split('_');
 
 /**
- * Guards the id shape createArtifactId promises to the client - see its JSDoc for why the five
- * segments and their positions are a contract, not an implementation detail.
+ * The shape the client parses is spread across `apps/client`, so these ids are a contract rather
+ * than an implementation detail - see createArtifactId's JSDoc for which reader owns which
+ * position. Source ids in these tests are written the way `generateCompleteArtifactId` writes them
+ * (the identifier attribute verbatim, no slugifying), because that is the only shape the import
+ * ever reads back.
  */
 describe('createArtifactId', () => {
-  const segments = (id: string) => id.split('_');
-
   it('satisfies both gates the client applies to an artifact id', () => {
     const id = createArtifactId('react', 'Sales Dashboard');
 
@@ -17,8 +20,9 @@ describe('createArtifactId', () => {
     expect(createArtifactId()).toMatch(/^artifact_generated_artifact_/);
   });
 
-  it('leaves the identifier segment a clean slug so the rendered card can adopt the row', () => {
-    // See createArtifactId's doc for why segment 2 has to stay comparable.
+  it('slugs a title into the identifier segment', () => {
+    // Only safe for a title: nothing compares this id against an `<artifact identifier=...>`
+    // attribute. Carrying an existing identifier across goes through remintArtifactId instead.
     expect(segments(createArtifactId('svg', 'Red Circle'))[2]).toBe('red-circle');
   });
 
@@ -33,16 +37,6 @@ describe('createArtifactId', () => {
     expect(segments(id)[3]).toMatch(/^\d+$/);
     expect(segments(id)[4]).toMatch(/^\d+$/);
     expect(new RegExp(`^${identifierPrefix}_\\d+_\\d+$`).test(id)).toBe(true);
-  });
-
-  it('round-trips its identifier segment through getArtifactIdentifier', () => {
-    // This pair is the invariant the notebook import depends on: reminting an id for a copy has to
-    // preserve the identifier the original carried, since the copy's reply still names it.
-    const original = createArtifactId('react', 'Todo App');
-    const reminted = createArtifactId('react', getArtifactIdentifier(original) ?? 'wrong');
-
-    expect(getArtifactIdentifier(reminted)).toBe(getArtifactIdentifier(original));
-    expect(reminted).not.toBe(original);
   });
 
   it('puts a parseable timestamp in the position the viewer reads', () => {
@@ -70,5 +64,57 @@ describe('createArtifactId', () => {
     const ids = new Set(Array.from({ length: 200 }, () => createArtifactId('code', 'Same Title')));
 
     expect(ids.size).toBe(200);
+  });
+});
+
+describe('getArtifactIdentifier', () => {
+  it('reads the identifier segment out of a parseable id', () => {
+    expect(getArtifactIdentifier('artifact_react_todo-app_1700000000000_0')).toBe('todo-app');
+  });
+
+  it('returns undefined for a legacy id, whose segment 2 is a random discriminator', () => {
+    // Legacy ids hold a random discriminator in this position, not an identifier - see the
+    // function doc. Every row predating the shape fix carries one.
+    expect(getArtifactIdentifier('artifact_1700000000000_k3f9dz1qp')).toBeUndefined();
+  });
+
+  it('returns undefined for an id that is not artifact-shaped at all', () => {
+    expect(getArtifactIdentifier('6a9aacc0a73b5700defff05c')).toBeUndefined();
+  });
+});
+
+describe('remintArtifactId', () => {
+  it('carries the identifier segment across verbatim', () => {
+    // The whole point of the function: `findExistingArtifactId` compares this segment for equality
+    // against the raw attribute in the reply, and `generateCompleteArtifactId` wrote it raw into
+    // the source id. Slugifying it - which is right for a title - is what breaks that match, so
+    // the identifier here deliberately survives neither lowercasing nor a 40-char truncation.
+    const identifier = 'Q3-Revenue-Breakdown-By-Region-And-Product-Line';
+    const source = `artifact_recharts_${identifier}_1700000000000_0`;
+
+    const reminted = remintArtifactId(source, 'recharts', 'Quarterly Revenue');
+
+    expect(segments(reminted)[2]).toBe(identifier);
+    expect(reminted).not.toBe(source);
+    expect(segments(reminted).length).toBe(5);
+    expect(segments(reminted)[3]).toMatch(/^\d+$/);
+  });
+
+  it('falls back to the title when the source id carries no identifier', () => {
+    // A legacy `artifact_<ts>_<rand>` source has no attribute to preserve, so a slug of the title
+    // is the best available guess - and strictly better than the random discriminator that sits in
+    // segment 2 of that id.
+    const reminted = remintArtifactId('artifact_1700000000000_k3f9dz1qp', 'svg', 'Red Circle');
+
+    expect(segments(reminted)[2]).toBe('red-circle');
+    expect(segments(reminted).length).toBe(5);
+  });
+
+  it('mints a distinct id every time so a copy never collides with its source', () => {
+    const source = 'artifact_react_todo-app_1700000000000_0';
+    const ids = new Set(Array.from({ length: 200 }, () => remintArtifactId(source, 'react', 'Todo App')));
+
+    expect(ids.size).toBe(200);
+    expect(ids.has(source)).toBe(false);
   });
 });
