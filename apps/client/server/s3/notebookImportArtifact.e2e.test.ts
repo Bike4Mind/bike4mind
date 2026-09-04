@@ -48,9 +48,12 @@ afterEach(async () => {
 
 const BODY = '<svg><circle r="4" /></svg>';
 
+/** generateCompleteArtifactId's shape, identifier verbatim. Title slug would be `my-diagram`. */
+const SOURCE_ID = 'artifact_svg_Flow-Chart_1700000000000_0';
+
 function artifact(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'artifact_1_abc',
+    id: SOURCE_ID,
     name: 'My Diagram',
     type: 'svg',
     content: BODY,
@@ -87,7 +90,7 @@ function makeService() {
     chatHistoryRepository: createChatHistoryWrites(),
     knowledgeRepository: { create: async () => null },
     // the real thing, not a copy
-    ...createArtifactWrites(undefined, logger as never),
+    ...createArtifactWrites(),
     toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
     agentRepository: { create: async () => null },
     userRepository: { findById: async () => ({ id: USER }) },
@@ -172,9 +175,8 @@ describe('notebook import: artifacts against real models', () => {
 
     // findExistingArtifactId (app/utils/artifactPersistence.ts) compares segment 2 for equality
     // against the `<artifact identifier=...>` attribute in the reply, so the source identifier has
-    // to survive the remint. The fixture separates the two deliberately: `abc` is the source
-    // identifier, `my-diagram` is what slugifying the title would have produced.
-    expect(id.split('_')[2]).toBe('abc');
+    // to survive the remint unchanged - see SOURCE_ID for what the fixture separates.
+    expect(id.split('_')[2]).toBe('Flow-Chart');
   });
 
   it('refuses a preserved id that is already taken instead of writing a duplicate key', async () => {
@@ -184,8 +186,32 @@ describe('notebook import: artifacts against real models', () => {
     const result = await runImport([artifact()], { preserveIds: true });
 
     expect(result.importedAttachments).toBe(0);
-    expect((result.warnings ?? []).join(' ')).toContain('artifact_1_abc');
-    expect(await Artifact.countDocuments({ id: 'artifact_1_abc' })).toBe(1);
+    expect((result.warnings ?? []).join(' ')).toContain(SOURCE_ID);
+    expect(await Artifact.countDocuments({ id: SOURCE_ID })).toBe(1);
+    expect(await ArtifactContent.countDocuments({})).toBe(1);
+  });
+
+  it('refuses a preserved id held only by an orphaned content row, which the artifacts collection cannot see', async () => {
+    // See `createArtifactWrites.artifactIdTaken` for why an orphaned content row has to count as
+    // taken. This mongod is standalone, so the transaction abort that makes it matter in production
+    // cannot be reproduced here; what these assertions pin instead is that the refusal comes from
+    // the GUARD - its own message, not a duplicate-key error - and that nothing is written on top
+    // of the orphan.
+    await ArtifactContent.create({
+      artifactId: SOURCE_ID,
+      version: 1,
+      content: BODY,
+      contentHash: 'a'.repeat(64),
+      contentSize: BODY.length,
+      mimeType: 'image/svg+xml',
+      encoding: 'utf8',
+    });
+
+    const result = await runImport([artifact()], { preserveIds: true });
+
+    expect(result.importedAttachments).toBe(0);
+    expect((result.warnings ?? []).join(' ')).toContain(`an artifact with id "${SOURCE_ID}" already exists`);
+    expect(await Artifact.countDocuments({})).toBe(0);
     expect(await ArtifactContent.countDocuments({})).toBe(1);
   });
 

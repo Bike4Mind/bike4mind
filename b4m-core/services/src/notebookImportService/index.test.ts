@@ -41,10 +41,10 @@ function makeAdapters(existingSessions: unknown[] = []) {
     },
     chatHistoryRepository: { bulkCreate, deleteMany: vi.fn() },
     knowledgeRepository: { create: vi.fn() },
-    artifactExists: vi.fn().mockResolvedValue(false),
+    artifactIdTaken: vi.fn().mockResolvedValue(false),
     // Returns the id the creation path minted, which is what the notebook's array records. The
     // shape matters: the client reads a shorter id as an incomplete legacy artifact.
-    createArtifact: vi.fn().mockResolvedValue('artifact_code_red-circle-a1b2c3_1700000000000_0'),
+    createArtifact: vi.fn().mockResolvedValue({ id: 'artifact_code_red-circle-a1b2c3_1700000000000_0' }),
     toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
     agentRepository: { create: vi.fn() },
     userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
@@ -232,7 +232,9 @@ describe('notebook import: artifacts', () => {
   });
 
   const ARTIFACT = {
-    id: 'artifact_1_abc',
+    // generateCompleteArtifactId's shape, identifier verbatim. The mixed case separates a faithful
+    // carry-across from a slugified one; neither matches a slug of the title.
+    id: 'artifact_recharts_Q3-Revenue_1700000000000_0',
     name: 'My Chart',
     type: 'recharts',
     content: 'chart body',
@@ -270,19 +272,20 @@ describe('notebook import: artifacts', () => {
   it('records the id it supplied, since artifacts are read by their own id', async () => {
     const { adapters, result } = await importArtifact(ARTIFACT, { preserveIds: true });
 
-    expect(adapters.createArtifact).toHaveBeenCalledWith(expect.objectContaining({ id: 'artifact_1_abc' }));
+    expect(adapters.createArtifact).toHaveBeenCalledWith(expect.objectContaining({ id: ARTIFACT.id }));
     expect(result.importedAttachments).toBe(1);
   });
 
   it('remints the id without preserveIds but carries the source identifier across', async () => {
-    // `abc` is the identifier segment of the fixture's source id, and it has to survive the remint:
-    // the imported reply still names it, and that is what the rendered card looks the row up by.
-    // A slug of the title ("my-chart") would only match when the two happen to agree.
+    // `Q3-Revenue` is the identifier segment of the fixture's source id, and it has to survive the
+    // remint unchanged: the imported reply still names it, and that is what the rendered card looks
+    // the row up by. A slug of the title ("my-chart") matches only when the two happen to agree,
+    // and a slugified identifier ("q3-revenue") never matches at all.
     const { adapters } = await importArtifact(ARTIFACT);
 
     const [payload] = (adapters.createArtifact as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(payload.id).not.toBe(ARTIFACT.id);
-    expect(payload.id.split('_')[2]).toBe('abc');
+    expect(payload.id.split('_')[2]).toBe('Q3-Revenue');
   });
 
   it('records the id the creation path returns, not the one it was handed', async () => {
@@ -318,7 +321,7 @@ describe('notebook import: artifacts', () => {
     // A duplicate key is a server-side error, so it would abort the transaction the whole import
     // runs in - and the catch below would report one warning while every later write failed.
     const { adapters } = makeAdapters();
-    (adapters.artifactExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (adapters.artifactIdTaken as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     const result = await new NotebookImportService(adapters).importNotebooks(
       'user-1',
       withArtifact(ARTIFACT) as never,
@@ -327,13 +330,13 @@ describe('notebook import: artifacts', () => {
 
     expect(adapters.createArtifact).not.toHaveBeenCalled();
     expect(result.importedAttachments).toBe(0);
-    expect(result.warnings?.join(' ')).toContain('artifact_1_abc');
+    expect(result.warnings?.join(' ')).toContain(ARTIFACT.id);
   });
 
   it('does not consult existing ids when it is minting them, since a fresh id cannot collide', async () => {
     const { adapters } = await importArtifact(ARTIFACT);
 
-    expect(adapters.artifactExists).not.toHaveBeenCalled();
+    expect(adapters.artifactIdTaken).not.toHaveBeenCalled();
   });
 
   it('refuses an unrecognised type in a sentence, since the warning reaches the importer', async () => {

@@ -14,11 +14,10 @@ import {
 } from '../notebookExportService/types';
 import {
   ArtifactTypeSchema,
-  createArtifactId,
   DefaultLLMParams,
-  getArtifactIdentifier,
   isValidEnumValue,
   KnowledgeType,
+  remintArtifactId,
 } from '@bike4mind/common';
 import type { ArtifactType } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
@@ -66,19 +65,25 @@ export interface NotebookImportAdapters {
   };
   knowledgeRepository: AttachmentRepository;
   /**
-   * Whether an artifact already carries this id. Only consulted for `preserveIds`, where the id
-   * comes from the export rather than being minted, so it can already be taken.
+   * Whether ANY row already occupies this id - the artifact itself or one of the two documents
+   * created alongside it, each of which has its own unique key. Only consulted for `preserveIds`,
+   * where the id comes from the export rather than being minted, so it can already be taken.
+   *
+   * Deliberately not named `artifactExists`, which is what the same question is called in
+   * apps/client/server/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
+   * and MUST stay that narrow, because that module tells a real collision apart from a repairable
+   * orphan by exactly that difference. Two ports, one name, opposite safety properties.
    */
-  artifactExists: (id: string) => Promise<boolean>;
+  artifactIdTaken: (id: string) => Promise<boolean>;
   /**
    * Not a bare repository, unlike the others: an artifact is three documents (body, version, then
    * the artifact pointing at both), and the required `contentId`/`contentHash`/`contentSize` can
    * only be derived while writing the body - so the caller wires the app's own creation path, which
    * also keeps those three writes inside the import's transaction.
    *
-   * Returns the created artifact's id, because artifacts resolve by their own `id` rather than by
-   * `_id` and that id is what readers will use - and the caller cannot assume the id it passed was
-   * the one stored.
+   * Returns the created row, not its id: `takeStoreId` takes the id from it, the same seam the
+   * three sibling attachment kinds go through. Artifacts resolve by their own `id` rather than by
+   * `_id`, and the caller cannot assume the id it passed was the one stored.
    */
   createArtifact: (params: {
     userId: string;
@@ -99,7 +104,7 @@ export interface NotebookImportAdapters {
     title: string;
     content: string;
     metadata?: Record<string, unknown>;
-  }) => Promise<string>;
+  }) => Promise<{ id: unknown }>;
   toolRepository: AttachmentRepository;
   agentRepository: AttachmentRepository;
   fileStorageService: {
@@ -526,7 +531,10 @@ export class NotebookImportService {
           throw new Error('the export carries no body for this artifact');
         }
 
-        const preservedId = options.preserveIds ? artifact.id : undefined;
+        // Truthiness, not just the flag: an export can carry an empty id, and `??` below would
+        // keep it as the id to store - skipping the collision check and losing the remint, with
+        // only `providedId || ...` inside the creation path to stop an empty id being written.
+        const preservedId = options.preserveIds && artifact.id ? artifact.id : undefined;
 
         // A reminted id keeps the SOURCE identifier rather than a slug of the title, because the
         // imported reply still carries the original `<artifact identifier=...>` attribute and that
@@ -535,14 +543,13 @@ export class NotebookImportService {
         // parser's own example), and when they disagree the rendered card cannot find this row and
         // mints an id of its own, losing the version history the round trip just restored.
         const artifactType = toArtifactType(artifact.type);
-        const storedId =
-          preservedId ?? createArtifactId(artifactType, getArtifactIdentifier(artifact.id) ?? artifact.name);
+        const storedId = preservedId ?? remintArtifactId(artifact.id, artifactType, artifact.name);
 
         // Checked before the write, not left to the catch below: re-importing an export into the
         // account it came from duplicates a unique key, and a server-side error aborts the whole
         // transaction - so the catch would log one warning while every later write failed with
         // NoSuchTransaction. Only reachable with `preserveIds`, since a minted id cannot collide.
-        if (preservedId && (await this.adapters.artifactExists(preservedId))) {
+        if (preservedId && (await this.adapters.artifactIdTaken(preservedId))) {
           throw new Error(`an artifact with id "${preservedId}" already exists`);
         }
 
@@ -550,7 +557,7 @@ export class NotebookImportService {
         // stamped at import time - unlike tools and agents below. Mongoose would honour them, but
         // artifactService.create takes no timestamps, and widening it would let any caller of the
         // artifacts API backdate a row.
-        const createdId = await this.adapters.createArtifact({
+        const created = await this.adapters.createArtifact({
           userId: targetUserId,
           id: storedId,
           sessionId,
@@ -560,7 +567,7 @@ export class NotebookImportService {
           content: artifact.content,
           metadata: artifact.metadata,
         });
-        importedIds.push(createdId);
+        importedIds.push(this.takeStoreId(created, 'artifact'));
       } catch (error) {
         this.attachmentWarnings.push(
           `Failed to import artifact "${artifact.name}": ${error instanceof Error ? error.message : String(error)}`

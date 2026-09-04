@@ -110,11 +110,24 @@ const withSession = <T>(
  * regressing - see notebookImportArtifact.e2e.test.ts.
  */
 export const createArtifactWrites = (session?: ClientSession) => ({
-  // Session-bound, so it sees artifacts written earlier in this same import and not only
-  // committed ones.
-  artifactExists: async (id: string) => {
-    const query = Artifact.exists({ id });
-    return (await (session ? query.session(session) : query)) !== null;
+  // Both collections: `create` writes the content row FIRST, so an interrupted create leaves an
+  // orphaned `artifact_contents` row with no `artifacts` row to find it by - the state
+  // `persistAgentArtifacts.clearPartialArtifact` exists to repair. Checking only `artifacts` lets
+  // that orphan reach a server-side E11000 on (artifactId, version), aborting the transaction the
+  // whole import runs inside.
+  //
+  // Refused rather than repaired, deliberately: this id comes from a user-uploaded file, so
+  // repairing means hard-deleting rows on the strength of it. Known dead end - an account holding
+  // an orphan can never import that artifact, and no UI clears one.
+  //
+  // Session-bound, so it sees rows written earlier in this same import. Sequential, so the
+  // ordinary already-imported case answers on the first query.
+  artifactIdTaken: async (id: string) => {
+    const artifactQuery = Artifact.exists({ id });
+    if ((await (session ? artifactQuery.session(session) : artifactQuery)) !== null) return true;
+
+    const contentQuery = ArtifactContent.exists({ artifactId: id });
+    return (await (session ? contentQuery.session(session) : contentQuery)) !== null;
   },
   // Delegates to the same creation path the artifacts API uses rather than hand-building a
   // payload that drifts from the schema; see NotebookImportAdapters.createArtifact for why.
@@ -130,7 +143,7 @@ export const createArtifactWrites = (session?: ClientSession) => ({
     title: string;
     content: string;
     metadata?: Record<string, unknown>;
-  }): Promise<string> => {
+  }): Promise<{ id: unknown }> => {
     const written = await artifactService.create(
       userId,
       {
@@ -149,9 +162,10 @@ export const createArtifactWrites = (session?: ClientSession) => ({
         },
       }
     );
-    // Read back off the stored row, not off the payload: when no id was supplied the creation path
-    // minted one, and that is the id readers resolve the artifact by.
-    return String((written.artifact as unknown as { id: string }).id);
+    // The stored row, not the payload's id: when no id was supplied the creation path minted one,
+    // and that is the id readers resolve the artifact by. The service's `takeStoreId` reads it -
+    // the same seam every other attachment kind goes through.
+    return written.artifact as { id: unknown };
   },
 });
 
