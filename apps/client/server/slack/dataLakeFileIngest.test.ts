@@ -48,6 +48,7 @@ let findByContentHashesInDataLake: ReturnType<typeof vi.fn>;
 let resolveEntitlementKeys: ReturnType<typeof vi.fn>;
 let resolveMembershipOrgIds: ReturnType<typeof vi.fn>;
 let resolveAdministeredOrgIds: ReturnType<typeof vi.fn>;
+let listByLake: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -58,6 +59,7 @@ beforeEach(() => {
   resolveEntitlementKeys = vi.fn().mockResolvedValue(['ent-a']);
   resolveMembershipOrgIds = vi.fn().mockResolvedValue(['org-1']);
   resolveAdministeredOrgIds = vi.fn().mockResolvedValue(['org-2']);
+  listByLake = vi.fn().mockResolvedValue([]);
 
   assertLakeWriteAccess.mockResolvedValue(lake);
   assertCanWriteDataLakeTags.mockResolvedValue(undefined);
@@ -70,7 +72,7 @@ beforeEach(() => {
     dataLakes: {} as never,
     // See the same adapter in dataLakeLinkIngest.test.ts: required by the write gate so a curator or
     // transferred owner can ingest, and unguarded by typecheck because test files are excluded.
-    dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) } as never,
+    dataLakeAccessGrants: { listByLake } as never,
     fabFiles: { findByContentHashesInDataLake },
     createLakeFile,
     resolveEntitlementKeys,
@@ -173,7 +175,7 @@ describe('authorization comes before any side effect', () => {
       expect.objectContaining({ userId: 'user-1', isAdmin: false, administeredOrgIds: ['org-2'] }),
       ['datalake:sales'],
       expect.objectContaining({
-        db: expect.objectContaining({ dataLakeAccessGrants: expect.anything() }),
+        db: expect.objectContaining({ dataLakeAccessGrants: expect.objectContaining({ listByLake }) }),
       })
     );
   });
