@@ -5,6 +5,12 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { NotebookExportRequestSchema } from '../../../types/api';
 
+// A UTC runner cannot tell the local-zone resolution from the UTC-anchoring bug it replaced: both
+// render "2026-01-15" as the same instant. The expected values below are literals for the same
+// reason - re-deriving them from `new Date(...).toISOString()` would just re-run the production
+// formula against this same zone and assert nothing.
+process.env.TZ = 'America/Los_Angeles';
+
 const { mockPost, mockToastError } = vi.hoisted(() => ({ mockPost: vi.fn(), mockToastError: vi.fn() }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mockPost } }));
@@ -57,8 +63,8 @@ describe('NotebookExportModal', () => {
 
     await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(mockPost.mock.calls[0][1]).toMatchObject({
-      fromDate: new Date('2026-01-15T00:00:00.000').toISOString(),
-      toDate: new Date('2026-01-20T23:59:59.999').toISOString(),
+      fromDate: '2026-01-15T08:00:00.000Z',
+      toDate: '2026-01-21T07:59:59.999Z',
     });
     expect(mockToastError).not.toHaveBeenCalled();
   });
