@@ -179,8 +179,13 @@ export const applyTaxonomySuggestions = async (
       // number with no signal why. Log carries batchId for grepping one occurrence; the metric
       // (deliberately dimensionless, matching this file's low-cardinality convention) is the
       // aggregate rate an alarm could eventually watch.
+      //
+      // A lost CAS is not the only way in: the filter carries `deletedAt: null` (FabFileModel) and
+      // `findByBatchId` already excludes deleted rows, so a file soft-deleted inside this window
+      // lands here too. Rare, but the message has to admit it - "tags changed since read" is the one
+      // thing that definitely did not happen in that case, and it is what someone will grep on.
       logger?.warn(
-        `applyTaxonomySuggestions: ${skipped}/${updates.length} file(s) skipped on batch ${batchId} - tags changed since read`
+        `applyTaxonomySuggestions: ${skipped}/${updates.length} file(s) skipped on batch ${batchId} - tags changed or file deleted since read`
       );
       await metrics?.recordTagsApplySkipped(skipped).catch(() => {});
     }

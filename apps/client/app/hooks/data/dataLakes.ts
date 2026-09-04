@@ -653,10 +653,11 @@ export function useApplyTaxonomySuggestions(batchId: string) {
       const res = await api.post<{
         success: true;
         filesUpdated: number;
-        unchanged: number;
+        // `unchanged` and `skipped` shipped in the SAME service commit, so a server predating it
+        // omits both - a type marking only one optional describes a payload that never existed.
+        unchanged?: number;
         // Files whose optimistic-concurrency check lost - something else changed their tags between
-        // the read and the write. Optional because a server mid-rolling-deploy omits it, and
-        // `undefined > 0` then falls through to the plain success arm rather than throwing.
+        // the read and the write, or the file was deleted inside the window.
         skipped?: number;
       }>(`/api/data-lakes/batches/${batchId}/apply-taxonomy`, { tags });
       return res.data;
@@ -666,18 +667,26 @@ export function useApplyTaxonomySuggestions(batchId: string) {
       // updated, because the identical-value write still bumped `updatedAt`. Splitting `unchanged`
       // out is what stops that over-report.
       const plural = (n: number) => `${n.toLocaleString()} file${n === 1 ? '' : 's'}`;
+      // Defaulted once, so an old server's absent fields read as zero everywhere below rather than
+      // needing a `??` (or a `!`) at each use.
+      const unchanged = result.unchanged ?? 0;
+      const skipped = result.skipped ?? 0;
       const applied =
-        result.filesUpdated === 0 && result.unchanged > 0
-          ? `Tags already up to date on ${plural(result.unchanged)}`
-          : result.unchanged > 0
-            ? `Tags applied to ${plural(result.filesUpdated)}, ${plural(result.unchanged)} already up to date`
-            : `Tags applied to ${plural(result.filesUpdated)}`;
+        result.filesUpdated === 0 && unchanged === 0
+          ? // Reachable: a batch where no file matches any accepted tag emits no ops and counts no
+            // `unchanged`. "Tags applied to 0 files" was the last arm claiming something happened.
+            'No files matched these tags'
+          : result.filesUpdated === 0
+            ? `Tags already up to date on ${plural(unchanged)}`
+            : unchanged > 0
+              ? `Tags applied to ${plural(result.filesUpdated)}, ${plural(unchanged)} already up to date`
+              : `Tags applied to ${plural(result.filesUpdated)}`;
       // Read `skipped` FIRST: "already up to date on 7 files" is an affirmative claim of
       // completeness, and it would otherwise fire unchanged on a batch where the other 3 files
       // silently failed their CAS check. Warning rather than success, because nothing in the
       // product lets the user retry a batch once it is 'applied'.
-      if ((result.skipped ?? 0) > 0) {
-        toast.warning(`${applied}. ${plural(result.skipped!)} could not be updated - changed while applying.`);
+      if (skipped > 0) {
+        toast.warning(`${applied}. ${plural(skipped)} could not be updated - changed while applying.`);
       } else {
         toast.success(applied);
       }

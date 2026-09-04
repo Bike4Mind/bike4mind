@@ -134,7 +134,8 @@ describe('applyTaxonomySuggestions', () => {
     expect(result).toEqual({ success: true, filesUpdated: 0, unchanged: 1, skipped: 0 });
     // No op emitted at all - a write that cannot change anything is not worth a round trip.
     expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
-    // And critically: no lost-race warning, no metric. That was the defect.
+    // Still no lost-race warning and no metric - same as `main`, and it has to stay that way now
+    // that `skipped` reaches the user.
     expect(adapters.logger.warn).not.toHaveBeenCalled();
     expect(adapters.metrics.recordTagsApplySkipped).not.toHaveBeenCalled();
   });

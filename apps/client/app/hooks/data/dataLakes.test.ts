@@ -986,9 +986,11 @@ describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
   });
 
   it('falls through to the plain success arm when the server omits skipped (rolling deploy)', async () => {
-    // A client on this build against a server that has not shipped `skipped` yet: `undefined > 0`
-    // must read as "no skips", not throw and not warn.
-    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 4, unchanged: 0 } });
+    // A client on this build against a server that has not shipped these fields yet. BOTH are
+    // absent, because `unchanged` and `skipped` shipped in the same service commit - a fixture
+    // keeping `unchanged: 0` models a payload no server ever sends, which is what made this case
+    // pass for the wrong reason.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 4 } });
 
     const { result } = mount();
     await act(async () => {
@@ -997,6 +999,19 @@ describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
 
     expect(toast.warning).not.toHaveBeenCalled();
     expect(toast.success).toHaveBeenCalledWith('Tags applied to 4 files');
+  });
+
+  it('says nothing matched rather than "applied to 0 files" when the batch produced no ops', async () => {
+    // A batch where no file matches any accepted tag emits no ops and counts no `unchanged`, so the
+    // old plain arm claimed an application that did not happen.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
   });
 });
 
