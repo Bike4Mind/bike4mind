@@ -69,13 +69,15 @@ export interface NotebookImportAdapters {
    * only be derived while writing the body - so the caller wires the app's own creation path, which
    * also keeps those three writes inside the import's transaction.
    *
-   * The id passed in is the one readers will use, since artifacts resolve by their own `id`
-   * (`artifact_<ts>_<rand>`, not ObjectId-castable). Knowledge, tools and agents resolve by `_id`,
-   * so theirs has to come back from the store instead.
+   * Returns the created artifact's id, because artifacts resolve by their own `id` rather than by
+   * `_id` and that id is what readers will use. An id is passed in only to preserve a source id:
+   * minting one here would have to reproduce the `artifact_{type}_{identifier}_{timestamp}_{index}`
+   * shape the client parses, and the import's `generateId` port is a bare uuid, which is not it.
    */
   createArtifact: (params: {
     userId: string;
-    id: string;
+    /** Only when preserving source ids; otherwise the creation path mints a parseable one. */
+    id?: string;
     /**
      * The notebook the artifact belongs to. Recorded on the artifact itself because that is what
      * the viewer reads back (`GET /api/artifacts?sessionId=`); `session.artifactIds` is a
@@ -87,7 +89,7 @@ export interface NotebookImportAdapters {
     title: string;
     content: string;
     metadata?: Record<string, unknown>;
-  }) => Promise<unknown>;
+  }) => Promise<string>;
   toolRepository: AttachmentRepository;
   agentRepository: AttachmentRepository;
   fileStorageService: {
@@ -514,23 +516,25 @@ export class NotebookImportService {
           throw new Error('the export carries no body for this artifact');
         }
 
-        const newArtifactId = options.preserveIds ? artifact.id : this.adapters.generateId();
+        // Only set when preserving the source id - see createArtifact's doc above for why minting a
+        // parseable one is left to the creation path.
+        const preservedId = options.preserveIds ? artifact.id : undefined;
 
         // Checked before the write, not left to the catch below: re-importing an export into the
         // account it came from duplicates a unique key, and a server-side error aborts the whole
         // transaction - so the catch would log one warning while every later write failed with
         // NoSuchTransaction. Only reachable with `preserveIds`, since a minted id cannot collide.
-        if (options.preserveIds && (await this.adapters.artifactExists(newArtifactId))) {
-          throw new Error(`an artifact with id "${newArtifactId}" already exists`);
+        if (preservedId && (await this.adapters.artifactExists(preservedId))) {
+          throw new Error(`an artifact with id "${preservedId}" already exists`);
         }
 
         // The export's createdAt/updatedAt are deliberately not carried, so an imported artifact is
         // stamped at import time - unlike tools and agents below. Mongoose would honour them, but
         // artifactService.create takes no timestamps, and widening it would let any caller of the
         // artifacts API backdate a row.
-        await this.adapters.createArtifact({
+        const createdId = await this.adapters.createArtifact({
           userId: targetUserId,
-          id: newArtifactId,
+          id: preservedId,
           sessionId,
           type: toArtifactType(artifact.type),
           // The export calls it `name`; the schema calls it `title`.
@@ -538,7 +542,7 @@ export class NotebookImportService {
           content: artifact.content,
           metadata: artifact.metadata,
         });
-        importedIds.push(newArtifactId);
+        importedIds.push(createdId);
       } catch (error) {
         this.attachmentWarnings.push(
           `Failed to import artifact "${artifact.name}": ${error instanceof Error ? error.message : String(error)}`

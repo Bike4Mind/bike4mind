@@ -42,7 +42,9 @@ function makeAdapters(existingSessions: unknown[] = []) {
     chatHistoryRepository: { bulkCreate, deleteMany: vi.fn() },
     knowledgeRepository: { create: vi.fn() },
     artifactExists: vi.fn().mockResolvedValue(false),
-    createArtifact: vi.fn(),
+    // Returns the id the creation path minted, which is what the notebook's array records. The
+    // shape matters: the client reads a shorter id as an incomplete legacy artifact.
+    createArtifact: vi.fn().mockResolvedValue('artifact_code_red-circle-a1b2c3_1700000000000_0'),
     toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
     agentRepository: { create: vi.fn() },
     userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
@@ -272,15 +274,20 @@ describe('notebook import: artifacts', () => {
     expect(result.importedAttachments).toBe(1);
   });
 
-  it('mints a fresh id without preserveIds, and puts that same id on the notebook', async () => {
-    // The pair matters: an id that is generated but not the one recorded leaves the notebook
-    // pointing at an artifact nobody can read.
+  it('leaves the id to the creation path without preserveIds, and records the one it returns', async () => {
+    // The pair matters: an id that is minted but not the one recorded leaves the notebook pointing
+    // at an artifact nobody can read.
+    //
+    // No `id` is passed at all. The import's `generateId` port is a bare uuid shared with knowledge
+    // storage keys, and an artifact id has to carry the `artifact_{type}_{identifier}_{timestamp}_
+    // {index}` shape the client parses - so only the creation path can mint one.
     const { adapters } = await importArtifact(ARTIFACT);
 
-    expect(adapters.createArtifact).toHaveBeenCalledWith(expect.objectContaining({ id: 'generated-id' }));
+    const [payload] = (adapters.createArtifact as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(payload.id).toBeUndefined();
     expect(adapters.sessionRepository.updateById).toHaveBeenCalledWith(
       'new-session-id',
-      expect.objectContaining({ artifactIds: ['generated-id'] })
+      expect.objectContaining({ artifactIds: ['artifact_code_red-circle-a1b2c3_1700000000000_0'] })
     );
   });
 

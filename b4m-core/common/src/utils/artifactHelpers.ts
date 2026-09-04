@@ -67,9 +67,26 @@ export function createDefaultPermissions(userId: string): ArtifactPermissions {
   };
 }
 
-export function createArtifactId(): string {
-  // Timestamp + random suffix; not a collision-proof UUID.
-  return `artifact_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+/**
+ * Mints an artifact id in the shape the client parses: `artifact_{type}_{identifier}_{timestamp}_{index}`.
+ *
+ * All five segments matter: `useArtifactVersions` (app/hooks/data/artifacts.ts) treats a shorter id
+ * as legacy and skips fetching version history, and `getStableTimestamp` (KnowledgeViewer) reads
+ * segment 3 as a number - so `type` and `identifier` are stripped of `_` to keep positions honest.
+ *
+ * Not collision-proof: the random suffix on the identifier segment, not the timestamp, is what
+ * separates two artifacts minted in the same millisecond.
+ */
+export function createArtifactId(type: string = 'generated', identifier?: string): string {
+  const segment = (value: string, fallback: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || fallback;
+
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `artifact_${segment(type, 'generated')}_${segment(identifier ?? '', 'artifact')}-${suffix}_${Date.now()}_0`;
 }
 
 // Validation helpers

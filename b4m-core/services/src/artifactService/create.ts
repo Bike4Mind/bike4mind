@@ -91,8 +91,9 @@ export const create = async (
     metadata,
   } = secureParameters(parameters, createArtifactSchema);
 
-  // Use provided ID if available (for AI-generated artifacts), otherwise generate one
-  const artifactId = providedId || createArtifactId();
+  // Use provided ID if available (for AI-generated artifacts), otherwise generate one. The type and
+  // title are what make the minted id parseable by the client; see createArtifactId.
+  const artifactId = providedId || createArtifactId(type, title);
 
   // Calculate content metadata
   const contentHash = calculateContentHash(content);

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { randomUUID } from 'crypto';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
@@ -96,7 +97,9 @@ function makeService() {
       getSignedUrl: async () => '',
     },
     logger,
-    generateId: () => `artifact_gen_${Math.random().toString(36).slice(2, 10)}`,
+    // Bare uuid, matching production - an `artifact_`-shaped stub would mask the import minting ids
+    // from this port instead of from createArtifact.
+    generateId: () => randomUUID(),
   };
   return new NotebookImportService(adapters as never);
 }
@@ -147,6 +150,25 @@ describe('notebook import: artifacts against real models', () => {
     expect(written?.permissions?.isPublic).toBe(false);
     expect(written?.permissions?.canRead).toEqual([USER]);
     expect(written?.userId).toBe(USER);
+  });
+
+  it('mints an id the client can parse rather than the uuid the generateId port supplies', async () => {
+    await runImport([artifact()]);
+    const id = String((await Artifact.findOne({ userId: USER }))?.id);
+
+    // The two gates useArtifactVersions applies (app/hooks/data/artifacts.ts). Failing either makes
+    // the viewer treat the artifact as legacy or incomplete and never fetch its version history, so
+    // an imported artifact silently loses its version dropdown. A bare uuid fails the first; a
+    // three-segment id from the old createArtifactId fails the second.
+    expect(id.startsWith('artifact_')).toBe(true);
+    expect(id.split('_').length).toBeGreaterThanOrEqual(5);
+
+    // getStableTimestamp (KnowledgeViewer) reads segment 3 positionally as a number.
+    expect(Number.isNaN(Number(id.split('_')[3]))).toBe(false);
+
+    // Specifically not the port's value: that is exactly what shipped, and every artifact imported
+    // on preview carried one.
+    expect(id).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/);
   });
 
   it('refuses a preserved id that is already taken instead of writing a duplicate key', async () => {
