@@ -20,3 +20,31 @@ export const assertParseableDate = (name: string, value: string | undefined): vo
 export const dateParam = z.string().refine(value => value === '' || isParseableDate(value), {
   message: 'Must be a parseable date',
 });
+
+// The checks above only cover the parse. A date that parses can still be pushed out of range
+// by arithmetic applied afterwards -- a timezone shift, an end-of-day `setUTCHours`, a
+// `setDate` offset -- and the result is the same Invalid Date and the same 500. Anything that
+// mutates a date after validating it needs the assertion below, placed AFTER the mutation:
+// a check before a mutator can only inspect the arguments the mutator is about to be given.
+
+/** Throws BadRequestError (400) when a date has been mutated out of the representable range. */
+export const assertDateInRange = (name: string, value: Date): Date => {
+  if (Number.isNaN(value.getTime())) {
+    throw new BadRequestError(`Invalid ${name}: date out of range`);
+  }
+  return value;
+};
+
+/**
+ * Parses an hours/days-style integer query param and clamps it into `[min, max]`, so the
+ * arithmetic built on it cannot overflow a Date. Returns undefined for a missing value and
+ * throws for a present-but-non-numeric one, which is the split every caller wanted: a bad
+ * value is the caller's error, an absent one is a default.
+ */
+export const clampedIntParam = (name: string, value: string | undefined, fallback: number, min: number, max: number): number => {
+  const parsed = parseInt(value ?? String(fallback), 10);
+  if (Number.isNaN(parsed)) {
+    throw new BadRequestError(`Invalid ${name}: must be a number`);
+  }
+  return Math.min(Math.max(parsed, min), max);
+};

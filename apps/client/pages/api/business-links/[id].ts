@@ -19,6 +19,12 @@ interface IParams {
 // whole body keeps that a client error; unknown keys are stripped, so they cannot reach the
 // payload at all. `categoryId` also accepts null, which is the clear-the-field value and the
 // only non-string that casts cleanly on an ObjectId path.
+//
+// This is deliberately stricter than mongoose. A number or boolean on a String path does NOT
+// throw -- mongoose coerces it and writes `"123"`/`"true"` -- so `{"ticker":123}` used to be
+// accepted and is a 400 now. Rejecting is the intended behavior: the coercion silently stores
+// a type the client did not send, and no in-app caller relies on it. Stated here because it is
+// a wire-visible tightening that is invisible in the throwing-shape tests below.
 const updateBodySchema = z.object({
   name: z.string().optional(),
   url: z.string().optional(),

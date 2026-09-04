@@ -143,6 +143,20 @@ describe('PUT /api/business-links/[id] - the String-typed fields cast too', () =
     expect(mockRefs.updatePayload).toBeUndefined();
   });
 
+  // Deliberate tightening, pinned so it cannot change by accident. Mongoose does NOT throw on
+  // these: it coerces and writes `"123"`/`"true"`. Base forwarded them; the schema rejects
+  // them, because silently storing a type the client did not send is worse than a 400.
+  it.each([
+    ['a number on ticker', { ticker: 123 }],
+    ['a boolean on name', { name: true }],
+  ])('rejects %s even though mongoose would have coerced it', async (_label, body) => {
+    const { req, res } = invokePut(body as unknown as Record<string, string>);
+    await mockRefs.putHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockRefs.updatePayload).toBeUndefined();
+  });
+
   it('still lets a normal string update through', async () => {
     const { req, res } = invokePut({ name: 'renamed', url: 'https://example.com', ticker: 'AAPL', type: 'stock' });
     await mockRefs.putHandler!(req, res);

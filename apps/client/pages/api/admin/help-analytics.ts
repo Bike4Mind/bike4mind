@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { assertDateInRange } from '@server/utils/dateParam';
 
 function parseDate(value: string, label: string): Date {
   const d = new Date(value);
@@ -12,21 +13,16 @@ function parseDate(value: string, label: string): Date {
 }
 
 // Parses a date-only string and shifts it into the caller's local day (to the end of that day
-// when `endOfDay`). parseDate validates the parse; the assert below validates the SHIFT, which
+// when `endOfDay`). parseDate validates the parse; assertDateInRange validates the SHIFT, which
 // is a separate failure mode: a date at either edge of the JS Date range parses cleanly and
-// still overflows once the offset or end-of-day shift lands, even for an in-range offset. An
-// Invalid Date would cast against the Date-typed `createdAt` and answer 500 rather than 400.
-// Same reasoning as admin/email/whats-new-content.ts: assert the constructed date, not its input.
+// still overflows once the offset or end-of-day shift lands, even for an in-range offset.
 function shiftedDate(value: string, label: string, offsetMinutes: number, endOfDay: boolean): Date {
   const d = parseDate(value, label);
   d.setUTCMinutes(d.getUTCMinutes() + offsetMinutes);
   if (endOfDay) {
     d.setUTCHours(d.getUTCHours() + 23, d.getUTCMinutes() + 59, 59, 999);
   }
-  if (Number.isNaN(d.getTime())) {
-    throw new BadRequestError(`Invalid ${label} date format`);
-  }
-  return d;
+  return assertDateInRange(label, d);
 }
 
 const handler = baseApi()

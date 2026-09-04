@@ -135,6 +135,17 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     expect(status).toHaveBeenCalledWith(500);
   });
 
+  // A plain nested object is not a subdocument schema, so mongoose reports the dotted path.
+  // Equality is load-bearing here: an `.endsWith('_id')` "simplification" would read this as
+  // a missing resource and silently restore the blanket 404 this narrowing exists to remove.
+  it('does not treat a dotted nested path ending in _id as a missing resource', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(castError('nested._id'), req, res);
+    expect(status).toHaveBeenCalledWith(500);
+    expect(req.logger.error).toHaveBeenCalled();
+    expect(req.logger.warn).not.toHaveBeenCalled();
+  });
+
   it('keeps the schema field and model name out of the 500 body', () => {
     const { req, res, json } = makeReqRes();
     errorHandler(castError('userId'), req, res);
@@ -184,5 +195,18 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     for (const key of Object.keys(body)) {
       expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
     }
+  });
+
+  // Pins the fromZodError() call itself, not just the status. Asserting only the status and
+  // the field name leaves the transformation unpinned: zod's raw `message` is a JSON dump of
+  // the issue array and happens to contain the field name too, so dropping fromZodError()
+  // would ship that dump on every 422 across baseApi with nothing failing.
+  it('flattens the message rather than dumping the zod issue array', () => {
+    const { req, res, json } = makeReqRes();
+    errorHandler(zodError(), req, res);
+    const message = String((json.mock.calls[0][0] as Record<string, unknown>).error);
+    expect(message).toMatch(/^Validation error: /);
+    expect(message).not.toContain('invalid_type');
+    expect(message).not.toContain('"path"');
   });
 });

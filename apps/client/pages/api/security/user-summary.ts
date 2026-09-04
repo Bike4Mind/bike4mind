@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { authFailLogRepository } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { clampedIntParam } from '@server/utils/dateParam';
 
 /**
  * GET /api/security/user-summary
@@ -10,14 +10,9 @@ import { BadRequestError } from '@server/utils/errors';
  */
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { hours?: string }>(async (req, res) => {
-    // Clamp both ends: an unbounded negative is finite (so it survives the NaN check) but
-    // large enough that the arithmetic below overflows into an Invalid Date. NaN survives
-    // the clamp, so a non-numeric value still reaches the guard. Either shape would cast
-    // against the Date-typed `createdAt` filter in getUserFailedLogins.
-    const hours = Math.min(Math.max(parseInt(req.query.hours || '24', 10), 1), 168);
-    if (Number.isNaN(hours)) {
-      throw new BadRequestError('Invalid hours: must be a number');
-    }
+    // Bounded at both ends so the arithmetic below cannot overflow into an Invalid Date, which
+    // would cast against the Date-typed `createdAt` filter in getUserFailedLogins.
+    const hours = clampedIntParam('hours', req.query.hours, 24, 1, 168);
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
     const user = req.user;

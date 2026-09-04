@@ -1,7 +1,8 @@
 import { ModalModel } from '@bike4mind/database';
 import { IModalDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@server/utils/errors';
+import { assertDateInRange } from '@server/utils/dateParam';
 import { marked } from 'marked';
 import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
@@ -44,11 +45,8 @@ const handler = baseApi().get(async (req, res) => {
     startDate.setDate(startDate.getDate() - daysAgo);
     // Assert the constructed date rather than the parsed number: setDate overflows to an
     // Invalid Date for NaN and for a magnitude past the Date range in EITHER direction, so
-    // there is no single sane bound to clamp to. An Invalid Date here casts against the
-    // Date-typed `createdAt` filter below.
-    if (Number.isNaN(startDate.getTime())) {
-      throw new BadRequestError('Invalid days: must be a number of days within range');
-    }
+    // there is no single sane bound to clamp to.
+    assertDateInRange('days', startDate);
 
     const queryLimit = limitParam ? parseInt(limitParam, 10) : 20;
     modals = await ModalModel.find({
