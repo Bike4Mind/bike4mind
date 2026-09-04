@@ -71,11 +71,15 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
 const userRepository = vi.hoisted(() => ({ findById: vi.fn() }));
+// Rebinding an embed key validates the target agent; default to an owned one.
+const agentRepository = vi.hoisted(() => ({
+  findById: vi.fn().mockResolvedValue({ id: 'agent-1', userId: 'u1', organizationId: 'org-1' }),
+}));
 const organizationRepository = vi.hoisted(() => ({
   findById: vi.fn(),
   findIdsAdministeredBy: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository, agentRepository }));
 
 import { CreditHolderType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';

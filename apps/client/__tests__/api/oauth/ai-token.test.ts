@@ -27,6 +27,8 @@ vi.mock('@bike4mind/database', () => ({
   // Threaded into the revoke adapter; the exchange revokes the caller's own keys
   // (minter path), so findIdsAdministeredBy is never consulted here.
   organizationRepository: { findIdsAdministeredBy: vi.fn().mockResolvedValue([]) },
+  // Required adapter on createUserApiKey; this flow never mints an embed key.
+  agentRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
 const mockVerifyClientSecret = vi.fn();

@@ -44,6 +44,8 @@ vi.mock('@bike4mind/utils', () => ({
 const mockUserFind = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'target-user', username: 'targetUser' }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
+  // Required adapter on createUserApiKey (embed binds are validated there).
+  agentRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({

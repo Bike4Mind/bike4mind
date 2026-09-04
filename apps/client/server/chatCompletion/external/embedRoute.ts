@@ -366,6 +366,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       if (!isAgentOwnedByEmbedKey(agent, ctx)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Agent is not owned by the embed key' });
       }
+      // Narrower than the check above on purpose: authorization accepts a personal
+      // agent too, but only an ORG-owned one extends KB reach to org-mate projects.
+      const ownedByOrg = agent.organizationId != null && agent.organizationId === ctx.organizationId;
 
       const hydrated = hydrateEmbedAgent(agent);
       // Deliberately fail-closed: embed chat never inherits the system default, so a

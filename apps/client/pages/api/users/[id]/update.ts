@@ -11,7 +11,6 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { ApiKeyScope, redactUserSecretsForSelf } from '@bike4mind/common';
-import { getApiKeyScopes, isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 import * as z from 'zod';
@@ -109,7 +108,10 @@ const handler = baseApi().put(
       // every ordinary user's own profile update. The gate therefore lives on the
       // branch instead. JWT callers are unaffected; an admin driving their own
       // profile update with a narrow key now needs an admin-scoped one.
-      if (isApiKeyAuth(req) && !getApiKeyScopes(req).includes(ApiKeyScope.ADMIN)) {
+      // Read `apiKeyInfo` directly rather than via apiKeyAuth's helpers: importing that
+      // middleware here would pull the whole auth/ability/model chain into a route that
+      // needs one field off the request.
+      if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
         return res.status(403).json({ error: 'Insufficient API key permissions' });
       }
 
