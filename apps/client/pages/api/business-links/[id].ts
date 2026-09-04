@@ -26,10 +26,11 @@ const handler = baseApi()
 
       // Update payloads cast too, and casting runs before validators, so runValidators does
       // not cover this. The payload below is built unconditionally, so a falsy-but-present
-      // value reaches the cast as well and only null casts cleanly. '' is what the edit form
-      // sends with no categories loaded and means "no category", so normalize it onto null
-      // (the clear-the-field value) rather than rejecting it; anything else non-null must be
-      // a well-formed id or it would throw instead of answering the caller.
+      // value reaches the cast as well and only null casts cleanly. The UI cannot reach here
+      // with '' (BusinessLink.tsx gates the query on a truthy categoryId), so reading '' as
+      // "no category" and normalizing it onto null is a direct-API-caller convenience, not a
+      // destructive write the form sends; anything else non-null must be a well-formed id or
+      // it would throw instead of answering the caller.
       const normalizedCategoryId = categoryId === '' ? null : categoryId;
       if (
         normalizedCategoryId !== undefined &&

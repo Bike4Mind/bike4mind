@@ -11,6 +11,24 @@ function parseDate(value: string, label: string): Date {
   return d;
 }
 
+// Parses a date-only string and shifts it into the caller's local day (to the end of that day
+// when `endOfDay`). parseDate validates the parse; the assert below validates the SHIFT, which
+// is a separate failure mode: a date at either edge of the JS Date range parses cleanly and
+// still overflows once the offset or end-of-day shift lands, even for an in-range offset. An
+// Invalid Date would cast against the Date-typed `createdAt` and answer 500 rather than 400.
+// Same reasoning as admin/email/whats-new-content.ts: assert the constructed date, not its input.
+function shiftedDate(value: string, label: string, offsetMinutes: number, endOfDay: boolean): Date {
+  const d = parseDate(value, label);
+  d.setUTCMinutes(d.getUTCMinutes() + offsetMinutes);
+  if (endOfDay) {
+    d.setUTCHours(d.getUTCHours() + 23, d.getUTCMinutes() + 59, 59, 999);
+  }
+  if (Number.isNaN(d.getTime())) {
+    throw new BadRequestError(`Invalid ${label} date format`);
+  }
+  return d;
+}
+
 const handler = baseApi()
   .use(
     rateLimit({
@@ -29,24 +47,16 @@ const handler = baseApi()
     // Used to shift date-only strings so "Feb 20" for a PST user means
     // local midnight in UTC (e.g. T08:00:00Z for PST) instead of UTC midnight.
     const offsetMinutes = typeof tzOffset === 'string' ? parseInt(tzOffset, 10) : 0;
-    // Clamped to the real UTC offset range (+/-14h). A finite but absurd value passes the
-    // isFinite check and then overflows the setUTCMinutes shifts below into an Invalid Date,
-    // which casts on the Date-typed `createdAt` and answers 500 rather than a client error.
+    // Clamped to the real UTC offset range (+/-14h) so an absurd offset cannot shift a sane
+    // date out of range. This bounds the offset only; shiftedDate rejects the overflow itself.
     const validOffset = Number.isFinite(offsetMinutes) ? Math.min(Math.max(offsetMinutes, -840), 840) : 0;
 
     const createdAtFilter: { $gte?: Date; $lte?: Date } = {};
     if (typeof dateFrom === 'string') {
-      const d = parseDate(dateFrom, 'dateFrom');
-      // Shift from UTC midnight to the user's local midnight
-      d.setUTCMinutes(d.getUTCMinutes() + validOffset);
-      createdAtFilter.$gte = d;
+      createdAtFilter.$gte = shiftedDate(dateFrom, 'dateFrom', validOffset, false);
     }
     if (typeof dateTo === 'string') {
-      const d = parseDate(dateTo, 'dateTo');
-      // Shift to end of user's local day
-      d.setUTCMinutes(d.getUTCMinutes() + validOffset);
-      d.setUTCHours(d.getUTCHours() + 23, d.getUTCMinutes() + 59, 59, 999);
-      createdAtFilter.$lte = d;
+      createdAtFilter.$lte = shiftedDate(dateTo, 'dateTo', validOffset, true);
     }
     const dateFilter = Object.keys(createdAtFilter).length ? { createdAt: createdAtFilter } : {};
 

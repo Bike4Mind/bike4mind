@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
- * `dateFrom`/`dateTo` are validated by `parseDate`, but `tzOffset` is then applied to the
- * result with `setUTCMinutes`. A finite but absurd offset survives the `Number.isFinite`
- * check and overflows the already-valid Date into an Invalid Date, which casts against the
- * Date-typed `createdAt` on the seven schema-casting queries below - a 500 where the
- * blanket CastError mapping used to answer 404. The clamp is what keeps the shift in range.
+ * `dateFrom`/`dateTo` are validated by `parseDate`, but the shifts applied afterwards can
+ * still push an already-valid Date out of range into an Invalid Date, which casts against the
+ * Date-typed `createdAt` on the eight schema-casting queries below - a 500 where the blanket
+ * CastError mapping used to answer 404. Two independent routes to that overflow, so two
+ * defences, and the tests below pin them separately:
+ *   - an absurd `tzOffset`, bounded by the clamp on `validOffset`
+ *   - a parseable date at the edge of the JS Date range, which overflows under ANY offset
+ *     (including an absent one, via the end-of-day shift) and so cannot be clamped away;
+ *     `shiftedDate` asserts the constructed date instead.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -91,5 +95,26 @@ describe('GET /api/admin/help-analytics - tzOffset clamp', () => {
     const { promise } = run({ dateFrom: 'not-a-date' });
     await expect(promise).rejects.toMatchObject({ statusCode: 400 });
     expect(mocks.countDocuments).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/admin/help-analytics - extreme-year dates', () => {
+  // Each of these parses cleanly and only overflows once a shift lands, so the clamp above is
+  // structurally unable to prevent them - the -840 case uses an offset inside the clamp, and
+  // the first needs no offset at all because the end-of-day shift overflows on its own.
+  it.each([
+    ['dateTo at the high edge, no offset at all', { dateTo: '+275760-09-13' }],
+    ['dateFrom at the low edge, offset inside the clamp', { dateFrom: '-271821-04-20', tzOffset: '-840' }],
+    ['dateFrom at the high edge, offset inside the clamp', { dateFrom: '+275760-09-13', tzOffset: '840' }],
+  ])('rejects %s with a 400 before any query runs', async (_label, query) => {
+    const { promise } = run(query);
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.countDocuments).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a date near the edge that survives the shift', async () => {
+    const { promise } = run({ dateFrom: '+275760-09-10' });
+    await promise;
+    expect(Number.isNaN(filterDates()[0].getTime())).toBe(false);
   });
 });
