@@ -24,6 +24,8 @@ export interface RotateUserApiKeyResult {
   name: string;
   keyPrefix: string;
   key: string; // Only returned once during rotation
+  /** Set only when rotation re-owned the key; the user it belonged to before. */
+  previousOwnerUserId?: string;
 }
 
 /**
@@ -41,6 +43,17 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string 
 /**
  * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
  * admin of the org it is billed to).
+ *
+ * Rotation RE-OWNS the key to whoever rotated it. Previously only `keyHash` and
+ * `keyPrefix` were rewritten, never `userId` - so an org admin rotating a
+ * teammate's org-billed key walked away with a plaintext credential that
+ * authenticated as that teammate. Re-owning keeps the org-admin capability (the
+ * rotate-a-teammate's-org-key flow) while making the returned credential act as
+ * the person actually holding it. Billing is untouched: an org-billed key still
+ * bills the org, which is what `billingOwnerType`/`organizationId` govern.
+ *
+ * Callers should surface `previousOwnerUserId` so the original minter can be told
+ * their key changed hands.
  */
 export const rotateUserApiKey = async (
   userId: string,
@@ -57,8 +70,14 @@ export const rotateUserApiKey = async (
 
   const { key, keyPrefix, keyHash } = generateNewApiKey();
 
+  const previousOwnerUserId = apiKey.userId?.toString();
+  const reOwned = !!previousOwnerUserId && previousOwnerUserId !== userId;
+
   apiKey.keyHash = keyHash;
   apiKey.keyPrefix = keyPrefix;
+  if (reOwned) {
+    apiKey.userId = userId;
+  }
 
   await db.userApiKeys.update(apiKey);
 
@@ -67,5 +86,6 @@ export const rotateUserApiKey = async (
     name: apiKey.name,
     keyPrefix: apiKey.keyPrefix,
     key, // This is the only time the raw key is returned
+    ...(reOwned ? { previousOwnerUserId } : {}),
   };
 };
