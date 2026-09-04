@@ -81,18 +81,16 @@ describe('resolveAccessibleLakes', () => {
     expect(mockGetRequestEntitlements).not.toHaveBeenCalled();
   });
 
-  // Both grant reads inside listDataLakes degrade to empty when the repo is absent, so a lake held
-  // by an owner or curator grant was missing from every browse surface - articles, tag-counts, the
+  // listDataLakes degrades both grant reads to empty when the repo is absent, so a lake held by
+  // an owner or curator grant was missing from every browse surface - articles, tag-counts, the
   // rlm-answer gate, and the file-access check in pages/api/files/[id] - while the read gate
-  // admitted it. Asserted on BOTH branches: an admin takes listAllDataLakes, so a fix applied to
-  // one call site only would leave the other silently degraded.
-  it.each([
-    ['non-admin', { id: 'u1', tags: [] }, () => mockListDataLakes],
-    ['admin', { id: 'admin', tags: [], isAdmin: true }, () => mockListAllDataLakes],
-  ])('threads the grants and settings adapters on the %s path', async (_label, user, getMock) => {
-    await resolveAccessibleLakes(asReq(user));
+  // admitted it. Non-admin only: listAllDataLakes never calls resolveEnforceReadGrants or
+  // grantedLakeIdsFor, so an admin already sees every draft/active lake with or without either
+  // adapter - passing them would just discard a wasted grant read (see the admin case below).
+  it('threads the grants and settings adapters on the non-admin path', async () => {
+    await resolveAccessibleLakes(asReq({ id: 'u1', tags: [] }));
 
-    expect(getMock()).toHaveBeenCalledWith(
+    expect(mockListDataLakes).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         db: expect.objectContaining({
@@ -102,6 +100,21 @@ describe('resolveAccessibleLakes', () => {
           // owner/curator and hiding a reader-granted lake the gate would admit.
           settings: { settings: true },
         }),
+      })
+    );
+  });
+
+  // The admin branch gets neither adapter: listAllDataLakes can't be "silently degraded" by their
+  // absence because it never narrows by grant or settings in the first place (find() over every
+  // draft/active lake). Pinned so a well-meant "add them for consistency" doesn't reintroduce a
+  // wide indexed grants read whose result is never used on this branch.
+  it('passes no grants or settings adapter on the admin path', async () => {
+    await resolveAccessibleLakes(asReq({ id: 'admin', tags: [], isAdmin: true }));
+
+    expect(mockListAllDataLakes).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        db: { dataLakes: expect.anything() },
       })
     );
   });
