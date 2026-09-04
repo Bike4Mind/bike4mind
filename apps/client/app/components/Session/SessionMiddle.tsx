@@ -41,7 +41,7 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
-import { seatStreamingQuest } from './seatStreamingQuest';
+import { buildChatHistory } from './buildChatHistory';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -352,40 +352,10 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   // The streaming quest stays in the array (replaced with merged streaming data)
   // so the same MessageContent instance persists across the streaming -> completed
   // transition - no DOM remount, no flicker.
-  const filteredChatHistory = useMemo(() => {
-    let filtered = flattenQuests;
-
-    // Filter out only truly broken quests (null, undefined, or completely empty)
-    // Keep temporary optimistic quests that have valid prompts
-    // Include voice session transcripts in the chat history display (even with empty prompts)
-    filtered = filtered.filter(
-      message =>
-        message &&
-        // Check if it's a voice transcript (has conversationItemId OR is voice_transcript type)
-        (!!message.conversationItemId ||
-          message.type === 'voice_transcript' ||
-          // For other messages, require valid prompts
-          (message.prompt !== null && message.prompt !== undefined && typeof message.prompt === 'string'))
-    );
-
-    // Apply pinned filter first
-    if (showPinnedOnly) {
-      filtered = filtered.filter(message => message.pinned === true);
-    }
-
-    // Apply search filter
-    if (search.trim()) {
-      const lowCaseSearch = search.toLowerCase();
-      filtered = filtered.filter(
-        message =>
-          message.prompt.toLowerCase().includes(lowCaseSearch) ||
-          (message?.replies ?? []).some(r => r.toLowerCase().includes(lowCaseSearch))
-      );
-    }
-
-    // Last, so none of the filters above can drop the turn that is still streaming.
-    return seatStreamingQuest(filtered, activeStreamingQuestId, streamingMessageData);
-  }, [flattenQuests, search, showPinnedOnly, activeStreamingQuestId, streamingMessageData]);
+  const filteredChatHistory = useMemo(
+    () => buildChatHistory(flattenQuests, { search, showPinnedOnly, activeStreamingQuestId, streamingMessageData }),
+    [flattenQuests, search, showPinnedOnly, activeStreamingQuestId, streamingMessageData]
+  );
 
   // Clear the pending-first-message overlay once real data is available.
   // SessionMiddle is mounted underneath PendingFirstMessage immediately so it can

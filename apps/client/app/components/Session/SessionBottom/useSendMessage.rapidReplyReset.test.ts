@@ -16,26 +16,39 @@ import { resolve } from 'path';
  * Source-level assertion rather than renderHook, mirroring
  * useSendMessage.stopMessageToast.test.ts and useSendMessage.killSwitch.test.ts:
  * useSendMessage consumes ~15 context providers.
+ *
+ * MAINTENANCE CONTRACT: each assertion scopes to ONE reset via a unique anchor
+ * (`isRealSlashCommand` for the send, `Generation cancelled by user` for the
+ * cancel). Keeping the spans disjoint is the point - a span wide enough to contain
+ * both resets passes while either one alone is broken. Update the anchors in the
+ * same commit as any rename or extraction.
  */
 describe('useSendMessage - rapidReply reset (regression)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
-  it('clears rapidReply when a cancellation completes', () => {
-    const handleStopMessage = source.match(/const handleStopMessage[\s\S]*?\n {2}\};/)?.[0] ?? '';
-    expect(handleStopMessage).not.toBe('');
+  // The send-time reset only: the `if (!isRealSlashCommand)` block and nothing after it.
+  const sendReset =
+    source.match(/if \(!isRealSlashCommand\) \{\s*setChatCompletion\(prev => \(\{[\s\S]*?\}\)\);\s*\}/)?.[0] ?? '';
 
-    const cancelledReset =
-      handleStopMessage.match(
-        /setChatCompletion\(prev => \(\{[\s\S]*?Generation cancelled by user[\s\S]*?\}\)\);/
-      )?.[0] ?? '';
-    expect(cancelledReset).not.toBe('');
-    expect(cancelledReset).toMatch(/rapidReply: undefined/);
+  // The post-cancel reset only, anchored on its own status message.
+  const cancelReset =
+    source.match(/setChatCompletion\(prev => \(\{[^}]*?'Generation cancelled by user'[\s\S]*?\}\)\);/)?.[0] ?? '';
+
+  it('scopes each assertion to a single reset', () => {
+    expect(sendReset).not.toBe('');
+    expect(cancelReset).not.toBe('');
+    // Disjoint: neither span may contain the other's anchor, or a one-sided
+    // regression would pass.
+    expect(sendReset).not.toContain('Generation cancelled by user');
+    expect(cancelReset).not.toContain('isRealSlashCommand');
+    expect(sendReset).toContain('OPTIMISTIC_GENERATING_STATUS');
   });
 
   it('clears rapidReply when a new turn starts', () => {
-    const sendReset =
-      source.match(/setChatCompletion\(prev => \(\{[\s\S]*?OPTIMISTIC_GENERATING_STATUS,[\s\S]*?\}\)\);/)?.[0] ?? '';
-    expect(sendReset).not.toBe('');
     expect(sendReset).toMatch(/rapidReply: undefined/);
+  });
+
+  it('clears rapidReply when a cancellation completes', () => {
+    expect(cancelReset).toMatch(/rapidReply: undefined/);
   });
 });
