@@ -71,20 +71,27 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
 
   // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
   // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
-  // Grants: without them `listDataLakes` degrades both grant reads to empty, so a lake reached by an
-  // owner or curator grant is absent from every browse surface - including the file-access check in
-  // `pages/api/files/[id]` - even though the read gate admits it. Settings rides along, unlike the
-  // Slack `list` reply which deliberately omits it: this is a READ surface, so it must track the
+  // Grants and settings only matter on the `listDataLakes` (non-admin) branch below - without
+  // them it degrades both grant reads to empty, so a lake reached by an owner or curator grant is
+  // absent from every browse surface - including the file-access check in `pages/api/files/[id]`
+  // - even though the read gate admits it. Settings rides along, unlike the Slack `list` reply
+  // which deliberately omits it: this is a READ surface, so it must track the
   // `EnforceLakeReadGrants` cutover rather than freeze at owner/curator, or a reader-granted lake
   // would pass the gate post-cutover and still be invisible here.
-  const lakeDb = {
-    dataLakes: dataLakeRepository,
-    dataLakeAccessGrants: dataLakeAccessGrantRepository,
-    settings: adminSettingsRepository,
-  };
+  //
+  // `listAllDataLakes` (admin branch) gets neither adapter: it never calls
+  // `resolveEnforceReadGrants`/`grantedLakeIdsFor`, so an admin already sees every draft/active
+  // lake regardless, and the one grant read that adapter would trigger only feeds the `isOwn`
+  // label - which this content-scope path never reads (see the return-type comment above).
   const dynamic = ctx.isAdmin
-    ? await dataLakeService.listAllDataLakes(ctx, { db: lakeDb })
-    : await dataLakeService.listDataLakes(ctx, { db: lakeDb });
+    ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
+    : await dataLakeService.listDataLakes(ctx, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          settings: adminSettingsRepository,
+        },
+      });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of
   // requiredUserTag/requiredEntitlement filter, reusing the keys toAccessContext already
