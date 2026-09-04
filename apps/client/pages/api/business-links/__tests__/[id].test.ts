@@ -3,9 +3,11 @@ import { createMocks } from 'node-mocks-http';
 import { Types } from 'mongoose';
 
 /**
- * The PUT puts a caller-supplied `categoryId` into the update payload. Update payloads
- * cast just like filters do, and casting runs before validators, so `runValidators` does
- * not cover it - the guard has to be in the handler.
+ * The PUT puts caller-supplied values into the update payload. Update payloads cast just
+ * like filters do, and casting runs before validators, so `runValidators` does not cover it
+ * - the guard has to be in the handler. This is not only about the ObjectId field: the four
+ * String-typed fields cast too, and a JSON body can hand any of them an array or an object,
+ * which throws `CastError kind='string'` rather than being rejected.
  */
 
 // Collapse the baseApi().put().delete() chain and capture the PUT handler.
@@ -116,5 +118,51 @@ describe('PUT /api/business-links/[id] - categoryId validation', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockRefs.updatePayload).toMatchObject({ name: 'renamed' });
+  });
+});
+
+describe('PUT /api/business-links/[id] - the String-typed fields cast too', () => {
+  beforeEach(() => {
+    mockRefs.updatePayload = undefined;
+  });
+
+  // Measured on the pinned mongoose 8.24.1: `_castUpdate({ ticker: ['AAPL','MSFT'] })` on a
+  // String path throws `CastError path='ticker' kind='string'`, and so does a nested object
+  // on `name`. A single-element array throws too, so there is no arity escape.
+  it.each([
+    ['an array on ticker', { ticker: ['AAPL', 'MSFT'] }],
+    ['a single-element array on ticker', { ticker: ['AAPL'] }],
+    ['an object on name', { name: { first: 'a' } }],
+    ['an array on type', { type: ['a', 'b'] }],
+    ['an array on url', { url: ['https://a', 'https://b'] }],
+  ])('rejects %s with 400 before the payload can cast', async (_label, body) => {
+    const { req, res } = invokePut(body as unknown as Record<string, string>);
+    await mockRefs.putHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockRefs.updatePayload).toBeUndefined();
+  });
+
+  it('still lets a normal string update through', async () => {
+    const { req, res } = invokePut({ name: 'renamed', url: 'https://example.com', ticker: 'AAPL', type: 'stock' });
+    await mockRefs.putHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.updatePayload).toMatchObject({
+      name: 'renamed',
+      url: 'https://example.com',
+      ticker: 'AAPL',
+      type: 'stock',
+    });
+  });
+
+  // Unknown keys are stripped by the schema, so they cannot reach the payload and cannot
+  // cast against a path the caller was never meant to write.
+  it('strips a key the schema does not declare', async () => {
+    const { req, res } = invokePut({ name: 'renamed', createdAt: 'not-a-date' } as unknown as Record<string, string>);
+    await mockRefs.putHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.updatePayload).not.toHaveProperty('createdAt');
   });
 });

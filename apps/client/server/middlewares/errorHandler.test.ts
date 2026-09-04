@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ApiErrorSchema, BadRequestError } from '@bike4mind/common';
+import { z } from 'zod';
 import errorHandler from './errorHandler';
 
 function makeReqRes() {
@@ -151,6 +152,36 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     const { req, res, json } = makeReqRes();
     errorHandler(castError(), req, res);
     for (const key of Object.keys(json.mock.calls[0][0] as Record<string, unknown>)) {
+      expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
+    }
+  });
+});
+
+describe('errorHandler - a ZodError becomes a 422', () => {
+  // Per CONVENTIONS.md a schema rejection is a 422, and this branch is the only thing
+  // that makes that true for every route that lets a ZodError reach the middleware. It
+  // was previously unpinned: the route tests that throw one assert the raw
+  // `{ name: 'ZodError' }` shape without ever going through errorHandler.
+  const zodError = () => z.object({ days: z.number() }).safeParse({ days: 'abc' }).error!;
+
+  it('maps it to 422 and logs it as an expected client error', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(zodError(), req, res);
+    expect(status).toHaveBeenCalledWith(422);
+    expect(req.logger.warn).toHaveBeenCalled();
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('reports the offending field without serializing zod internals', () => {
+    const { req, res, json } = makeReqRes();
+    errorHandler(zodError(), req, res);
+    const body = json.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.name).toBe('UnprocessableEntityError');
+    expect(String(body.error)).toContain('days');
+    // fromZodError() flattens to a readable sentence; the raw issue objects carry keys
+    // (`code`, `expected`, `_zod`) that are not in the envelope and must not reach a body.
+    expect(JSON.stringify(body)).not.toContain('_zod');
+    for (const key of Object.keys(body)) {
       expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
     }
   });

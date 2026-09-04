@@ -111,7 +111,15 @@ export class EmailSendAttemptRepository
         // extend to end of day so the full endDate is included
         const endOfDay = new Date(endDate);
         endOfDay.setHours(23, 59, 59, 999);
-        (query.createdAt as Record<string, unknown>).$lte = endOfDay;
+        // setHours overflows to an Invalid Date when endDate already sits at the top of the
+        // representable range, and an Invalid Date casts against the Date-typed `createdAt`
+        // and throws. Fall back to the un-extended date: the only day this loses the
+        // end-of-day extension on is the last representable one, which no stored document
+        // can exceed anyway. Validating the caller's string belongs at the HTTP boundary,
+        // not here -- this repository cannot tell a wire value from a computed one.
+        (query.createdAt as Record<string, unknown>).$lte = Number.isNaN(endOfDay.getTime())
+          ? endDate
+          : endOfDay;
       }
     }
 
