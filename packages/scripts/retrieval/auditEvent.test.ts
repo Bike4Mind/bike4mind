@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { readRetrievalStatus, readServedDocuments, type RetrievalStatus } from './auditEvent';
+import { RELEVANCE_FLOOR_NOTICE, readRetrievalStatus, readServedDocuments, type RetrievalStatus } from './auditEvent';
 
 /** The tool ran to completion and put passages in front of the model. */
 const SERVED: RetrievalStatus = { kind: 'served-content' };
 /** The tool ran to completion and had nothing to serve. */
 const EMPTY: RetrievalStatus = { kind: 'no-content' };
+/** The semantic arm ran and the floor under test rejected every candidate. */
+const FLOOR_EMPTIED: RetrievalStatus = { kind: 'floor-emptied' };
+
+/** The notice as the tool actually writes it, prefix-matched by RELEVANCE_FLOOR_NOTICE. */
+const floorWarning = `${RELEVANCE_FLOOR_NOTICE} for this query`;
 
 describe('readRetrievalStatus', () => {
   it('reads a citables write as content having reached the model', () => {
@@ -25,6 +30,52 @@ describe('readRetrievalStatus', () => {
         { retrieval: { outcome: 'ok' } },
       ])
     ).toEqual(SERVED);
+  });
+
+  it('takes the LAST outcome when two writes disagree, in both directions', () => {
+    // The pair above cannot fail if the terminal pick is reversed - both outcomes are 'ok'. These
+    // can. The rule is load-bearing: it is what makes the semantic-then-keyword sequence readable
+    // at all, and what lets a late failure override an earlier apparent success.
+    expect(readRetrievalStatus([{ retrieval: { outcome: 'ok' } }, { retrieval: { outcome: 'failed' } }])).toEqual({
+      kind: 'failed',
+      outcome: 'failed',
+    });
+    expect(readRetrievalStatus([{ retrieval: { outcome: 'failed' } }, { retrieval: { outcome: 'ok' } }])).toEqual(
+      EMPTY
+    );
+  });
+
+  it('reads the relevance-floor notice as the floor emptying an arm that DID run', () => {
+    // The keyword arm carries the semantic arm's skipNotice into promptMeta.warnings. Without
+    // this, a nonzero floor reads as a keyword fallback and aborts the sweep on its first
+    // negative question - the exact rows the floor was added to produce.
+    expect(readRetrievalStatus([{ warnings: [floorWarning], retrieval: { outcome: 'ok' } }])).toEqual(FLOOR_EMPTIED);
+  });
+
+  it('lets the floor notice win over citables the keyword fallback stamped', () => {
+    // The fallback still runs after the floor empties the semantic arm, and its hits become
+    // citables. Counting those would report the keyword arm's behaviour as this configuration's,
+    // and neither knob under test governs that arm.
+    expect(
+      readRetrievalStatus([{ citables: [{ id: 'f1' }], warnings: [floorWarning], retrieval: { outcome: 'ok' } }])
+    ).toEqual(FLOOR_EMPTIED);
+  });
+
+  it('does not read an unrelated warning as the floor', () => {
+    // describeSearchLimitations produces its own notices (e.g. files withheld for a model
+    // mismatch) on the same field. Those mean the corpus was not whole, which is not a clean
+    // measurement - they must keep falling through to the abort.
+    expect(readRetrievalStatus([{ warnings: ['some files were withheld'], retrieval: { outcome: 'ok' } }])).toEqual(
+      EMPTY
+    );
+  });
+
+  it('keeps a non-ok outcome ahead of the floor notice', () => {
+    // A failed retrieval exercised no configuration whether or not a floor was set.
+    expect(readRetrievalStatus([{ warnings: [floorWarning], retrieval: { outcome: 'failed' } }])).toEqual({
+      kind: 'failed',
+      outcome: 'failed',
+    });
   });
 
   it('reports a non-ok outcome rather than reading it as an empty result', () => {
@@ -88,6 +139,13 @@ describe('readServedDocuments', () => {
     // the operator after an embedding credential that is fine.
     expect(readServedDocuments({ fileIds: [], scores: [0.9] }, SERVED)).toMatchObject({ kind: 'unmeasurable' });
     expect(readServedDocuments({ scores: [0.9] }, SERVED)).toMatchObject({ kind: 'unmeasurable' });
+  });
+
+  it('reads a floor-emptied turn as nothing served, whatever the keyword arm recorded', () => {
+    // The keyword fallback writes its own unscored audit row. Reading THAT as keyword-fallback is
+    // what made `--configs 0:0,4000:70` impossible to complete.
+    expect(readServedDocuments({ fileIds: ['f1'] }, FLOOR_EMPTIED)).toEqual({ kind: 'nothing' });
+    expect(readServedDocuments(null, FLOOR_EMPTIED)).toEqual({ kind: 'nothing' });
   });
 
   it('does not treat a zero score as absent', () => {

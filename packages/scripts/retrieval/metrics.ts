@@ -94,7 +94,19 @@ export type Aggregate = {
   /** Questions nothing supports - the denominator for falsePositiveRate. */
   negatives: number;
   recall: number;
+  /**
+   * Averaged over the positives that actually SERVED something, not over all of them - read it
+   * next to `precisionScored`, which is that denominator.
+   *
+   * A positive that served nothing scores a vacuous `precision` of 1 (nothing irrelevant was
+   * served). Pooling those in would make precision climb as the floor got more aggressive, since
+   * an emptied question would contribute a 1.0 rather than being excluded - so precision would
+   * reward the very trade it exists to price. Recall still scores those questions 0, which is
+   * where an over-aggressive floor is supposed to show up.
+   */
   precision: number;
+  /** Positives that served at least one document - the denominator `precision` was averaged over. */
+  precisionScored: number;
   hitRate: number;
   mrr: number;
   meanDocumentsServed: number;
@@ -116,15 +128,20 @@ const mean = (xs: number[]): number => (xs.length === 0 ? 0 : xs.reduce((a, b) =
  * negative, so pooling would let a corpus with many negatives report a high recall that no positive
  * question earned. `meanDocumentsServed` spans every question, since "how much did retrieval emit"
  * is meaningful on both.
+ *
+ * Precision narrows the denominator once more, to the positives that served something - see the
+ * field's own comment for why a vacuous 1.0 there would invert the metric's meaning.
  */
 export function aggregate(outcomes: readonly QuestionOutcome[]): Aggregate {
   const positives = outcomes.filter(o => !o.isNegative);
   const negatives = outcomes.filter(o => o.isNegative);
+  const precisionScored = positives.filter(o => o.documentsServed > 0);
   return {
     positives: positives.length,
     negatives: negatives.length,
     recall: mean(positives.map(o => o.recall)),
-    precision: mean(positives.map(o => o.precision)),
+    precision: mean(precisionScored.map(o => o.precision)),
+    precisionScored: precisionScored.length,
     hitRate: mean(positives.map(o => o.hit)),
     mrr: mean(positives.map(o => o.rr)),
     meanDocumentsServed: mean(outcomes.map(o => o.documentsServed)),

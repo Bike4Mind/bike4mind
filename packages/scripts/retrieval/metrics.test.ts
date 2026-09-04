@@ -99,6 +99,28 @@ describe('aggregate', () => {
     expect(agg.meanDocumentsServed).toBe(1.5);
   });
 
+  it('excludes empty-served positives from precision so a floor cannot inflate it', () => {
+    const agg = aggregate([
+      scoreQuestion(['a', 'x'], set('a')), // served, precision 0.5
+      scoreQuestion([], set('b')), // emptied by the floor: precision vacuously 1
+    ]);
+    // Pooling the vacuous 1 would report 0.75 - precision RISING as the floor empties questions,
+    // which inverts the one metric that exists to price what a floor costs.
+    expect(agg.precision).toBe(0.5);
+    expect(agg.precisionScored).toBe(1);
+    // Recall is where the emptied question is supposed to show up, and still does.
+    expect(agg.recall).toBe(0.5);
+  });
+
+  it('reports precisionScored 0 rather than a precision no question earned', () => {
+    // Every positive emptied. mean([]) is 0, which the table renders as "n/a (n=0)" so it does not
+    // read as a measured collapse.
+    const agg = aggregate([scoreQuestion([], set('a')), scoreQuestion([], set('b'))]);
+    expect(agg.precisionScored).toBe(0);
+    expect(agg.precision).toBe(0);
+    expect(agg.recall).toBe(0);
+  });
+
   it('returns zeroes rather than NaN when a bucket is empty', () => {
     // A corpus with no negatives must not report NaN for falsePositiveRate: the probe prints these
     // straight into a results table, and NaN there reads as a broken run rather than an empty bucket.

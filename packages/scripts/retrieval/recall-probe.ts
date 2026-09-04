@@ -27,7 +27,11 @@
  * The probe captures the `statusUpdate` seam alongside it, because the audit trail alone cannot say
  * whether an absent event means "retrieval served nothing" or "the harness never saw the write".
  * Unlike the audit write, every terminal path AWAITS its status write, so `promptMeta.retrieval` is
- * always present by the time `toolFn` resolves. See `auditEvent.ts`, which owns that decision.
+ * always present by the time `toolFn` resolves. `promptMeta.warnings` is captured from the same
+ * seam and carries the tool's relevance-floor notice, which is the only thing separating "the
+ * keyword arm answered because the floor under test emptied the semantic one" (a real measurement)
+ * from "the keyword arm answered because the semantic one was never wired up" (a fatal harness
+ * problem). See `auditEvent.ts`, which owns both decisions.
  *
  * CORPUS. The `system-help` lake: 51 public help articles, seeded by
  * `packages/scripts/help/ingest-help-datalake.ts`. See `corpus.ts` for why that corpus and why the
@@ -48,14 +52,20 @@
  *               unscoped arm ranks the caller's own library alongside the lake, and personal files
  *               would enter the corpus without being in the ground truth.
  *   --out-dir   where the JSON result lands (default packages/scripts/out, which is gitignored).
- *   --dry-run   run the preflight checks and print the plan without writing settings or searching.
+ *   --dry-run   print the plan without writing settings or sweeping. Preflight still RUNS, and it
+ *               ends in a live canary search (a real embedding call) - checking that the corpus is
+ *               reachable is the whole value of a dry run, so it is deliberately not skipped.
  *
  * SIDE EFFECT: the sweep WRITES the two admin settings on the target stage and restores their prior
- * values in a `finally`. They are stage-wide, so run this against a preview you own, never a stage
- * other people are using.
+ * values on the way out - from a `finally`, and from a SIGINT/SIGTERM handler so Ctrl-C does not
+ * strand a mid-sweep configuration on the stage. It also takes a lease row for the duration, so a
+ * second concurrent run refuses to start rather than capturing the first run's mutated values as
+ * its baseline. They are stage-wide settings regardless, so run this against a preview you own,
+ * never a stage other people are using.
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
@@ -80,6 +90,7 @@ import { b4mTools } from '@bike4mind/services/llm/tools';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 import type { IUserDocument, RecordLakeAccessEventInput, SettingKey } from '@bike4mind/common';
 import { readRetrievalStatus, readServedDocuments, type CapturedPromptMeta } from './auditEvent';
+import { pollFor } from './pollEvent';
 import { PROBE_QUESTIONS, type ProbeQuestion } from './corpus';
 import { aggregate, scoreQuestion, type QuestionOutcome } from './metrics';
 import {
@@ -151,27 +162,11 @@ function createCapturingRecorder() {
 type Capture = ReturnType<typeof createCapturingRecorder>;
 
 /**
- * `recordLakeAccessEvent` resolves the audit retention settings before calling `record()`, and the
- * tool does not await the result, so the event lands a few microtasks after `toolFn` returns. Poll
- * briefly rather than sleeping a fixed interval: the settings read is cached, so this almost always
- * succeeds on the first tick.
- *
- * Only called once the status seam has confirmed content WAS served, so exhausting the timeout is
- * unambiguously a stalled write and never an honest empty result. Still returns `null` rather than
- * throwing, to keep `readServedDocuments` the single place the two absences are told apart - the
- * one decision that has to stay testable without a stage.
+ * Wait out the tool's un-awaited audit write. See `pollEvent.ts`, which owns the loop and its
+ * timeout semantics; this is only the binding to the capture buffer.
  */
-async function waitForEvent(capture: Capture, timeoutMs = 5_000): Promise<RecordLakeAccessEventInput | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (capture.events.length > 0) return capture.events[0];
-    await new Promise(resolve => setImmediate(resolve));
-    // Yield to the macrotask queue too, so a pending I/O continuation is not starved by a tight
-    // microtask loop.
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-  return null;
-}
+const waitForEvent = (capture: Capture, timeoutMs?: number): Promise<RecordLakeAccessEventInput | null> =>
+  pollFor(() => capture.events[0], { timeoutMs });
 
 // ---------------------------------------------------------------------------
 // Tool context
@@ -288,12 +283,21 @@ async function preflight(user: IUserDocument, capture: Capture): Promise<{ lakeI
   // personal file is not attributable to any lake - so the tool records no audit event for it and
   // the probe would read a real result as "served nothing". Ground truth cannot describe those
   // files either. Enforce the precondition instead of documenting it.
+  //
+  // PARTIAL BY CONSTRUCTION: `findByUserId` returns OWNED files, while the unscoped arm ranks
+  // owned plus shared plus org-shared. A file shared TO the probe user passes this check and can
+  // still enter the ranking. Low impact rather than unhandled - `resolveSlugs` surfaces it as
+  // `UNTAGGED:<id>` instead of dropping it, so it shows up in the detail as an intruder rather
+  // than corrupting a slug - but a clean account is still the only way to rule the case out, which
+  // is why the message asks for one rather than for an empty owned list.
   const ownFiles = await fabFileRepository.findByUserId(user.id);
   const ownNonLake = ownFiles.filter(f => !f.tags?.some(t => t.name.startsWith(HELP_TAG_PREFIX)));
   if (ownNonLake.length > 0) {
     throw new Error(
       `Probe user ${user.id} owns ${ownNonLake.length} file(s) outside the help lake. They would ` +
-        `enter the ranking without being in the ground truth. Use a dedicated account with no files.`
+        `enter the ranking without being in the ground truth. Use a dedicated account with no files ` +
+        `- note this check sees OWNED files only, so files shared to the account are not covered ` +
+        `and would appear in the results as UNTAGGED:<id>.`
     );
   }
 
@@ -336,6 +340,12 @@ async function preflight(user: IUserDocument, capture: Capture): Promise<{ lakeI
 // Settings
 // ---------------------------------------------------------------------------
 
+/**
+ * Deliberately reads THROUGH the soft-delete filter (see `writeSetting`), so a tombstone left by an
+ * older run of this script reads as "unset" rather than as a baseline. That is the recovering
+ * answer: a tombstone's `settingValue` is whatever the interrupted sweep wrote last, never the
+ * stage's real prior value, and restoring "unset" hard-deletes the row and leaves the stage clean.
+ */
 async function readSetting(name: string): Promise<string | null> {
   const row = await AdminSettings.findOne({ settingName: name }).lean<{ settingValue?: string } | null>();
   return row?.settingValue ?? null;
@@ -348,12 +358,31 @@ async function readSetting(name: string): Promise<string | null> {
  * accessor AND consults the scoped-settings overlay, each with its own ~5 minute TTL. Because the
  * probe invokes the tool in this same process, invalidating here makes a configuration take effect
  * immediately - an HTTP-driven probe would have to wait out a full TTL on every serving instance.
+ *
+ * BOTH BRANCHES FIGHT THE SAME SOFT-DELETE ASYMMETRY, which is invisible at the call site.
+ * `AdminSettingsSchema.plugin(softDeletePlugin)` (`AdminSettingsModel.ts:47`) replaces `deleteOne`
+ * with an `updateOne` that stamps `deletedAt` (`db-core/src/utils/mongo.ts:412`), and the plugin
+ * filters `find`/`findOne` on `deletedAt: null` but hooks NEITHER `updateOne` NOR
+ * `findOneAndUpdate`. A plain `deleteOne` here would therefore leave a tombstoned row that still
+ * carries the sweep's last value: `readSetting` reports it unset, so the next run captures a false
+ * baseline; the upsert below would match the tombstone without clearing `deletedAt`, so every
+ * subsequent configuration writes into a document `AdminSettingsCache` cannot see and every row in
+ * the table silently measures the shipped defaults. It escapes the script too - the settings API
+ * saves through an unfiltered `findOneAndUpdate`, so the setting becomes permanently unsettable
+ * from the admin UI on any stage this ran against.
+ *
+ * `hardDelete` really removes the row; `deletedAt: null` on the upsert recovers one left by an
+ * older run of this script.
  */
 async function writeSetting(name: string, value: string | null): Promise<void> {
   if (value === null) {
-    await AdminSettings.deleteOne({ settingName: name });
+    await AdminSettings.deleteOne({ settingName: name }, { hardDelete: true });
   } else {
-    await AdminSettings.updateOne({ settingName: name }, { $set: { settingValue: value } }, { upsert: true });
+    await AdminSettings.updateOne(
+      { settingName: name },
+      { $set: { settingValue: value, deletedAt: null } },
+      { upsert: true }
+    );
   }
   invalidateSettingsCache();
   invalidateScopedSettingsCache();
@@ -362,6 +391,154 @@ async function writeSetting(name: string, value: string | null): Promise<void> {
 async function applyConfig(config: SweepConfig): Promise<void> {
   await writeSetting(TOKEN_BUDGET_SETTING, String(config.tokenBudget));
   await writeSetting(MIN_RELEVANCE_SETTING, String(config.minRelevancePct));
+}
+
+/**
+ * A row this script owns, not a real setting - `settingsMap` has no entry for it, so every typed
+ * reader ignores it. It exists only so a second concurrent run can see the first.
+ */
+const LEASE_SETTING = '__recallProbeLease';
+
+/**
+ * How long before a lease is reported as abandoned. Longer than any plausible sweep (30 questions x
+ * a handful of configurations, each a live embedding call), so a slow run is never mistaken for a
+ * dead one.
+ */
+const LEASE_STALE_AFTER_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Take exclusive ownership of the two swept settings, and hand back a `restore` that gives them
+ * back exactly once.
+ *
+ * This is the ONLY thing standing between a dev script and a permanently altered shared stage, so
+ * both ways of losing that guarantee are closed here rather than left to the caller:
+ *
+ * - CONCURRENCY. A second run started while a first is in flight would read the FIRST run's mutated
+ *   values as its own baseline and restore those on exit, discarding the stage's real configuration
+ *   with no error anywhere. The lease makes the second run refuse instead. It is a plain row rather
+ *   than a Mongo lock because the two runs may be different processes on different machines.
+ *
+ * - INTERRUPTION. Ctrl-C is the natural reaction to a sweep that is taking too long, and it skips
+ *   `finally` entirely - leaving the stage carrying whichever configuration was mid-flight, which
+ *   is a live change to retrieval behaviour that nobody knows was made. The handlers below restore
+ *   first and then re-raise, so the exit status still reports the signal.
+ *
+ * `restore` is idempotent and single-flight: the signal path and the `finally` path both call it,
+ * and a second Ctrl-C during a slow restore must not start a second one.
+ */
+async function acquireSettingsLease(): Promise<{ restore: () => Promise<void> }> {
+  const holder = `${hostname()}:${process.pid}`;
+  const now = Date.now();
+
+  // Atomic: `upsertedCount` is 1 only for the run that actually created the row. A concurrent
+  // loser either matches the existing row or trips the unique index on settingName - both mean
+  // somebody else holds the lease.
+  let acquired = false;
+  try {
+    const result = await AdminSettings.updateOne(
+      { settingName: LEASE_SETTING },
+      { $setOnInsert: { settingValue: JSON.stringify({ holder, startedAt: now }), deletedAt: null } },
+      { upsert: true }
+    );
+    acquired = result.upsertedCount === 1;
+  } catch {
+    acquired = false;
+  }
+
+  if (!acquired) {
+    const existing = await readSetting(LEASE_SETTING);
+    // Tolerate an unparseable row: the lease still BLOCKS either way, and a SyntaxError here would
+    // replace the message that tells the operator what to do with one that does not.
+    let startedAt = 0;
+    try {
+      startedAt = Number(JSON.parse(existing ?? '{}')?.startedAt ?? 0);
+    } catch {
+      startedAt = 0;
+    }
+    const ageMs = now - startedAt;
+    const age =
+      Number.isFinite(ageMs) && startedAt > 0 ? `${Math.round(ageMs / 60_000)} minute(s) ago` : 'at an unknown time';
+    const staleHint =
+      startedAt > 0 && ageMs > LEASE_STALE_AFTER_MS
+        ? `\nThat lease is older than ${LEASE_STALE_AFTER_MS / 3_600_000}h, so the run holding it probably died. ` +
+          `Confirm no sweep is running, CHECK ${TOKEN_BUDGET_SETTING} and ${MIN_RELEVANCE_SETTING} against ` +
+          `what this stage should have, then clear the "${LEASE_SETTING}" row to release it.`
+        : '';
+    throw new Error(
+      `Another recall probe holds the settings lease on this stage (${existing ?? 'holder unknown'}, taken ${age}). ` +
+        `Refusing to start: this run would capture that run's mutated settings as its baseline and ` +
+        `restore those on exit, permanently discarding the stage's real configuration.${staleHint}`
+    );
+  }
+
+  // Captured AFTER the lease so nothing else can be mid-sweep, and BEFORE the first write so the
+  // restore puts back whatever the stage had, including "unset" - writing a 0 back would leave a
+  // row where there was none and quietly change how a future reader interprets the stage config.
+  const original: Record<string, string | null> = {
+    [TOKEN_BUDGET_SETTING]: await readSetting(TOKEN_BUDGET_SETTING),
+    [MIN_RELEVANCE_SETTING]: await readSetting(MIN_RELEVANCE_SETTING),
+  };
+
+  let inFlight: Promise<void> | null = null;
+  const runRestore = async (): Promise<void> => {
+    // Never let a restore failure replace the error that actually ended the run - a mid-run DB
+    // outage takes these writes down with it, and an unguarded await here would surface the
+    // cleanup's socket timeout while hiding the cause. The stage is left mutated either way, so
+    // the values needed to undo it by hand are printed rather than merely logged as a failure.
+    const stranded: string[] = [];
+    for (const [name, value] of Object.entries(original)) {
+      try {
+        await writeSetting(name, value);
+      } catch (err) {
+        stranded.push(`${name}=${value ?? '(unset)'}`);
+        logger.warn(`Could not restore ${name}`, err);
+      }
+    }
+    // Released last: while any setting is still stranded the lease is the only marker that this
+    // stage is mid-sweep, and a run that starts against a half-restored stage is the corruption
+    // the lease exists to prevent.
+    if (stranded.length > 0) {
+      logger.error(
+        `SETTINGS LEFT MODIFIED ON THIS STAGE. Restore by hand: ${stranded.join(', ')} ` +
+          '("(unset)" means delete the row rather than writing a 0 - a 0 row and no row read the ' +
+          'same to the search path today, but not to a human reading the stage config later.) ' +
+          `Then clear the "${LEASE_SETTING}" row, which is deliberately left behind to block the ` +
+          'next run until you have.'
+      );
+      return;
+    }
+    try {
+      await writeSetting(LEASE_SETTING, null);
+    } catch (err) {
+      logger.warn(`Could not release the "${LEASE_SETTING}" row. Clear it by hand before the next run.`, err);
+      return;
+    }
+    logger.log('\nRestored the original settings values.');
+  };
+
+  const restore = (): Promise<void> => (inFlight ??= runRestore());
+
+  const onSignal = (signal: NodeJS.Signals): void => {
+    void (async () => {
+      logger.warn(`\nReceived ${signal}. Restoring the stage settings before exiting.`);
+      await restore();
+      // Re-raise with our handler gone so the process dies of the signal it was sent and the exit
+      // status stays honest (128+n), rather than reporting a clean exit from an aborted sweep.
+      process.removeListener('SIGINT', onSignal);
+      process.removeListener('SIGTERM', onSignal);
+      process.kill(process.pid, signal);
+    })();
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+
+  return {
+    restore: async () => {
+      process.removeListener('SIGINT', onSignal);
+      process.removeListener('SIGTERM', onSignal);
+      await restore();
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -416,8 +593,9 @@ async function runQuestion(question: ProbeQuestion, user: IUserDocument, capture
 
   if (reading.kind === 'keyword-fallback') {
     throw new Error(
-      `Question ${question.id} fell through to KEYWORD search (audit row carried no chunk scores). ` +
-        `The semantic arm did not run, so this configuration was never exercised. Check the ` +
+      `Question ${question.id} fell through to KEYWORD search (audit row carried no chunk scores) ` +
+        `WITHOUT the relevance-floor notice, so the semantic arm was never available rather than ` +
+        `emptied by the floor under test. This configuration was never exercised. Check the ` +
         `embedding credential and defaultEmbeddingModel on this stage.`
     );
   }
@@ -475,13 +653,7 @@ async function main(): Promise<void> {
   const rows: SweepRow[] = [];
   const detail: Record<string, QuestionResult[]> = {};
 
-  // Captured BEFORE the first write so the finally below restores whatever the stage had, including
-  // "unset" - writing a 0 back would leave a row where there was none and quietly change how a
-  // future reader interprets the stage's configuration.
-  const original = {
-    [TOKEN_BUDGET_SETTING]: await readSetting(TOKEN_BUDGET_SETTING),
-    [MIN_RELEVANCE_SETTING]: await readSetting(MIN_RELEVANCE_SETTING),
-  };
+  const { restore } = await acquireSettingsLease();
 
   try {
     for (const config of configs) {
@@ -500,29 +672,9 @@ async function main(): Promise<void> {
       rows.push({ ...config, aggregate: aggregate(results.map(r => r.outcome)) });
     }
   } finally {
-    // Restore every setting even if one throws, and never let a restore failure replace the error
-    // that actually ended the run - a mid-run DB outage takes the writes down with it, and an
-    // unguarded `await` here would surface the cleanup's socket timeout while hiding the cause.
-    // The stage is left mutated either way, so the values needed to undo it by hand are printed
-    // rather than merely logged as a failure.
-    const stranded: string[] = [];
-    for (const [name, value] of Object.entries(original)) {
-      try {
-        await writeSetting(name, value);
-      } catch (err) {
-        stranded.push(`${name}=${value ?? '(unset)'}`);
-        logger.warn(`Could not restore ${name}`, err);
-      }
-    }
-    if (stranded.length > 0) {
-      logger.error(
-        `SETTINGS LEFT MODIFIED ON THIS STAGE. Restore by hand: ${stranded.join(', ')} ` +
-          '("(unset)" means delete the row rather than writing a 0 - a 0 row and no row read the ' +
-          'same to the search path today, but not to a human reading the stage config later.)'
-      );
-    } else {
-      logger.log('\nRestored the original settings values.');
-    }
+    // Restores every setting and releases the lease, even if a question threw. Idempotent with the
+    // signal handlers the lease installed, so an interrupted run does not restore twice.
+    await restore();
   }
 
   const table = formatSweepTable(rows);
