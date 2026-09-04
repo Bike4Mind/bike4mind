@@ -8,6 +8,7 @@ import {
   Chip,
   Divider,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Modal,
@@ -443,6 +444,9 @@ const IdentityProvidersTab: React.FC = () => {
                       </IconButton>
                     }
                   />
+                  {/* The API never sends a stored secret back, so this field is always blank on
+                      an edit. Say so, or a blank field reads as "the secret is gone". */}
+                  {editingIdp && <FormHelperText>Leave blank to keep the current secret.</FormHelperText>}
                 </FormControl>
 
                 <FormControl>
