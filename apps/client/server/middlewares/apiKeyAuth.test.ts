@@ -105,7 +105,40 @@ describe('apiKeyAuth scope gate', () => {
     );
   });
 
-  it('leaves a scope-less route open to any valid key', async () => {
+  it('leaves a scope-less route open to an ordinary key', async () => {
     expect((await run(undefined, makeReq())).passed).toBe(true);
+  });
+
+  it('403s a confined key on a scope-less route', async () => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.EMBED_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    const req = makeReq();
+
+    const { passed, error } = await run(undefined, req);
+    expect(passed).toBe(false);
+    expect(error?.message).toMatch(/Insufficient API key permissions/);
+    // The gate must reject before the owner is ever loaded - an embed key must not
+    // reach a handler as its minter.
+    expect(findByIdMock).not.toHaveBeenCalled();
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      'API key scope check failed',
+      expect.objectContaining({ heldScopes: [ApiKeyScope.EMBED_CHAT], requiredScopes: undefined })
+    );
+  });
+
+  it('admits a confined key on the route that requires its scope', async () => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    expect((await run([ApiKeyScope.OVERWATCH_INGEST_WRITE], makeReq())).passed).toBe(true);
   });
 });
