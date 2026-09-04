@@ -57,17 +57,35 @@ interface PurgeDataLakeDocumentAdapters {
    */
   storage: { delete: (path: string) => Promise<unknown> };
   /**
-   * Crypto-shred the facts this document contributed to the lake's memory ledger. Optional only
-   * because the service cannot reach the ledger repository itself; a host that leaves it unwired
-   * keeps recalling beliefs distilled from a document it told the owner was destroyed. Called once,
-   * after the destruction converged, with the lake principal the extractor wrote under.
+   * Crypto-shred the facts this document contributed to the memory ledger of EVERY lake it
+   * belonged to by EITHER membership arm - not just the lake the purge was authorized through.
+   * Extraction (`extractLakeMemory`) runs per lake, so a file belonging to two lakes produces
+   * beliefs on both ledgers under the same `fabFileId`; scoping the shred to one lake would leave
+   * the other lake folding and recalling beliefs sourced from a document it was told is gone.
+   * Optional only because the service cannot reach the ledger repository itself; a host that
+   * leaves it unwired keeps recalling those beliefs. Called once, after the destruction converged,
+   * with every tag the file carried (see `tagNames` below) plus the purging lake's own identity
+   * (`purgingLake`) - the host resolves the file's OTHER member lakes from the tags and shreds the
+   * purging lake directly. Unlike `onPurged`'s other-lakes stats rebuild, the purging lake is NOT
+   * excluded: that rebuild skips it because `recomputeLakeStats` already covered it directly, but
+   * nothing here does the purging lake's shred for it. A host that catches and logs per-lake (as
+   * the one wired host does) should say so on its own hook, since it changes the "a throw
+   * propagates" contract this adapter would otherwise imply.
    */
   shredDocumentMemory?: (args: {
-    datalakeTag: string;
-    /** The lake principal's owner - the lake's creator, matching the whole-lake shred. */
-    ownerUserId: string;
+    /** Every tag the file carried before deletion, unfiltered - the host resolves membership. */
+    tagNames: string[];
     /** The `sources` entry every extracted fact carries. */
     fabFileId: string;
+    /** The file's owner - needed to resolve the owner-anchored prefix membership arm. */
+    ownerUserId: string;
+    /**
+     * The lake this purge was authorized through, handed over directly rather than folded into
+     * `tagNames` for the host to resolve back: a prefix-arm member (see `lakeMembershipSignals`)
+     * carries no `datalake:*` tag for this lake at all, and resolving one back through a
+     * meta-tag lookup risks a case-sensitivity mismatch a direct handoff cannot have.
+     */
+    purgingLake: { id: string; datalakeTag: string; createdByUserId: string };
   }) => Promise<void>;
   /**
    * Called with the finished receipt BEFORE `onPurged`, so the durable record is filed while the
@@ -251,6 +269,10 @@ export const purgeDataLakeDocument = async (
   // to whoever (or whatever key) authorized the destruction, not filed as `system`.
   const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db, logger }, { actor });
 
+  // Captured once and shared by shredDocumentMemory and onPurged below: both need the tags the row
+  // carried pre-delete to resolve the file's OTHER member lakes.
+  const tagNames = (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string');
+
   const receipt: DataLakeDocumentPurgeReceipt = {
     dataLakeId: lake.id,
     datalakeTag: lake.datalakeTag,
@@ -280,11 +302,12 @@ export const purgeDataLakeDocument = async (
 
   // Only once the document is genuinely gone: shredding the beliefs of a document that survived a
   // failed sweep would destroy recall for content still in the lake.
-  if (verified && lake.datalakeTag && lake.createdByUserId) {
+  if (verified) {
     await shredDocumentMemory?.({
-      datalakeTag: lake.datalakeTag,
-      ownerUserId: lake.createdByUserId,
+      tagNames,
       fabFileId: file.id,
+      ownerUserId: file.userId,
+      purgingLake: { id: lake.id, datalakeTag: lake.datalakeTag, createdByUserId: lake.createdByUserId },
     });
   }
 
@@ -294,7 +317,7 @@ export const purgeDataLakeDocument = async (
     // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
     // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.
     fileSize: deletedByThisCall && typeof file.fileSize === 'number' ? file.fileSize : 0,
-    tagNames: (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string'),
+    tagNames,
   });
 
   return receipt;

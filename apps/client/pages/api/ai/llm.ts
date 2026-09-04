@@ -1,5 +1,5 @@
 import { userRepository } from '@bike4mind/database';
-import { LLMApiRequestBody, redactSessionForClient } from '@bike4mind/common';
+import { ApiKeyScope, LLMApiRequestBody, redactSessionForClient } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
@@ -11,7 +11,16 @@ import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
 import { Request } from 'express';
 
-const handler = baseApi()
+// Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
+// (ChatCompletionInvoke -> dispatchQuest), so a key minted without chat access must not be able
+// to spend here. `apiKeyScopes.ts` already advertises exactly this mapping in the New-Key modal,
+// so the gate was promised to users before it existed. An `ai:chat`-only key still drives the
+// whole flow - GET /api/quests/{id} accepts AI_CHAT too. Narrower than the [AI_CHAT, AI_GENERATE]
+// pair on the contract surfaces (chat.contract.ts, cli/auth.ts DEFAULT_COMPLETION_SCOPES), which
+// accept AI_GENERATE only to preserve legacy completions behavior; that rationale does not
+// extend here, since this route is in no contract. Scope checks apply only to API-key requests;
+// browser/JWT sessions fall through untouched (see apiKeyAuth).
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   .use(
     rateLimit({
       // More permissive rate limiting in development

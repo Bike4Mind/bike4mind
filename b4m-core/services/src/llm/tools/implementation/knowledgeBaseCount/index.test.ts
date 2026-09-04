@@ -17,17 +17,26 @@ const dynamicLake = {
   slug: 'research',
   datalakeTag: 'datalake:org1:research',
   fileTagPrefix: 'acme:',
-  membership: { datalakeTag: 'datalake:org1:research', fileTagPrefix: 'acme:', creatorUserId: 'owner1' },
+  membership: {
+    kind: 'owned' as const,
+    datalakeTag: 'datalake:org1:research',
+    fileTagPrefix: 'acme:',
+    creatorUserId: 'owner1',
+  },
   source: 'dynamic' as const,
 };
 
-/** A static-registry lake: no creator, so it can only be counted through the OPEN prefix arm. */
+/**
+ * A static-registry lake: no creator, so its prefix arm is unanchored - which is why its scope is
+ * `kind: 'registry'` and not `owned`. It still HAS a scope; being counted through one is the point.
+ */
 const registryLake = {
   id: 'lake2',
   name: 'Shared KB',
   slug: 'shared',
   datalakeTag: 'datalake:shared',
   fileTagPrefix: 'opti:',
+  membership: { kind: 'registry' as const, datalakeTag: 'datalake:shared', fileTagPrefix: 'opti:' },
   source: 'registry' as const,
 };
 
@@ -80,8 +89,12 @@ describe('count_knowledge_base', () => {
     expect(searchCalls(ctx)[0][5]).not.toHaveProperty('dataLakeTags');
   });
 
-  it('counts a registry lake through the OPEN prefix arm instead', async () => {
-    // A registry lake's files carry no meta-tag, so a membership-scope count would return 0.
+  it('counts a registry lake through its registry membership scope, not a hand-rolled tag pair', async () => {
+    // The regression this pins: this arm used to assemble `dataLakeTags` + `dataLakeTagPrefixes`
+    // by hand because `membership` was absent for registry lakes. It happened to emit the same
+    // OR-set as `buildDataLakeMembershipFilter`'s registry arm, so nothing caught the divergence
+    // when one of them moved. Asserting the SCOPE (not the resulting count) is what makes the
+    // parity structural - see registryScopeParity.test.ts for the count-vs-browse half.
     getDynamicDataLakeAccessMock.mockResolvedValue({
       dataLakeTags: [],
       dataLakeTagPrefixes: [registryLake.fileTagPrefix],
@@ -91,11 +104,12 @@ describe('count_knowledge_base', () => {
     const ctx = makeContext();
     await run(ctx);
     expect(searchCalls(ctx)[0][5]).toMatchObject({
-      dataLakeTags: [registryLake.datalakeTag],
-      dataLakeTagPrefixes: [registryLake.fileTagPrefix],
+      lakeMemberships: [registryLake.membership],
       restrictToDataLake: true,
+      includeShared: true,
     });
-    expect(searchCalls(ctx)[0][5]).not.toHaveProperty('lakeMemberships');
+    expect(searchCalls(ctx)[0][5]).not.toHaveProperty('dataLakeTags');
+    expect(searchCalls(ctx)[0][5]).not.toHaveProperty('dataLakeTagPrefixes');
   });
 
   it('totals several libraries and names each', async () => {
@@ -224,12 +238,20 @@ describe('count_knowledge_base narrows lake access to the session lake', () => {
       dataLakeTagPrefixes: ['mine:', 'unrel:'],
       scopedTagPrefixes: [],
       lakes: [
-        { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+        {
+          id: 'l1',
+          name: 'mine',
+          datalakeTag: 'datalake:mine',
+          fileTagPrefix: 'mine:',
+          membership: { kind: 'registry', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:' },
+          source: 'registry',
+        },
         {
           id: 'l2',
           name: 'Unrelated-Product-KB',
           datalakeTag: 'datalake:unrelated',
           fileTagPrefix: 'unrel:',
+          membership: { kind: 'registry', datalakeTag: 'datalake:unrelated', fileTagPrefix: 'unrel:' },
           source: 'registry',
         },
       ],

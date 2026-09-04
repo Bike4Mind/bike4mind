@@ -280,27 +280,12 @@ describe('add/remove orchestration', () => {
     await handleRemove('foo', dir, configStore);
 
     const [, args] = mockedExecFileSync.mock.calls[0];
+    // --no-audit is load-bearing, not tidiness: npm audits on uninstall too, and
+    // that registry round trip is ~1000x the cost of the removal itself.
     expect(args).toEqual(['uninstall', '--prefix', dir, '--no-fund', '--no-audit', 'b4m-plugin-foo']);
 
     const reloaded = await new ConfigStore(configPath).load();
     expect(reloaded.features?.foo).toBe(false);
-  });
-
-  // Both npm calls must suppress funding/audit metadata. Omitting the flags is not cosmetic:
-  // where egress drops packets instead of refusing the connection, npm's metadata fetch never
-  // returns and the call hangs until NPM_TIMEOUT_MS, which surfaces as a 120s e2e timeout.
-  it.each([
-    ['add', async (d: string, cs: ConfigStore) => handleAdd('b4m-plugin-foo', d, cs)],
-    ['remove', async (d: string, cs: ConfigStore) => handleRemove('foo', d, cs)],
-  ])('%s keeps npm off the network', async (_label, run) => {
-    await fakeInstalledPlugin('b4m-plugin-foo', 'foo');
-    mockedExecFileSync.mockReturnValue(Buffer.from(''));
-
-    await run(dir, configStore);
-
-    const [, args] = mockedExecFileSync.mock.calls[0];
-    expect(args).toContain('--no-fund');
-    expect(args).toContain('--no-audit');
   });
 
   it('add reports npm-missing (ENOENT) and exits 1', async () => {

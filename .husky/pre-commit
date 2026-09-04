@@ -87,6 +87,12 @@ if ! bash scripts/check-no-smart-punctuation.sh; then
   FINAL_EXIT_CODE=1
 fi
 
+# Check that no workflow interpolates ${{ }} inside a run: body
+echo "Running workflow run-interpolation check..."
+if ! python3 scripts/check-no-run-interpolation.py; then
+  FINAL_EXIT_CODE=1
+fi
+
 # Run gitleaks to check for secrets
 echo "Running gitleaks check..."
 if ! sh "$(dirname -- "$0")/gitleaks-pre-commit.sh"; then

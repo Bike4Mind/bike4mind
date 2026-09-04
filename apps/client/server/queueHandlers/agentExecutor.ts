@@ -1040,7 +1040,18 @@ async function processExecution(
     // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
     // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
     if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
-      orchestrationProfile = buildOptiOrchestrationProfile();
+      // Premium tool names come from the generated map (the same one merged into `externalTools`
+      // below), so a tool an overlay registers is offerable here without editing a list by hand.
+      const premiumToolNames = Object.keys(premiumLlmTools);
+      // An empty map means codegen ran with no overlay hydrated. The loop then has no optimizer
+      // tools at all and answers in prose, which reads as a model failure rather than a build one -
+      // so say it once, here, where the cause is known.
+      if (premiumToolNames.length === 0) {
+        logger.warn('[opti] optimizer surface resolved no premium tools; the agent has only core generics', {
+          executionId,
+        });
+      }
+      orchestrationProfile = buildOptiOrchestrationProfile({ premiumToolNames });
     } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.

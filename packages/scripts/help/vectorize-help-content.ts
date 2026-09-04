@@ -58,40 +58,84 @@ interface ChunkData {
   accessLevel: HelpAccessLevel;
 }
 
+/** Remedy quoted in every failure below; see also .husky/check-help-content.sh. */
+const REGENERATE_HINT = 'regenerate the help artifacts with `pnpm --filter @bike4mind/scripts help:regenerate`';
+
 /**
- * Load slug -> accessLevel mapping from help-index.json.
- * Falls back to 'public' if the index doesn't exist or a slug is missing.
+ * Load slug -> accessLevel mapping from help-index.json. Throws if the index
+ * can't be read, parsed, or is not a non-empty entries[]: access-level labels
+ * gate admin-only content out of the Help AI chat for non-admin users, so a
+ * broken index must fail the build rather than silently produce chunks whose
+ * labels were never derived from it. An empty entries[] parses fine but would
+ * leave every slug unresolvable, so it is rejected here rather than surfacing
+ * as one "no entry for slug" complaint per bundled article.
  */
-function loadAccessLevelMap(): Map<string, HelpAccessLevel> {
-  const map = new Map<string, HelpAccessLevel>();
-  try {
-    const raw = fs.readFileSync(HELP_INDEX_PATH, 'utf-8');
-    const index = JSON.parse(raw) as HelpIndex;
-    for (const entry of index.entries) {
-      map.set(entry.slug, entry.accessLevel);
-    }
-    console.log(`Loaded access levels for ${map.size} entries from help-index.json`);
-  } catch {
-    console.warn('Could not load help-index.json for access levels — defaulting all chunks to "public"');
+export function loadAccessLevelMap(indexPath: string = HELP_INDEX_PATH): Map<string, HelpAccessLevel> {
+  const raw = fs.readFileSync(indexPath, 'utf-8');
+  const index = JSON.parse(raw) as HelpIndex;
+  if (!Array.isArray(index.entries) || index.entries.length === 0) {
+    throw new Error(`unexpected artifact shape in ${indexPath}: expected a non-empty entries[] - ${REGENERATE_HINT}`);
   }
+  const map = new Map<string, HelpAccessLevel>();
+  for (const entry of index.entries) {
+    map.set(entry.slug, entry.accessLevel);
+  }
+  console.log(`Loaded access levels for ${map.size} entries from help-index.json`);
   return map;
+}
+
+/**
+ * Resolve a slug's access level, throwing when the slug is absent from the index.
+ * No level is ever inferred from a miss: defaulting to 'public' bypasses the Help
+ * AI chat's admin gate, and defaulting to 'admin' silently hides the public docs.
+ * A miss is an invariant violation, not a normal condition - bundle-help-content.ts
+ * copies exactly the index's entries and sweeps everything else, so the bundled
+ * corpus and the index agree unless help:vectorize ran without a preceding bundle.
+ */
+export function resolveAccessLevel(slug: string, accessLevelMap: Map<string, HelpAccessLevel>): HelpAccessLevel {
+  const accessLevel = accessLevelMap.get(slug);
+  if (!accessLevel) {
+    throw new Error(`no help-index.json entry for bundled help article "${slug}" - ${REGENERATE_HINT}`);
+  }
+  return accessLevel;
+}
+
+/**
+ * Derive a slug from a content-root-relative markdown path. Must stay in sync with
+ * filePathToSlug in loadHelpArticles.ts, which builds the index this slug is looked
+ * up in - including normalizing separators last, so both agree on Windows, where a
+ * relative path arrives as `features\\notebooks` and would otherwise never match.
+ */
+export function relativePathToSlug(relativePath: string): string {
+  let slug = relativePath.replace(/\.md$/, '');
+  if (slug.endsWith('/index')) slug = slug.replace(/\/index$/, '');
+  else if (slug === 'index') slug = '';
+  return slug.replace(/\\/g, '/');
+}
+
+export interface BuildChunksOptions {
+  /** Overridable roots for testing; default to the real repo locations. */
+  contentRoot?: string;
+  indexPath?: string;
 }
 
 /**
  * Process all help articles into chunks ready for embedding.
  * Reads directly from apps/client/public/help-content/ (already filtered and bundled).
  */
-async function buildChunks(): Promise<ChunkData[]> {
-  const accessLevelMap = loadAccessLevelMap();
-  const chunks: ChunkData[] = [];
+export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkData[]> {
+  const contentRoot = opts.contentRoot ?? HELP_CONTENT_ROOT;
+  const indexPath = opts.indexPath ?? HELP_INDEX_PATH;
+  const accessLevelMap = loadAccessLevelMap(indexPath);
 
   const files = await glob('**/*.md', {
-    cwd: HELP_CONTENT_ROOT,
+    cwd: contentRoot,
     absolute: true,
   });
 
   console.log(`Found ${files.length} markdown files in help-content`);
 
+  const articles: { slug: string; title: string; content: string }[] = [];
   for (const filePath of files) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
     const { data: frontmatter, content } = matter(fileContent);
@@ -101,16 +145,31 @@ async function buildChunks(): Promise<ChunkData[]> {
       continue;
     }
 
-    const relativePath = path.relative(HELP_CONTENT_ROOT, filePath);
-    let slug = relativePath.replace(/\.md$/, '');
-    if (slug.endsWith('/index')) slug = slug.replace(/\/index$/, '');
-    else if (slug === 'index') slug = '';
+    articles.push({
+      slug: relativePathToSlug(path.relative(contentRoot, filePath)),
+      title: frontmatter.title as string,
+      content,
+    });
+  }
 
-    const title = frontmatter.title as string;
-    const accessLevel = accessLevelMap.get(slug) ?? 'public';
-    const sections = chunkByHeadings(content, title);
+  // Report every unresolvable slug at once: a stale bundle typically misses many,
+  // and throwing on the first would make it a one-slug-at-a-time fix. Sorted
+  // because glob order is not stable and the list is read by a human.
+  const unindexed = articles
+    .filter(article => !accessLevelMap.has(article.slug))
+    .map(article => article.slug)
+    .sort();
+  if (unindexed.length > 0) {
+    throw new Error(
+      `${unindexed.length} bundled help article(s) have no help-index.json entry: ${unindexed.join(', ')} - ${REGENERATE_HINT}`
+    );
+  }
 
-    for (const section of sections) {
+  const chunks: ChunkData[] = [];
+  for (const { slug, title, content } of articles) {
+    const accessLevel = resolveAccessLevel(slug, accessLevelMap);
+
+    for (const section of chunkByHeadings(content, title)) {
       // Prepend article title for embedding context
       const embeddingContent = `# ${title}\n\n${section.content}`;
       chunks.push({
@@ -218,7 +277,11 @@ async function main(): Promise<void> {
   console.log(`  Output: ${OUTPUT_PATH}`);
 }
 
-main().catch(error => {
-  console.error('Failed to vectorize help content:', error);
-  process.exit(1);
-});
+// Only run when invoked directly (not when imported by tests). Compared by resolved
+// path rather than filename suffix so a mismatch cannot silently no-op the script.
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  main().catch(error => {
+    console.error('Failed to vectorize help content:', error);
+    process.exit(1);
+  });
+}
