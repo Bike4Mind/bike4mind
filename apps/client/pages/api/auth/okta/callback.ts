@@ -33,6 +33,7 @@ import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
+import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 
 /**
@@ -186,6 +187,35 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         meta: { path: req.url, status: 401 },
       });
       return res.redirect('/login?error=email_required');
+    }
+
+    // Trust anchor (mirrors the SAML strategy in server/auth/auth.ts): an Okta tenant may
+    // only assert addresses in the domain its IDP row is registered for. Enforced BEFORE
+    // the lookup below, so a rogue tenant cannot resolve a victim in another tenant.
+    //
+    // The SST-secret fallback has no IDP row and therefore no domain to bind to; it is a
+    // single deploy-level Okta tenant configured by an operator, so it stays unbound - but
+    // loudly, never silently.
+    if (idp) {
+      if (!emailMatchesIdpDomain(email, idp.emailDomain)) {
+        Logger.warn('[Okta Callback] Rejecting login: asserted email is outside the IDP registered domain', {
+          idpId: idp.id,
+        });
+        await authFailLogRepository.create({
+          strategy: 'okta',
+          ip,
+          userAgent,
+          email,
+          reason: IDP_EMAIL_DOMAIN_MISMATCH,
+          headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
+          meta: { path: req.url, status: 401 },
+        });
+        return res.redirect(`/login?error=${encodeURIComponent(IDP_EMAIL_DOMAIN_MISMATCH)}`);
+      }
+    } else {
+      Logger.warn(
+        '[Okta Callback] No IDP record for this login (SST-secret fallback): the asserted email domain is unbound'
+      );
     }
 
     // Build query conditions for user lookup (escape regex chars to prevent injection)

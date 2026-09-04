@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { AuthStrategy } from '@bike4mind/common';
 import { ACCOUNT_LINK_EMAIL_MISMATCH, ACCOUNT_LINK_VERIFICATION_REQUIRED } from '@server/utils/auth/oauthAccountLink';
+import { IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler.
 vi.mock('@server/middlewares/baseApi', () => {
@@ -103,10 +104,12 @@ beforeEach(() => {
     valid: true,
     payload: { idpId: 'idp-1', codeVerifier: 'pkce-verifier' },
   });
+  // The IDP is registered for example.com, which every email in this file belongs to,
+  // so the domain bind passes and the tests below exercise what they mean to.
   mockGetConfig.mockResolvedValue({
     config: { issuer: 'https://okta.example.com' },
     source: 'idp',
-    idp: { id: 'idp-1' },
+    idp: { id: 'idp-1', emailDomain: 'example.com' },
   });
   mockExchange.mockResolvedValue({
     accessToken: 'okta-access',
@@ -262,5 +265,80 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@example.com' }));
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/auth/okta/callback - IDP email-domain bind', () => {
+  const victim = {
+    id: 'victim-1',
+    _id: 'victim-1',
+    email: 'victim@b.example',
+    emailVerified: true,
+    isAdmin: true,
+    authProviders: [],
+    tokenVersion: 0,
+  };
+
+  /** Point the resolved config at IdP A while the assertion names an IdP B address. */
+  function useIdpA() {
+    mockGetConfig.mockResolvedValue({
+      config: { issuer: 'https://a.okta.example' },
+      source: 'idp',
+      idp: { id: 'idp-a', emailDomain: 'a.example' },
+    });
+  }
+
+  it('refuses an IDP asserting an email registered to a different IDP', async () => {
+    useIdpA();
+    const res = await runCallback({
+      user: victim,
+      userInfo: { sub: 'okta-attacker', email: 'victim@b.example', email_verified: true },
+    });
+
+    expect(res._getRedirectUrl()).toContain(IDP_EMAIL_DOMAIN_MISMATCH);
+    // Refused before the account is even looked up, let alone linked or signed in.
+    expect(mockFindOne).not.toHaveBeenCalled();
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ strategy: 'okta', email: 'victim@b.example', reason: IDP_EMAIL_DOMAIN_MISMATCH })
+    );
+  });
+
+  it('refuses a subdomain of the registered domain', async () => {
+    useIdpA();
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-sub', email: 'user@eu.a.example', email_verified: true },
+    });
+
+    expect(res._getRedirectUrl()).toContain(IDP_EMAIL_DOMAIN_MISMATCH);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('allows an email inside the registered domain', async () => {
+    useIdpA();
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-sub', email: 'user@a.example', email_verified: true, name: 'A User' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'user@a.example' }));
+  });
+
+  it('leaves the SST-secret fallback unbound (no IDP record to bind to)', async () => {
+    mockGetConfig.mockResolvedValue({
+      config: { issuer: 'https://okta.example.com' },
+      source: 'sst',
+      idp: undefined,
+    });
+
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-sst', email: 'anyone@wherever.example', email_verified: true, name: 'SST User' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
   });
 });

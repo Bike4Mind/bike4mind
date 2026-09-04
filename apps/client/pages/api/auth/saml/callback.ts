@@ -21,12 +21,10 @@ const handleSamlCallback = async (req: any, res: any) => {
     // /auth/success, so carried through opaquely here.
     let redirectTo: string | undefined;
 
-    console.log('SAML callback received:', {
-      method: req.method,
-      RelayState,
-      body: req.body,
-      query: req.query,
-    });
+    // Never log the request body or RelayState: the body carries the base64
+    // SAMLResponse, i.e. a complete signed assertion that is replayable inside its
+    // validity window by anyone who can read the logs.
+    console.log('SAML callback received:', { method: req.method });
 
     // Try to extract IDP ID from RelayState or other mechanisms
     if (RelayState) {
@@ -60,7 +58,7 @@ const handleSamlCallback = async (req: any, res: any) => {
       throw new BadRequestError('Missing IDP context');
     }
 
-    const identityProvider = await identityProviderRepository.findById(idpId);
+    const identityProvider = await identityProviderRepository.findByIdWithSecrets(idpId);
 
     if (!identityProvider || !identityProvider.isActive || identityProvider.type !== 'saml') {
       return res.redirect('/login?error=invalid_idp');
@@ -68,6 +66,7 @@ const handleSamlCallback = async (req: any, res: any) => {
 
     const strategyName = setupSamlStrategy({
       _id: identityProvider.id,
+      emailDomain: identityProvider.emailDomain,
       samlConfig: identityProvider.samlConfig,
     });
 
@@ -106,14 +105,17 @@ const handleSamlCallback = async (req: any, res: any) => {
       }
 
       if (!user) {
-        console.error('SAML authentication failed:', info);
+        // `info.reason` is only ever set by our own verify callback (currently the
+        // IdP domain bind), so it is a safe, non-attacker-controlled discriminator.
+        const reason = (info && (info.reason as string)) || 'SAML authentication failed';
+        console.error('SAML authentication failed:', reason);
 
         try {
           await authFailLogRepository.create({
             strategy: 'saml',
             ip,
             userAgent,
-            reason: 'SAML authentication failed',
+            reason,
             email,
             headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
             meta: { path: req.url, status: 401 },
