@@ -242,7 +242,15 @@ export async function handleRemove(name: string, pluginsDir: string, configStore
     return; // unreachable; keeps the type narrowing honest under tests that stub exit
   }
 
-  runNpmOrExit(['uninstall', '--prefix', pluginsDir, plugin.name], pluginsDir, 'remove', plugin.name);
+  // --no-fund --no-audit for the same reason the install call passes them: without them npm
+  // fetches funding/audit metadata, which blocks indefinitely wherever egress is filtered by
+  // dropping packets rather than refusing the connection, hanging until NPM_TIMEOUT_MS.
+  runNpmOrExit(
+    ['uninstall', '--prefix', pluginsDir, '--no-fund', '--no-audit', plugin.name],
+    pluginsDir,
+    'remove',
+    plugin.name
+  );
 
   if (plugin.valid) {
     const config = await configStore.load();
