@@ -194,7 +194,37 @@ describe('authorizeLakeForWrite - both gates honour the org-admin rung', () => {
 
     // Pins the test above to the org-admin rung specifically: same lake, same empty grants, same
     // membership - only the administered set differs.
-    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a refusal');
+    expect(result.reason).toBe('not_authorized');
+    // Refused by gate 1 - gate 2 must never be reached, or a rewrite that lets gate 1 fall through
+    // to a permissive gate 2 would pass this test for the wrong reason.
+    expect(d.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it("gate 2 decides on the actor it was given, not on gate 1's verdict", async () => {
+    // Gate 1 authorizes lake A via the org-admin rung; gate 2 re-resolves by meta-tag and lands on
+    // a DIFFERENT lake the same actor administers nothing on. If gate 2 were ever reduced to a
+    // rubber stamp of gate 1 (or handed a hardcoded `{ ...ctx, isAdmin: true }`), this still passes
+    // gate 1's mocks but must refuse here - only a genuine re-decision on lake B can catch that.
+    const otherOrgLake = {
+      id: 'lake-2',
+      name: 'Org2 Admin',
+      slug: 'org2-admin',
+      datalakeTag: 'datalake:org2-admin',
+      createdByUserId: 'someone-else',
+      organizationId: 'org-2',
+      status: 'active',
+      isPublic: false,
+    } as never;
+
+    const d = deps();
+    d.dataLakes.findByDatalakeTag.mockResolvedValue(otherOrgLake);
+
+    const result = await authorizeLakeForWrite(actor, 'org1-admin', d);
+
+    if (result.ok) throw new Error('expected a refusal');
+    expect(result.reason).toBe('not_authorized');
+    expect(d.dataLakes.findByDatalakeTag).toHaveBeenCalledWith('datalake:org1-admin');
   });
 
   it('authorizes a curator whose grant is the only reason, so gate 2 sees the grant repo', async () => {
