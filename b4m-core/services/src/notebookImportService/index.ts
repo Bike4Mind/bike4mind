@@ -12,7 +12,14 @@ import {
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
 } from '../notebookExportService/types';
-import { ArtifactTypeSchema, DefaultLLMParams, isValidEnumValue, KnowledgeType } from '@bike4mind/common';
+import {
+  ArtifactTypeSchema,
+  createArtifactId,
+  DefaultLLMParams,
+  getArtifactIdentifier,
+  isValidEnumValue,
+  KnowledgeType,
+} from '@bike4mind/common';
 import type { ArtifactType } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 import type { IChatHistoryItem } from '@bike4mind/common';
@@ -70,13 +77,16 @@ export interface NotebookImportAdapters {
    * also keeps those three writes inside the import's transaction.
    *
    * Returns the created artifact's id, because artifacts resolve by their own `id` rather than by
-   * `_id` and that id is what readers will use. An id is passed in only to preserve a source id:
-   * minting one here would have to reproduce the `artifact_{type}_{identifier}_{timestamp}_{index}`
-   * shape the client parses, and the import's `generateId` port is a bare uuid, which is not it.
+   * `_id` and that id is what readers will use - and the caller cannot assume the id it passed was
+   * the one stored.
    */
   createArtifact: (params: {
     userId: string;
-    /** Only when preserving source ids; otherwise the creation path mints a parseable one. */
+    /**
+     * Always set by this service: either the preserved source id, or one minted by
+     * `createArtifactId` that carries the source identifier segment across. Optional only because
+     * the creation path behind this port mints its own when a caller omits it.
+     */
     id?: string;
     /**
      * The notebook the artifact belongs to. Recorded on the artifact itself because that is what
@@ -516,9 +526,17 @@ export class NotebookImportService {
           throw new Error('the export carries no body for this artifact');
         }
 
-        // Only set when preserving the source id - see createArtifact's doc above for why minting a
-        // parseable one is left to the creation path.
         const preservedId = options.preserveIds ? artifact.id : undefined;
+
+        // A reminted id keeps the SOURCE identifier rather than a slug of the title, because the
+        // imported reply still carries the original `<artifact identifier=...>` attribute and that
+        // attribute - not the title - is what `findExistingArtifactId` compares segment 2 against.
+        // The two agree only by luck (`identifier="todo-app"` for title "Todo List App" is the
+        // parser's own example), and when they disagree the rendered card cannot find this row and
+        // mints an id of its own, losing the version history the round trip just restored.
+        const artifactType = toArtifactType(artifact.type);
+        const storedId =
+          preservedId ?? createArtifactId(artifactType, getArtifactIdentifier(artifact.id) ?? artifact.name);
 
         // Checked before the write, not left to the catch below: re-importing an export into the
         // account it came from duplicates a unique key, and a server-side error aborts the whole
@@ -534,9 +552,9 @@ export class NotebookImportService {
         // artifacts API backdate a row.
         const createdId = await this.adapters.createArtifact({
           userId: targetUserId,
-          id: preservedId,
+          id: storedId,
           sessionId,
-          type: toArtifactType(artifact.type),
+          type: artifactType,
           // The export calls it `name`; the schema calls it `title`.
           title: artifact.name,
           content: artifact.content,

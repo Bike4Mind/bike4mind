@@ -27,9 +27,8 @@ import type { Logger } from '@bike4mind/observability';
 // parsers are a known fork; consolidating them is a separate change.
 //
 // Not interchangeable with `createArtifactId` (@bike4mind/common) despite the matching shape: this
-// one keeps `identifier` verbatim, which is what makes the row adoptable, while that one slugifies
-// it and appends a random suffix precisely so its rows are NOT adopted. Swapping either for the
-// other breaks one of the two behaviours.
+// one takes its timestamp and index from the caller, which is what makes a repeated write
+// idempotent, while that one stamps `Date.now()`.
 import {
   checkHasDefaultExport,
   extractReactDependencies,

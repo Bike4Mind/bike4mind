@@ -169,6 +169,12 @@ describe('notebook import: artifacts against real models', () => {
     // Specifically not the port's value: that is exactly what shipped, and every artifact imported
     // on preview carried one.
     expect(id).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/);
+
+    // findExistingArtifactId (app/utils/artifactPersistence.ts) compares segment 2 for equality
+    // against the `<artifact identifier=...>` attribute in the reply, so the source identifier has
+    // to survive the remint. The fixture separates the two deliberately: `abc` is the source
+    // identifier, `my-diagram` is what slugifying the title would have produced.
+    expect(id.split('_')[2]).toBe('abc');
   });
 
   it('refuses a preserved id that is already taken instead of writing a duplicate key', async () => {
