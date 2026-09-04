@@ -122,6 +122,17 @@ describe('check-help-content.sh accessLevel parity', () => {
     expect(r.stdout).toContain('features/ghost: has no help-index.json entry');
   });
 
+  it('distinguishes an index entry with no accessLevel from a missing entry', () => {
+    // Theoretical today - loadHelpArticles.ts defaults accessLevel at generation time - but a
+    // lone `want === undefined` check would file this under "no index entry", sending the reader
+    // after the wrong artifact. The slug IS indexed; what is missing is the field.
+    const dir = makeSandbox();
+    writeArtifacts(dir, [{ slug: 'features/foo' }], [chunk('features/foo', 'public')]);
+    const r = runGuard(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('features/foo: has a help-index.json entry with no accessLevel');
+  });
+
   it('fails an admin article labeled public even when both artifacts agree', () => {
     // Parity alone sees nothing here - the artifacts agree, on the wrong level. This is the
     // shape a full regenerate against a tampered index would produce.

@@ -111,8 +111,10 @@ fi
 #      chunk is still scored and served on its own accessLevel.
 #   2. no slug in the admin category carries anything but 'admin', which catches the case
 #      where both artifacts agree on the wrong level.
-# Both artifacts are already known to parse and to hold the expected shape - the block
-# above exits non-zero otherwise - so this re-read can assume it.
+# Both artifacts are already known to parse and to hold array-shaped entries/chunks - the
+# block above exits non-zero otherwise - so this re-read can assume that much. It does NOT
+# verify per-record shape, so a record missing `slug` still throws here; the fail-closed
+# wrapper below is what turns that into a blocked commit rather than a pass.
 if ! LEVEL_VIOLATIONS=$(node -e "
     const idx = JSON.parse(require('fs').readFileSync('$INDEX_FILE','utf-8'));
     const emb = JSON.parse(require('fs').readFileSync('$EMBEDDINGS_FILE','utf-8'));
@@ -123,12 +125,16 @@ if ! LEVEL_VIOLATIONS=$(node -e "
     const counts = new Map();
     for (const c of emb.chunks) {
       const want = expected.get(c.slug);
+      // has() rather than a lone undefined check: an entry present but missing accessLevel
+      // would otherwise be misreported as having no entry at all.
       const problem =
-        want === undefined
+        !expected.has(c.slug)
           ? 'has no help-index.json entry, so nothing constrains its accessLevel'
-          : c.accessLevel !== want
-            ? 'embeddings say ' + c.accessLevel + ', index says ' + want
-            : null;
+          : want === undefined
+            ? 'has a help-index.json entry with no accessLevel, so parity cannot be checked'
+            : c.accessLevel !== want
+              ? 'embeddings say ' + c.accessLevel + ', index says ' + want
+              : null;
       if (problem !== null) {
         const key = c.slug + ': ' + problem;
         counts.set(key, (counts.get(key) || 0) + 1);
