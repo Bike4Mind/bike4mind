@@ -3,7 +3,11 @@
   "compilerOptions": {
     "module": "esnext",
     "moduleResolution": "bundler",
-    "noEmit": true
+    "noEmit": true,
+    // toolRuntimeAssets.ts imports scripts/resolve-highs-wasm.mjs, the resolver shared with
+    // the client's postinstall copy. It stays .mjs because that script runs under plain node
+    // with no build step; allowJs lets infra consume it (types come from its JSDoc).
+    "allowJs": true
   },
   "include": [
     "../sst-env.d.ts",
