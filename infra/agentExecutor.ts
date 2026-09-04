@@ -18,6 +18,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
 import { agentContinuationQueue } from './queues';
+import { toolRuntimeAssets } from './toolRuntimeAssets';
 
 // Re-export websocketApi route setup for the agent_execute route.
 // Defined here (not in websocket.ts) to avoid circular dependency:
@@ -90,12 +91,7 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
       resources: [agentContinuationQueue.arn],
     },
   ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
+  copyFiles: toolRuntimeAssets(),
 };
 
 export const agentExecutor = new sst.aws.Function('AgentExecutor', {
