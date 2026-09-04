@@ -88,14 +88,9 @@ type KnowledgeRow = Pick<
 >;
 
 /** No `content`: the body lives in a separate collection, reached via contentId. */
-type ArtifactRow = Pick<
-  IArtifactDocument,
-  'id' | 'title' | 'type' | 'version' | 'createdAt' | 'updatedAt' | 'metadata'
->;
+type ArtifactRow = Pick<IArtifactDocument, 'id' | 'title' | 'type' | 'createdAt' | 'updatedAt' | 'metadata'>;
 /** The body, which lives in its own collection keyed by (artifactId, version). */
 type ArtifactContentRow = Pick<IArtifactContentDocument, 'artifactId' | 'version' | 'content'>;
-/** Joins an artifact to its body. Both sides of the join must build the key the same way. */
-const keyOf = (artifactId: string, version: number | undefined) => `${artifactId}@${version}`;
 
 type ToolRow = Pick<IToolDocument, 'id' | 'name' | 'createdAt'>;
 
@@ -454,23 +449,34 @@ export class NotebookExportService {
 
     // The body is the whole point of exporting an artifact: `contentId`, `contentHash` and
     // `contentSize` are all required on import and can only be derived from it, so a label-only
-    // export cannot be imported at all. Exact (artifact, version) pairs rather than two independent
-    // `$in`s, which would fetch their cross product - whole bodies, most of them discarded.
-    // Guarded rather than called unconditionally: `$or: []` is not a valid filter, so an empty
-    // `artifacts` has to skip the query rather than build one out of it.
+    // export cannot be imported at all.
+    //
+    // The body is the NEWEST content row, which is the same rule the viewer resolves by
+    // (`artifactService/get` -> `findLatestContent`). Keying on `artifact.version` instead looks
+    // stricter and is wrong: `create` and `update` write the content row, the version row and the
+    // artifact row as three separate calls with no transaction (documented at
+    // apps/client/server/utils/persistAgentArtifacts.ts) and assign `version` only after the
+    // content write returns, so the pointer can only ever LAG the newest row, never lead it. An
+    // export keyed on it ships the older body while the user is looking at the newer one.
+    //
+    // Sorted descending so the first row seen for an artifact is its newest; one query for the
+    // batch, guarded because an empty `$in` is a query with no answer worth making.
     const contents =
       artifacts.length === 0
         ? []
-        : await this.adapters.artifactContentRepository.find({
-            $or: artifacts.map((a: ArtifactRow) => ({ artifactId: a.id, version: a.version })),
-          });
-    // Keyed on the version too, not just the artifact: a stale row would export content the source
-    // no longer shows.
-    const bodyFor = new Map(contents.map((c: ArtifactContentRow) => [keyOf(c.artifactId, c.version), c.content]));
+        : await this.adapters.artifactContentRepository.find(
+            { artifactId: { $in: artifacts.map((a: ArtifactRow) => a.id) } },
+            { sort: { version: -1 } }
+          );
+
+    const bodyFor = new Map<string, string>();
+    for (const row of contents as ArtifactContentRow[]) {
+      if (!bodyFor.has(row.artifactId)) bodyFor.set(row.artifactId, row.content);
+    }
 
     const bodyless: string[] = [];
     const exported = artifacts.map((artifact: ArtifactRow) => {
-      const content = bodyFor.get(keyOf(artifact.id, artifact.version));
+      const content = bodyFor.get(artifact.id);
       if (content === undefined) bodyless.push(artifact.id);
       return {
         id: artifact.id,

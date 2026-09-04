@@ -347,13 +347,11 @@ describe('notebook export', () => {
   it('carries the artifact body, which is what makes the export importable at all', async () => {
     // Without this the import cannot derive contentId/contentHash/contentSize and rejects every
     // artifact, which is the whole failure this join exists to remove.
-    const { payload } = await exportOnceWithAdapters({
+    const { payload, adapters } = await exportOnceWithAdapters({
       artifactRepository: {
         find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts', version: 3 }]),
       },
       artifactContentRepository: {
-        // Current version first, stale second, so a key that ignored the version would take the
-        // stale row by last-write-wins instead of quietly landing on the right answer.
         find: vi.fn().mockResolvedValue([
           { artifactId: 'artifact-1', version: 3, content: 'current body' },
           { artifactId: 'artifact-1', version: 2, content: 'stale body' },
@@ -361,9 +359,12 @@ describe('notebook export', () => {
       },
     });
 
-    // Keyed by version, not just by artifact: a stale row would export content the source no
-    // longer shows.
     expect(payload.notebooks[0].artifacts[0].content).toBe('current body');
+    // Newest-first is Mongo's job, not a re-sort here, so the sort is part of the contract.
+    expect(adapters.artifactContentRepository.find).toHaveBeenCalledWith(
+      { artifactId: { $in: ['artifact-1'] } },
+      { sort: { version: -1 } }
+    );
   });
 
   it('warns by id about an artifact whose body is missing rather than exporting it silently', async () => {
@@ -381,6 +382,29 @@ describe('notebook export', () => {
     expect(adapters.logger.warn).toHaveBeenCalledWith(
       'Some artifacts exported without their body',
       expect.objectContaining({ artifactIds: ['artifact-1'] })
+    );
+  });
+  it('exports the body the viewer shows when the artifact pointer lags its content rows', async () => {
+    // The only drift that can actually happen: `update` writes the content row first and assigns
+    // `artifact.version` only after, with no transaction around the pair, so an interrupted write
+    // leaves the pointer BEHIND the newest row. The viewer resolves through findLatestContent and
+    // renders v3; a join keyed on `artifact.version` finds the (id, 2) row and silently exports v2.
+    const { payload, adapters } = await exportOnceWithAdapters({
+      artifactRepository: {
+        find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts', version: 2 }]),
+      },
+      artifactContentRepository: {
+        find: vi.fn().mockResolvedValue([
+          { artifactId: 'artifact-1', version: 3, content: 'what the viewer shows' },
+          { artifactId: 'artifact-1', version: 2, content: 'what the pointer says' },
+        ]),
+      },
+    });
+
+    expect(payload.notebooks[0].artifacts[0].content).toBe('what the viewer shows');
+    expect(adapters.logger.warn).not.toHaveBeenCalledWith(
+      'Some artifacts exported without their body',
+      expect.anything()
     );
   });
 });
