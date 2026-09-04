@@ -54,8 +54,13 @@ export function useNavigationExecutor() {
           } else {
             requestFamily(intent.target);
           }
+          // Name the mode. Tanstack drops search params on a navigate that omits `search`, and
+          // bare /opti falls back to its blank-state surface - which consumes the pending
+          // family and discards it, so the button appeared to do nothing. Stated outright
+          // rather than merged over `prev`: `session` means a different thing on other routes
+          // (see agentExecutionHistoryRoute), and /opti reflects its own back into the URL.
           // @ts-expect-error - /opti is a premium route, not in static route tree
-          navigate({ to: '/opti' });
+          navigate({ to: '/opti', search: { mode: 'optimize' } });
           break;
         }
       }
