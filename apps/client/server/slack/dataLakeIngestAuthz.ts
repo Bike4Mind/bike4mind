@@ -183,7 +183,8 @@ export async function authorizeLakeForWrite(
 
     if (err instanceof BadRequestError) {
       // Surface the thrown message: it distinguishes "built into the platform and is read-only"
-      // from "only the creator can add files", which the generic sentence cannot.
+      // from "you do not have permission to add files to this data lake", which the generic
+      // sentence cannot.
       deps.logger.info('@datalake add refused by the lake write gate', { lakeSlug, message: err.message });
       return {
         ok: false,
@@ -251,7 +252,7 @@ export async function authorizeLakeForWrite(
     return {
       ok: false,
       reason: 'not_authorized',
-      message: `You can only add files to a data lake you created. Ask an admin, or the creator of \`${lakeSlug}\`.`,
+      message: `You do not have permission to add files to \`${lakeSlug}\`. Ask an admin, or someone who manages it.`,
     };
   }
 
