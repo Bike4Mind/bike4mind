@@ -125,6 +125,21 @@ describe('NotebookExportModal', () => {
     expect(mockPost.mock.calls[0][1]).toMatchObject({ maxFileSize: 100 * 1024 * 1024 });
   });
 
+  it('snaps the box back to the size it will actually send', async () => {
+    // The clamp is silent, so a box left reading 500 while 100 goes out tells the user their large
+    // files will be embedded when they will be URL-referenced instead.
+    renderModal();
+    const box = screen.getByTestId('notebook-export-size-input') as HTMLInputElement;
+    fireEvent.change(box, { target: { value: '500' } });
+    expect(box.value).toBe('500');
+    fireEvent.blur(box);
+    expect(box.value).toBe('100');
+
+    clickExport();
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    expect(mockPost.mock.calls[0][1]).toMatchObject({ maxFileSize: 100 * 1024 * 1024 });
+  });
+
   it('names the offending field when the server rejects the body', async () => {
     mockPost.mockRejectedValue({
       response: {

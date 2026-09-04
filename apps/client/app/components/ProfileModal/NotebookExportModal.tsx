@@ -321,6 +321,9 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                   setDrafts(d => ({ ...d, maxFileSizeMb: text }));
                   updateOption('maxFileSize', resolveSizeMb(text) * 1024 * 1024);
                 }}
+                // The box must not show a number the request does not carry: resolveSizeMb clamps,
+                // so a typed 500 would sit on screen while 100 went out.
+                onBlur={() => setDrafts(d => ({ ...d, maxFileSizeMb: String(resolveSizeMb(d.maxFileSizeMb)) }))}
                 endDecorator="MB"
                 slotProps={{
                   input: {
