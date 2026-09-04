@@ -552,7 +552,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         )}
         {/* Rapid reply - the instant acknowledgement, above the streaming reply body
             it precedes. Only the streaming message is handed a chatCompletion. */}
-        {chatCompletion && <RapidReplyBubble chatCompletion={chatCompletion} questId={messageData.id} />}
+        {chatCompletion && <RapidReplyBubble chatCompletion={chatCompletion} />}
         {/* Auto-route notice. Sits above the reply body (not in the footer chip
             row) so the user reads it before internalizing the agent-style answer -
             false-positive remediation via Dismiss is more discoverable that way.

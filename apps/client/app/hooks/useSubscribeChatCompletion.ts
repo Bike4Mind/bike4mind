@@ -22,11 +22,6 @@ export type IChatCompletion = {
   quest?: z.infer<typeof StreamedChatCompletionAction>['quest'];
   statusMessage?: string | null;
   rapidReply?: {
-    /** Quest this acknowledgement belongs to. Kept from the frame because the bubble
-     *  renders inside a message and `quest` can still point at the previous turn - a
-     *  stopped quest is never handed off, so the next turn's rapid reply would
-     *  otherwise be drawn under the stopped one. */
-    questId: string;
     content: string;
     status: 'streaming' | 'completed' | 'replaced';
     ttfvt?: number;
@@ -126,7 +121,7 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
           // Update the rapid reply state
           setChatCompletion(prev => ({
             ...prev,
-            rapidReply: { ...rapidReplyMessage.rapidReply, questId: rapidReplyMessage.questId },
+            rapidReply: rapidReplyMessage.rapidReply,
             statusMessage: rapidReplyMessage.statusMessage || prev.statusMessage,
           }));
 

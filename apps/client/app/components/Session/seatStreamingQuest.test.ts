@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import type { IChatHistoryItem } from '@bike4mind/common';
 import { seatStreamingQuest } from './seatStreamingQuest';
 
@@ -44,5 +46,41 @@ describe('seatStreamingQuest', () => {
     const result = seatStreamingQuest([quest('a', { pinned: true })], 'b', streaming);
 
     expect(result.map(q => q.id)).toEqual(['b', 'a']);
+  });
+});
+
+/**
+ * The helper's own behaviour is covered above, but the fix also depends on WHERE
+ * SessionMiddle calls it: seating before the pin/search filters lets them drop the
+ * running turn again, which is the regression this PR fixes. Nothing else fails if
+ * that call moves back up, so the position is asserted here.
+ *
+ * Source-level, mirroring the useSendMessage.*.test.ts precedent - SessionMiddle
+ * renders Virtuoso plus ~15 providers, so a render test would assert far less for
+ * far more setup.
+ */
+describe('SessionMiddle - seats the streaming quest last', () => {
+  const source = readFileSync(resolve(__dirname, 'SessionMiddle.tsx'), 'utf8');
+  const memo = source.match(/const filteredChatHistory = useMemo\([\s\S]*?\}, \[/)?.[0] ?? '';
+
+  it('locates the filteredChatHistory memo', () => {
+    expect(memo).not.toBe('');
+  });
+
+  it('calls seatStreamingQuest after the pinned and search filters', () => {
+    const seatAt = memo.indexOf('seatStreamingQuest(');
+    const pinnedAt = memo.indexOf('showPinnedOnly');
+    const searchAt = memo.indexOf('lowCaseSearch');
+
+    expect(seatAt).toBeGreaterThan(-1);
+    expect(pinnedAt).toBeGreaterThan(-1);
+    expect(searchAt).toBeGreaterThan(-1);
+    expect(seatAt).toBeGreaterThan(pinnedAt);
+    expect(seatAt).toBeGreaterThan(searchAt);
+  });
+
+  it('does not filter the list after seating', () => {
+    const afterSeat = memo.slice(memo.indexOf('seatStreamingQuest('));
+    expect(afterSeat).not.toMatch(/\.filter\(/);
   });
 });

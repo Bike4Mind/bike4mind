@@ -3,20 +3,14 @@ import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeC
 
 interface RapidReplyBubbleProps {
   chatCompletion: ReturnType<typeof useSubscribeChatCompletion>['chatCompletion'];
-  /** Quest of the message this is rendering inside. */
-  questId: string | undefined;
 }
 
 /** The instant acknowledgement shown while the real answer is still streaming.
  *  Rendered above the streaming reply body so the transcript reads in the order
  *  the two responses were produced. */
-const RapidReplyBubble = ({ chatCompletion, questId }: RapidReplyBubbleProps) => {
+const RapidReplyBubble = ({ chatCompletion }: RapidReplyBubbleProps) => {
   const rapidReply = chatCompletion.rapidReply;
   if (!rapidReply || rapidReply.status === 'replaced' || !chatCompletion.statusMessage) return null;
-  // The acknowledgement belongs to one quest, and the streaming slot can still be held
-  // by an earlier one (a stopped quest is never handed off), so drawing it wherever the
-  // slot happens to be would attribute it to the wrong message.
-  if (rapidReply.questId !== questId) return null;
 
   return (
     <Box
