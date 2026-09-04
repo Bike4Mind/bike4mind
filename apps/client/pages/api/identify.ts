@@ -5,6 +5,7 @@ import { secretRotationRepository } from '@bike4mind/database/infra';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 
 // Per-user cap (req.user is set here, so rateLimit keys by user id, not IP). No legitimate
 // flow calls identify anywhere near 60/min - it fires on cold load, tab refocus and WS
@@ -18,36 +19,47 @@ const handler = baseApi()
   .use(rateLimit(IDENTIFY_RATE_LIMIT))
   .use(requireUser)
   .get(async (req, res) => {
-    let accessToken: string | undefined = req.headers?.authorization?.split(' ')[1];
+    // An API key is a long-lived credential that may be scoped to a single flow or
+    // shipped publicly (embed widgets), so it gets a read-only whoami: no session is
+    // minted and no refresh cookie is set. Otherwise presenting one here would trade
+    // it for a full browser session carrying the owner's whole account.
+    const isApiKeyCaller = !!req.apiKeyInfo;
+    let accessToken: string | undefined = isApiKeyCaller ? undefined : req.headers?.authorization?.split(' ')[1];
     req.logger.log(
       `Successful auth for "${req.user?.username}" (${req.user?.email}), ${
-        accessToken ? 'have' : 'creating'
+        isApiKeyCaller ? 'api key - no' : accessToken ? 'have' : 'creating'
       } access token`
     );
 
-    if (!accessToken) {
-      ({ accessToken } = await issueBrowserSession(req, res, req.user!.id, {
-        createdVia: 'identify',
-        tokenVersion: req.user!.tokenVersion ?? 0,
-      }));
-    } else {
-      const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
-      let previousSecret = undefined;
-      // Accept the previous key only within the shared rotation grace window.
-      if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
-        previousSecret = secretRotation?.previousKey;
-      }
-      const decoded = authTokenGenerator.verifyToken(accessToken, previousSecret);
-      if (decoded.exp && decoded.exp < Date.now() / 1000) {
+    if (!isApiKeyCaller) {
+      if (!accessToken) {
         ({ accessToken } = await issueBrowserSession(req, res, req.user!.id, {
           createdVia: 'identify',
           tokenVersion: req.user!.tokenVersion ?? 0,
         }));
+      } else {
+        const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
+        let previousSecret = undefined;
+        // Accept the previous key only within the shared rotation grace window.
+        if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
+          previousSecret = secretRotation?.previousKey;
+        }
+        const decoded = authTokenGenerator.verifyToken(accessToken, previousSecret);
+        if (decoded.exp && decoded.exp < Date.now() / 1000) {
+          ({ accessToken } = await issueBrowserSession(req, res, req.user!.id, {
+            createdVia: 'identify',
+            tokenVersion: req.user!.tokenVersion ?? 0,
+          }));
+        }
       }
     }
 
     return res.status(200).json({
-      user: req.user,
+      // Same self-view shape as refreshToken and the login endpoints, which feed the
+      // client's currentUser from this identical sanitizer. Raw `req.user` is the
+      // hydrated document, so returning it shipped OAuth tokens, encrypted integration
+      // credentials, login IP history and security-question answers to any bearer.
+      user: redactUserSecretsForSelf(req.user),
       accessToken,
       // impersonatedBy is stamped onto req.user by verifyJwtPayload for an admin-driven
       // session; surfaced as a plain boolean because the client's only durable impersonation
