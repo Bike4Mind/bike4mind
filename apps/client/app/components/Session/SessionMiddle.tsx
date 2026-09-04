@@ -41,6 +41,7 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
+import { seatStreamingQuest } from './seatStreamingQuest';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -354,13 +355,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   const filteredChatHistory = useMemo(() => {
     let filtered = flattenQuests;
 
-    // Replace the streaming quest with merged streaming data (has latest replies
-    // from WebSocket) instead of filtering it out. This keeps the MessageContent
-    // instance stable across the streaming -> completed handoff.
-    if (activeStreamingQuestId && streamingMessageData) {
-      filtered = filtered.map(q => (q.id === activeStreamingQuestId ? streamingMessageData : q));
-    }
-
     // Filter out only truly broken quests (null, undefined, or completely empty)
     // Keep temporary optimistic quests that have valid prompts
     // Include voice session transcripts in the chat history display (even with empty prompts)
@@ -389,7 +383,8 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       );
     }
 
-    return filtered;
+    // Last, so none of the filters above can drop the turn that is still streaming.
+    return seatStreamingQuest(filtered, activeStreamingQuestId, streamingMessageData);
   }, [flattenQuests, search, showPinnedOnly, activeStreamingQuestId, streamingMessageData]);
 
   // Clear the pending-first-message overlay once real data is available.
