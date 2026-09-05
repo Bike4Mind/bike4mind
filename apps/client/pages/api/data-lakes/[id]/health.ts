@@ -16,6 +16,13 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
  *
  * Returns the four retrievability predicates and the reachable-content headline as RAW per-predicate
  * results; the UI derives the badge, so this contract stays stable when the presentation changes.
+ * Also returns `duplicateMembers` (#2239): members sharing an exact fileName with a sibling in this
+ * lake, report-only - no repair/removal action exists here yet - and `membership` (#2245), the same
+ * lake graded over a wider population, with the scope every number was computed as. The two overlap
+ * and disagree by construction; see the note on LakeHealthApiResponse.membership.
+ *
+ * `membership` is the WIRE shape: `toWireMembershipReport` drops the per-member `serverTextHash` and
+ * `userId` that the repair arm reasons over, since the read gate below admits `public`.
  * Health is advisory and never blocks anything.
  *
  * Same read gate as GET /api/data-lakes/:id (owner/org/tag/public), with the not-found-style denial

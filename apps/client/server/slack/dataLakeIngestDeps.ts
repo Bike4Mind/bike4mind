@@ -40,6 +40,15 @@ export function buildSlackLakeIngestDeps(args: {
     // shared adapter so BOTH the attachment and link paths are gated - a link path that quietly
     // skipped it would be a tag-write hole, since this PR is what gives that path caller-set tags.
     dataLakes: dataLakeRepository,
+    // GATE 4 (found live, #2034): `createFabFile`'s own tag gate re-resolves manage from THIS `db`,
+    // not from the caller's already-authorized ctx. Absent, `resolveCanManageLake` there degrades to
+    // createdByUserId + org rungs only (`CreateFabFileAdapters.db.dataLakeAccessGrants`'s own
+    // comment names this exact case: "NOT... adequate... where the reviewer may be a curator or a
+    // grant-transferred owner" - the Slack `add` door is exactly that shape) - so a curator grantee
+    // passed both prologue gates and was refused here with "You do not have permission to change
+    // this data lake's files", identical wording to gate 3's `administeredOrgIds` omission but a
+    // different missing field. Mirrors `proposalAdmissionDeps.ts`'s wiring.
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
     // Scoped-override store for the admission contract's enforcement lever (#1680); without it the
     // lever would resolve platform-only and a per-lake enforcement setting would silently do
     // nothing on the Slack door.
@@ -90,6 +99,7 @@ export function buildSlackLakeIngestDeps(args: {
         emailVerified: actor.emailVerified,
       }),
     resolveMembershipOrgIds: userId => organizationRepository.findMembershipOrgIds(userId),
+    resolveAdministeredOrgIds: userId => organizationRepository.findIdsWithAdminRights(userId),
     createLakeFile: (userId, params) =>
       withTransaction(async () =>
         fabFilesService.createFabFile(
@@ -110,6 +120,11 @@ export function buildSlackLakeIngestDeps(args: {
             // Server-supplied: the request body can never reach this, so a Slack origin stamp
             // cannot be forged by a caller who merely uploaded a file.
             provenance: params.provenance,
+            // createFabFile runs its OWN tag gate and cannot derive this from the user document, so
+            // omitting it zeroes canManageLake's org rungs and refuses the write the prologue just
+            // authorized. Resolved once by the prologue and carried on the params - never
+            // re-resolved here, so the create re-checks against the value that granted the write.
+            administeredOrgIds: params.administeredOrgIds,
           }
         )
       ),
@@ -141,6 +156,9 @@ export function buildSlackLakeIngestDeps(args: {
           storage,
           tags: params.tags,
           provenance: params.provenance,
+          // Relayed to createFabFile's tag gate (createByUrl.ts:108) for the same reason as the
+          // file adapter above; FILE and LINK must not diverge on who is allowed to write.
+          administeredOrgIds: params.administeredOrgIds,
           deleteCreatedFile: (id: string) => FabFile.findByIdAndDelete(id),
         }
       ),

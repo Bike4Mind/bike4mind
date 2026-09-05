@@ -44,6 +44,19 @@ export interface CreateLakeFileParams {
   // db.organizations adapter and checkStorageLimitForFile then falls back to the user limit.
   // The web data-lake batch door does not set it either. Declaring the field is a repo-wide call.
   provenance: { sourceType: FabFileSourceType; sourceMetadata: Record<string, unknown> };
+  /**
+   * The orgs the actor administers, forwarded to `createFabFile`'s OWN tag gate - a THIRD manage
+   * check after this path's two, running inside the file create. It cannot derive the value from the
+   * user document (`create.ts:132-137` spells this out), so an omitted field silently zeroes the org
+   * rungs and refuses "a write the route's own manage gate just authorized" - which is exactly what
+   * happened here: `add` passed both prologue gates and then failed with "You do not have permission
+   * to change this data lake's files".
+   *
+   * REQUIRED, not optional: this path admits content into someone else's lake, so it is precisely the
+   * door that must pass it. Taken from the AUTHORIZED context rather than re-resolved, so the value
+   * that granted the write is the value the create re-checks against.
+   */
+  administeredOrgIds: string[];
 }
 
 export interface SlackLakeIngestDeps extends LakeAuthzDeps {
@@ -109,7 +122,7 @@ export async function ingestSlackFilesIntoLake(
   // Authorization first: resolve + write-gate the lake before any download or create.
   const authorized = await authorizeLakeForWrite(actor, lakeSlug, deps);
   if (!authorized.ok) return authorized;
-  const { lake, datalakeTag } = authorized;
+  const { lake, datalakeTag, ctx } = authorized;
 
   const rejected: string[] = [];
   // No `size` here on purpose - the authoritative length is the downloaded buffer's, below.
@@ -213,6 +226,7 @@ export async function ingestSlackFilesIntoLake(
           sourceType: FabFileSourceType.SLACK,
           sourceMetadata: { channel, messageTs },
         },
+        administeredOrgIds: ctx.administeredOrgIds ?? [],
       });
       added.push(file.fileName);
       // Marked seen only on success: a failed create must not make an identical second attachment

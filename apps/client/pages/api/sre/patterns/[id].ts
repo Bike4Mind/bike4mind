@@ -13,7 +13,7 @@
  * of the recurrence escalation.
  */
 
-import mongoose from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
@@ -34,7 +34,7 @@ const handler = baseApi().patch(
     if (!req.user?.isAdmin) throw new ForbiddenError('Permission denied');
 
     const { id } = req.query as Record<string, string>;
-    if (typeof id !== 'string' || !mongoose.Types.ObjectId.isValid(id)) {
+    if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new BadRequestError('Invalid pattern id');
     }
 

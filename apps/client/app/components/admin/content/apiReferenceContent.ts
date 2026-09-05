@@ -660,6 +660,8 @@ Direct access to AI capabilities outside the chat flow.
 POST /api/ai/llm
 \`\`\`
 
+**Required API-key scope:** \`ai:chat\`.
+
 **Request Body:**
 
 | Field | Type | Required | Description |

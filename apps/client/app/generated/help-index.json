@@ -2398,6 +2398,16 @@
           "anchor": "performance-metrics-info"
         },
         {
+          "level": 4,
+          "text": "Time to First Visible Token (TTFVT)",
+          "anchor": "time-to-first-visible-token-ttfvt"
+        },
+        {
+          "level": 4,
+          "text": "Troubleshooting: TTFVT looks better than users report",
+          "anchor": "troubleshooting-ttfvt-looks-better-than-users-report"
+        },
+        {
           "level": 3,
           "text": "Record Count",
           "anchor": "record-count"
@@ -2991,6 +3001,49 @@
         }
       ],
       "filePath": "admin/help-analytics.md",
+      "accessLevel": "admin"
+    },
+    {
+      "slug": "admin/data-lake-cost-governance",
+      "title": "Data Lake Cost Governance",
+      "description": "Set the embedding spend and throughput levers for data-lake ingestion, and read the provider's live rate limits to set them from",
+      "category": "admin",
+      "sidebarPosition": 38,
+      "tags": [
+        "admin",
+        "data-lakes",
+        "cost",
+        "embedding",
+        "rate-limits"
+      ],
+      "headings": [
+        {
+          "level": 1,
+          "text": "Data Lake Cost Governance",
+          "anchor": "data-lake-cost-governance"
+        },
+        {
+          "level": 2,
+          "text": "The levers",
+          "anchor": "the-levers"
+        },
+        {
+          "level": 2,
+          "text": "Provider limits",
+          "anchor": "provider-limits"
+        },
+        {
+          "level": 3,
+          "text": "When it says the limits are unavailable",
+          "anchor": "when-it-says-the-limits-are-unavailable"
+        },
+        {
+          "level": 2,
+          "text": "Troubleshooting",
+          "anchor": "troubleshooting"
+        }
+      ],
+      "filePath": "admin/data-lake-cost-governance.md",
       "accessLevel": "admin"
     },
     {
@@ -11990,6 +12043,16 @@
               "anchor": "performance-metrics-info"
             },
             {
+              "level": 4,
+              "text": "Time to First Visible Token (TTFVT)",
+              "anchor": "time-to-first-visible-token-ttfvt"
+            },
+            {
+              "level": 4,
+              "text": "Troubleshooting: TTFVT looks better than users report",
+              "anchor": "troubleshooting-ttfvt-looks-better-than-users-report"
+            },
+            {
               "level": 3,
               "text": "Record Count",
               "anchor": "record-count"
@@ -12583,6 +12646,49 @@
             }
           ],
           "filePath": "admin/help-analytics.md",
+          "accessLevel": "admin"
+        },
+        {
+          "slug": "admin/data-lake-cost-governance",
+          "title": "Data Lake Cost Governance",
+          "description": "Set the embedding spend and throughput levers for data-lake ingestion, and read the provider's live rate limits to set them from",
+          "category": "admin",
+          "sidebarPosition": 38,
+          "tags": [
+            "admin",
+            "data-lakes",
+            "cost",
+            "embedding",
+            "rate-limits"
+          ],
+          "headings": [
+            {
+              "level": 1,
+              "text": "Data Lake Cost Governance",
+              "anchor": "data-lake-cost-governance"
+            },
+            {
+              "level": 2,
+              "text": "The levers",
+              "anchor": "the-levers"
+            },
+            {
+              "level": 2,
+              "text": "Provider limits",
+              "anchor": "provider-limits"
+            },
+            {
+              "level": 3,
+              "text": "When it says the limits are unavailable",
+              "anchor": "when-it-says-the-limits-are-unavailable"
+            },
+            {
+              "level": 2,
+              "text": "Troubleshooting",
+              "anchor": "troubleshooting"
+            }
+          ],
+          "filePath": "admin/data-lake-cost-governance.md",
           "accessLevel": "admin"
         }
       ],
@@ -19193,5 +19299,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "b4a29560921ecfc8"
+  "version": "f869326413360b97"
 }

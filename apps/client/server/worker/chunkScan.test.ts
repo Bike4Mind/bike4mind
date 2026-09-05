@@ -231,6 +231,7 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120/#215
 
     it.each([
       ['the chunk-handler reason', 'rechunkPaused'],
+      ['the never-chunked reason', 'unchunkedPaused'],
       ['the vectorize reason', 'vectorizePaused'],
     ])('skips a stalled file - %s', (_label, reason) => {
       // A stalled file matches every OTHER clause (the reset zeroed chunkCount, the pause writes no
@@ -277,6 +278,7 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120/#215
 
     it.each([
       ['the chunk-handler reason', 'rechunkPaused'],
+      ['the never-chunked reason', 'unchunkedPaused'],
       ['the vectorize reason', 'vectorizePaused'],
     ])('SELECTS a stalled file so it is rebuilt - %s', (_label, reason) => {
       // The regression this conditionality prevents. This sweep is the only AUTOMATIC exit a stalled

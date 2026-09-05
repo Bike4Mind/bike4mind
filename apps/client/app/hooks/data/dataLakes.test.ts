@@ -876,6 +876,51 @@ describe('useRechunkDataLake cache invalidation', () => {
   });
 });
 
+describe('useRechunkDataLake paused refusal (#2223)', () => {
+  // The toast spies are module-level and shared across this file, so both assertions below
+  // ("the other toast was NOT called") need a clean slate.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+  };
+
+  it('warns that nothing was rebuilt, instead of a green success claiming the opposite', async () => {
+    // The paused arm also returns enqueued: 0, so on the counts alone it is indistinguishable from
+    // "nothing to do" - and it fell through to toast.success('All files are already chunked into
+    // passages.'). That claim is not merely uninformative but FALSE: the server-side gate only runs
+    // when at least one file was detected, so `detected` is always >= 1 here.
+    apiPost.mockResolvedValueOnce({ data: { detected: 12, enqueued: 0, remaining: 12, outcome: 'paused' } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('paused'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('still reports a genuine nothing-to-do as a success', async () => {
+    // The arm the paused case used to be confused with must keep its own wording.
+    apiPost.mockResolvedValueOnce({ data: { detected: 0, enqueued: 0, remaining: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('All files are already chunked into passages.');
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+});
+
 describe('useTransferLakeOwnership cache invalidation', () => {
   it('refreshes the access view, the picker and the lake LIST - ownership decides canManage', async () => {
     // The list matters as much as the view: once the actor is no longer the owner, controls that

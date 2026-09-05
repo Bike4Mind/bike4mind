@@ -52,7 +52,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
-import { getTextModelCost } from '@bike4mind/common';
+import { getTextModelCost, PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS } from '@bike4mind/common';
 import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from '@bike4mind/llm-adapters';
 import { DEFAULT_OUTPUT_MAX_TOKENS, usdToCredits } from '@bike4mind/utils';
 import { executeCompletion } from './cliCompletions';
@@ -177,16 +177,17 @@ describe('executeCompletion - output budget', () => {
     expect(vi.mocked(getTextModelCost).mock.calls[0]?.[2]).toBe(500);
   });
 
-  // An explicit budget above the historical basis must size its own hold. Capping the
-  // estimate at 4096 here would let a caller ask for 50K, clear the pre-flight check on a
-  // 4096-sized hold, and drive settlement past their balance or their org member cap.
-  it('estimates from an explicit budget when it is above the historical basis', async () => {
+  // An explicit budget above the historical basis raises the hold, but only up to the
+  // reservation ceiling: a caller asking for 50K would otherwise be gated on a cost the turn
+  // will not incur. Overshooting that ceiling settles as a shortfall debit, and the org member
+  // cap - which has no settlement counterpart - is gated on the unshrunk ceiling instead.
+  it('estimates from an explicit budget above the basis, clamped to the reservation ceiling', async () => {
     availableModels = [ADAPTIVE_MODEL];
     const { db } = buildDb();
 
     await executeCompletion({ ...baseParams, model: 'adaptive-model', db, options: { maxTokens: 50_000 } });
 
-    expect(vi.mocked(getTextModelCost).mock.calls[0]?.[2]).toBe(50_000);
+    expect(vi.mocked(getTextModelCost).mock.calls[0]?.[2]).toBe(PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS);
   });
 
   /**

@@ -62,6 +62,7 @@ const h = vi.hoisted(() => {
     resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
     sendToQueue: vi.fn(),
     fabFileUpdate: vi.fn(async () => null),
+    markConvergencePaused: vi.fn(async () => undefined),
   };
 });
 
@@ -78,6 +79,7 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
+    markConvergencePaused: h.markConvergencePaused,
   },
   // Deps for the convergence kill switch (#1676), built eagerly on every message. Never exercised
   // by these user-origin payloads (origin absent -> user work short-circuits before any read), but
@@ -802,27 +804,26 @@ describe('fabFileChunk handler - convergence kill switch', () => {
   // Without this the file sits at chunkCount:0 with no error - a shape indistinguishable from an
   // image or a pending upload, which is how QA's stranded document fell out of health's denominator,
   // out of the convergence plan and past the retrieval withhold all at once.
-  // The marker and the clear of the pending-rebuild stamp go in ONE `$set` (#1939), so the file can
-  // never be both "rebuilding, returns on its own" and "halted, needs an administrator" - and so the
-  // rebuild door's stale-pending arm does not offer a second repair for a file its paused arm
-  // already selects.
-  it('upgrades the pending-rebuild stamp to the paused marker in a single write', async () => {
+  //
+  // Delegated to `markConvergencePaused` rather than written inline, because WHICH chunk-arm reason
+  // is right depends on `chunkRebuildRequestedAt`, which the same write clears - so the choice, the
+  // clear and the redelivery guard all have to happen in one statement. That is only observable
+  // against a real server; see FabFileModel.markConvergencePaused.test.ts. All this pins is that the
+  // handler routes through it, and passes the file it was handed.
+  it('marks the file paused through the repository method that decides the reason', async () => {
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).toHaveBeenCalledWith({
-      id: 'ff1',
-      chunkStallReason: 'rechunkPaused',
-      chunkRebuildRequestedAt: null,
-    });
+    expect(h.markConvergencePaused).toHaveBeenCalledWith('ff1');
+    expect(h.fabFileUpdate).not.toHaveBeenCalled();
   });
 
   // A transient failure must not cost the marker, so the write is retried in-process before the
   // delivery is failed. This pins that the retry is what handles the realistic case.
   it('retries the marker write and acks once it succeeds', async () => {
-    h.fabFileUpdate.mockRejectedValueOnce(new Error('pool timeout')).mockResolvedValueOnce(undefined);
+    h.markConvergencePaused.mockRejectedValueOnce(new Error('pool timeout')).mockResolvedValueOnce(undefined);
 
     await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).resolves.toBeUndefined();
-    expect(h.fabFileUpdate).toHaveBeenCalledTimes(2);
+    expect(h.markConvergencePaused).toHaveBeenCalledTimes(2);
     expect(mockLogger.error).not.toHaveBeenCalled();
   });
 
@@ -834,7 +835,7 @@ describe('fabFileChunk handler - convergence kill switch', () => {
   // worse. A redelivery is also idempotent here: this branch has done nothing destructive, and if the
   // switch has since gone off the redelivery rebuilds the file for real.
   it('fails the delivery when the marker write keeps failing, so SQS retries instead of stranding it', async () => {
-    h.fabFileUpdate.mockRejectedValue(new Error('mongo down'));
+    h.markConvergencePaused.mockRejectedValue(new Error('mongo down'));
 
     await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).rejects.toThrow('mongo down');
     expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('could not mark ff1'));
@@ -849,7 +850,7 @@ describe('fabFileChunk handler - convergence kill switch', () => {
 
     await dispatch(makeEvent({ fabFileId: 'ff1', userId: 'u1' }), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ chunkStallReason: 'rechunkPaused' }));
+    expect(h.markConvergencePaused).not.toHaveBeenCalled();
   });
 });
 

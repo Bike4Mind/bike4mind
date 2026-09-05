@@ -48,6 +48,25 @@ describe('validateChatInput', () => {
       const result = validateChatInput({ ...baseParams, maxInputTokens: 0 });
       expect(result).not.toMatch(/exceeds maximum/i);
     });
+
+    // A pin that outlived its model reads as "you didn't pick one", which sends the user to a picker
+    // that already looks fine and hides the fact that the id has to be REPLACED. The catalog is known
+    // loaded here - the accessibleModels branch above already rejected an empty one - so an id that
+    // yields no context window is genuinely gone, not still in flight.
+    it('names the model when the selected one is no longer in the catalog', () => {
+      const result = validateChatInput({
+        ...baseParams,
+        maxInputTokens: 0,
+        selectedModel: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+      });
+      expect(result).toMatch(/us\.anthropic\.claude-sonnet-4-5-20250929-v1:0/);
+      expect(result).toMatch(/no longer available/i);
+    });
+
+    it('still says "no model selected" when nothing is selected at all', () => {
+      const result = validateChatInput({ ...baseParams, maxInputTokens: 0, selectedModel: '' });
+      expect(result).toMatch(/no ai model selected/i);
+    });
   });
 
   describe('input length check', () => {

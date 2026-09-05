@@ -1,4 +1,5 @@
 import { type ChunkStallReason } from '../../constants/chunking';
+import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 
@@ -1097,6 +1098,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     Array<{
       fabFileId: string;
       fileName?: string;
+      // Byte size, for the duplicate-members check: a same-fileName pair with differing size is
+      // confirmed to differ in content (a same-length substitution can still hide behind equal
+      // size, so equality is evidence, not proof).
+      fileSize: number | null;
+      // Server-verified content hash, for the same check: a same-fileName pair with matching hashes
+      // is confirmed IDENTICAL, and with differing hashes is confirmed to differ - proof `fileSize`
+      // alone cannot offer either direction of.
+      serverTextHash: string | null;
       chunkCount: number;
       // vectorizedChunkCount + error drive the in-flight vs settled decision in the pure evaluator;
       // omitting them here would silently disable that gate (rows arrive without them -> treated as
@@ -1114,6 +1123,35 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;
       embeddedCharCount: number | null;
+    }>
+  >;
+  /**
+   * Per-member MEMBERSHIP facts (#2245): who is in this lake, by which arm, and what identifies them.
+   *
+   * A third read rather than an extension of `findDataLakeHealthMembers`, for the same reason
+   * convergence has its own: it asks a different question and so admits a different population.
+   * Health excludes chunkless members because they carry no retrievable content; membership must
+   * KEEP them - a chunkless copy of a document is exactly the duplicate an owner wants removed, and
+   * excluding it would report the lake as clean.
+   *
+   * `arm` is computed in the pipeline rather than by shipping the whole `tags` array, which on a
+   * large lake is the bulk of the payload and is not otherwise needed.
+   *
+   * `limit` fetches one extra row so the caller can detect overflow instead of silently truncating.
+   */
+  findDataLakeMembershipMembers(
+    scope: DataLakeMembershipScope,
+    limit?: number
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      fileName?: string;
+      // Tri-state is preserved deliberately: `null` ("chunked, no extractable text") must not be
+      // confused with an absent hash, and NEITHER proves identity. See isFingerprint.
+      serverTextHash: string | null;
+      fileSize: number | null;
+      createdAt: Date | null;
+      arm: MembershipArm;
     }>
   >;
   /**
@@ -1225,6 +1263,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * back in for a file the rescue sweep has written off.
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  /**
+   * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
+   * chunkless reasons by whether a producer actually removed its passages, and clearing the
+   * pending-rebuild stamp in the SAME write so the file is never both paused and pending.
+   *
+   * A dedicated method rather than an `update` from the caller because the reason to write depends on
+   * a field the same statement clears - see the implementation for why that has to be one statement
+   * and why it has to be idempotent.
+   */
+  markConvergencePaused(id: string): Promise<void>;
   /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell

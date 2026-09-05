@@ -128,8 +128,9 @@ export const satisfiesMembershipScope = (
   // `scope.kind === 'registry'` branch; `prefixArmTagNames` applies the same reserved/empty-prefix
   // drop that branch sits behind.
   if (scope.kind === 'registry') return prefixArmTagNames(tagNames, scope.fileTagPrefix).length > 0;
-  // Fails closed to the meta arm alone when there is no creator to anchor the prefix arm to,
-  // matching buildDataLakeMembershipFilter's `!scope.creatorUserId` branch.
+  // Fails closed to the meta arm alone when there is no creator to anchor the prefix arm to. That
+  // decision now lives in `effectiveTagPrefixArm`, which buildDataLakeMembershipFilter defers to
+  // rather than testing the creator itself.
   if (!scope.creatorUserId || file.userId !== scope.creatorUserId) return false;
   return prefixArmTagNames(tagNames, scope.fileTagPrefix).length > 0;
 };

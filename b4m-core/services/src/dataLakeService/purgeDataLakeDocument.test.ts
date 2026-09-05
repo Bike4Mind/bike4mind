@@ -438,6 +438,57 @@ describe('purgeDataLakeDocument', () => {
     expect(receipt.storageObjectDeleted).toBe(true);
   });
 
+  it('attempts the current filePath LAST, after every prior version key', async () => {
+    // Ordering is what makes the guard below possible: the kept row is addressed by the current
+    // key, so it must not be gone before the sweep knows every other key cleared.
+    const db = makeDb({
+      filePath: 'uploads/q3-v3.pdf',
+      versions: [
+        { version: 1, filePath: 'uploads/q3.pdf' },
+        { version: 2, filePath: 'uploads/q3-v2.pdf' },
+      ],
+    });
+    const storage = makeStorage();
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(storage.delete.mock.calls.map(c => c[0])).toEqual([
+      'uploads/q3.pdf',
+      'uploads/q3-v2.pdf',
+      'uploads/q3-v3.pdf',
+    ]);
+  });
+
+  it('leaves the current object alone when a version key fails, so the kept row stays addressable', async () => {
+    // The partial outcome this exists to prevent: current key deleted, an older version refused.
+    // The sweep deliberately keeps the row for a retry, but a row naming an object that no longer
+    // exists presigns a dead key on download and cannot refetch its bytes to re-chunk.
+    const db = makeDb({
+      filePath: 'uploads/q3-v2.pdf',
+      fileSize: 27707,
+      versions: [{ version: 1, filePath: 'uploads/q3.pdf' }],
+    });
+    const storage = {
+      delete: vi.fn(async (path: string) =>
+        path === 'uploads/q3.pdf' ? Promise.reject(new Error('s3 down')) : ({} as never)
+      ),
+    };
+    const logger = { info: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage, logger });
+
+    // Never attempted, rather than attempted and failed.
+    expect(storage.delete.mock.calls.map(c => c[0])).toEqual(['uploads/q3.pdf']);
+    expect(receipt.storageObjectDeleted).toBe(false);
+    // Counted as unreached, so the number keeps meaning "objects still stored": both remain.
+    expect(receipt.storageObjectsRemaining).toBe(2);
+    expect(receipt.storageObjectsTotal).toBe(2);
+    // And the row survives, still naming a key that resolves.
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(receipt.documentDeleted).toBe(false);
+    expect(receipt.verified).toBe(false);
+  });
+
   it('withholds the refund when a concurrent purge removed the row first', async () => {
     // Deleting an already-absent object key succeeds, so without the atomic claim both callers
     // would refund the same bytes and halve the owner's recorded storage.
@@ -452,19 +503,83 @@ describe('purgeDataLakeDocument', () => {
     expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
   });
 
+  // These three pin `ownerUserId` to the FILE's owner, not the lake's creator - the two are given
+  // deliberately different values (a grant-based owner purging a file owned by someone else) so a
+  // regression that hands over `lake.createdByUserId` instead would fail loudly rather than passing
+  // by coincidence.
+  const FILE_OWNER_ID = 'file-owner-1';
+  const grantBasedOwnerDb = (fileOverrides: Record<string, unknown> = {}) => {
+    const db = makeDb({ userId: FILE_OWNER_ID, ...fileOverrides });
+    db.dataLakeAccessGrants.listByLake = vi.fn(async () => [
+      { principalType: 'user', principalId: FILE_OWNER_ID, role: 'owner' },
+    ]) as never;
+    return db;
+  };
+  const GRANT_BASED_OWNER = { userId: FILE_OWNER_ID, isAdmin: false };
+
   it('shreds the facts extracted from the document, only once the destruction converged', async () => {
     const shredDocumentMemory = vi.fn(async () => {});
 
-    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
-      db: makeDb(),
+    await purgeDataLakeDocument(GRANT_BASED_OWNER, 'lake-1', 'file-1', {
+      db: grantBasedOwnerDb(),
       storage: makeStorage(),
       shredDocumentMemory,
     });
 
     expect(shredDocumentMemory).toHaveBeenCalledWith({
-      datalakeTag: 'datalake:sales',
-      ownerUserId: 'owner-1',
+      tagNames: ['datalake:sales'],
       fabFileId: 'file-1',
+      ownerUserId: FILE_OWNER_ID,
+      purgingLake: { id: 'lake-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
+    });
+  });
+
+  it('passes every lake tag the document carried, not only the purging lake, so the host can fan the shred out', async () => {
+    // A file in two lakes has beliefs on both ledgers under the same fabFileId (extraction runs
+    // per lake). The service cannot resolve a tag to a lake itself, so it hands the host every tag
+    // the row carried and leaves the fan-out to it.
+    const db = grantBasedOwnerDb({
+      tags: [
+        { name: 'datalake:sales', strength: 1 },
+        { name: 'datalake:marketing', strength: 1 },
+      ],
+    });
+    const shredDocumentMemory = vi.fn(async () => {});
+
+    await purgeDataLakeDocument(GRANT_BASED_OWNER, 'lake-1', 'file-1', {
+      db,
+      storage: makeStorage(),
+      shredDocumentMemory,
+    });
+
+    expect(shredDocumentMemory).toHaveBeenCalledWith({
+      tagNames: ['datalake:sales', 'datalake:marketing'],
+      fabFileId: 'file-1',
+      ownerUserId: FILE_OWNER_ID,
+      purgingLake: { id: 'lake-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
+    });
+  });
+
+  it('shreds the purging lake even when the file is a prefix-arm-only member with no datalake:* tag', async () => {
+    // Lake membership has two arms (see lakeMembershipSignals): a file the lake's creator owns that
+    // carries only a prefixed tag (usable prefixes end with ':', per normalizeTagPrefix) is a full
+    // member with no `datalake:*` tag at all. Deriving the shred set from `file.tags` alone would
+    // shred nothing on the very lake the purge ran through - the direct `purgingLake` handoff below
+    // is what covers it instead.
+    // Ownership can't be varied here the way the other two cases are: the prefix arm's own
+    // membership test (`ownsFile` in lakeMembershipSignals) requires file.userId === lake.createdByUserId,
+    // so this file is necessarily owned by the lake's creator.
+    const db = makeDb({ tags: [{ name: 'sales:q3', strength: 1 }] });
+    db.dataLakes.findById = vi.fn(async () => ({ ...LAKE, fileTagPrefix: 'sales:' }) as never);
+    const shredDocumentMemory = vi.fn(async () => {});
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), shredDocumentMemory });
+
+    expect(shredDocumentMemory).toHaveBeenCalledWith({
+      tagNames: ['sales:q3'],
+      fabFileId: 'file-1',
+      ownerUserId: 'owner-1',
+      purgingLake: { id: 'lake-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
     });
   });
 
