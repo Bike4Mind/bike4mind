@@ -283,6 +283,13 @@ describe('public settings projection (M2.5 security boundary)', () => {
       expect(redactSettingSecrets({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe('');
     });
 
+    it('masks a settingName absent from settingsMap instead of returning it in cleartext (fail closed)', () => {
+      const secret = 'sk-live-orphaned-credential-tail';
+      const redacted = redactSettingSecrets({ settingName: 'someRemovedOrRenamedKey', settingValue: secret });
+      expect(redacted.settingValue).not.toBe(secret);
+      expect(redacted.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
+    });
+
     it('every isSensitive setting is a plain free-text string setting', () => {
       // The whole mask/preserve protocol assumes a string. A sensitive setting that is a
       // number, boolean, object, or a string with `options` breaks three ways at once: it
@@ -335,6 +342,14 @@ describe('public settings projection (M2.5 security boundary)', () => {
     it('passes a non-sensitive setting through untouched', () => {
       const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
       expect(redactSettingSecretsForBroadcast(setting)).toEqual(setting);
+    });
+
+    it('masks a settingName absent from settingsMap instead of broadcasting it in cleartext (fail closed)', () => {
+      const redacted = redactSettingSecretsForBroadcast({
+        settingName: 'someRemovedOrRenamedKey',
+        settingValue: 'a'.repeat(32) + ':' + 'b'.repeat(32) + ':deadbeef',
+      });
+      expect(redacted.settingValue).toBe(SENSITIVE_SETTING_MASK);
     });
   });
 });

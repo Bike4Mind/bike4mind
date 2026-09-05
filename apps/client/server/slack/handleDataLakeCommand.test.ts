@@ -21,7 +21,8 @@ vi.mock('./dataLakeLinkIngest', () => ({ ingestSlackLinkIntoLake }));
 import { handleDataLakeCommand, runDataLakeSlackCommand, formatIngestOutcome } from './handleDataLakeCommand';
 
 const actor = { id: 'u1', isAdmin: false };
-const ingestDeps = { dataLakes: {} } as never;
+const dataLakeAccessGrants = { listByLake: vi.fn(), listActiveByLakes: vi.fn(), listByPrincipal: vi.fn() };
+const ingestDeps = { dataLakes: {}, dataLakeAccessGrants } as never;
 
 const baseParams = (overrides: Record<string, unknown> = {}) => ({
   command: '@datalake help',
@@ -114,6 +115,32 @@ describe('handleDataLakeCommand', () => {
         );
       });
 
+      it('threads the grants repository, so a grant-held lake is reachable and labelled', async () => {
+        listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
+
+        await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        // Both of listDataLakes' grant reads degrade to empty when the repo is absent, so without it
+        // a curator-granted or transferred lake neither enters the row set nor earns a manage label -
+        // and `add`, which does resolve grants, accepts it. That disagreement is #2034.
+        expect(listDataLakes).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ db: expect.objectContaining({ dataLakeAccessGrants }) })
+        );
+      });
+
+      it('passes NO settings adapter, which would admit reader grants a write gate refuses', async () => {
+        listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
+
+        await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        // The settings repo is the read-grant cutover flag, which admits READER and org-principal
+        // grants into the list. A reader cannot write, so passing it would advertise lakes `add`
+        // then refuses - #2022 in a new place. Absent, resolveEnforceReadGrants returns false.
+        const [, adapters] = listDataLakes.mock.calls[0] as [unknown, { db: Record<string, unknown> }];
+        expect(adapters.db).not.toHaveProperty('settings');
+      });
+
       it('resolves entitlement keys for an admin, since the row set is built from the non-admin arms', async () => {
         listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
 
@@ -182,6 +209,19 @@ describe('handleDataLakeCommand', () => {
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
         expect(reply).toContain('ours');
+      });
+
+      it('loses no row for an admin whose administeredOrgIds is empty', async () => {
+        // Deliberate composition of two suppressions: the query runs with isAdmin false, and an
+        // admin's administeredOrgIds is zeroed at the context builder, so canManageLake's platform,
+        // org-admin and org-grant rungs ALL miss and every org row arrives canManage:false. Only
+        // `isWritable` reading the unsuppressed ctx keeps the reply non-empty.
+        buildSlackAccessContext.mockResolvedValue({ ...adminCtx, administeredOrgIds: [] });
+        listDataLakes.mockResolvedValue([{ slug: 'ours', name: 'Ours', canManage: false, organizationId: 'org-a' }]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(printedSlugs(reply)).toEqual(['ours']);
       });
 
       it('prints one row per slug, naming the lake `add` would resolve', async () => {
@@ -345,12 +385,12 @@ describe('handleDataLakeCommand', () => {
       ingestSlackFilesIntoLake.mockResolvedValue({
         ok: false,
         reason: 'not_authorized',
-        message: 'You can only add files to a data lake you created.',
+        message: 'You do not have permission to add files to `ghost`.',
       });
 
       const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1' }] }));
 
-      expect(reply).toBe('You can only add files to a data lake you created.');
+      expect(reply).toBe('You do not have permission to add files to `ghost`.');
     });
 
     it('ingests BOTH when a message carries a file and a link, reporting each', async () => {

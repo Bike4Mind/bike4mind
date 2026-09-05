@@ -179,13 +179,17 @@ export function buildOwnershipConditions(
      *
      * A `registry` scope's prefix arm carries NO ownership conjunct (see
      * `buildDataLakeMembershipFilter`), so it is safe ONLY where access is gated upstream and the
-     * query covers ONE lake - today that is the single-lake browse (`data-lakes/[id]/articles.ts`,
-     * gated by `assertLakeAccess`). Never put one in a multi-lake retrieval query: an unanchored
-     * prefix arm beside other lakes' arms is the cross-tenant promotion the SCOPED/OPEN split
-     * forbids. `lakeMembershipsFrom` filters `registry` out for that reason, but it is NOT the only
-     * door - `knowledgeBaseCount` reads `ResolvedLakeAccess.membership` directly. What actually
-     * holds the invariant is that `membership` is only ever attached to dynamic lakes; the filter
-     * is the second guard, not the first.
+     * query covers ONE lake: today the single-lake browse (`data-lakes/[id]/articles.ts`, gated by
+     * `assertLakeAccess`) and `knowledgeBaseCount`'s per-lake count (one query per lake, gated by
+     * `resolveSessionLakeAccess`). Never put one in a MULTI-lake query: an unanchored prefix arm
+     * beside other lakes' arms is the cross-tenant promotion the SCOPED/OPEN split forbids.
+     *
+     * Every `ResolvedLakeAccess` now carries a scope, registry lakes included, so presence is no
+     * longer a proxy for "creator-anchored" and the `kind` discriminant is the only thing that
+     * decides. The two multi-lake fan-outs allow-list it: `lakeMembershipsFrom`
+     * (getDynamicDataLakeTags.ts) and `dynamicMembershipScopesFor` (server/dataLakes/index.ts).
+     * Any NEW multi-lake call site must go through one of them rather than mapping
+     * `lakes.map(l => l.membership)` itself.
      */
     lakeMemberships?: DataLakeMembershipScope[];
     /**

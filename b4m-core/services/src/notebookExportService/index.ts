@@ -11,7 +11,7 @@ import {
   NotebookExportError,
   CURRENT_EXPORT_VERSION,
 } from './types';
-import { isImageServeable } from '@bike4mind/common';
+import { dayjs, isImageServeable } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import type {
   IAgentDocument,
@@ -22,7 +22,11 @@ import type {
   IToolDocument,
 } from '@bike4mind/common';
 
+import { isObjectIdOrHexString } from 'mongoose';
 import { usableSessionIds } from '../utils/objectIds';
+
+/** Matches a bare "2026-01-15", as opposed to a full ISO datetime. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Mongo filter; stays loose because callers pass operator objects (`{ _id: { $in: [...] } }`). */
 type ExportQuery = Record<string, unknown>;
@@ -198,6 +202,25 @@ export class NotebookExportService {
         downloadUrl,
       };
     } catch (error) {
+      // Level chosen by code, not blanket `error`. A 5xx-level line is what trips the CloudWatch
+      // filter, so logging a caller condition here would page LiveOps even though the route
+      // answers 4xx - which is the whole fault this change exists to remove. This is the only
+      // line a rejection logs: the route rethrows to the caller without logging it again.
+      if (error instanceof NotebookExportError && error.statusCode < 500) {
+        // `reason` carries the offending ids: they live only in the message, and this is the sole
+        // line a rejection writes - the route answers the status without logging again.
+        this.adapters.logger.warn('Notebook export rejected', {
+          userId,
+          code: error.code,
+          status: error.statusCode,
+          reason: error.message,
+        });
+        throw error;
+      }
+
+      // Not de-duplicated, unlike the branch above: the route logs a genuine 500 again through the
+      // same logger. That feeds a fingerprint-deduplicating pipeline, so it costs one dropped queue
+      // message rather than a second page.
       this.adapters.logger.error('Notebook export failed', { userId, error });
 
       if (error instanceof NotebookExportError) {
@@ -213,17 +236,32 @@ export class NotebookExportService {
 
     // Filter by specific notebook IDs
     if (options.notebookIds && options.notebookIds.length > 0) {
+      // Rejected, never dropped: exporting fewer notebooks than were named, silently, is worse.
+      // Unreachable through the route, whose request schema rejects first; this guards any future
+      // caller of the exported service that has no schema in front of it.
+      const unusable = options.notebookIds.filter(id => !isObjectIdOrHexString(id));
+      if (unusable.length > 0) {
+        throw new NotebookExportError(
+          `notebookIds contains ids that cannot address a notebook: ${unusable.join(', ')}`,
+          'INVALID_NOTEBOOK_ID'
+        );
+      }
+
       query._id = { $in: options.notebookIds };
     }
 
-    // Date range filtering
+    // Date range filtering. A bare "2026-01-15" parses to that day's midnight, so an inclusive
+    // `$lte` on it would return nothing from the day the caller actually named. Reached by API
+    // callers, not the modal - that resolves the picked day in the viewer's zone before sending.
     if (options.fromDate || options.toDate) {
       query.lastUpdated = {};
       if (options.fromDate) {
         query.lastUpdated.$gte = new Date(options.fromDate);
       }
       if (options.toDate) {
-        query.lastUpdated.$lte = new Date(options.toDate);
+        query.lastUpdated.$lte = DATE_ONLY.test(options.toDate)
+          ? dayjs.utc(options.toDate).endOf('day').toDate()
+          : new Date(options.toDate);
       }
     }
 

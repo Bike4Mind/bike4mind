@@ -313,7 +313,9 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
       modelInferenceTime: { type: Number, required: false },
+      // Unset means nothing visible ever streamed - see PromptMetaPerformanceSchema.
       firstTokenTime: { type: Number, required: false },
+      firstChunkTime: { type: Number, required: false },
       // Posted back by the client after it renders the first token (quests/[id]/client-timing).
       clientFirstTokenTime: { type: Number, required: false },
       streamingPerformance: {
