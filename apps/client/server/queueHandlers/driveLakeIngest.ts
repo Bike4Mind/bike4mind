@@ -243,18 +243,17 @@ export function hasDriveFileChanged(
  */
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   let connectionId: string | undefined;
-  let claimed = false;
+  // The CAS token this run HOLDS for the connection's sync claim, or undefined while it holds none.
+  // Every acquisition path mints one and every renew rotates it, so holding a token IS holding the
+  // claim - which is what the catch below reads to decide whether releasing is ours to do. Distinct
+  // from `payload.claimToken`, which a continuation only PRESENTS to adopt with; that becomes ours
+  // only once adoptSyncClaim consumes it and hands back a rotated one.
+  let ingestClaimToken: string | undefined;
   try {
     const payload = Payload.parse(JSON.parse(event.Records[0].body));
     connectionId = payload.connectionId;
     const { redriveCount, resumeBatchId, slice } = payload;
     logger.updateMetadata({ handler: 'driveLakeIngest', connectionId });
-
-    // The CAS token this run currently holds for the chain, if any - reassigned to the freshly
-    // rotated value on a successful adopt, and again on every renewSyncClaim before a continuation
-    // is enqueued. See OrgGoogleDriveConnection.ingestClaimToken for why the batch id alone can't
-    // serve as this token.
-    let ingestClaimToken = payload.claimToken;
 
     // `?? ` alone is not enough: a non-finite reading is not nullish and every comparison against it
     // is false, which would disable the deadline guard silently rather than fall back to the budget.
@@ -296,6 +295,27 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await finalizeBatchIfComplete(settled ?? current, logger);
     };
 
+    /**
+     * End this run's claim: heal the connection back to 'connected' (or record why the sync stopped)
+     * and stamp lastPolledAt. Compare-and-set on the token this run holds, so a run that already lost
+     * the claim - to a stale-claim reclaim, or to a disconnect/reconnect landing mid-run - leaves the
+     * new owner alone instead of flipping a live ingest back to 'connected' for a poll to walk over.
+     * Losing it is an expected outcome, not a failure: the new owner releases when it finishes.
+     */
+    const releaseClaim = async (lastError: string | null) => {
+      if (!ingestClaimToken) return;
+      const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+        payload.connectionId,
+        ingestClaimToken,
+        lastError
+      );
+      if (!released) {
+        logger.warn('[driveLakeIngest] claim was taken away before release; leaving the new owner alone', {
+          connectionId,
+        });
+      }
+    };
+
     const connection = await orgGoogleDriveConnectionRepository.findById(connectionId);
     if (!connection) {
       logger.warn('[driveLakeIngest] connection not found; dropping', { connectionId });
@@ -314,20 +334,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // same already-consumed token) loses rather than racing this run. Falling back to a fresh claim
     // covers the one case where the chain's claim is genuinely gone: the previous slice threw,
     // released, and SQS redelivered its message.
-    claimed = false;
-    if (resumeBatchId && ingestClaimToken) {
-      const adopted = await orgGoogleDriveConnectionRepository.adoptSyncClaim(
-        connectionId,
-        resumeBatchId,
-        ingestClaimToken
-      );
-      if (adopted) {
-        claimed = true;
-        ingestClaimToken = adopted;
-      }
+    if (resumeBatchId && payload.claimToken) {
+      ingestClaimToken =
+        (await orgGoogleDriveConnectionRepository.adoptSyncClaim(connectionId, resumeBatchId, payload.claimToken)) ??
+        undefined;
     }
-    if (!claimed) claimed = await orgGoogleDriveConnectionRepository.claimForSync(connectionId);
-    if (!claimed) {
+    if (!ingestClaimToken) {
+      ingestClaimToken = (await orgGoogleDriveConnectionRepository.claimForSync(connectionId)) ?? undefined;
+    }
+    if (!ingestClaimToken) {
       // Someone else holds the claim. If a real ingest is in flight ('syncing'), DEFER this run by
       // re-enqueuing with a delay so a genuine second sync (new files added mid-run) isn't dropped -
       // bounded so it can't spin. If instead the connection is in an error state (claimForSync won't
@@ -368,20 +383,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Same reasoning as the connection-not-found exit above: a continuation reaching here still
       // owns an adopted batch that needs settling.
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-        status: 'connected',
-        lastPolledAt: new Date(),
-      });
+      await releaseClaim(null);
       return;
     }
     const user = await User.findById(connection.connectedBy);
     if (!user) {
       logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-        status: 'connected',
-        lastPolledAt: new Date(),
-      });
+      await releaseClaim(null);
       return;
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
@@ -739,11 +748,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // A folder that grew past the cap mid-chain still owes its adopted batch a settlement - the
       // same exit this cap refusal shares with the zero-candidate and admission-refusal returns below.
       if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-        status: 'connected',
-        lastPolledAt: new Date(),
-        lastError: `Folder has ${walkAndDiffSize} files (folder listing or connection's stored set), over the ${MAX_INGEST_CANDIDATES}-file limit for one sync. Split it into subfolders and connect them separately.`,
-      });
+      await releaseClaim(
+        `Folder has ${walkAndDiffSize} files (folder listing or connection's stored set), over the ${MAX_INGEST_CANDIDATES}-file limit for one sync. Split it into subfolders and connect them separately.`
+      );
       return;
     }
 
@@ -792,10 +799,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // A chain whose last slice happened to consume the remainder exactly lands here, with its
         // batch still open on the previous slice's plan. Settle it rather than leaving it processing.
         if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
-        await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-          status: 'connected',
-          lastPolledAt: new Date(),
-        });
+        await releaseClaim(null);
         return;
       }
 
@@ -830,11 +834,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // A lever flipped mid-chain refuses the remainder; the slices already ingested still have to
         // settle their shared batch rather than leave it processing.
         if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
-        await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-          status: 'connected',
-          lastPolledAt: new Date(),
-          lastError: admissionError.message,
-        });
+        await releaseClaim(admissionError.message);
         return;
       }
 
@@ -1016,12 +1016,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           ingestClaimToken
         );
         if (renewedToken) {
+          // The renew rotated the stored token, so the one this run was holding is no longer the claim.
+          // Adopt the rotated value BEFORE the enqueue can throw: the catch releases on whatever this
+          // holds, and releasing on a superseded token is a silent no-op that would strand the
+          // connection at 'syncing' with no continuation ever enqueued.
+          ingestClaimToken = renewedToken;
           await sendToQueue(Resource.driveLakeIngestQueue.url, {
             connectionId,
             resumeBatchId: batch.id,
             slice: slice + 1,
             claimToken: renewedToken,
           });
+          // Handed off: the continuation owns the claim from here, so a later throw (the `finally`
+          // below) must NOT release it out from under that slice.
+          ingestClaimToken = undefined;
           logger.info('[driveLakeIngest] out of time; enqueued continuation slice', {
             connectionId,
             batchId: batch.id,
@@ -1031,17 +1039,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           // Deliberately NOT releasing the claim, and NOT finalizing: the chain owns both until it ends.
           return;
         }
-        // The claim went while this slice ran (a stale-claim reclaim, a disconnect). Someone else owns
-        // the connection now: settle the batch, but touch NOTHING on the connection - healing it to
-        // 'connected' here would release a claim this run no longer holds.
+        // Either the claim went while this slice ran (a stale-claim reclaim, a disconnect), or this run
+        // still holds it but renewed a batch id the connection's pointer does not match - an adopt that
+        // won the claim and then could not adopt its batch plans a fresh one (see the warn above the
+        // batch resolution). Settle the batch and release: the release is a compare-and-set, so the
+        // genuine loser no-ops and logs, while the still-holding case heals the connection now instead
+        // of leaving it at 'syncing' until the chained-stale window reclaims it an hour later.
         logger.warn('[driveLakeIngest] lost the sync claim mid-slice; ending the chain', {
           connectionId,
           batchId: batch.id,
           slice,
           deferred,
         });
-        claimed = false;
         await settleChainedBatch(batch.id);
+        await releaseClaim(null);
+        ingestClaimToken = undefined;
         return;
       } else if (deferred > 0) {
         // Chain ceiling. Coverage is not lost - the files this chain uploaded stop being candidates
@@ -1063,14 +1075,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       if (adoptedBatch || deferred > 0) await settleChainedBatch(batch.id);
       else await finalizeBatchIfComplete(await dataLakeBatchRepository.findById(batch.id), logger);
 
-      // Releases the syncing claim (syncing -> connected).
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-        status: 'connected',
-        lastPolledAt: new Date(),
-        ...(deferred > 0 && {
-          lastError: `Sync stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files left. The next scheduled poll continues from here; split very large folders into subfolders to converge faster.`,
-        }),
-      });
+      await releaseClaim(
+        deferred > 0
+          ? `Sync stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files left. The next scheduled poll continues from here; split very large folders into subfolders to converge faster.`
+          : null
+      );
     } finally {
       await flushReclaimedStorage();
 
@@ -1096,16 +1105,25 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
   } catch (err) {
     // Release the syncing claim so a retry can re-run - guarded so it can't clobber a
-    // credential_error that getValidConnectionDriveAccessToken set underneath us. Carry the failure
-    // onto `lastError`: the release heals the status back to 'connected' and stamps lastPolledAt, so
-    // without this a deterministically-broken connection reads healthy and freshly-polled with no
-    // operator-visible sign that every sync is dying.
-    if (claimed && connectionId) {
-      await orgGoogleDriveConnectionRepository
-        .releaseSyncClaim(connectionId, err instanceof Error ? err.message : String(err))
-        .catch(e =>
-          logger.error(`[driveLakeIngest] failed to release sync claim: ${e instanceof Error ? e.message : String(e)}`)
-        );
+    // credential_error that getValidConnectionDriveAccessToken set underneath us, nor a claim this
+    // run already lost. Carry the failure onto `lastError`: the release heals the status back to
+    // 'connected' and stamps lastPolledAt, so without this a deterministically-broken connection
+    // reads healthy and freshly-polled with no operator-visible sign that every sync is dying.
+    if (ingestClaimToken && connectionId) {
+      const released = await orgGoogleDriveConnectionRepository
+        .releaseSyncClaim(connectionId, ingestClaimToken, err instanceof Error ? err.message : String(err))
+        .catch(e => {
+          logger.error(`[driveLakeIngest] failed to release sync claim: ${e instanceof Error ? e.message : String(e)}`);
+          return undefined;
+        });
+      // null (rather than undefined) is the CAS losing: the claim moved on while this run was failing,
+      // so both the release and the lastError belong to a run that no longer owns the connection.
+      // Worth a line either way - it separates "released" from "someone took it" in the logs.
+      if (released === null) {
+        logger.warn('[driveLakeIngest] claim was taken away before the failure release; left the new owner alone', {
+          connectionId,
+        });
+      }
     }
     if (err instanceof ZodError || err instanceof SyntaxError) {
       logger.warn(`Skipping drive-lake-ingest message: ${err instanceof Error ? err.message : String(err)}`);
