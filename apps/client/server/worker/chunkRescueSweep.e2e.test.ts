@@ -94,23 +94,27 @@ describe('runStrandedVectorizeRescue against real Mongo', () => {
     expect(sentIds()).toEqual([String(stranded._id)]);
   });
 
-  it('stamps convergence provenance only on files that belong to a batch', async () => {
+  it('sends every file unstamped, batch or not', async () => {
     const lone = await seed({ name: 'lone' });
     const batched = await seed({ name: 'batched', batchId: 'batch-1' });
 
     await expect(runStrandedVectorizeRescue(logger)).resolves.toBe(2);
 
-    // Batch files are convergence work the kill switch may halt; a lone rescue is not, and
-    // stamping it would make the switch stop it too. batchId survives the .select() projection.
+    // These files are already chunked, so the handler's halt branch runs ABOVE the already-chunked
+    // resume: a stamped message would mark a healthy file paused over its own committed passages.
+    // batchId survives the .select() projection, so a stamp-by-batch regression is visible here
+    // rather than only in the mocked twin. Must match the hosted sweep in dataLakeBatchReconcile.ts.
     expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
       fabFileId: String(batched._id),
       userId: String(userId),
-      origin: 'convergence',
     });
     expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
       fabFileId: String(lone._id),
       userId: String(userId),
     });
+    // Stated as an absence too, matching the hosted twin's own assertion, so re-adding the stamp
+    // cannot pass by widening one of the payloads above.
+    for (const [, msg] of h.sendToQueue.mock.calls) expect(msg).not.toHaveProperty('origin');
   });
 
   it('stays quiet when the collection holds nothing to rescue', async () => {
