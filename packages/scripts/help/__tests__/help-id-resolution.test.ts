@@ -5,7 +5,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { loadHelpArticles } from '../loadHelpArticles';
 import { chunkByHeadings, estimateTokenCount } from '../utils';
-import type { HelpIndex, HelpEmbeddingsIndex } from '../types';
+import type { HelpIndex, HelpEmbeddingsIndex, HelpAccessLevel } from '../types';
 import { ROUTE_HELP_SUGGESTIONS } from '../../../../apps/client/app/components/help/routeHelpSuggestions';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -170,6 +170,8 @@ describe('help id resolution', () => {
       slug: string;
       sectionPath: string;
       tokenCount: number;
+      title: string;
+      accessLevel: HelpAccessLevel;
     }
     const chunkKey = (chunk: { slug: string; sectionPath: string }): string => `${chunk.slug}::${chunk.sectionPath}`;
 
@@ -185,6 +187,12 @@ describe('help id resolution', () => {
           slug: entry.slug,
           sectionPath: section.sectionPath,
           tokenCount: estimateTokenCount(`# ${entry.title}\n\n${section.content}`),
+          // Read from the corpus rather than from `entry`: help-index.json and
+          // help-embeddings.json are generated from the same frontmatter, so comparing
+          // against docs-site catches both "index regenerated, embeddings not" and
+          // "neither regenerated". A title-less article is reported, not crashed on.
+          title: article.frontmatter.title ?? '<no frontmatter title>',
+          accessLevel: article.accessLevel,
         });
       }
     }
@@ -220,15 +228,57 @@ describe('help id resolution', () => {
     // Restricted to keys present on both sides - a missing/orphan key is already
     // reported above, and would otherwise show here too as a confusing
     // "committed=undefined" mismatch.
-    const embeddedTokenCountByKey = new Map(embeddings.chunks.map(chunk => [chunkKey(chunk), chunk.tokenCount]));
-    const tokenCountMismatches = derived
-      .filter(
-        chunk => embeddedKeys.has(chunkKey(chunk)) && embeddedTokenCountByKey.get(chunkKey(chunk)) !== chunk.tokenCount
-      )
-      .map(
-        chunk =>
-          `${chunkKey(chunk)}: committed=${embeddedTokenCountByKey.get(chunkKey(chunk))} derived=${chunk.tokenCount}`
-      )
+    const embeddedByKey = new Map(embeddings.chunks.map(chunk => [chunkKey(chunk), chunk]));
+    const comparable = derived
+      .filter(chunk => embeddedKeys.has(chunkKey(chunk)))
+      .map(chunk => ({ chunk, embedded: embeddedByKey.get(chunkKey(chunk))! }));
+
+    // `title` and `accessLevel` are article-level facts, so one drifted article would
+    // otherwise report once per chunk - 20 identical lines for the largest article today.
+    // Keyed by slug so each article is reported once.
+    const titleDriftBySlug = new Map<string, string>();
+    const accessLevelDriftBySlug = new Map<string, string>();
+    for (const { chunk, embedded } of comparable) {
+      if (embedded.title !== chunk.title) {
+        titleDriftBySlug.set(chunk.slug, `${chunk.slug}: committed="${embedded.title}" docs-site="${chunk.title}"`);
+      }
+      if (embedded.accessLevel !== chunk.accessLevel) {
+        accessLevelDriftBySlug.set(
+          chunk.slug,
+          `${chunk.slug}: committed=${embedded.accessLevel} docs-site=${chunk.accessLevel}`
+        );
+      }
+    }
+
+    // The key sets above cannot see a title rename: `chunkByHeadings` names each section
+    // after its H2, falling back to the article title only for an article with no H2 - and
+    // every article in the corpus has one. `retrieval.ts` writes the committed title
+    // straight into the Help AI chat context, so a stale one makes answers cite the old name.
+    const titleDrift = [...titleDriftBySlug.values()].sort();
+    expect(
+      titleDrift,
+      'help-embeddings.json holds an article title docs-site no longer uses. ' +
+        'Run `OPENAI_API_KEY=... pnpm --filter @bike4mind/scripts help:regenerate`.\n' +
+        titleDrift.join('\n')
+    ).toEqual([]);
+
+    // Worth asserting despite `accessLevel` being a function of the article's category:
+    // the vectorizer reads it from help-index.json, and `loadAccessLevelMap` falls back to
+    // 'public' for every chunk if that read fails (#2332) - which would publish the whole
+    // admin corpus. `retrieval.ts` filters on the committed value, so this is the
+    // authorization decision, and nothing else checks it.
+    const accessLevelDrift = [...accessLevelDriftBySlug.values()].sort();
+    expect(
+      accessLevelDrift,
+      'help-embeddings.json holds an accessLevel docs-site disagrees with - the Help AI chat ' +
+        'authorizes retrieval on this value. ' +
+        'Run `OPENAI_API_KEY=... pnpm --filter @bike4mind/scripts help:regenerate`.\n' +
+        accessLevelDrift.join('\n')
+    ).toEqual([]);
+
+    const tokenCountMismatches = comparable
+      .filter(({ chunk, embedded }) => embedded.tokenCount !== chunk.tokenCount)
+      .map(({ chunk, embedded }) => `${chunkKey(chunk)}: committed=${embedded.tokenCount} derived=${chunk.tokenCount}`)
       .sort();
 
     // Warn rather than fail: unlike the key sets above, this one is not clean on
