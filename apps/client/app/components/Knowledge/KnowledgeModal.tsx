@@ -1,4 +1,5 @@
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import {
@@ -349,7 +350,7 @@ const KnowledgeModal: React.FC = () => {
             // Also invalidate to ensure all components refresh
             queryClient.invalidateQueries({ queryKey: ['user'] });
             queryClient.invalidateQueries({ queryKey: ['system-prompt-files'] });
-            queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+            queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
           } catch (error) {
             console.error('Failed to add system file to user profile:', error);
             toast.error('File saved but failed to add to system prompts');
@@ -362,7 +363,7 @@ const KnowledgeModal: React.FC = () => {
         toast.success('File saved successfully');
       }
       setFilesMetaDataVersion(prevVersion => prevVersion + 1);
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
 
       if (projectId) {
         queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });

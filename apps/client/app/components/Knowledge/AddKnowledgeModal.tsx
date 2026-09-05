@@ -4,6 +4,7 @@ import FileUploadIcon from '@mui/icons-material/FileUpload';
 import KnowledgeModal from '@client/app/components/Knowledge/KnowledgeModal';
 import { IFabFileDocument, KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -79,7 +80,7 @@ const AddKnowledgeModal: React.FC<AddKnowledgeModalProps> = ({ open, onClose }) 
           fileSize: file.size,
         };
         const newFabFile = await createFabFileOnServerWithUpload(data, file);
-        queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
         setFabFile(newFabFile as IFabFileDocument);
         toast.success(`Uploaded: ${file.name}`);
       } catch (error) {

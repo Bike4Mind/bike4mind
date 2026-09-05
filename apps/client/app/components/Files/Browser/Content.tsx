@@ -9,6 +9,7 @@ import {
   usePaginatedSearchFabFiles,
   useSearchFabFiles,
 } from '@client/app/hooks/data/fabFiles';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
@@ -174,7 +175,7 @@ const FileBrowserContent = () => {
       if (msg.action !== 'update_file_chunk_vector_status') return;
 
       // Invalidate fabFiles queries to trigger a refetch and update the UI
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all, exact: false });
     });
 
     return () => {
@@ -189,7 +190,7 @@ const FileBrowserContent = () => {
     const unsubscribe = subscribeToAction('image_moderation_status', async msg => {
       if (msg.action !== 'image_moderation_status') return;
 
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all, exact: false });
     });
 
     return () => {

@@ -55,6 +55,7 @@ import { toast } from 'sonner';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useCurateNotebooks, useDownloadNotebooks, useSendNotebooksEmail } from '@client/app/hooks/data/notebooks';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import { CurationType, ExportFormat, CurationArtifactTypeSchema } from '@bike4mind/common';
@@ -249,7 +250,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
           }
 
           // Invalidate fabFiles queries to refresh file browser immediately
-          queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+          queryClient.invalidateQueries({ queryKey: fabFileKeys.all, exact: false });
         } else if (data.status === 'failed') {
           const sessionName = newSessions[sessionIndex].sessionName;
           const jobId = data.curationJobId;
