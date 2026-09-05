@@ -54,7 +54,14 @@ export function EmbeddingProviderLimits() {
   });
 
   const measuredTokens = data?.supported ? data.limits.limitTokens : null;
-  const suggestedTokens = measuredTokens ? Math.floor(measuredTokens * EMBEDDING_THROUGHPUT_SUGGESTED_SHARE) : null;
+  // A ceiling of 0 is a real provider answer - the snapshot contract reserves null for "did not
+  // say" - but every readout below either divides by it or formats a value derived from it, so 0 is
+  // excluded once here rather than at each use. The truthiness check this replaces left
+  // suggestedTokens null while the `!== null` render gate still opened, and formatNumber(null)
+  // throws on the way to the panel.
+  const tokenCeiling = measuredTokens !== null && measuredTokens > 0 ? measuredTokens : null;
+  const suggestedTokens =
+    tokenCeiling !== null ? Math.floor(tokenCeiling * EMBEDDING_THROUGHPUT_SUGGESTED_SHARE) : null;
 
   return (
     <Box sx={{ p: 2 }} data-testid="embedding-provider-limits">
@@ -124,16 +131,16 @@ export function EmbeddingProviderLimits() {
             </Chip>
           </Stack>
 
-          {measuredTokens !== null && Number.isFinite(configuredTokens) && (
+          {tokenCeiling !== null && suggestedTokens !== null && Number.isFinite(configuredTokens) && (
             <Typography level="body-sm" textColor="inherit" data-testid="embedding-limits-comparison">
               Embedding Max Tokens Per Minute is set to {formatNumber(configuredTokens)} -{' '}
-              {sharePercent(configuredTokens, measuredTokens)}% of measured capacity. Suggested:{' '}
-              <strong>{formatNumber(suggestedTokens as number)}</strong>, leaving the rest for
+              {sharePercent(configuredTokens, tokenCeiling)}% of measured capacity. Suggested:{' '}
+              <strong>{formatNumber(suggestedTokens)}</strong>, leaving the rest for
               query-side embedding, which shares this pool.
             </Typography>
           )}
 
-          {data.limits.limitRequests !== null && Number.isFinite(configuredCalls) && (
+          {data.limits.limitRequests !== null && data.limits.limitRequests > 0 && Number.isFinite(configuredCalls) && (
             <Typography level="body-sm" textColor="inherit" data-testid="embedding-limits-calls-comparison">
               Embedding Max Calls Per Minute is set to {formatNumber(configuredCalls)} -{' '}
               {sharePercent(configuredCalls, data.limits.limitRequests)}% of measured capacity.

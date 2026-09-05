@@ -2,9 +2,11 @@ import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@server/utils/errors';
+import { envKey } from '@bike4mind/auth/apiKeyService';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import {
+  ApiKeyScope,
   ModelBackend,
   parseEmbeddingRateLimitHeaders,
   hasUsableLimits,
@@ -56,6 +58,10 @@ const PROBE_INPUT = 'rate limit probe';
  * The PLATFORM embedding credentials: the admin setting, then the self-host env fallback. Mirrors
  * the tail of getEffectiveLLMApiKeys minus its personal-key arm, which is the part that would make
  * this reading describe the wrong account (see the call site).
+ *
+ * The env arms go through `envKey` rather than reading process.env directly, because that is where
+ * the B4M_SELF_HOST gate lives. Reading process.env here would have handed a cloud stage an
+ * environment credential the baseline it claims to mirror would never have used.
  */
 async function resolvePlatformEmbeddingKeys() {
   const [openaiSetting, voyageSetting, ollamaSetting] = await Promise.all([
@@ -63,15 +69,27 @@ async function resolvePlatformEmbeddingKeys() {
     adminSettingsRepository.getSettingsValue('voyageApiKey'),
     adminSettingsRepository.getSettingsValue('ollamaBackend'),
   ]);
-  const str = (value: unknown) => (typeof value === 'string' && value.trim() ? value : null);
+  // Returns the TRIMMED value, not the original: this previously tested trim-truthiness and then
+  // returned the untrimmed string, so a setting saved with surrounding whitespace reached the
+  // outbound Authorization header, which undici rejects outright.
+  const str = (value: unknown) => {
+    if (typeof value !== 'string') return null;
+    return value.trim() || null;
+  };
   return {
-    openai: str(openaiSetting) ?? str(process.env.OPENAI_API_KEY),
+    openai: str(openaiSetting) ?? envKey('OPENAI_API_KEY'),
     voyageai: str(voyageSetting),
-    ollama: str(ollamaSetting) ?? str(process.env.OLLAMA_BASE_URL),
+    ollama: str(ollamaSetting) ?? envKey('OLLAMA_BASE_URL'),
   };
 }
 
-const handler = baseApi().get(
+/**
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key before req.user
+ * is set, so a key issued for a narrow integration cannot spend the platform embedding credential
+ * on a billable probe just because its owner is an admin. JWT/browser callers still go through the
+ * isAdmin check below.
+ */
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
@@ -118,6 +136,19 @@ const handler = baseApi().get(
       } satisfies EmbeddingLimitsUnavailable);
     }
 
+    // The dispatch below is a binary, so without this arm a fifth backend would be probed at
+    // VoyageAI's endpoint with VoyageAI's key and the answer reported as its own ceiling.
+    // resolveEmbeddingConfig switches exhaustively, so a new backend fails the build there; this
+    // covers the runtime path that a non-exhaustive ternary leaves open.
+    if (provider !== ModelBackend.OpenAI && provider !== ModelBackend.VoyageAI) {
+      return res.json({
+        supported: false,
+        provider,
+        model,
+        reason: `Reading rate limits from ${provider} is not implemented.`,
+      } satisfies EmbeddingLimitsUnavailable);
+    }
+
     const isOpenAI = provider === ModelBackend.OpenAI;
     const url = isOpenAI ? 'https://api.openai.com/v1/embeddings' : 'https://api.voyageai.com/v1/embeddings';
     const apiKey = isOpenAI ? config.openaiApiKey : config.voyageApiKey;
@@ -133,12 +164,20 @@ const handler = baseApi().get(
     } catch (err) {
       // A failed probe is UNKNOWN, never "no limits" - reporting it as unsupported would let an
       // admin read a network blip as "this provider has no ceiling" and raise a lever on it.
-      logger?.warn(`[embedding-limits] probe to ${provider} failed`, err);
+      //
+      // The provider error text is deliberately NOT echoed to either sink. A credential carrying an
+      // interior control byte makes undici throw with the whole outbound header set inside its
+      // message, so err.message can contain `Bearer <key>` in full - and the contract at the top of
+      // this file is that no key material is ever returned. The error name plus the transport code
+      // is what an operator actually needs, and neither can carry the header.
+      const name = err instanceof Error ? err.name : 'UnknownError';
+      const code = (err as { cause?: { code?: string } } | null)?.cause?.code;
+      logger?.warn(`[embedding-limits] probe to ${provider} failed: ${name}${code ? ` (${code})` : ''}`);
       return res.json({
         supported: false,
         provider,
         model,
-        reason: `Could not reach ${provider}: ${err instanceof Error ? err.message : String(err)}`,
+        reason: `Could not reach ${provider}. This is unknown, not unlimited.`,
       } satisfies EmbeddingLimitsUnavailable);
     }
 

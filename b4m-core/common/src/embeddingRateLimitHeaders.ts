@@ -17,9 +17,11 @@ export interface EmbeddingRateLimitSnapshot {
   limitRequests: number | null;
   remainingTokens: number | null;
   remainingRequests: number | null;
-  /** Time until the token window resets, in ms. */
+  /** Time until the token window resets, in ms. A reset instant expressed as a delay, not a sleep
+   *  hint: 0 means the window has already rolled, where a `Retry-After` of 0 directs a caller to
+   *  retry now. Do not route these through `retryAfterHintOrNull` - it answers the other question. */
   resetTokensMs: number | null;
-  /** Time until the request window resets, in ms. */
+  /** Time until the request window resets, in ms. Same instant-not-delay reading as resetTokensMs. */
   resetRequestsMs: number | null;
 }
 
@@ -39,7 +41,11 @@ function getHeader(headers: HeadersLike, name: string): string | null {
 
 function parseCount(value: string | null): number | null {
   if (value === null) return null;
-  const parsed = Number(value.trim());
+  const trimmed = value.trim();
+  // Number('') is 0, so without this an empty header value would fabricate a ceiling of zero -
+  // precisely the "the provider said zero" answer the contract above promises never to invent.
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }
 

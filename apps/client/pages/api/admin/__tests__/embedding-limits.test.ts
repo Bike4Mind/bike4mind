@@ -105,8 +105,24 @@ describe('GET /api/admin/embedding-limits', () => {
     const body = res._getJSONData();
     expect(body.supported).toBe(false);
     expect(body.reason).toMatch(/Could not reach/);
-    expect(body.reason).toMatch(/ECONNRESET/);
+    expect(body.reason).toMatch(/unknown, not unlimited/);
     expect(body.limits).toBeUndefined();
+  });
+
+  it('never returns key material on the probe-failure path either', async () => {
+    // undici reports an unusable header value by putting the outbound header set into its message,
+    // so a key with an interior control byte makes err.message carry `Bearer <key>` in full.
+    // Forwarding the provider's error into `reason` therefore broke the rule the happy-path test
+    // above enforces - which is why the transport detail now goes only to the log.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new Error('Invalid header value: authorization: Bearer sk-live-secret-value'))
+    );
+    const res = await call();
+    const serialized = JSON.stringify(res._getJSONData());
+    expect(res._getJSONData().supported).toBe(false);
+    expect(serialized).not.toContain('sk-live-secret-value');
+    expect(serialized).not.toContain('Invalid header value');
   });
 
   it('reports an unexpected status rather than inventing limits', async () => {
@@ -141,10 +157,16 @@ describe('GET /api/admin/embedding-limits', () => {
       seen.push(key);
       return key === 'openaiDemoKey' ? 'sk-platform' : null;
     });
-    vi.stubGlobal('fetch', respondWith({ headers: OPENAI_HEADERS }));
+    const fetchSpy = respondWith({ headers: OPENAI_HEADERS });
+    vi.stubGlobal('fetch', fetchSpy);
 
     const res = await call();
 
+    // The name of this test is a claim about the outbound request, so it is asserted on the header
+    // actually sent. `seen` only proves the platform setting was READ; it would still pass if the
+    // probe went out under a different credential entirely.
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(fetchSpy.mock.calls[0][1].headers.authorization).toBe('Bearer sk-platform');
     expect(seen).toContain('openaiDemoKey');
     expect(res._getJSONData().supported).toBe(true);
   });

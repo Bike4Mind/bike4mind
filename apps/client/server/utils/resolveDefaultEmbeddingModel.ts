@@ -5,11 +5,13 @@ import type { Logger } from '@bike4mind/observability';
 /**
  * The platform's configured embedding model, as the FLAT admin setting.
  *
- * Deliberately not the same function as `lakeAdmissionGate`'s same-named helper: that one resolves
- * through `resolveScopedSetting`, so a lake- or org-scoped override can win. This is the platform
- * answer, which is what a caller wants when it is asking "what does this deployment embed with"
- * rather than "what does this lake embed with". Kept apart on purpose; converging them would
- * silently give one set of callers the other's semantics.
+ * Deliberately not the same function as `lakeAdmissionGate`'s same-named helper - but not because
+ * the answers differ. That one calls `resolveScopedSetting` with an EMPTY scope, which resolves to
+ * the platform value too (its own test: "returns the platform value with an empty scope"), so
+ * describing this as the un-scoped twin of a scoped resolver is wrong. What actually differs is
+ * shape: this returns a validated `SupportedEmbeddingModel` and falls back to ada-002 when the read
+ * throws, where that one returns a bare `string` through an injected `db` adapter. Converging them
+ * means choosing one caller's failure behaviour for both, which is the reason to leave them apart.
  *
  * Falls back to ada-002 rather than throwing: every caller needs SOME model to proceed, and a
  * misconfigured value is otherwise indistinguishable from an empty result. Both the unsupported
