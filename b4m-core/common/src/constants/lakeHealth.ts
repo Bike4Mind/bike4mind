@@ -1,4 +1,4 @@
-import type { LakeMembershipReport } from './lakeMembershipHealth';
+import type { WireLakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -529,7 +529,7 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    * which one is a product decision (#2245 says it supersedes the report-only half of #2239). Kept
    * side by side only so a merge did not silently delete either.
    */
-  membership: LakeMembershipReport;
+  membership: WireLakeMembershipReport;
   /**
    * Duplicate-fileName members (#2239). Report-only - see `findDuplicateMembers`. `groups` (and each
    * group's `members`) are capped for payload size by the caller; `memberCount`/`groupCount` on the

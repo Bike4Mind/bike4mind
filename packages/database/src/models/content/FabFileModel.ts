@@ -1510,6 +1510,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       serverTextHash: string | null;
       fileSize: number | null;
       createdAt: Date | null;
+      userId: string | null;
       arm: MembershipArm;
     }>
   > {
@@ -1539,6 +1540,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           serverTextHash: { $ifNull: ['$serverTextHash', null] },
           fileSize: { $ifNull: ['$fileSize', null] },
           createdAt: { $ifNull: ['$createdAt', null] },
+          // Neither arm carries an ownership conjunct for a registry lake, so a same-name group can
+          // span contributors. The repair arm gates deletion on that; without it here the payload
+          // cannot express the gate.
+          userId: { $ifNull: [{ $toString: '$userId' }, null] },
           // Which arm admitted this member. The meta-tag is authoritative when present; everything
           // else reaching this $match did so through the prefix arm.
           arm: {
