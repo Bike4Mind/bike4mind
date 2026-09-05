@@ -1001,6 +1001,37 @@ describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
     expect(toast.success).toHaveBeenCalledWith('Tags applied to 4 files');
   });
 
+  it('survives an old server that omits the fields and matched nothing', async () => {
+    // `filesUpdated: 0` is the one old-server shape where the `?? 0` defaulting is observable at
+    // all: without it, `unchanged === 0` is false against undefined, the first arm is skipped, and
+    // the next one formats undefined. The fixture above uses `filesUpdated: 4`, which takes the
+    // last arm and never touches either field.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
+  });
+
+  it('does not claim nothing matched when every emitted op lost its race', async () => {
+    // Files matched - all of them lost the CAS check. Gating only the first arm on `skipped` moves
+    // the false claim to the second one ("already up to date on 0 files"), so this pins the message
+    // rather than the arm.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith('3 files could not be updated - changed while applying.');
+  });
+
   it('says nothing matched rather than "applied to 0 files" when the batch produced no ops', async () => {
     // A batch where no file matches any accepted tag emits no ops and counts no `unchanged`, so the
     // old plain arm claimed an application that did not happen.

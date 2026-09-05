@@ -340,7 +340,11 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
+    // The cause clause is the half an operator reads: '1/2' alone survives a rewrite that drops it.
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('1/2'));
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('tags changed or file deleted since read')
+    );
     expect(adapters.metrics.recordTagsApplySkipped).toHaveBeenCalledWith(1);
     // Returned, not only logged: the caller has no other way to know the run was incomplete, and
     // the batch is 'applied' afterwards so there is no in-product retry.

@@ -673,9 +673,15 @@ export function useApplyTaxonomySuggestions(batchId: string) {
       const skipped = result.skipped ?? 0;
       const applied =
         result.filesUpdated === 0 && unchanged === 0
-          ? // Reachable: a batch where no file matches any accepted tag emits no ops and counts no
-            // `unchanged`. "Tags applied to 0 files" was the last arm claiming something happened.
-            'No files matched these tags'
+          ? skipped === 0
+            ? // Reachable: a batch where no file matches any accepted tag emits no ops and counts no
+              // `unchanged`. "Tags applied to 0 files" was the last arm claiming something happened.
+              'No files matched these tags'
+            : // Every op the batch emitted lost its CAS race. Files DID match, so "no files matched"
+              // contradicts the skipped clause below, and falling through to the next arm would say
+              // "already up to date on 0 files" instead - worse. That clause is the whole story
+              // here, so contribute no prefix to it.
+              ''
           : result.filesUpdated === 0
             ? `Tags already up to date on ${plural(unchanged)}`
             : unchanged > 0
@@ -686,8 +692,10 @@ export function useApplyTaxonomySuggestions(batchId: string) {
       // silently failed their CAS check. Warning rather than success, because nothing in the
       // product lets the user retry a batch once it is 'applied'.
       if (skipped > 0) {
-        toast.warning(`${applied}. ${plural(skipped)} could not be updated - changed while applying.`);
+        const detail = `${plural(skipped)} could not be updated - changed while applying.`;
+        toast.warning(applied ? `${applied}. ${detail}` : detail);
       } else {
+        // `applied` is only ever empty on the all-skipped arm above, which cannot reach here.
         toast.success(applied);
       }
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
