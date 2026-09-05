@@ -95,6 +95,7 @@ const ContextInspectorTab = dynamic(() => import('./ContextInspectorTab'), { ssr
 const RetrievalRateTab = dynamic(() => import('./RetrievalRateTab'), { ssr: false });
 const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
+const ApiKeyScopePreflightTab = dynamic(() => import('./ApiKeyScopePreflightTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const SreAgentTab = dynamic(() => import('./SreAgentTab'), { ssr: false });
 const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false });
@@ -586,6 +587,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.RateLimits}>{activeTab === AdminTab.RateLimits && <RateLimitsTab />}</TabPanel>
               <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
+              <TabPanel value={AdminTab.ApiKeyScopePreflight}>
+                {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.IntegrationHealth}>
                 {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}
               </TabPanel>

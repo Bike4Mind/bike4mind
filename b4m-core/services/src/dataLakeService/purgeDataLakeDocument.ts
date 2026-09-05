@@ -57,17 +57,35 @@ interface PurgeDataLakeDocumentAdapters {
    */
   storage: { delete: (path: string) => Promise<unknown> };
   /**
-   * Crypto-shred the facts this document contributed to the lake's memory ledger. Optional only
-   * because the service cannot reach the ledger repository itself; a host that leaves it unwired
-   * keeps recalling beliefs distilled from a document it told the owner was destroyed. Called once,
-   * after the destruction converged, with the lake principal the extractor wrote under.
+   * Crypto-shred the facts this document contributed to the memory ledger of EVERY lake it
+   * belonged to by EITHER membership arm - not just the lake the purge was authorized through.
+   * Extraction (`extractLakeMemory`) runs per lake, so a file belonging to two lakes produces
+   * beliefs on both ledgers under the same `fabFileId`; scoping the shred to one lake would leave
+   * the other lake folding and recalling beliefs sourced from a document it was told is gone.
+   * Optional only because the service cannot reach the ledger repository itself; a host that
+   * leaves it unwired keeps recalling those beliefs. Called once, after the destruction converged,
+   * with every tag the file carried (see `tagNames` below) plus the purging lake's own identity
+   * (`purgingLake`) - the host resolves the file's OTHER member lakes from the tags and shreds the
+   * purging lake directly. Unlike `onPurged`'s other-lakes stats rebuild, the purging lake is NOT
+   * excluded: that rebuild skips it because `recomputeLakeStats` already covered it directly, but
+   * nothing here does the purging lake's shred for it. A host that catches and logs per-lake (as
+   * the one wired host does) should say so on its own hook, since it changes the "a throw
+   * propagates" contract this adapter would otherwise imply.
    */
   shredDocumentMemory?: (args: {
-    datalakeTag: string;
-    /** The lake principal's owner - the lake's creator, matching the whole-lake shred. */
-    ownerUserId: string;
+    /** Every tag the file carried before deletion, unfiltered - the host resolves membership. */
+    tagNames: string[];
     /** The `sources` entry every extracted fact carries. */
     fabFileId: string;
+    /** The file's owner - needed to resolve the owner-anchored prefix membership arm. */
+    ownerUserId: string;
+    /**
+     * The lake this purge was authorized through, handed over directly rather than folded into
+     * `tagNames` for the host to resolve back: a prefix-arm member (see `lakeMembershipSignals`)
+     * carries no `datalake:*` tag for this lake at all, and resolving one back through a
+     * meta-tag lookup risks a case-sensitivity mismatch a direct handoff cannot have.
+     */
+    purgingLake: { id: string; datalakeTag: string; createdByUserId: string };
   }) => Promise<void>;
   /**
    * Called with the finished receipt BEFORE `onPurged`, so the durable record is filed while the
@@ -189,20 +207,26 @@ export const purgeDataLakeDocument = async (
   // `versions[]`, each under its own object key (see appendEditedVersion), and `filePath` names only
   // the newest - so deleting that alone leaves the original document's bytes behind while the
   // receipt claims the file is gone.
-  const storageKeys = Array.from(
-    new Set(
-      [file.filePath, ...(file.versions ?? []).map(version => version?.filePath)].filter(
-        (path): path is string => typeof path === 'string' && path.length > 0
-      )
-    )
-  );
+  //
+  // ORDER MATTERS: prior versions first, `filePath` LAST. When the sweep cannot clear every key it
+  // deliberately keeps the row so a retry can still name them, and that row is only useful while
+  // `filePath` still resolves - download presigns it and reprocess refetches the bytes through it.
+  // Deleting the current object while an older version survived would keep a row addressing an
+  // object that is gone, which is worse than keeping both.
+  const isStorageKey = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
+  const currentKey = isStorageKey(file.filePath) ? file.filePath : null;
+  const versionKeys = Array.from(
+    new Set((file.versions ?? []).map(version => version?.filePath).filter(isStorageKey))
+    // Deduped against the current key too: a version row may repeat it, and it must be attempted
+    // last, not at whichever position it first appears in `versions[]`.
+  ).filter(path => path !== currentKey);
 
   // BEFORE the chunks and the row: those two writes are the ones a retry cannot re-derive once
   // done (chunks feed the lake-health rollups, and the row is the only thing naming these keys).
   // If the object store refuses, nothing destructive has happened yet, so the document, its
   // chunks and its rollups stay consistent and a retry converges.
   const storageKeysUnreached: string[] = [];
-  for (const path of storageKeys) {
+  const deleteKey = async (path: string) => {
     try {
       await storage.delete(path);
     } catch (error) {
@@ -212,6 +236,25 @@ export const purgeDataLakeDocument = async (
         filePath: path,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
+    }
+  };
+
+  for (const path of versionKeys) {
+    await deleteKey(path);
+  }
+  if (currentKey) {
+    if (storageKeysUnreached.length > 0) {
+      // Not attempted, on purpose - see the ordering note above. Still counted as unreached so
+      // `storageObjectsRemaining` keeps meaning "objects still stored", which is what the receipt
+      // and its dialog copy report.
+      storageKeysUnreached.push(currentKey);
+      logger?.info('[dataLake] permanent deletion skipped the current object to keep the kept row addressable', {
+        fabFileId: file.id,
+        filePath: currentKey,
+        unreachedVersionKeys: storageKeysUnreached.length - 1,
+      });
+    } else {
+      await deleteKey(currentKey);
     }
   }
   const storageObjectDeleted = storageKeysUnreached.length === 0;
@@ -251,6 +294,10 @@ export const purgeDataLakeDocument = async (
   // to whoever (or whatever key) authorized the destruction, not filed as `system`.
   const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db, logger }, { actor });
 
+  // Captured once and shared by shredDocumentMemory and onPurged below: both need the tags the row
+  // carried pre-delete to resolve the file's OTHER member lakes.
+  const tagNames = (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string');
+
   const receipt: DataLakeDocumentPurgeReceipt = {
     dataLakeId: lake.id,
     datalakeTag: lake.datalakeTag,
@@ -261,7 +308,7 @@ export const purgeDataLakeDocument = async (
     embeddingModels,
     documentDeleted,
     storageObjectDeleted,
-    storageObjectsTotal: storageKeys.length,
+    storageObjectsTotal: versionKeys.length + (currentKey ? 1 : 0),
     storageObjectsRemaining: storageKeysUnreached.length,
     retrievalIndexOutcome: retrievalIndex ? 'purged' : vectorsCollocated ? 'collocated' : 'unwired',
     verified,
@@ -280,11 +327,12 @@ export const purgeDataLakeDocument = async (
 
   // Only once the document is genuinely gone: shredding the beliefs of a document that survived a
   // failed sweep would destroy recall for content still in the lake.
-  if (verified && lake.datalakeTag && lake.createdByUserId) {
+  if (verified) {
     await shredDocumentMemory?.({
-      datalakeTag: lake.datalakeTag,
-      ownerUserId: lake.createdByUserId,
+      tagNames,
       fabFileId: file.id,
+      ownerUserId: file.userId,
+      purgingLake: { id: lake.id, datalakeTag: lake.datalakeTag, createdByUserId: lake.createdByUserId },
     });
   }
 
@@ -294,7 +342,7 @@ export const purgeDataLakeDocument = async (
     // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
     // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.
     fileSize: deletedByThisCall && typeof file.fileSize === 'number' ? file.fileSize : 0,
-    tagNames: (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string'),
+    tagNames,
   });
 
   return receipt;

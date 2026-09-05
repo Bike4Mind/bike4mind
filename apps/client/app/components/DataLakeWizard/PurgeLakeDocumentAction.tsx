@@ -130,8 +130,11 @@ export default function PurgeLakeDocumentAction({
                 sx={{ mt: 0.5, color: 'warning.500' }}
               >
                 {receipt.storageObjectsRemaining} of {receipt.storageObjectsTotal} stored cop
-                {receipt.storageObjectsTotal === 1 ? 'y' : 'ies'} of this file could not be removed, so the document was
-                left intact rather than stranded. The failure has been recorded; retry, or contact support.
+                {receipt.storageObjectsTotal === 1 ? 'y' : 'ies'} of this file{' '}
+                {receipt.storageObjectsRemaining === 1 ? 'remains' : 'remain'}, so the document was left intact rather
+                than stranded. Once one copy cannot be removed the others are left in place deliberately, which keeps
+                this file openable until a retry clears them all. The failure has been recorded; retry, or contact
+                support.
               </Typography>
             )}
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.tertiary' }}>

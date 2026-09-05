@@ -144,6 +144,7 @@ const FULL_PROMPT_META = {
     contextRetrievalTime: 100,
     modelInferenceTime: 800,
     firstTokenTime: 200,
+    firstChunkTime: 120,
     clientFirstTokenTime: 250,
     streamingPerformance: { chunkCount: 10, totalStreamTime: 900, totalChars: 500, charsPerSecond: 555 },
     phases: { post_process: 10 },

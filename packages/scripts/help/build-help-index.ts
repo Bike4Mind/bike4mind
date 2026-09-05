@@ -114,7 +114,7 @@ function buildCategoryTree(entries: HelpIndexEntry[]): HelpCategory[] {
   }
 
   const sortCategories = (categories: HelpCategory[]): void => {
-    categories.sort((a, b) => a.sidebarPosition - b.sidebarPosition || a.name.localeCompare(b.name));
+    categories.sort((a, b) => a.sidebarPosition - b.sidebarPosition || compareStrings(a.name, b.name));
     for (const cat of categories) {
       cat.entries.sort(compareEntries);
       sortCategories(cat.subcategories);
@@ -124,6 +124,16 @@ function buildCategoryTree(entries: HelpIndexEntry[]): HelpCategory[] {
   sortCategories(rootCategories);
 
   return rootCategories;
+}
+
+/**
+ * Locale-independent string comparator. `localeCompare` orders by ICU collation, which
+ * varies by locale (and can reorder e.g. punctuation or case differently across
+ * machines) - the opposite of what a reproducible-build tie-break needs. Plain
+ * relational comparison orders by UTF-16 code unit, which is the same everywhere.
+ */
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
@@ -145,7 +155,7 @@ export function compareEntries(a: HelpIndexEntry, b: HelpIndexEntry): number {
   return (
     a.sidebarPosition - b.sidebarPosition ||
     a.slug.split('/').length - b.slug.split('/').length ||
-    a.slug.localeCompare(b.slug)
+    compareStrings(a.slug, b.slug)
   );
 }
 
@@ -161,7 +171,7 @@ export function computeVersion(entries: HelpIndexEntry[]): string {
 
 /** Sort entries and derive categories/version from them - the pure, testable core of the build. */
 export function buildIndexFromEntries(rawEntries: HelpIndexEntry[]): HelpIndex {
-  const entries = [...rawEntries].sort((a, b) => a.category.localeCompare(b.category) || compareEntries(a, b));
+  const entries = [...rawEntries].sort((a, b) => compareStrings(a.category, b.category) || compareEntries(a, b));
   const categories = buildCategoryTree(entries);
   return {
     entries,

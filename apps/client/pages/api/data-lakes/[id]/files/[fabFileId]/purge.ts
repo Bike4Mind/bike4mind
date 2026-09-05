@@ -25,8 +25,7 @@ import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
-import { shredMemoryFromSource } from '@server/memory/ledgerMemoryStore';
-import { memoryLedgerRepository } from '@bike4mind/database';
+import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
 
 /**
@@ -132,24 +131,19 @@ const handler = baseApi()
           );
         },
         // Facts the lake-memory extractor distilled from this document are stamped with its
-        // fabFileId in `sources` and keep reaching live system prompts through recallLakeMemory.
-        // The lake's DEK cannot be destroyed here - the lake's other documents need it - so the
-        // shred is scoped to this source instead. Without it a "permanently deleted" document keeps
-        // speaking through the beliefs it produced.
-        shredDocumentMemory: async ({ datalakeTag, ownerUserId, fabFileId: source }) => {
-          const shredded = await shredMemoryFromSource(
-            memoryLedgerRepository,
-            { kind: 'lake', id: datalakeTag },
-            ownerUserId,
-            source
-          );
-          // Logged for the same reason the whole-lake shred is: an unwired adapter and a document
-          // that produced no facts are otherwise indistinguishable from the outside.
-          req.logger.info('[lakeMemory] shredded the facts extracted from a purged lake document', {
-            datalakeTag,
-            fabFileId: source,
-            shredded,
-          });
+        // fabFileId in `sources` and keep reaching live system prompts through recallLakeMemory -
+        // on EVERY lake it belonged to by either membership arm, since extraction runs per lake.
+        // The lake's DEK cannot be destroyed here - each lake's other documents need it - so the
+        // shred is scoped to this source: `shredMemoryForLakeTags` resolves the file's other member
+        // lakes from its tags (both the meta-tag and the owner-anchored prefix arm) and shreds the
+        // purging lake directly from `purgingLake`. That inclusion is deliberate and NOT the same as
+        // the other-lakes stats rebuild below: the rebuild filters the purging lake out because
+        // recomputeLakeStats already covered it directly, but nothing shreds the purging lake's
+        // ledger unless it is handed over here. Without it a "permanently deleted" document keeps
+        // speaking through the beliefs it produced on any lake it belonged to, including the one
+        // the purge was authorized through.
+        shredDocumentMemory: async ({ tagNames, fabFileId: source, ownerUserId, purgingLake }) => {
+          await shredMemoryForLakeTags(tagNames, source, ownerUserId, purgingLake, { logger: req.logger });
         },
         onPurged: async ({ ownerUserId, fileSize, tagNames }) => {
           // Return the bytes, mirroring the +size that the upload event added. Every other

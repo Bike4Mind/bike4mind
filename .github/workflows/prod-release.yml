@@ -79,26 +79,32 @@ jobs:
 
       - name: Determine configuration
         id: config
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          AWS_PROD_ROLE_ARN: ${{ secrets.AWS_PROD_ROLE_ARN }}
+          AWS_DEV_ROLE_ARN: ${{ secrets.AWS_DEV_ROLE_ARN }}
+          APP_NAME: ${{ vars.SEED_APP_NAME || 'bike4mind' }}
         run: |
           # Determine stage based on event and branch
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
             # For workflow_run events, the branch is from the triggering workflow
             # Since we filter by prod branch, this should always be production
             echo "stage=production" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=${{ secrets.AWS_PROD_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
-          elif [ "${{ github.ref }}" = "refs/heads/prod" ]; then
+            echo "aws_role_arn=$AWS_PROD_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
+          elif [ "$REF" = "refs/heads/prod" ]; then
             echo "stage=production" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=${{ secrets.AWS_PROD_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
-          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "aws_role_arn=$AWS_PROD_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
+          elif [ "$REF" = "refs/heads/main" ]; then
             echo "stage=dev" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=${{ secrets.AWS_DEV_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
+            echo "aws_role_arn=$AWS_DEV_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
           else
             # For manual workflow_dispatch on other branches, use dev
             echo "stage=dev" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=${{ secrets.AWS_DEV_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
+            echo "aws_role_arn=$AWS_DEV_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
           fi
 
-          echo "app_name=${{ vars.SEED_APP_NAME || 'bike4mind' }}" | tee -a "$GITHUB_OUTPUT"
+          echo "app_name=$APP_NAME" | tee -a "$GITHUB_OUTPUT"
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -159,18 +165,22 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           # For workflow_run (auto), explicitly use 'prod'. For manual dispatch, use input (defaults to 'HEAD')
           TARGET_BRANCH: ${{ github.event_name == 'workflow_run' && 'prod' || github.event.inputs.target_branch || 'HEAD' }}
+          SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
-          pnpm sst shell --stage ${{ steps.config.outputs.stage }} --print-logs -- pnpm --filter @bike4mind/scripts create-prod-release --target-branch "$TARGET_BRANCH"
+          pnpm sst shell --stage "$SST_STAGE" --print-logs -- pnpm --filter @bike4mind/scripts create-prod-release --target-branch "$TARGET_BRANCH"
 
       - name: Summary
         if: success()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
           echo "✅ Production release created successfully!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
             echo "**Triggered by**: Deploy workflow completion" >> $GITHUB_STEP_SUMMARY
             echo "**Branch**: prod" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Triggered by**: Manual workflow dispatch" >> $GITHUB_STEP_SUMMARY
-            echo "**Stage**: ${{ steps.config.outputs.stage }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Stage**: $SST_STAGE" >> $GITHUB_STEP_SUMMARY
           fi

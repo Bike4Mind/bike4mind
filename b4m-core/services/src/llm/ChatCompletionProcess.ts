@@ -58,6 +58,7 @@ import {
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
+  reservationOutputTokens,
   LOW_CREDIT_ALERT_THRESHOLD,
   ITokenizer,
   getSettingsByNames,
@@ -79,6 +80,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   resolveOutputMaxTokens,
+  reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
   type ICompletionOptions,
@@ -93,6 +95,7 @@ import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
@@ -3354,7 +3357,16 @@ export class ChatCompletionProcess {
         // Atomic pre-reservation: reserve estimated credits BEFORE streaming begins
         // This prevents race conditions where concurrent requests overdraw the balance.
         // Pattern: bare $inc + check + rollback (consistent with cliCompletions.ts)
-        const usdCost = getTextModelCost(modelInfo, inputTokens, safeMaxTokens);
+        //
+        // Priced on a realistic output size, NOT safeMaxTokens: that is a ceiling the
+        // model usually stops far short of, and holding it would gate the turn on a cost
+        // it will not incur. See reservationOutputTokens for the under-reservation
+        // tradeoff this accepts; settlement below charges actual usage either way.
+        const usdCost = getTextModelCost(
+          modelInfo,
+          inputTokens,
+          reservationOutputTokens(safeMaxTokens, reasonsWithinOutputBudget(modelInfo))
+        );
         const requiredCredits = usdToCredits(usdCost);
 
         // Determine credit holder (user or org)
@@ -3371,7 +3383,14 @@ export class ChatCompletionProcess {
           // Enforce the per-member cap here, at pre-flight, before debiting the org pool.
           // Blocking must happen now: by settlement the reply has streamed and the balance
           // has moved, so a cap throw there can only sabotage usage tracking (#1536).
-          if (isMemberCreditCapExceeded(organization, this.user.id, requiredCredits)) {
+          // Priced on the unshrunk ceiling rather than the hold: this gate has no
+          // settlement counterpart (see memberCreditCap.ts), so an under-estimate lets a
+          // member blow past the cap in one turn with nothing left to catch it. Still not
+          // an upper bound on the turn - it prices one round at the uncached input rate on
+          // the primary model, so a tool loop, a cache-write turn, or a fallback hop onto
+          // pricier pricing can each settle above it.
+          const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens));
+          if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
                 used: getMemberUsedCredits(organization, this.user.id),
@@ -3548,6 +3567,31 @@ export class ChatCompletionProcess {
       // Add timing logs
       const streamStartTime = Date.now();
       let chunkCount = 0;
+
+      /**
+       * Wipe everything that describes a single streaming attempt, so a retry starts clean.
+       *
+       * The timings reset with the rest of it because a retry discards the reply the user was
+       * shown, and `promptMeta.model` is relabelled to whichever model finally answers. Keeping
+       * a first attempt's fast TTFVT would attribute it to the model that replaced it - the row
+       * would claim sub-second on a turn the user watched freeze.
+       *
+       * Scope, and it is not uniform: `streamStartTime` is declared outside the retry loop, so
+       * `streamingPerformance.totalStreamTime` spans every attempt - but `chunkCount` and `replies`
+       * are reset here, so `totalChars` and `chunkCount` describe the last attempt only, and
+       * `charsPerSecond` divides one by the other and understates on any retried turn. The resets
+       * are what let a retry restart cleanly and are deliberately kept; the TTFVT pair is
+       * per-attempt by design.
+       */
+      const resetStreamStateForRetry = () => {
+        for (const key of Object.keys(replies)) {
+          replies[parseInt(key)] = '';
+        }
+        quest.replies = [];
+        chunkCount = 0;
+        quest.promptMeta!.performance!.firstChunkTime = undefined;
+        quest.promptMeta!.performance!.firstTokenTime = undefined;
+      };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
@@ -3880,13 +3924,14 @@ export class ChatCompletionProcess {
                     });
                   }
                 );
-                // Clear the interval on first response and calculate TTFVT
+                // First chunk of ANY kind, hidden reasoning included, so this is explicitly
+                // not the user-visible latency - a thinking-first turn stamps this while the
+                // transcript is still empty. TTFVT is stamped further down, off the
+                // accumulated reply.
                 if (streamedTexts.some(text => text != null && text.trim().length > 0)) {
-                  // Capture TTFVT on first non-empty chunk (regardless of chunk number)
-                  if (!quest.promptMeta!.performance!.firstTokenTime) {
+                  if (!quest.promptMeta!.performance!.firstChunkTime) {
                     const timeToFirstChunk = Date.now() - streamStartTime;
-                    const ttfvt = Date.now() - processStartTime; // Time to First Visible Token
-                    quest.promptMeta!.performance!.firstTokenTime = ttfvt;
+                    quest.promptMeta!.performance!.firstChunkTime = Date.now() - processStartTime;
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
@@ -3959,30 +4004,41 @@ export class ChatCompletionProcess {
                   // Note: 'enhance' mode would be more complex and could be implemented later
                 }
 
-                await Promise.all(
-                  streamedTexts.map(async (text, index) => {
-                    if (!text) return;
+                streamedTexts.forEach((text, index) => {
+                  if (!text) return;
+                  appendStreamedChunk(replies, text, index, transitionMode);
+                  quest.replies = Object.values(replies);
+                  // Send message to the client for each received streamed message
+                  smartSend();
+                });
 
-                    // In append mode, always append to replies[0] regardless of stream index
-                    if (transitionMode === 'append') {
-                      replies[0] ??= '';
-                      replies[0] += text;
-                    } else {
-                      replies[index] ??= '';
-                      // If the last character is </think> which indicates the end of a thinking reply, append the text to the next reply
-                      // This happens when thinking models use other tools which causes the index to reset.
-                      if (replies[index].endsWith('</think>')) {
-                        replies[index + 1] ??= '';
-                        replies[index + 1] += text;
-                      } else {
-                        replies[index] += text;
-                      }
-                    }
-                    quest.replies = Object.values(replies);
-                    // Send message to the client for each received streamed message
-                    smartSend();
-                  })
-                );
+                // Time To First Visible Token: stamped off the ACCUMULATED reply, not the raw
+                // chunk, for two reasons. Hidden reasoning and the answer that follows it can
+                // land in a single chunk (kimiBackend and xaiBackend both prepend the close
+                // marker to real text), so only the accumulated slots say what the transcript
+                // now shows. And
+                // `replies` is already cleared on every fallback/overload/timeout retry path,
+                // where a running "am I inside a thinking block" flag would need resetting at
+                // each of the five - drift this derivation cannot have.
+                // Deliberately left unset when nothing visible ever streams: absent reads as
+                // "never rendered", where a number would read as fast.
+                if (
+                  shouldStampFirstVisibleToken(
+                    quest.promptMeta!.performance!,
+                    replies,
+                    transitionMode,
+                    rapidReplyContent
+                  )
+                ) {
+                  quest.promptMeta!.performance!.firstTokenTime = Date.now() - processStartTime;
+                  logger.info(
+                    `⏱️ [TTFVT] First visible token at ${
+                      quest.promptMeta!.performance!.firstTokenTime
+                    }ms (first chunk of any kind: ${
+                      quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+                    }ms, model: ${currentModel.id})`
+                  );
+                }
                 // Field-wise assign-not-clobber (mirrors cliCompletions.ts:211-214). Some
                 // adapters fire intermediate callbacks carrying only {toolsUsed} or with
                 // inputTokens: 0 (see anthropicBackend.ts:1598-1604) before the terminal
@@ -4044,12 +4100,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue; // Retry the while loop with cleaned messages
             }
@@ -4084,12 +4135,7 @@ export class ChatCompletionProcess {
 
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
-                // Reset streaming state for clean retry
-                for (const key of Object.keys(replies)) {
-                  replies[parseInt(key)] = '';
-                }
-                quest.replies = [];
-                chunkCount = 0;
+                resetStreamStateForRetry();
 
                 continue; // Re-enter the while loop to retry with the same model
               }
@@ -4114,12 +4160,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -4140,12 +4181,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -4227,13 +4263,7 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
 
               // Clear previous replies for retry
-              Object.keys(replies).forEach(key => {
-                replies[parseInt(key)] = '';
-              });
-              quest.replies = [];
-
-              // Reset streaming state for retry
-              chunkCount = 0;
+              resetStreamStateForRetry();
               // Continue the loop with the new model
               continue;
             } catch (fallbackError) {
@@ -4299,8 +4329,14 @@ export class ChatCompletionProcess {
             }
           }
         } else if (chunkCount > 0) {
+          // The frozen-turn signature: chunks arrived (hidden reasoning; tool-call argument
+          // deltas are consumed without being forwarded, so they never show up here at all)
+          // while the user saw nothing. Deliberately left unstamped, which makes this log the
+          // only place such a turn surfaces - keep it a warning.
           logger.warn(
-            `⚠️ [TTFVT] Failed to capture first token time for ${currentModel.id} despite ${chunkCount} chunks - all chunks were empty`
+            `⚠️ [TTFVT] Never rendered for ${currentModel.id}: ${chunkCount} chunks streamed but no visible text (first chunk of any kind: ${
+              quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+            }ms)`
           );
         } else {
           logger.warn(
@@ -5617,78 +5653,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       fileNotices: allNotices,
     };
     return result;
-  }
-
-  private async validateUserCredits(
-    model: ModelInfo,
-    inputTokens: number,
-    maxOutputTokens: number,
-    organization?: IOrganizationDocument | null
-  ) {
-    // Secondary dispute check: catches mid-stream tool invocations (e.g. image generation)
-    if (this.user.disputePending) {
-      throw new InsufficientCreditsError(
-        'Your account is under review due to a payment dispute. Please contact support to resolve this.'
-      );
-    }
-
-    let userCredits = this.user.currentCredits ?? 0;
-    this.logger.updateMetadata({ creditsSource: 'user', creditsSourceId: this.user.id });
-
-    if (organization) {
-      this.logger.updateMetadata({ creditsSource: 'organization', creditsSourceId: organization.id });
-      userCredits = organization.currentCredits;
-    }
-
-    const usdCost = getTextModelCost(model, inputTokens, maxOutputTokens);
-    const requiredCredits = usdToCredits(usdCost);
-
-    // Check if current credits are below the alert threshold
-    if (userCredits < LOW_CREDIT_ALERT_THRESHOLD) {
-      // Send low credits notification for current balance using deduplication
-      const { getNotificationDeduplicator } = await import('@bike4mind/utils');
-      getNotificationDeduplicator()
-        .handleLowCreditNotification(
-          this.user.id,
-          this.user.name || 'Unknown',
-          this.user.email || 'No email',
-          userCredits,
-          organization ? { id: organization.id, name: organization.name } : null,
-          this.slackWebhookUrl
-        )
-        .catch((error: Error) => {
-          this.logger.error('Failed to send low credits notification:', error);
-        });
-    }
-
-    // Check if there are enough credits for the operation
-    if (userCredits < requiredCredits) {
-      const errorMessage = organization
-        ? `Your organization "${organization.name}" does not have enough credits to complete this request. The organization currently has ${userCredits} credits, and this request requires ${requiredCredits} credits. Please contact your organization administrator to add more credits.`
-        : `You do not have enough credits to complete this request. You currently have ${userCredits} credits, and this request requires ${requiredCredits} credits. Try adjusting your prompt to be more concise or reducing the number of chat history messages to lower the credit cost.`;
-      throw new InsufficientCreditsError(errorMessage);
-    }
-
-    // Check if credits will be below the alert threshold after this operation
-    const remainingCredits = userCredits - requiredCredits;
-    if (remainingCredits < LOW_CREDIT_ALERT_THRESHOLD) {
-      // Send low credits notification using deduplication
-      const { getNotificationDeduplicator } = await import('@bike4mind/utils');
-      getNotificationDeduplicator()
-        .handleLowCreditNotification(
-          this.user.id,
-          this.user.name || 'Unknown',
-          this.user.email || 'No email',
-          remainingCredits,
-          organization ? { id: organization.id, name: organization.name } : null,
-          this.slackWebhookUrl
-        )
-        .catch((error: Error) => {
-          this.logger.error('Failed to send low credits notification:', error);
-        });
-    }
-
-    return requiredCredits;
   }
 
   /**
