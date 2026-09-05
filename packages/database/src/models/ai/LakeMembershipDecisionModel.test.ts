@@ -23,6 +23,18 @@ describe('LakeMembershipDecisionRepository', () => {
     await LakeMembershipDecisionModel.ensureIndexes();
   });
 
+  it('rejects a second row for the same (lake, name) at the database', async () => {
+    // upsertDecision can never collide - it matches on the very key it would collide on - so the
+    // suite exercised the index only by asserting it exists. The index is what stops a SECOND
+    // writer (BaseRepository.create, the admission door) leaving two contradictory rulings for one
+    // name with the plan free to pick either. Raw driver inserts, to bypass the repository.
+    await LakeMembershipDecisionModel.collection.insertOne({ ...decision() } as never);
+
+    await expect(LakeMembershipDecisionModel.collection.insertOne({ ...decision() } as never)).rejects.toThrow(
+      /E11000/
+    );
+  });
+
   it('upsert creates one row, then overwrites it in place on the (lake, name) key', async () => {
     const created = await repo.upsertDecision(decision());
     expect(created.decision).toBe('keep-both');
@@ -31,6 +43,10 @@ describe('LakeMembershipDecisionRepository', () => {
       decision({ decision: 'keep-newest', groupIdentity: 'f1:hash-a|f2:hash-b|f3:hash-c' })
     );
 
+    // Asserted non-undefined FIRST, and not merged into the line below: `toJSON()` only carries `id`
+    // when the schema asks for virtuals, and this schema did not - so the identity check under it
+    // was `undefined === undefined` and held whether or not the row was reused.
+    expect(created.id).toEqual(expect.any(String));
     expect(updated.id).toBe(created.id); // the owner re-answered; they did not answer twice
     expect(updated.decision).toBe('keep-newest');
     expect(updated.groupIdentity).toBe('f1:hash-a|f2:hash-b|f3:hash-c');
@@ -83,6 +99,43 @@ describe('LakeMembershipDecisionRepository', () => {
     expect((await repo.listByLake('lake-2')).map(d => d.fileName)).toEqual(['a.md']);
     // Idempotent, because the purge sweep this serves is re-run whole on a DLQ retry.
     expect(await repo.deleteForLake('lake-1')).toBe(0);
+  });
+
+  // The pairing guard lives on the SCHEMA, not in `recordMembershipDecision`, because that service
+  // is one writer of several. These three go through the doors that bypass it: BaseRepository's
+  // inherited `create` and `update`, and a raw findOneAndUpdate. Delete either schema hook and one
+  // of them starts passing.
+  describe('keptFabFileId/decision pairing', () => {
+    it('refuses a keep-specific that names nobody, through BaseRepository.create', async () => {
+      await expect(repo.create(decision({ decision: 'keep-specific', keptFabFileId: null }) as never)).rejects.toThrow(
+        /keptFabFileId is required/
+      );
+    });
+
+    it('refuses a kept member on a decision that has no such notion, through BaseRepository.create', async () => {
+      await expect(repo.create(decision({ decision: 'keep-newest', keptFabFileId: 'f1' }) as never)).rejects.toThrow(
+        /only meaningful for keep-specific/
+      );
+    });
+
+    it('refuses the same mismatch on the update path, where a required validator cannot see it', async () => {
+      const created = await repo.upsertDecision(decision({ decision: 'keep-specific', keptFabFileId: 'f1' }));
+
+      await expect(repo.update({ id: created.id, keptFabFileId: null, decision: 'keep-specific' } as never)).rejects.toThrow(
+        /keptFabFileId is required/
+      );
+    });
+
+    it('lets a partial update that names neither field through', async () => {
+      // The guard reads what the write NAMES, so an update touching only groupIdentity changed
+      // neither half of the pair and must not be rejected for the row's existing shape.
+      const created = await repo.upsertDecision(decision({ decision: 'keep-specific', keptFabFileId: 'f1' }));
+
+      const updated = await repo.update({ id: created.id, groupIdentity: 'f1:hash-z' } as never);
+
+      expect(updated?.groupIdentity).toBe('f1:hash-z');
+      expect(updated?.keptFabFileId).toBe('f1');
+    });
   });
 
   it('rejects a decision value the planner cannot act on', async () => {

@@ -42,8 +42,12 @@ export interface MembershipDecisionRecord {
   dataLakeId: string;
   fileName: string;
   decision: RepairDecision;
-  /** Set only for `keep-specific`; the member the owner chose to keep. */
-  keptFabFileId?: string | null;
+  /**
+   * Set only for `keep-specific`; the member the owner chose to keep. Required-and-nullable rather
+   * than optional, matching the persisted row: a decision that came back from the collection always
+   * carries the field, and `lakeMembershipRepair.test.ts` pins the two declarations to each other.
+   */
+  keptFabFileId: string | null;
   /** `groupIdentity` at the time the decision was made. A mismatch re-opens the question. */
   groupIdentity: string;
   decidedByUserId: string;

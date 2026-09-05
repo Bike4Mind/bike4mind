@@ -28,7 +28,12 @@ const LakeMembershipDecisionSchema = new mongoose.Schema(
     decidedAt: { type: Date, required: true },
     source: { type: String, enum: LAKE_MEMBERSHIP_DECISION_SOURCES, required: true },
   },
-  { timestamps: true }
+  // `virtuals` is what puts `id` on the object `toJSON()` returns, and this repository returns
+  // exactly that, typed as ILakeMembershipDecisionDocument - which declares `id: string`. Without it
+  // every row comes back with only `_id` and the declared field is undefined at runtime, so
+  // `BaseRepository.update` rejects a row this repository itself just handed out. Matches the other
+  // data-lake schemas.
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
 // One ruling per (lake, name) - the natural key, and the same index that serves `listByLake` on its
@@ -37,6 +42,39 @@ const LakeMembershipDecisionSchema = new mongoose.Schema(
 // one while a repair run writes another, cannot leave two contradictory rulings for one name with
 // the plan free to pick either.
 LakeMembershipDecisionSchema.index({ dataLakeId: 1, fileName: 1 }, { unique: true });
+
+// The keptFabFileId/decision pairing is a DATA constraint, enforced here rather than only in
+// `recordMembershipDecision`. That service is one writer of several: `BaseRepository` gives this
+// repository `create`, `update` and `updateMany` for free, and the type file already declares a
+// second door (`source: 'admission'`) with no reason to route through the service. A `keep-specific`
+// naming nobody reads to every surface as a ruling the owner made while removing nothing, forever.
+//
+// Two hooks rather than a conditional `required`: mongoose binds `this` in an update validator to
+// the QUERY, not the document, so a `required` function cannot see a sibling path on the
+// findOneAndUpdate path - which is the path every write in this repository actually takes.
+const assertKeptPairing = (decision: unknown, keptFabFileId: unknown) => {
+  if (decision === 'keep-specific' && !keptFabFileId) {
+    throw new Error('keptFabFileId is required for a keep-specific decision');
+  }
+  if (decision !== undefined && decision !== 'keep-specific' && keptFabFileId) {
+    throw new Error(`keptFabFileId is only meaningful for keep-specific, not ${String(decision)}`);
+  }
+};
+
+LakeMembershipDecisionSchema.pre('validate', function () {
+  assertKeptPairing(this.decision, this.keptFabFileId);
+});
+
+// `updateOne`/`updateMany` are included even though nothing calls them on this collection today:
+// leaving a door unguarded because it is currently unused is how the service-only check became
+// bypassable in the first place.
+LakeMembershipDecisionSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], function () {
+  const update = (this.getUpdate() ?? {}) as Record<string, unknown> & { $set?: Record<string, unknown> };
+  // A write can name the fields at the top level or under $set; a partial update that names neither
+  // leaves both undefined and the guard passes, which is correct - it changed neither.
+  const fields = { ...update, ...(update.$set ?? {}) };
+  assertKeptPairing(fields.decision, fields.keptFabFileId);
+});
 
 export const LakeMembershipDecisionModel =
   (mongoose.models['LakeMembershipDecision'] as unknown as mongoose.Model<ILakeMembershipDecisionDocument>) ||
