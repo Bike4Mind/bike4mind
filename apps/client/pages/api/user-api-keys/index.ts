@@ -1,6 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { organizationRepository } from '@bike4mind/database';
+import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import {
@@ -200,6 +200,7 @@ const handler = baseApi()
       {
         db: {
           userApiKeys: userApiKeyRepository,
+          agents: agentRepository,
         },
       }
     );

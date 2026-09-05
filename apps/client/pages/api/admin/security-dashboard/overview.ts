@@ -3,6 +3,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { computeCategoryScoreAndCounts, computeDeterministicStatus } from '@server/security/securityDashboardScoring';
+import { ApiKeyScope } from '@bike4mind/common';
 
 export type SecurityCheckStatus = 'pass' | 'warning' | 'fail' | 'disabled';
 
@@ -37,7 +38,7 @@ export interface SecurityDashboardOverviewResponse {
  * Admin Security Dashboard Overview API.
  * Aggregates the latest scan snapshots (web/code/packages/secrets/cloud/waf) into a single overview.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

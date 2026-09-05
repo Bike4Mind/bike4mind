@@ -52,10 +52,14 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 // findIdsAdministeredBy stays (GET org-list + POST org-billing auth use it);
 // findById is added because the owner-scoped gate + GET now resolve owners.
 const userRepository = vi.hoisted(() => ({ findById: vi.fn().mockResolvedValue({ id: 'owner' }) }));
+// Embed mints validate the bound agent; default to one the minting user owns.
+const agentFindById = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'agent-1', userId: 'u1' }));
 const organizationFindById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findIdsAdministeredBy, findById: organizationFindById },
   userRepository,
+  // Bind-time agent-ownership adapter; overridden per-test where a mint binds one.
+  agentRepository: { findById: agentFindById },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 

@@ -28,6 +28,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
 import { agentRepository } from '@bike4mind/database';
 import {
+  isAgentOwnedByEmbedKey,
   parseBrandingColor,
   parseBrandingDisplayName,
   parseBrandingLogoUrl,
@@ -108,7 +109,10 @@ const handler = baseApi({ auth: false })
 
     // Cosmetic only - the chat route re-hydrates the agent itself; a missing
     // name (or a failed lookup) just falls back to the page's default header.
-    const agent = info.agentId ? await agentRepository.findById(info.agentId).catch(() => null) : null;
+    // Gated on the same ownership predicate the chat route applies, so a key bound
+    // to another tenant's agent cannot use this page to read that agent's name.
+    const boundAgent = info.agentId ? await agentRepository.findById(info.agentId).catch(() => null) : null;
+    const agent = boundAgent && isAgentOwnedByEmbedKey(boundAgent, info) ? boundAgent : null;
 
     // Effective branding is decided HERE and only the outcome reaches the page:
     // the raw hideBranding flag never crosses to the client. Stored values are

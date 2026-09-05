@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { Resource } from 'sst';
+import { ApiKeyScope } from '@bike4mind/common';
 import {
   securityFindingRepository,
   securityFindingRunRepository,
@@ -14,7 +15,7 @@ export interface AttackSimulationGetResponse {
   findings: ISecurityFindingDocument[];
 }
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

@@ -45,7 +45,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
-import { checkRateLimit, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
@@ -262,6 +262,9 @@ describe('verifyEmbedApiKey (embed credential-class gates)', () => {
   beforeEach(() => {
     vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_embedkey');
     vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    // The key owner's account state is now checked on this path too.
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
   });
 
   it('returns the bound agentId and allowedOrigins on a valid org-owned embed key', async () => {
@@ -322,7 +325,11 @@ describe('verifyEmbedKeyById (session-token path re-validation)', () => {
     allowedOrigins: ['https://example.com'],
   };
 
-  beforeEach(() => vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset());
+  beforeEach(() => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
 
   it('resolves an active org-owned embed key by id', async () => {
     vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue(validResult);
@@ -360,5 +367,51 @@ describe('verifyEmbedKeyById (session-token path re-validation)', () => {
       organizationId: undefined,
     });
     await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/organization-owned/);
+  });
+});
+
+describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
+  const validKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(validKey);
+    vi.mocked(User.findById).mockReset();
+  });
+
+  it('admits a key whose owner is in good standing', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+    await expect(verifyApiKey({})).resolves.toMatchObject({ keyId: 'k1' });
+  });
+
+  it('refuses a banned owner', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: true });
+    await expect(verifyApiKey({})).rejects.toThrow(/banned/i);
+  });
+
+  it('refuses an owner with a pending payment dispute', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false, disputePending: true });
+    await expect(verifyApiKey({})).rejects.toThrow(/dispute/i);
+  });
+
+  it('refuses a moderation-suspended owner', async () => {
+    vi.mocked(User.findById).mockResolvedValue({
+      id: 'u1',
+      isBanned: false,
+      moderation: { status: 'suspended' },
+    });
+    await expect(verifyApiKey({})).rejects.toThrow(/suspended/i);
+  });
+
+  it('refuses a key whose owner no longer exists', async () => {
+    vi.mocked(User.findById).mockResolvedValue(null);
+    await expect(verifyApiKey({})).rejects.toThrow(/not found/i);
   });
 });

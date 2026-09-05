@@ -22,23 +22,52 @@ import { ApiKeyScope } from '@bike4mind/common';
 export const SCOPE_STAGING_ENV_VAR = 'API_KEY_SCOPE_STAGING';
 
 /**
- * Scopes that may never be staged. Staging `admin:*` would silently open every
- * admin-gated route to any valid key, and the dedicated-flow scopes below have
- * no grandfathered population to protect - each is bound to a credential minted
- * with it (bridge pairing, embed widget, Overwatch ingest), so there is nothing
- * a grace period could rescue.
+ * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
+ * Overwatch ingest. A key holding nothing but these is *confined* - it authorizes
+ * only the routes that explicitly name one of them, and never rides the
+ * scope-less default in {@link decideScopeGate}.
+ *
+ * Without that, a credential minted for exactly one purpose authenticates as its
+ * full owner on every route declaring no `requiredScopes`, which is most of them.
+ * Embed keys make this concrete: they ship in public page HTML.
+ *
+ * `admin:*` is deliberately not confined. It is broad by design, and confining it
+ * would reject admin keys on every route outside the admin surface.
  */
-const UNSTAGEABLE_SCOPES: ReadonlySet<string> = new Set<string>([
-  ApiKeyScope.ADMIN,
+const CONFINED_SCOPES: ReadonlySet<string> = new Set<string>([
   ApiKeyScope.CC_BRIDGE,
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
 ]);
 
+/**
+ * Scopes that may never be staged. Staging `admin:*` would silently open every
+ * admin-gated route to any valid key, and the confined scopes have no
+ * grandfathered population to protect - each is bound to a credential minted
+ * with it, so there is nothing a grace period could rescue.
+ */
+const UNSTAGEABLE_SCOPES: ReadonlySet<string> = new Set<string>([ApiKeyScope.ADMIN, ...CONFINED_SCOPES]);
+
+/**
+ * True when the key carries *any* confined scope.
+ *
+ * Deliberately `some`, not `every`: a key mixing `embed:chat` with an ordinary
+ * scope is mintable today, and under `every` it would stay a full-account
+ * credential on every scope-less route - the precise hole this closes. Such a key
+ * still reaches whatever its ordinary scopes explicitly authorize; it just stops
+ * inheriting the scope-less default.
+ *
+ * A key with no scopes at all is not confined - that is a legacy broad key, and
+ * narrowing it here would be a silent revocation rather than a gate.
+ */
+function isConfinedKey(heldScopes: ApiKeyScope[] | undefined): boolean {
+  return !!heldScopes?.some(scope => CONFINED_SCOPES.has(scope));
+}
+
 const ALL_SCOPE_VALUES: ReadonlySet<string> = new Set<string>(Object.values(ApiKeyScope));
 
 export type ScopeGateDecision =
-  /** The key holds a required scope, or the route declares none. */
+  /** The key holds a required scope, or the route declares none and the key is not confined. */
   | { outcome: 'allow' }
   /** No required scope held, and every one of them is staged - let it through, but say so. */
   | { outcome: 'stagedAllow'; stagedScopes: ApiKeyScope[] }
@@ -79,14 +108,19 @@ export function parseStagedScopes(raw: string | undefined): {
  * already enforced, a key that legitimately needs the route could already have
  * been minted with it, so a key holding none of them is not grandfathered and is
  * denied.
+ *
+ * A route that declares no scopes still allows any ordinary key. The exception is
+ * a {@link isConfinedKey} credential, which is denied there: it authorizes its own
+ * flow and nothing else. Callers must therefore invoke this even when
+ * `requiredScopes` is undefined.
  */
 export function decideScopeGate(
   requiredScopes: ApiKeyScope[] | undefined,
   heldScopes: ApiKeyScope[] | undefined,
   staged: ReadonlySet<string>
 ): ScopeGateDecision {
-  if (!requiredScopes) return { outcome: 'allow' };
-  if (requiredScopes.some(scope => heldScopes?.includes(scope))) return { outcome: 'allow' };
+  if (requiredScopes?.some(scope => heldScopes?.includes(scope))) return { outcome: 'allow' };
+  if (!requiredScopes) return isConfinedKey(heldScopes) ? { outcome: 'deny' } : { outcome: 'allow' };
   // An empty `requiredScopes` denies (a route asking for "one of nothing" can
   // satisfy nobody); `every` on [] is true, so guard the length explicitly.
   if (requiredScopes.length > 0 && requiredScopes.every(scope => staged.has(scope))) {

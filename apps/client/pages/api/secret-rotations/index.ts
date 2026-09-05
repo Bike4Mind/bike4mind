@@ -1,17 +1,17 @@
-import { Permission } from '@bike4mind/common';
+import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError } from '@server/utils/errors';
 import { SECRET_ROTATION_CONFIG } from '@client/lib/secretRotation/constants';
 import { calculateNextRotationDate } from '@client/lib/secretRotation/utils';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   /**
    * Get all active secret rotations
    */
   .get(async (req, res) => {
     if (!req.ability?.can(Permission.read, SecretRotation)) {
-      return new ForbiddenError();
+      throw new ForbiddenError();
     }
 
     const secrets = await secretRotationRepository.findActiveKeys();

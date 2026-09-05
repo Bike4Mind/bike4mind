@@ -1,13 +1,13 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { userRepository } from '@bike4mind/database';
+import { agentRepository, userRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
@@ -38,7 +38,7 @@ interface CreateApiKeyBody {
  * Admin-only endpoint to generate an API key on behalf of any user.
  * Useful for creating service account keys without logging in as the target user.
  */
-const handler = baseApi({ auth: true })
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
@@ -77,16 +77,22 @@ const handler = baseApi({ auth: true })
             clientIP: req.ip,
             userAgent: req.headers['user-agent'],
             createdFrom: 'dashboard' as const,
+            // Without this the key is indistinguishable from one the target user
+            // minted themselves - `userId` is the target, not the actor.
+            createdByUserId: req.user.id,
           },
         },
         {
           db: {
             userApiKeys: userApiKeyRepository,
+            agents: agentRepository,
           },
         }
       );
 
-      // Log analytics event attributed to the target user
+      // Attributed to the target user, since the key is theirs - but the acting
+      // admin is recorded alongside, so the event is not readable as a self-service
+      // mint by that user.
       await logEvent(
         {
           userId,
@@ -97,6 +103,8 @@ const handler = baseApi({ auth: true })
             scopes: newApiKey.scopes,
             expiresAt: newApiKey.expiresAt?.toISOString(),
             createdFrom: 'dashboard',
+            createdByUserId: req.user.id,
+            createdByUsername: req.user.username,
           },
         },
         { ability: req.ability }

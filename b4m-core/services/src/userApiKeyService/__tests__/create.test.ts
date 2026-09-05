@@ -113,7 +113,12 @@ describe('createUserApiKey — overwatch ingest scope', () => {
 
 describe('createUserApiKey — embed keys (epic #41)', () => {
   let repo: ReturnType<typeof makeRepo>;
-  const adapters = () => ({ db: { userApiKeys: repo as any } });
+  const adapters = () => ({
+    db: {
+      userApiKeys: repo as any,
+      agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+    },
+  });
   // A coherent embed key is always org-billed (billingOwnerType Organization +
   // organizationId), mirroring assertEmbedCredential at serve/session time.
   const embedParams = {
@@ -127,6 +132,44 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
 
   beforeEach(() => {
     repo = makeRepo();
+  });
+
+  it('rejects embed:chat paired with any other scope', async () => {
+    // An embed key ships in public page HTML, so a second scope would hand every
+    // widget visitor whatever else the minter attached.
+    await expect(
+      createUserApiKey('user1', { ...embedParams, scopes: [ApiKeyScope.EMBED_CHAT, ApiKeyScope.AI_CHAT] }, adapters())
+    ).rejects.toThrow(/must be the only scope/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an agentId owned by neither the billing org nor the minter', async () => {
+    const foreign = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'other-org', userId: 'someone' }) } as any,
+      },
+    };
+    await expect(createUserApiKey('user1', embedParams, foreign)).rejects.toThrow(/owned by the billing organization/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a system/global agent, which is owned by nobody', async () => {
+    const systemAgent = {
+      db: { userApiKeys: repo as any, agents: { findById: vi.fn().mockResolvedValue({}) } as any },
+    };
+    await expect(createUserApiKey('user1', embedParams, systemAgent)).rejects.toThrow(
+      /owned by the billing organization/i
+    );
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an agentId that does not resolve', async () => {
+    const missing = {
+      db: { userApiKeys: repo as any, agents: { findById: vi.fn().mockResolvedValue(null) } as any },
+    };
+    await expect(createUserApiKey('user1', embedParams, missing)).rejects.toThrow(/owned by the billing organization/i);
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
   it('persists agentId, normalized origins, and branding', async () => {

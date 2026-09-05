@@ -32,6 +32,9 @@ const handler = baseApi().post(
         metadata: {
           keyId,
           name: rotatedKey.name,
+          // Present only when an org admin rotated someone else's key: the rotation
+          // re-owned it, so this is the audit trail for the change of hands.
+          ...(rotatedKey.previousOwnerUserId ? { previousOwnerUserId: rotatedKey.previousOwnerUserId } : {}),
         },
       },
       { ability: req.ability }

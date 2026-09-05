@@ -45,9 +45,38 @@ describe('parseStagedScopes', () => {
 });
 
 describe('decideScopeGate', () => {
-  it('allows a scope-less route regardless of what the key holds', () => {
+  it('allows a scope-less route for an ordinary key', () => {
+    expect(decideScopeGate(undefined, [ApiKeyScope.AI_CHAT], NONE)).toEqual({ outcome: 'allow' });
+    // No scopes at all is a legacy broad key, not a narrow one - confining it here
+    // would be a silent revocation.
     expect(decideScopeGate(undefined, [], NONE)).toEqual({ outcome: 'allow' });
     expect(decideScopeGate(undefined, undefined, NONE)).toEqual({ outcome: 'allow' });
+  });
+
+  it('denies a confined key on a scope-less route', () => {
+    for (const scope of [ApiKeyScope.EMBED_CHAT, ApiKeyScope.CC_BRIDGE, ApiKeyScope.OVERWATCH_INGEST_WRITE]) {
+      expect(decideScopeGate(undefined, [scope], NONE)).toEqual({ outcome: 'deny' });
+    }
+  });
+
+  it('denies a confined key on a route requiring some other scope', () => {
+    expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], NONE)).toEqual({ outcome: 'deny' });
+  });
+
+  it('allows a confined key on the route that names its scope', () => {
+    expect(decideScopeGate([ApiKeyScope.EMBED_CHAT], [ApiKeyScope.EMBED_CHAT], NONE)).toEqual({ outcome: 'allow' });
+  });
+
+  it('does not confine admin:* - it is broad by design', () => {
+    expect(decideScopeGate(undefined, [ApiKeyScope.ADMIN], NONE)).toEqual({ outcome: 'allow' });
+  });
+
+  it('confines a key that pairs a dedicated scope with an ordinary one', () => {
+    // Mintable today, so `some` rather than `every` is what actually closes the hole.
+    const mixed = [ApiKeyScope.EMBED_CHAT, ApiKeyScope.AI_CHAT];
+    expect(decideScopeGate(undefined, mixed, NONE)).toEqual({ outcome: 'deny' });
+    // It keeps whatever a route explicitly names, though - this is a gate, not a revocation.
+    expect(decideScopeGate([ApiKeyScope.AI_CHAT], mixed, NONE)).toEqual({ outcome: 'allow' });
   });
 
   it('allows when the key holds any one of the required scopes', () => {

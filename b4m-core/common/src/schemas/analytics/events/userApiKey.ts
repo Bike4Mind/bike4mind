@@ -24,6 +24,13 @@ export interface IUserApiKeyCreatedEvent extends IBaseEvent {
     billingOwnerType?: string;
     /** Set for org-billed keys: the organization charged for this key's usage. */
     organizationId?: string;
+    /**
+     * Acting admin, when the key was minted on a user's behalf through the admin
+     * route. The event's own `userId` is the key's OWNER, so without these two the
+     * record is indistinguishable from a self-service mint by that user.
+     */
+    createdByUserId?: string;
+    createdByUsername?: string;
   };
 }
 

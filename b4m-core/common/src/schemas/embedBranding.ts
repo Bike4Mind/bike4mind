@@ -92,3 +92,25 @@ export const EmbedBrandingSchema = z.object({
     .optional(),
   hideBranding: z.boolean().optional(),
 });
+
+/**
+ * Whether an embed key's bound agent is actually owned by that key.
+ *
+ * POSITIVE ownership, fail-closed: the agent must be an org-shared agent of the
+ * key's organization, or a personal agent of the key's owner. Checking only for a
+ * mismatch would let a system/global agent (neither `organizationId` nor `userId`
+ * set) satisfy both clauses, and an embed key must never run an agent it does not
+ * own.
+ *
+ * Shared so bind-time validation (createUserApiKey / updateEmbedKey) and every
+ * runtime consumer of `key.agentId` (embed chat, GET /api/embed/serve) apply one
+ * rule and cannot drift.
+ */
+export function isAgentOwnedByEmbedKey(
+  agent: { organizationId?: string | null; userId?: string | null },
+  key: { organizationId?: string | null; userId?: string | null }
+): boolean {
+  const ownedByOrg = agent.organizationId != null && agent.organizationId === key.organizationId;
+  const ownedByUser = agent.userId != null && agent.userId === key.userId;
+  return ownedByOrg || ownedByUser;
+}
