@@ -49,8 +49,12 @@ export const recomputeStatsForLakeTags = async (
      * file DELETE routes act for a request and pass it, while the upload path arrives from an S3
      * event or storage webhook with no user at all. Omitted, a draft -> active flip records under
      * a `system` principal, which is the honest answer rather than an invented one.
+     *
+     * A `ManageActor` rather than the bare pair, so a route under `baseApi()` can carry
+     * `auditPrincipal` and have a key-driven flip recorded as the KEY instead of its owning human
+     * (see `lakeConfigAuditPrincipal`).
      */
-    actor?: { userId: string; isAdmin: boolean };
+    actor?: dataLakeService.ManageActor;
   }
 ): Promise<void> => {
   // Concurrent, not sequential: the lakes are independent and share no state, so a bulk delete

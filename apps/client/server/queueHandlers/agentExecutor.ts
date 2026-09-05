@@ -41,8 +41,21 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   mcpServerRepository,
+  scopedSettingsRepository,
+  cacheRepository,
 } from '@bike4mind/database';
-import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
+import {
+  registerLambdaErrorHandlers,
+  getSettingsByNames,
+  fetchAgentConversationHistory,
+  fetchAndConvertFabFiles,
+  processFabFilesServer,
+  attachedContentExtractionBudget,
+  safeInputWindow,
+} from '@bike4mind/utils';
+import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
+import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { defaultEmbeddingModelForEnv } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -58,13 +71,7 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import {
-  getTextModelCost,
-  CreditHolderType,
-  ARTIFACT_EMISSION_PROMPT,
-  type IAgent,
-  type IUserDocument,
-} from '@bike4mind/common';
+import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -85,7 +92,15 @@ import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/service
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
-import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
+// Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
+// header for why the start-payload/doc precedence is the part worth pinning in a test.
+import {
+  inheritedArtifactFields,
+  resolveAgentArtifactEmissionPrompt,
+  resolveAgentArtifactGate,
+} from '../utils/artifactGate';
+import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
+import { selectGatedAction, resolveGateDisposition } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
@@ -100,12 +115,20 @@ import {
 } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
+import type { ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
 // it with the new-execution/iteration-0 gate so the gate is testable too.
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
-import { applySessionToolPolicy, runHasAttachments } from './agentExecutor.sessionToolPolicy';
+// Content materialization for the agent path - see the module header. Without it the agent gets
+// attachment metadata only and can read a file solely through the chunk-backed retrieval tool.
+import {
+  materializeAttachmentContent,
+  composeFirstIterationMessage,
+  attachmentNoticeBlock,
+} from './agentExecutor.attachmentContent';
+import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -144,6 +167,7 @@ import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { isHeadlessConnection } from '@server/utils/headlessConnection';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
@@ -254,7 +278,25 @@ const sqsClient = new SQSClient({});
 // WebSocket streaming helpers
 // ---------------------------------------------------------------------------
 
-function createWsSender(connectionId: string, logger: Logger) {
+/**
+ * Exported for `agentExecutor.headless.test.ts`: the headless short-circuit below is
+ * the only thing standing between a REST-started run and a failed `PostToConnection`
+ * on every single step - which this sender swallows, so the failure would be invisible.
+ */
+export function createWsSender(connectionId: string, logger: Logger) {
+  // A REST-dispatched run has no WebSocket peer. Sending to the sentinel id would fail
+  // on every single step - and this sender swallows send errors, so those failures
+  // would be invisible noise rather than a signal. Short-circuit instead, with one log
+  // line so "no events streamed" stays distinguishable from "events were sent and
+  // dropped". See `headlessConnection.ts` for why a later reconnect does not promote
+  // a headless run to a streaming one.
+  if (isHeadlessConnection(connectionId)) {
+    logger.info('[WS] Headless execution: streaming disabled; poll GET /api/v1/agent-executions/{id}');
+    // Same signature as the real sender, so a call site that starts passing a new
+    // argument cannot silently type-check against a narrower no-op.
+    return async (_action: string, _payload: Record<string, unknown> = {}) => {};
+  }
+
   const wsEndpoint = Resource.websocket.managementEndpoint;
   const client = new ApiGatewayManagementApiClient({ endpoint: wsEndpoint });
 
@@ -624,6 +666,104 @@ export function buildInProcessCreditCapCheck(
   };
 }
 
+/**
+ * Flat token allowance set aside for instructions before the attachment share is computed.
+ * Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess so an agent turn and a chat turn size the
+ * same attachment against the same window.
+ */
+const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
+
+/**
+ * Resolve this run's attachment ids and extract their content, using the SAME extractor the chat
+ * path uses so an agent turn gets the raw-content fallback, cosine excerpting, truncation notices
+ * and image blocks that a chat turn gets.
+ *
+ * Never throws. Extraction is an enhancement over the metadata preamble - a failure here has to
+ * leave the run behaving exactly as it did before, not kill the turn.
+ */
+async function materializeAttachmentsForRun(args: {
+  execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
+  sessionKnowledgeIds: string[];
+  scope: Record<string, unknown>;
+  modelInfo?: ModelInfo;
+  apiKeyTable: ApiKeyTable;
+  logger: Logger;
+}) {
+  const { execution, sessionKnowledgeIds, scope, modelInfo, apiKeyTable, logger } = args;
+
+  const requestedIds = Array.from(
+    new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
+  );
+  if (requestedIds.length === 0) return undefined;
+
+  // A model we cannot size gives no honest budget, and guessing one would inline against a window
+  // that may not exist. Fall through to the metadata preamble instead.
+  if (!modelInfo) {
+    logger.warn('[AttachmentContent] No resolved modelInfo; skipping content materialization', {
+      requested: requestedIds.length,
+    });
+    return undefined;
+  }
+
+  try {
+    const storage = getFilesStorage();
+    const { files, missingIds } = await fetchAndConvertFabFiles(
+      requestedIds,
+      { scope },
+      { db: { fabfiles: fabFileRepository, caches: cacheRepository }, storage, logger }
+    );
+
+    // Same construction as the chat path (ChatCompletionProcess ~2013): pick the env's default
+    // embedding model, then hand the factory ONLY the credential that model's provider needs.
+    // Getting this wrong is quiet rather than loud - the query embedding just fails and every file
+    // falls through to the raw-content path, so a vectorized file silently loses cosine selection.
+    const embeddingProvider = getProviderFromModel(defaultEmbeddingModelForEnv());
+    const embeddingFactory = new EmbeddingFactory({
+      ...(embeddingProvider === 'openai' && { openaiApiKey: apiKeyTable?.openai }),
+      ...(embeddingProvider === 'voyageai' && { voyageApiKey: apiKeyTable?.voyageai }),
+      ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
+    });
+
+    const budget = attachedContentExtractionBudget(
+      safeInputWindow(modelInfo, modelInfo.max_tokens),
+      AGENT_SYSTEM_PROMPT_RESERVE
+    );
+
+    return await materializeAttachmentContent(
+      files,
+      missingIds,
+      fabFiles =>
+        processFabFilesServer(
+          embeddingFactory,
+          fabFiles,
+          execution.query,
+          budget,
+          modelInfo,
+          // No per-file status channel on this path: the agent surface streams iteration events,
+          // not the chat status line. Delivery problems still reach the user via the notices.
+          async () => {},
+          {
+            logger,
+            storage,
+            db: {
+              fabfilechunks: fabFileChunkRepository,
+              fabfiles: fabFileRepository,
+              caches: cacheRepository,
+            },
+            resizeImageForModel: ensureImageWithinDimensionLimit,
+          }
+        ),
+      logger
+    );
+  } catch (err) {
+    logger.error('[AttachmentContent] Materialization failed; falling back to the metadata preamble', {
+      requested: requestedIds.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
 async function processExecution(
   executionId: string,
   connectionId: string,
@@ -771,6 +911,13 @@ async function processExecution(
       });
     }
 
+    // One precedence rule for the caller's artifact intent across every consumer in this function:
+    // start payload first, persisted doc second, the same order `resolveAgentArtifactGate` reads
+    // them in below. Both channels are written from the same command object in `agentExecute`, so
+    // they cannot disagree today - hoisted so they still cannot if that doc write ever becomes
+    // optimistic.
+    const callerEnableArtifacts = startPayload?.enableArtifacts ?? execution.enableArtifacts;
+
     // Get API keys and LLM backend
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(execution.userId, {
       db: {
@@ -893,7 +1040,18 @@ async function processExecution(
     // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
     // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
     if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
-      orchestrationProfile = buildOptiOrchestrationProfile();
+      // Premium tool names come from the generated map (the same one merged into `externalTools`
+      // below), so a tool an overlay registers is offerable here without editing a list by hand.
+      const premiumToolNames = Object.keys(premiumLlmTools);
+      // An empty map means codegen ran with no overlay hydrated. The loop then has no optimizer
+      // tools at all and answers in prose, which reads as a model failure rather than a build one -
+      // so say it once, here, where the cause is known.
+      if (premiumToolNames.length === 0) {
+        logger.warn('[opti] optimizer surface resolved no premium tools; the agent has only core generics', {
+          executionId,
+        });
+      }
+      orchestrationProfile = buildOptiOrchestrationProfile({ premiumToolNames });
     } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.
@@ -939,9 +1097,18 @@ async function processExecution(
         profileName: orchestrationProfile.name,
         isSynthetic: orchestrationProfile.isSynthetic,
         allowedToolCount: orchestrationProfile.allowedTools.length,
+        toolsetIsExclusive: orchestrationProfile.toolsetIsExclusive ?? false,
         defaultThoroughness: orchestrationProfile.defaultThoroughness,
         isContinuation: !isNewExecution,
       });
+      // An exclusive toolset voids the payload's tool selection by design - but silently
+      // voiding it is how a "why is the tool I picked missing?" report goes undiagnosable.
+      if (orchestrationProfile.toolsetIsExclusive && startPayload?.enabledTools?.length) {
+        logger.warn('[Orchestration] Payload enabledTools ignored: profile toolset is exclusive', {
+          profileId: orchestrationProfile.id,
+          ignoredToolCount: startPayload.enabledTools.length,
+        });
+      }
     }
 
     // Build tools - per-request agent store (unified agent model).
@@ -1023,6 +1190,10 @@ async function processExecution(
           organizationId: execution.organizationId,
           sessionId: execution.sessionId,
           questId: execution.questId,
+          // Inherited alongside `questId` so a child's own audit rows can join to the turn its
+          // parent belongs to. Distinct from `questId` above, which means different things per
+          // dispatch lineage and must never be read as a Quest id (#1867).
+          linkedQuestId: execution.linkedQuestId,
           query: info.task,
           model: info.model,
           approvedTools: [] as string[],
@@ -1065,6 +1236,10 @@ async function processExecution(
           // it. The parent's Lattice toolbelt is scoped to the parent run; a
           // child that needs Lattice must be granted it explicitly. A future PR
           // adding a sibling flag should make the same deliberate choice.
+          //
+          // `enableArtifacts` is the deliberate exception - see `inheritedArtifactFields` for why an
+          // opt-OUT has to cross the dispatch boundary when a grant does not.
+          ...inheritedArtifactFields(callerEnableArtifacts),
         };
 
         // Three execution modes mapped to schema state:
@@ -1258,7 +1433,10 @@ async function processExecution(
         organizationId: execution.organizationId,
         sessionId: execution.sessionId,
         questId: execution.questId,
+        // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
+        linkedQuestId: execution.linkedQuestId,
         spawnedByExecutionId: executionId,
+        enableArtifacts: callerEnableArtifacts,
       },
       logger,
     });
@@ -1279,6 +1457,28 @@ async function processExecution(
       cacheWriteTokens: 0,
     };
 
+    // Whether this run may offer each delegation surface - decided from the profile's
+    // denials and the session contract, and consumed below at the dependency level.
+    const delegation = delegationOffer({
+      profileDeniedTools: orchestrationProfile?.deniedTools,
+      session,
+    });
+    if (!delegation.offerDelegate || !delegation.offerDag) {
+      logger.info('[Orchestration] Delegation surfaces withheld for this run', {
+        offerDelegate: delegation.offerDelegate,
+        offerDag: delegation.offerDag,
+        profileId: orchestrationProfile?.id,
+      });
+    }
+    // Filled in place by the materialization step below, which cannot run this early (it needs
+    // `iterationIndex`). ToolBuilder stores this exact array on the ToolContext, and the knowledge
+    // tools read it when INVOKED - always after materialization - so pushing into it here is what
+    // lets `retrieve_knowledge_content` say "its content is already in the conversation, answer
+    // from that" instead of the generic "indexing may still be in progress". Same shape as the
+    // chat path's abortSignalHolder. Must be mutated in place: reassigning would not propagate.
+    const inlinedAttachmentIds: string[] = [];
+    const fullyInlinedAttachmentIds: string[] = [];
+
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
@@ -1287,6 +1487,18 @@ async function processExecution(
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
+      inlinedAttachmentIds,
+      fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
@@ -1309,6 +1521,7 @@ async function processExecution(
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -1321,11 +1534,20 @@ async function processExecution(
         models,
       },
       apiKeyTable: apiKeyTable as ApiKeyTable,
-      agentStore,
+      // The delegation tools are injected as OBJECTS keyed on these two deps, never on
+      // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
+      // profile denies both to keep its loop single-agent - or a session whose
+      // disableUserIntegrations promises no delegation, is enforced HERE or nowhere.
+      // Observed before this gate: an optimizer run registered delegate_to_agent and
+      // coordinate_task against its own profile's deniedTools. The `agentStore` local
+      // stays intact above for exclusive-MCP resolution; only the injection key is
+      // withheld - the same shape the chat path uses (`agentStore: undefined` in
+      // ChatCompletionProcess) and `agentExecutor.latticeTools` uses for its pool.
+      agentStore: delegation.offerDelegate ? agentStore : undefined,
       getRemainingTimeMs: () => context.getRemainingTimeInMillis(),
       handoffSignal,
       dagHandoffSignal,
-      dagDispatcher,
+      dagDispatcher: delegation.offerDag ? dagDispatcher : undefined,
       getCurrentExecutionId: () => executionId,
       // In-process delegate_to_agent/coordinate_task have no pre-flight reservation of
       // their own (unlike ChatCompletionProcess), so without this a member who crosses
@@ -1427,6 +1649,10 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
+      questId: resolveExecutionQuestId({
+        startPayloadQuestId: startPayload?.questId,
+        executionLinkedQuestId: execution.linkedQuestId,
+      }),
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },
@@ -1563,20 +1789,23 @@ async function processExecution(
     //
     // Resolved only on NEW executions: continuations already carry the composed
     // system message in the checkpoint (messages[0]), same as `personaPrompt`.
-    // `enableArtifacts` is read on every invocation (new + continuation) because
+    // The gate is re-resolved on every invocation (new + continuation) because
     // the DAG bubble-up at persist-time gates on it too, and reading it here
     // avoids a second settings round-trip further down.
-    // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
-    // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
-    const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
-    // NOTE: this `|| ARTIFACT_EMISSION_PROMPT` fallback must resolve to the SAME default as the chat
-    // path, which uses the util getSettingsValue('ArtifactEmissionPrompt', settings, ARTIFACT_EMISSION_PROMPT)
-    // in ChatCompletionProcess. Two resolvers, one default - keep them in sync so an empty/unset value
-    // reverts to the same built-in prompt on both paths.
-    const artifactEmissionPrompt =
-      isNewExecution && enableArtifacts
-        ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
-        : undefined;
+    //
+    // Admin setting AND the caller's request flag, via the same resolver the chat pipeline uses - so
+    // an opt-out is honoured on an autonomous run too, where no human is reading each turn. See
+    // `server/utils/artifactGate.ts` for the start-payload/doc precedence.
+    const enableArtifacts = resolveAgentArtifactGate({
+      adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+      startPayloadEnableArtifacts: startPayload?.enableArtifacts,
+      executionEnableArtifacts: execution.enableArtifacts,
+    });
+    const artifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: enableArtifacts,
+      isNewExecution,
+      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+    });
 
     // Create or restore ReActAgent. LLM runtime knobs are merged via
     // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
@@ -2078,6 +2307,30 @@ async function processExecution(
       // iteration 0 of a new execution - continuation Lambdas replay the
       // checkpoint, which already embeds the preamble in the first user
       // message. The gate is wrapped in a helper so it's unit-testable.
+      // Extract attachment CONTENT before the metadata preamble is built, so the preamble knows
+      // which files are already in front of the agent and does not mark an inlined-but-chunkless
+      // file unreadable. Gated to the same iteration-0-of-a-new-execution window as the preamble:
+      // the content is baked into the checkpointed first message, and continuation Lambdas replay
+      // it rather than re-extracting.
+      const materialized =
+        isNewExecution && iterationIndex === 0
+          ? await materializeAttachmentsForRun({
+              execution,
+              sessionKnowledgeIds: session.knowledgeIds ?? [],
+              scope: fabFileReadScope,
+              modelInfo,
+              apiKeyTable: apiKeyTable as ApiKeyTable,
+              logger,
+            })
+          : undefined;
+
+      if (materialized) {
+        // In place - see the declaration. Populated before `runIteration`, so no tool can observe
+        // the empty array.
+        inlinedAttachmentIds.push(...materialized.inlinedFileIds);
+        fullyInlinedAttachmentIds.push(...materialized.fullyInlinedFileIds);
+      }
+
       let firstIterationQuery = await maybeBuildFirstIterationQuery(
         {
           isNewExecution,
@@ -2087,6 +2340,7 @@ async function processExecution(
           sessionKnowledgeIds: session.knowledgeIds ?? [],
           scope: fabFileReadScope,
           availableToolNames: resolvedToolNames,
+          inlinedFileIds: materialized?.inlinedFileIds ?? [],
         },
         logger,
         fabFileRepository
@@ -2130,6 +2384,13 @@ async function processExecution(
           logger
         );
         if (skillsPreamble) firstIterationQuery = `${firstIterationQuery}${skillsPreamble}`;
+
+        // Attachment problems ride the query as text, like every other preamble. Chat says the
+        // same thing in a system message; both exist so the model cannot answer as though a
+        // missing file were present.
+        if (materialized && materialized.notices.length > 0) {
+          firstIterationQuery = `${firstIterationQuery}${attachmentNoticeBlock(materialized.notices)}`;
+        }
       }
       // Seed the run with recent session history so short follow-ups ("yes", "go ahead") resolve
       // against prior turns. Only on iteration 0 of a new execution - continuation Lambdas restore
@@ -2149,8 +2410,16 @@ async function processExecution(
         }
       }
 
+      // Fold extracted content in last, so it sits after every preamble. Stays a plain string
+      // unless an image was inlined - only then does the message become a MessageContent array,
+      // which `runIteration` accepts and the checkpoint stores as-is.
+      const firstIterationMessage =
+        materialized && firstIterationQuery !== undefined
+          ? composeFirstIterationMessage(firstIterationQuery, materialized)
+          : firstIterationQuery;
+
       resetLastIterationConfidence();
-      iterationResult = await agent.runIteration(firstIterationQuery, {
+      iterationResult = await agent.runIteration(firstIterationMessage, {
         maxIterations,
         confidenceGate,
         previousMessages,
@@ -2304,25 +2573,53 @@ async function processExecution(
       const gated = selectGatedAction(iterationResult.allSteps, approvedTools, deniedTools);
       if (gated) {
         const { toolName, toolInput, verdict } = gated;
+        const disposition = resolveGateDisposition(verdict, connectionId);
 
-        if (verdict === 'denied') {
+        if (disposition === 'denied') {
           // Fail the execution - the tool already executed (Phase 1 limitation),
           // but continuing would let the agent act on the denied tool's result
           // and potentially retry it indefinitely. Checkpoint persistence and
           // iteration billing already happened above the branch.
           logger.warn(`[Permission] Tool "${toolName}" is denied — failing execution`);
-          await agentExecutionRepository.markFailed(executionId, {
-            message: `Execution stopped: tool "${toolName}" is not permitted`,
-          });
+          const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
+          // `callerSafe`: this string names only a tool the caller already knows about, and
+          // the public poll response is documented to name the gated tool - so it is
+          // published verbatim rather than collapsed by the sanitizer.
+          await agentExecutionRepository.markFailed(executionId, { message: deniedMessage, callerSafe: true });
           await sendWs('failed', {
             executionId,
             reason: 'tool_denied',
             toolName,
           });
+          // Settle the dispatch-time Quest, as the hard-error path below does. Without
+          // this the prompt bubble stays `pending` with an empty reply forever - the
+          // status is deliberately `pending` at dispatch so Slack pollers don't fire on
+          // an empty `replies`, and only `persistRunAsQuest` ever flips it to `done`.
+          await persistRunAsQuest(executionId, `${deniedMessage}.`, logger);
           return;
         }
 
-        // verdict === 'needs_approval' - pause and ask the user. Note: the tool
+        // A headless run (REST dispatch) has nobody to ask - see `resolveGateDisposition`
+        // for why that is treated as denial rather than a pause.
+        if (disposition === 'no_approver') {
+          logger.warn(`[Permission] Tool "${toolName}" needs approval but the run is headless - failing`, {
+            executionId,
+            toolName,
+          });
+          const headlessMessage =
+            `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
+            'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
+            'excludes approval-gated tools, or start the run over the WebSocket route.';
+          // `callerSafe`: written for the REST caller specifically - it names the gated tool
+          // and the remedy, which is exactly what the contract promises in `error`.
+          await agentExecutionRepository.markFailed(executionId, { message: headlessMessage, callerSafe: true });
+          // Settle the dispatch-time Quest so chat history shows the reason instead of a
+          // permanently `pending` empty bubble - same reasoning as the denied branch above.
+          await persistRunAsQuest(executionId, `${headlessMessage}`, logger);
+          return;
+        }
+
+        // disposition === 'ask' - pause and ask the user. Note: the tool
         // has already executed (Phase 1 limitation) - approval gates future
         // iterations, not this one. Checkpoint persistence and iteration
         // billing already happened above the branch.
@@ -2889,6 +3186,16 @@ async function processSubagentDispatch(
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
       // parent toolbelt). Session is resolved above from the child's sessionId.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
@@ -2910,6 +3217,7 @@ async function processSubagentDispatch(
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),
@@ -2959,6 +3267,11 @@ async function processSubagentDispatch(
       onToolStart: async () => {},
       onToolFinish: async () => {},
       sessionId: child.sessionId,
+      // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
+      // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
+      // a lake-access row - but wired now so the native-tool path anticipated below does not
+      // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
+      questId: child.linkedQuestId,
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: child.model,
@@ -2978,7 +3291,13 @@ async function processSubagentDispatch(
       toolAvailability
     );
 
+    // Created here rather than alongside its watchdog below because the tools built on the next
+    // line need its signal: a tool that runs its own llm.complete (deep_research, blog_draft, ...)
+    // otherwise keeps generating past both abort triggers. See ToolContext.getAbortSignal.
+    const abortController = new AbortController();
+
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+      getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
@@ -3055,7 +3374,6 @@ async function processSubagentDispatch(
     // LIMITATION: 0..5s window where an aborted child keeps running before
     // the next poll tick. Acceptable - the agent stops at the next iteration
     // boundary inside the LLM call.
-    const abortController = new AbortController();
     const abortPoller = setInterval(() => {
       // Cheap synchronous check first - no DB roundtrip if we're already done.
       if (context.getRemainingTimeInMillis() < PARENT_DEADLINE_BUFFER_MS && !abortController.signal.aborted) {
@@ -3088,15 +3406,20 @@ async function processSubagentDispatch(
     // Artifact-emission parity for dispatched subagents (DAG worker nodes and
     // Lambda-dispatched delegates). Give them the same `<artifact>` guidance as
     // the top-level agent so their answers carry tags the parent can surface on
-    // the completion. Gated on the admin `EnableArtifacts` setting; dispatched
-    // children are always fresh in-process runs (no checkpoint), so no
+    // the completion. Gated on the admin `EnableArtifacts` setting AND the artifact intent the
+    // child inherited from its parent at creation, so a caller opt-out survives delegation;
+    // dispatched children are always fresh in-process runs (no checkpoint), so no
     // isNewExecution guard is needed.
     // Hoist the gate into a local (mirrors the top-level path) so we only read
     // ArtifactEmissionPrompt when artifacts are actually on.
-    const childArtifactsEnabled = await adminSettingsRepository.getSettingsValue('EnableArtifacts');
-    const childArtifactEmissionPrompt = childArtifactsEnabled
-      ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
-      : undefined;
+    const childArtifactsEnabled = resolveAgentArtifactGate({
+      adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+      executionEnableArtifacts: child.enableArtifacts,
+    });
+    const childArtifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: childArtifactsEnabled,
+      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+    });
 
     logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {
       agentName,

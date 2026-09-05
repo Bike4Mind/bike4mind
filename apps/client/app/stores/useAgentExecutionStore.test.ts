@@ -87,30 +87,71 @@ describe('useAgentExecutionStore — clearForSession', () => {
   });
 });
 
-describe('useAgentExecutionStore — pending reconnect FIFO queue', () => {
+describe('useAgentExecutionStore -- pending reconnect queue', () => {
   beforeEach(resetStore);
 
   it('registerPendingReconnect enqueues in order', () => {
     const { registerPendingReconnect } = useAgentExecutionStore.getState();
     registerPendingReconnect('session-A');
     registerPendingReconnect('session-B');
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual(['session-A', 'session-B']);
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'session-A', executionId: undefined },
+      { sessionId: 'session-B', executionId: undefined },
+    ]);
   });
 
-  it('consumePendingReconnect drains FIFO and returns the head', () => {
+  it('consumePendingReconnect drains un-keyed entries FIFO', () => {
     const { registerPendingReconnect, consumePendingReconnect } = useAgentExecutionStore.getState();
     registerPendingReconnect('session-A');
     registerPendingReconnect('session-B');
 
     expect(consumePendingReconnect()).toBe('session-A');
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual(['session-B']);
-
     expect(useAgentExecutionStore.getState().consumePendingReconnect()).toBe('session-B');
     expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
   });
 
   it('consumePendingReconnect returns undefined when the queue is empty', () => {
     expect(useAgentExecutionStore.getState().consumePendingReconnect()).toBeUndefined();
+  });
+
+  // A socket-open sweep asks about several runs at once and their responses come back in
+  // whatever order the server finishes them, so arrival order cannot be the correlation.
+  it('answers a keyed entry by its executionId, whatever the queue order', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('session-A', 'exec-1');
+    registerPendingReconnect('session-B', 'exec-2');
+
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-2')).toBe('session-B');
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-1')).toBe('session-A');
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+  });
+
+  it('leaves keyed entries alone when an un-keyed response drains', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('session-A', 'exec-1');
+    registerPendingReconnect('session-probe');
+
+    // A `found: false` response carries no executionId; it must not steal exec-1's entry.
+    expect(useAgentExecutionStore.getState().consumePendingReconnect()).toBe('session-probe');
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'session-A', executionId: 'exec-1' },
+    ]);
+  });
+
+  it('falls back to an un-keyed entry when no entry matches the response id', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('session-probe');
+
+    // The mount-time probe cannot know the id it will be answered with.
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-9')).toBe('session-probe');
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+  });
+
+  it('clearAll drops the correlation queues, not just the executions', () => {
+    const store = useAgentExecutionStore.getState();
+    store.registerPendingReconnect('session-A', 'exec-1');
+    store.clearAll();
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
   });
 });
 
@@ -995,5 +1036,51 @@ describe('useAgentExecutionStore - final_answer collapse (issue #35)', () => {
     const child = useAgentExecutionStore.getState().executions['exec-1'].childExecutions['child-1'];
     expect(child.iterations).toHaveLength(1);
     expect(child.pendingTextByIteration).toBeUndefined();
+  });
+});
+
+describe('useAgentExecutionStore -- keyed entries that can never match do not decay into steals', () => {
+  beforeEach(resetStore);
+
+  it('a keyed miss with no un-keyed entry consumes nothing', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('session-A', 'exec-1');
+
+    // The arm that carries the "a keyed entry cannot offset the un-keyed FIFO"
+    // argument: a response for an unknown run must not touch exec-1's entry.
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-unknown')).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'session-A', executionId: 'exec-1' },
+    ]);
+  });
+
+  it('a session-less sweep entry answers its own id and leaves the probe entry alone', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    // The sweep can ask about a run whose session the store never learned
+    // (a stray event synthesises an active, session-less execution). Its entry
+    // must still exist, keyed - otherwise its response would drain the probe's.
+    registerPendingReconnect(undefined, 'exec-orphan');
+    registerPendingReconnect('sess-probe');
+
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-orphan')).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([{ sessionId: 'sess-probe' }]);
+  });
+
+  // The arm the found:false comment in useAgentExecution.ts reasons about, and the
+  // one it used to get wrong: a keyed sweep request whose run is gone server-side
+  // is answered by a BARE found:false, which drains the un-keyed probe entry it
+  // does not answer. The residual is documented there; this pins the behaviour so
+  // the next reader cannot re-derive the comfortable version of it.
+  it('a found:false drains the oldest un-keyed entry even when a keyed entry is queued', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('sess-stale', 'exec-gone'); // sweep entry, run gone server-side
+    registerPendingReconnect('sess-probe'); // concurrent mount probe
+
+    expect(useAgentExecutionStore.getState().consumePendingReconnect(undefined)).toBe('sess-probe');
+    // The probe's entry is gone, so its own response has nothing left to pair with.
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'sess-stale', executionId: 'exec-gone' },
+    ]);
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-live')).toBeUndefined();
   });
 });

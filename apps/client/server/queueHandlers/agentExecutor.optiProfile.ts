@@ -16,10 +16,9 @@
 import type { ResolvedOrchestrationProfile } from './agentExecutor.orchestrationProfile';
 
 /**
- * Tools offered to the optimizer agent. The five `optihashi_*` tools resolve from the premium
- * tool map already merged into `externalTools`; the rest are core generics (verified registered
- * in `b4m-core/services/src/llm/tools/index.ts`). Kept deliberately small so the loop stays on
- * the model->formulate->solve->advance task.
+ * Core generics offered to the optimizer agent alongside the premium optimizer tools (verified
+ * registered in `b4m-core/services/src/llm/tools/index.ts`). Kept deliberately small so the loop
+ * stays on the model->formulate->solve->advance task.
  *
  * `retrieve_knowledge_content` is load-bearing rather than a convenience: the agent path injects
  * attached files as METADATA ONLY and points the agent at this tool to read them
@@ -29,16 +28,32 @@ import type { ResolvedOrchestrationProfile } from './agentExecutor.orchestration
  * the loop on task, whereas open-ended lake search invites it off task, and that search is
  * still available on the chat path.
  */
-export const OPTI_AGENT_TOOLS: string[] = [
-  'optihashi_decompose',
-  'optihashi_formulate',
-  'optihashi_edit_problem',
-  'optihashi_schedule',
-  'optihashi_solve',
+export const OPTI_CORE_AGENT_TOOLS: readonly string[] = [
   'retrieve_knowledge_content',
   'web_search',
   'current_datetime',
 ];
+
+/**
+ * The optimizer agent's toolbelt: every premium tool the host has registered, plus the core
+ * generics above (deduped, so an overlay name colliding with a generic is offered once).
+ *
+ * The premium names are DERIVED from the caller's tool map rather than restated here. That map is
+ * generated from whichever overlay packages are hydrated at install/dev-server time
+ * (`apps/client/scripts/generate-premium-glue.mjs` -> `premiumLlmTools.generated.ts`, gitignored),
+ * so a list written out here drifts silently: a newly registered tool is resolvable on the chat
+ * path but invisible to this profile until someone edits the list by hand, and nothing fails loudly
+ * when that happens - the agent simply never sees the tool and answers in prose instead.
+ *
+ * Assumption, true of every premium tool registered today: a premium tool belongs on the optimizer
+ * surface. `ToolDefinition` carries no surface tag, so if a non-optimizer overlay ever contributes
+ * one, the fix is to tag the definition rather than to reintroduce a name list here.
+ *
+ * `OPTI_DENIED_TOOLS` is still subtracted downstream, so a derived name remains deniable.
+ */
+export function resolveOptiAgentTools(premiumToolNames: readonly string[]): string[] {
+  return [...new Set([...premiumToolNames, ...OPTI_CORE_AGENT_TOOLS])];
+}
 
 /**
  * Explicitly denied even if a payload override tries to re-add them: image generation has a
@@ -115,20 +130,36 @@ Discipline:
   the tool call does the real work.`;
 
 /**
- * Build the opti orchestration profile. `systemPrompt` defaults to the built-in loop prompt but
- * accepts an override (e.g. an admin-tuned prompt) resolved by the caller.
+ * Build the opti orchestration profile.
+ *
+ * `premiumToolNames` is required rather than defaulted: this file stays a pure builder (no Mongo,
+ * AWS or overlay engine imports), so it cannot read the generated premium map itself and the caller
+ * passes `Object.keys(premiumLlmTools)`. Requiring it turns a caller that forgets into a compile
+ * error rather than an agent silently missing its optimizer tools.
+ *
+ * `systemPrompt` defaults to the built-in loop prompt but accepts an override (e.g. an admin-tuned
+ * prompt) resolved by the caller.
  */
-export function buildOptiOrchestrationProfile(
-  systemPrompt: string = OPTI_AGENT_LOOP_PROMPT
-): ResolvedOrchestrationProfile {
+export function buildOptiOrchestrationProfile({
+  premiumToolNames,
+  systemPrompt = OPTI_AGENT_LOOP_PROMPT,
+}: {
+  premiumToolNames: readonly string[];
+  systemPrompt?: string;
+}): ResolvedOrchestrationProfile {
   return {
     id: 'synthetic:opti-orchestration',
     name: 'Optimizer',
-    allowedTools: OPTI_AGENT_TOOLS,
+    allowedTools: resolveOptiAgentTools(premiumToolNames),
     deniedTools: OPTI_DENIED_TOOLS,
     maxIterations: { ...OPTI_MAX_ITERATIONS },
     defaultThoroughness: 'very_thorough',
     isSynthetic: true,
+    // The walk needs its whole toolbelt: decompose plans it, formulate/solve advance it, and a
+    // caller's per-run tool selection narrowing that set strands the loop midway. Observed in
+    // production - a classifier-routed send carried a payload naming a single optimizer tool, so
+    // the agent had no way to decompose the scenario it had just been asked to break down.
+    toolsetIsExclusive: true,
     systemPrompt,
     // Disable the confidence gate for the autonomous optimizer loop. The opti tools are
     // sandboxed (LLM/solver + undoable /opti side-effect, no external mutation) and the

@@ -24,18 +24,23 @@ import {
   usdToCredits,
   usdToCreditsStochastic,
   getSettingsValue,
+  processFabFilesServer,
+  fetchAndConvertFabFiles,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import type { FabFileNotice } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
+  PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
+  PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder } from './tools/ToolBuilder';
+import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -74,6 +79,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   usdToCredits: vi.fn(),
   usdToCreditsStochastic: vi.fn(),
   processUrlsFromPrompt: vi.fn(),
+  // Stubbed so fabFilesToMessages can be exercised for real without a storage/embedding stack.
+  processFabFilesServer: vi.fn(),
+  fetchAndConvertFabFiles: vi.fn(),
   isOverloadedError: vi.fn().mockReturnValue(false),
   shouldTriggerFallback: vi.fn().mockReturnValue(false),
   getLlmWithFallback: vi.fn().mockResolvedValue(null),
@@ -147,6 +155,8 @@ const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
+const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
+const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
 
 const mockDb = {};
 const mockStorage = {};
@@ -264,6 +274,13 @@ describe('ChatCompletionProcess', () => {
     mockedBuildAndSortMessages.mockReset();
     mockedFetchAndProcessPreviousMessages.mockReset();
     mockedProcessUrlsFromPrompt.mockReset();
+    mockedProcessFabFilesServer.mockReset().mockResolvedValue({
+      userMessages: [],
+      fileNotices: [],
+      deliveredFileIds: [],
+      fullyDeliveredFileIds: [],
+    });
+    mockedFetchAndConvertFabFiles.mockReset().mockResolvedValue({ files: [], missingIds: [] });
     mockedShouldTriggerFallback.mockReset();
     mockedIsOverloadedError.mockReset();
     mockedGetLlmWithFallback.mockReset();
@@ -667,6 +684,53 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // #2243: this is the ONE site (restrictToDataLake: true) where swapping the caller-anchored
+  // scopedTagPrefixes arm for the creator-anchored lakeMemberships arm changes what matches -
+  // see Approach property 1. Pin both directions.
+  describe('countLakeReachableAttachments (#2243 lake-membership arm)', () => {
+    const LAKE = { id: 'lake1', name: 'Acme', slug: 'acme', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:' };
+    const MEMBERSHIP = {
+      kind: 'owned' as const,
+      datalakeTag: LAKE.datalakeTag,
+      fileTagPrefix: LAKE.fileTagPrefix,
+      creatorUserId: 'creator-1',
+    };
+
+    it('forwards lakeMemberships (derived from access.lakes), not scopedTagPrefixes', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [LAKE.fileTagPrefix],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      const search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+      (service as any).db = { fabfiles: { search } };
+
+      await (service as any).countLakeReachableAttachments(['f1']);
+
+      const options = search.mock.calls[0][5];
+      expect(options.lakeMemberships).toEqual([MEMBERSHIP]);
+      expect(options).not.toHaveProperty('scopedTagPrefixes');
+    });
+
+    it('Up: forwards the membership arm on the path a creator-owned prefix-only attachment takes', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      // Stands in for buildOwnershipConditions's real membership arm - already proven correct
+      // by the query-builder's own unit + real-Mongo tests; this pins that the count call SITE
+      // forwards what it needs to reach that arm.
+      const search = vi.fn().mockResolvedValue({ data: [{ id: 'f1' }], hasMore: false, total: 1 });
+      (service as any).db = { fabfiles: { search } };
+
+      const count = await (service as any).countLakeReachableAttachments(['f1']);
+      expect(count).toBe(1);
+    });
+  });
+
   describe('process', () => {
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({
@@ -936,6 +1000,25 @@ describe('ChatCompletionProcess', () => {
         // raw has to reach through and turn that off too, or "empty stack" is off by 17 tokens.
         const completeOpts = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
         expect(completeOpts.omitIdentityReminder).toBe(true);
+      });
+
+      // A session's first turn used to keep the in-flight quest in history, so the caller's message
+      // reached the model twice: once as history, once as the current user prompt. The pair
+      // discriminates on the mode alone - only raw asks history to exclude the current turn.
+      it('asks history to exclude the current turn under raw, but not for a default request', async () => {
+        mockTextModel();
+        const base = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+        await service.process({ body: base, logger: mockLogger });
+        expect(mockedFetchAndProcessPreviousMessages.mock.calls.at(-1)?.[2]).toEqual(
+          expect.objectContaining({ excludeCurrentPrompt: false })
+        );
+
+        mockTextModel();
+        await service.process({ body: { ...base, promptMode: 'raw' as const }, logger: mockLogger });
+        expect(mockedFetchAndProcessPreviousMessages.mock.calls.at(-1)?.[2]).toEqual(
+          expect.objectContaining({ excludeCurrentPrompt: true })
+        );
       });
 
       // Auto-added tools are OUR additions, and any attached tool also pulls the provider's
@@ -1310,6 +1393,100 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
     });
 
+    // The reservation figure itself, at the production call site. The cap tests above run a
+    // 100-token output window, where reservationOutputTokens is the identity - so reverting
+    // this call site to the raw ceiling would pass them untouched. Input priced at $0 so the
+    // hold depends only on the output figure, whatever the assembled prompt tokenizes to.
+    const RESERVATION_MAX_TOKENS = 100_000;
+    const reservationOrgSetup = (extraModelFields: Record<string, unknown> = {}) => {
+      const setup = capOrgSetup();
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 128_000,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: { 200000: { input: 0, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+          ...extraModelFields,
+        },
+      ]);
+      return setup;
+    };
+    const reservationBody = () => ({
+      ...startQuestParams,
+      params: { ...startQuestParams.params, max_tokens: RESERVATION_MAX_TOKENS },
+      tools: [],
+      projectId: undefined,
+      organizationId: 'org1',
+    });
+    const outputOnlyCredits = (outputTokens: number) => realUsdToCredits((outputTokens * 30) / 1_000_000);
+    const expectedHold = outputOnlyCredits(PREFLIGHT_RESERVATION_OUTPUT_TOKENS);
+    const expectedReasoningHold = outputOnlyCredits(PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS);
+    const ceilingHold = outputOnlyCredits(RESERVATION_MAX_TOKENS);
+
+    it('holds the reservation ceiling, not the full requested max_tokens window', async () => {
+      reservationOrgSetup();
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      // Balance reads empty at the debit, which stops the turn right after the reservation -
+      // all this test needs is the amount that was held.
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(expectedHold).toBeLessThan(ceilingHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedHold);
+    });
+
+    // 'adaptive' is what the real reasonsWithinOutputBudget keys off - it is not mocked here,
+    // so dropping that argument at the call site would show up as the 16K figure.
+    it('holds the larger reasoning ceiling for a model that reasons inside its output budget', async () => {
+      reservationOrgSetup({ thinkingStyle: 'adaptive' });
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(expectedReasoningHold).toBeGreaterThan(expectedHold);
+      expect(expectedReasoningHold).toBeLessThan(ceilingHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedReasoningHold);
+    });
+
+    it('checks the per-member cap against the raw ceiling, not the shrunk hold', async () => {
+      // The cap has no settlement counterpart, so it must stay priced on the ceiling:
+      // this cap clears the hold but not the worst case, and must still block.
+      reservationOrgSetup();
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: Math.floor((expectedHold + ceilingHold) / 2),
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn();
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockQuest.errorCode).toBe('insufficient_credits');
+      expect(mockQuest.reply).toMatch(/per-member credit limit/);
+      expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+    });
+
     // Idempotency guard for a cross-model failover: the failed primary
     // attempt streamed partial output AND provider usage before erroring. The loop must
     // settle on ONLY the successful fallback attempt's usage (the per-attempt reset at
@@ -1421,6 +1598,88 @@ describe('ChatCompletionProcess', () => {
       const tokenUsage = updateCall[0].promptMeta.tokenUsage;
       expect(tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+    });
+
+    // The TTFVT pair is per-attempt, not per-turn. A failed primary that DID put visible text
+    // on screen stamps firstTokenTime; if the retry paths did not clear it, a fallback whose
+    // whole stream is hidden reasoning would inherit that stamp and report the frozen turn as
+    // measured - the one reading the metric exists to rule out. Kept separate from the failover
+    // test above, whose assertions need a fallback that streams something visible.
+    it('clears the first-visible-token stamp on retry, so a hidden-only fallback reads as never-rendered', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      // Primary streams VISIBLE text - so it stamps - and then fails.
+      let stampedByPrimary: number | undefined;
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['visible text from primary'], { inputTokens: 999, outputTokens: 999 });
+          stampedByPrimary = mockQuest.promptMeta.performance.firstTokenTime;
+          throw new Error('ServiceUnavailableException: primary outage');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      // Fallback streams an unterminated thinking block only: chunks arrive, nothing renders.
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['<think>reasoning that never closes'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      // Without this the test is vacuous: it would pass on a build that never stamps at all.
+      expect(stampedByPrimary).toEqual(expect.any(Number));
+
+      // Asserted field-wise rather than through ttfvtState: the whole turn elapses inside a
+      // millisecond here, so firstChunkTime stamps as 0 and the state derivation's truthy test
+      // reads that as 'unknown'. Unreachable on a real turn (processStartTime is taken before
+      // prompt assembly and the DB reads), but it makes the derived state useless as an assertion.
+      const performance = mockQuest.promptMeta.performance;
+      expect(performance.firstTokenTime).toBeUndefined();
+      expect(performance.firstChunkTime).toEqual(expect.any(Number));
     });
 
     // Bounded multi-hop traversal (provider-wide outage): primary fails, the first fallback
@@ -2206,6 +2465,7 @@ describe('ChatCompletionProcess', () => {
       dataLakeTags?: string[];
       promptMode?: 'raw';
       fabPromptMessages?: IMessage[];
+      fabFileNotices?: FabFileNotice[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
       const getAccessibleFiles = opts.getAccessibleFilesImpl
@@ -2221,10 +2481,13 @@ describe('ChatCompletionProcess', () => {
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
-      if (opts.fabPromptMessages) {
+      if (opts.fabPromptMessages || opts.fabFileNotices) {
         vi.spyOn(service as any, 'fabFilesToMessages').mockResolvedValue({
-          promptMessages: opts.fabPromptMessages,
+          promptMessages: opts.fabPromptMessages ?? [],
           convertedFabFiles: [],
+          deliveredFileIds: [],
+          fullyDeliveredFileIds: [],
+          fileNotices: opts.fabFileNotices ?? [],
         });
       }
 
@@ -2275,12 +2538,73 @@ describe('ChatCompletionProcess', () => {
       // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
       const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
       const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+      const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+        promptMeta?: { retrieval?: unknown; offeredTools?: string[] };
+      };
 
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
 
-      return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
+      return {
+        enabledToolsArg,
+        getAccessibleFiles,
+        contextAndSystemMessages,
+        retrieval: savedQuest?.promptMeta?.retrieval,
+        offeredTools: savedQuest?.promptMeta?.offeredTools,
+      };
     };
+
+    // #2228: a file that never reached the model used to leave no trace at all - the model answered
+    // as though it had the content and the user saw nothing. Both halves of the fix are asserted
+    // here because either one alone still leaves a surface where the failure is invisible.
+    describe('attachment notices reach the quest', () => {
+      const notice: FabFileNotice = {
+        fabFileId: 'f1',
+        fileName: 'context.md',
+        band: 'read_failed',
+        message: '"context.md" could not be read and was not sent.',
+        delivered: false,
+      };
+
+      it('persists a user-facing line on the quest for an attachment that did not arrive', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabFileNotices: [notice] });
+
+        const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
+        expect(saved.length).toBeGreaterThan(0);
+        expect(saved[0]).toEqual(['"context.md" could not be read and was not sent.']);
+      });
+
+      it('leaves the quest untouched when every attachment delivered', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabPromptMessages: [] });
+
+        const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
+        expect(saved).toEqual([]);
+      });
+
+      // The no-regression half: surfacing failures must not cost a healthy attachment its delivery.
+      // A ~15KB markdown document is the size from the production report.
+      it('still carries a large attachment content through buildDataSources into the built messages', async () => {
+        const body = 'LARGE_DOC_MARKER\n' + 'the quarterly plan says forty-eight person-weeks. '.repeat(300);
+
+        const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'context.md', vectorized: true, chunkCount: 4 }],
+          fabPromptMessages: [
+            {
+              role: 'user',
+              content: `Here is the content from the attached file "context.md" for context:\n\n${body}`,
+            },
+          ],
+        });
+
+        const assembled = contextAndSystemMessages.map(m => String(m.content)).join('\n');
+        expect(assembled).toContain('LARGE_DOC_MARKER');
+        expect(assembled).toContain('forty-eight person-weeks');
+        // And nothing claims a delivery problem for a file that delivered.
+        const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
+        expect(saved).toEqual([]);
+      });
+    });
 
     it('withholds both knowledge tools for an attachment with no readable chunk text yet', async () => {
       const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
@@ -2357,6 +2681,181 @@ describe('ChatCompletionProcess', () => {
       expect(
         contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
       ).toBe(true);
+    });
+
+    /**
+     * The denominator of the #1394 metric, asserted through the real `process()` rather than
+     * against the seed site in isolation: a turn is only in the optional population if the tool
+     * was genuinely offered AND nothing forced retrieval. Reuses this harness because it is the
+     * one place that already drives both halves of that condition.
+     */
+    describe('optional-path retrieval mode is seeded from the same turn that offers the tool', () => {
+      it('marks a turn optional when the knowledge tool is offered and nothing forces retrieval', async () => {
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        expect(enabledToolsArg).toContain('search_knowledge_base');
+        expect(retrieval).toEqual({ attempted: false, mode: 'optional', surfaces: [], dataLakeTags: [] });
+      });
+
+      it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
+        // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
+        // ordinary chat turn would dilute the rate toward zero.
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: [],
+          files: [],
+        });
+
+        expect(enabledToolsArg).not.toContain('search_knowledge_base');
+        expect(retrieval).toBeUndefined();
+      });
+
+      it('becomes the numerator when a knowledge-tool call merges its result onto the seed', async () => {
+        // The seed lands first and says attempted:false; the tool's own write arrives later in the
+        // turn. Composing the REAL seeded value here (rather than a hand-written literal) is what
+        // ties this to the shape `process()` actually produces, and driving it through
+        // applyQuestStatusChanges - the site every tool write goes through - is what would catch
+        // that path being changed from a merge to an assignment, which would erase `mode`.
+        const { retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        const quest = { promptMeta: { retrieval } } as any;
+        applyQuestStatusChanges(quest, {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+          },
+        } as any);
+
+        expect(quest.promptMeta.retrieval).toEqual({
+          attempted: true,
+          outcome: 'ok',
+          mode: 'optional',
+          surfaces: ['knowledgeBaseSearch'],
+          dataLakeTags: [],
+        });
+      });
+    });
+  });
+
+  /**
+   * The regression the commented-out `errorMessages` destructure caused, asserted at the one layer
+   * that can see it: processFabFilesServer computed a reason, fabFilesToMessages threw it away, and
+   * the model answered as though the attachment were present (#2228). Calls the prototype method
+   * directly because the suite's beforeEach spies the instance one out.
+   */
+  describe('fabFilesToMessages surfaces undelivered attachments to the model', () => {
+    const modelInfo = { id: 'gpt-4', backend: ModelBackend.OpenAI, supportsVision: false } as any;
+
+    const callReal = (fabFileIds: string[]) =>
+      (ChatCompletionProcess.prototype as any).fabFilesToMessages.call(
+        service,
+        fabFileIds,
+        { id: 'quest1' } as any,
+        {} as any,
+        'what does the attachment say?',
+        4000,
+        modelInfo
+      );
+
+    beforeEach(() => {
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+    });
+
+    it('prepends a system message naming the file and the reason it was not delivered', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({
+        files: [{ id: 'f1', fileName: 'context.md', mimeType: 'text/markdown' } as any],
+        missingIds: [],
+      });
+      mockedProcessFabFilesServer.mockResolvedValue({
+        userMessages: [],
+        deliveredFileIds: [],
+        fullyDeliveredFileIds: [],
+        fileNotices: [
+          {
+            fabFileId: 'f1',
+            fileName: 'context.md',
+            band: 'read_failed',
+            message: '"context.md" could not be read and was not sent.',
+            delivered: false,
+          },
+        ],
+      });
+
+      const { promptMessages, fileNotices } = await callReal(['f1']);
+
+      const systemText = promptMessages
+        .filter((m: IMessage) => m.role === 'system')
+        .map((m: IMessage) => String(m.content))
+        .join('\n');
+      expect(systemText).toContain('context.md');
+      expect(systemText).toContain('was NOT delivered');
+      expect(systemText).toContain('Do not answer as though these files were present');
+      expect(fileNotices).toHaveLength(1);
+    });
+
+    it('reports an id that could not be resolved at all', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({ files: [], missingIds: ['ghost-id'] });
+
+      const { promptMessages, fileNotices } = await callReal(['ghost-id']);
+
+      expect(fileNotices).toEqual([
+        expect.objectContaining({ fabFileId: 'ghost-id', band: 'unresolved', delivered: false }),
+      ]);
+      expect(promptMessages.map((m: IMessage) => String(m.content)).join('\n')).toContain('ghost-id');
+    });
+
+    it('says a partially-delivered file is incomplete rather than missing', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({
+        files: [{ id: 'f1', fileName: 'big.csv', mimeType: 'text/csv' } as any],
+        missingIds: [],
+      });
+      mockedProcessFabFilesServer.mockResolvedValue({
+        userMessages: [{ role: 'user', content: 'partial content' }],
+        deliveredFileIds: ['f1'],
+        fullyDeliveredFileIds: [],
+        fileNotices: [
+          {
+            fabFileId: 'f1',
+            fileName: 'big.csv',
+            band: 'truncated',
+            message: '"big.csv" was too large to send whole.',
+            delivered: true,
+          },
+        ],
+      });
+
+      const { promptMessages } = await callReal(['f1']);
+
+      const systemText = promptMessages
+        .filter((m: IMessage) => m.role === 'system')
+        .map((m: IMessage) => String(m.content))
+        .join('\n');
+      expect(systemText).toContain('delivered only in part');
+      expect(systemText).not.toContain('was NOT delivered');
+      // The content that DID arrive still reaches the model - the notice is additive.
+      expect(promptMessages.some((m: IMessage) => String(m.content).includes('partial content'))).toBe(true);
+    });
+
+    it('adds no system message when every attachment delivered whole', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({
+        files: [{ id: 'f1', fileName: 'context.md', mimeType: 'text/markdown' } as any],
+        missingIds: [],
+      });
+      mockedProcessFabFilesServer.mockResolvedValue({
+        userMessages: [{ role: 'user', content: 'FULL_FILE_CONTENT' }],
+        deliveredFileIds: ['f1'],
+        fullyDeliveredFileIds: ['f1'],
+        fileNotices: [],
+      });
+
+      const { promptMessages, fileNotices } = await callReal(['f1']);
+
+      expect(fileNotices).toEqual([]);
+      expect(promptMessages).toEqual([{ role: 'user', content: 'FULL_FILE_CONTENT' }]);
     });
   });
 
@@ -3043,6 +3542,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3057,6 +3557,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3073,6 +3574,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3094,6 +3596,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'no_lakes',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
       });

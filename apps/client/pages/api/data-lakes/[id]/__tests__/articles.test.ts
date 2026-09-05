@@ -10,6 +10,7 @@ const LAKE = {
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   lakeMembershipScope: vi.fn(),
+  registryMembershipScope: vi.fn(),
   isFallbackLake: vi.fn(),
   search: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
@@ -31,6 +32,7 @@ vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     lakeMembershipScope: h.lakeMembershipScope,
+    registryMembershipScope: h.registryMembershipScope,
     isFallbackLake: h.isFallbackLake,
     // Real implementation (already unit-tested on its own) so this suite asserts on the actual
     // lakeAccessEventRepository.record call args rather than a reimplementation.
@@ -79,6 +81,7 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.isFallbackLake.mockReturnValue(false);
   h.lakeMembershipScope.mockReturnValue({
+    kind: 'owned',
     datalakeTag: LAKE.datalakeTag,
     fileTagPrefix: LAKE.fileTagPrefix,
     creatorUserId: LAKE.createdByUserId,
@@ -96,12 +99,15 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     // The creator, NOT the viewer: a viewer's own file that merely carries a colliding tag
     // prefix is not a member of someone else's lake, and a per-viewer answer could never match
     // the lake's persisted fileCount.
-    expect(serverOptions.lakeMembership).toEqual({
-      datalakeTag: 'datalake:org1:acme-docs',
-      fileTagPrefix: 'acme:',
-      creatorUserId: 'creator-1',
-    });
-    expect(serverOptions.lakeMembership.creatorUserId).not.toBe('viewer-9');
+    expect(serverOptions.lakeMemberships).toEqual([
+      {
+        kind: 'owned',
+        datalakeTag: 'datalake:org1:acme-docs',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      },
+    ]);
+    expect(serverOptions.lakeMemberships[0].creatorUserId).not.toBe('viewer-9');
   });
 
   it('passes the scope OUTSIDE the parsed params so a caller cannot forge one', async () => {
@@ -111,7 +117,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const [, params, , serverOptions] = h.search.mock.calls[0];
     // search() zod-parses params; a forgeable creatorUserId there would read anyone's files.
     // Every other scope key is out of the parsed params for the same reason.
-    expect(params.options).not.toHaveProperty('lakeMembership');
+    expect(params.options).not.toHaveProperty('lakeMemberships');
     expect(params.options).not.toHaveProperty('scopedTagPrefixes');
     expect(params.options).not.toHaveProperty('dataLakeTags');
     expect(params.options).not.toHaveProperty('dataLakeTagPrefixes');
@@ -130,20 +136,62 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     expect(serverOptions.userGroups).toEqual(['viewer-group']);
   });
 
-  it('browses a built-in registry lake by its OPEN prefix arm, not the ownership predicate', async () => {
-    // A fallback lake is owner-less and no write path can stamp its meta-tag, so its files carry
-    // only prefixed content tags. Scoping it by creator ownership would return nothing at all.
+  it('browses a built-in registry lake through the REGISTRY membership scope', async () => {
+    // A registry lake is owner-less, so scoping it by creator ownership drops its prefix arm and
+    // under-returns. It used to get a hand-rolled dataLakeTags/dataLakeTagPrefixes pair here; both
+    // this browse and the count surfaces now resolve the SAME scope, which is what stops the two
+    // from disagreeing about how many files the lake holds.
+    const registryScope = { kind: 'registry', datalakeTag: 'datalake:org1:acme-docs', fileTagPrefix: 'acme:' };
     h.isFallbackLake.mockReturnValue(true);
+    h.registryMembershipScope.mockReturnValue(registryScope);
     h.assertLakeAccess.mockResolvedValue({ ...LAKE, createdByUserId: '' });
     const { res } = makeRes();
 
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
     const [, , , serverOptions] = h.search.mock.calls[0];
-    expect(serverOptions.dataLakeTagPrefixes).toEqual(['acme:']);
-    expect(serverOptions.dataLakeTags).toEqual(['datalake:org1:acme-docs']);
-    expect(serverOptions?.lakeMembership).toBeUndefined();
+    // #2216 routes the registry browse through a membership scope; this branch carries the
+    // singular -> plural rename, so it arrives as a one-element `lakeMemberships` array.
+    expect(serverOptions.lakeMemberships).toEqual([registryScope]);
+    // The hand-rolled pair is gone - leaving it would re-open the second, divergent predicate.
+    expect(serverOptions.dataLakeTagPrefixes).toBeUndefined();
+    expect(serverOptions.dataLakeTags).toBeUndefined();
     expect(h.lakeMembershipScope).not.toHaveBeenCalled();
+  });
+
+  it('narrows to the Uncategorized bucket on ?uncategorized=true, using the RESOLVED lake prefix', async () => {
+    // The bucket is the lake's members carrying no tag under its own prefix - what the picker
+    // counted but the prefix-keyed tree had no branch for (#2031). The prefix comes from the
+    // lake this request already resolved, never from the query string, so the flag can only ever
+    // REMOVE files from one lake's list.
+    const { res } = makeRes();
+    const req = { ...makeReq(), query: { id: 'lake1', uncategorized: 'true' } };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    const [, params, , serverOptions] = h.search.mock.calls[0];
+    expect(serverOptions.lacksContentPrefixTags).toEqual(['acme:']);
+    // Still scoped to the one lake: the flag narrows, it does not replace the membership arm.
+    expect(serverOptions.restrictToDataLake).toBe(true);
+    expect(serverOptions.lakeMemberships).toHaveLength(1);
+    // Out of the parsed params with the rest of the scope, so nothing here is forgeable.
+    expect(params.options).not.toHaveProperty('lacksContentPrefixTags');
+  });
+
+  it('leaves the browse unnarrowed without the flag, and for any value other than true', async () => {
+    for (const query of [
+      { id: 'lake1' },
+      { id: 'lake1', uncategorized: 'false' },
+      { id: 'lake1', uncategorized: '1' },
+    ]) {
+      h.search.mockClear();
+      const { res } = makeRes();
+
+      await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)({ ...makeReq(), query }, res);
+
+      const [, , , serverOptions] = h.search.mock.calls[0];
+      expect(serverOptions).not.toHaveProperty('lacksContentPrefixTags');
+    }
   });
 
   it('still returns an empty page for a lake with no meta-tag, without searching', async () => {
@@ -227,5 +275,66 @@ describe('GET /api/data-lakes/:id/articles access-event audit', () => {
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
     expect(json).toHaveBeenCalledWith({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+  });
+});
+
+describe('GET /api/data-lakes/:id/articles pagination walk', () => {
+  it('walking page by page over a tied fileName fixture returns exactly total distinct ids', async () => {
+    // Simulates a fixed DB layer's tied-fileName total order (see fabFileSearchPageWalk.integration
+    // test for the real fix). The walk arithmetic pins page-param parsing, passthrough of
+    // data/total/hasMore, and termination; the order assertion at the end is what catches a
+    // per-page sort override here, since the mock below reads only pagination.page and would stay
+    // green under any sort at all.
+    const files = [
+      { id: 'f1', fileName: 'd1.txt' },
+      { id: 'f2', fileName: 'd2.txt' },
+      { id: 'f3', fileName: 'd3.txt' },
+      { id: 'f4', fileName: 'tied.txt' },
+      { id: 'f5', fileName: 'tied.txt' },
+      { id: 'f6', fileName: 'tied.txt' },
+      { id: 'f7', fileName: 'tied.txt' },
+      { id: 'f8', fileName: 'tied.txt' },
+      { id: 'f9', fileName: 'tied.txt' },
+      { id: 'f10', fileName: 'z1.txt' },
+    ];
+    const limit = 3;
+    h.search.mockImplementation(async (_userId: string, params: { pagination: { page: number } }) => {
+      const skip = (params.pagination.page - 1) * limit;
+      const slice = files.slice(skip, skip + limit + 1);
+      return { data: slice.slice(0, limit), total: files.length, hasMore: slice.length > limit };
+    });
+
+    const seenIds = new Set<string>();
+    let duplicateCount = 0;
+    let total = -1;
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { res, json } = makeRes();
+      const req = { ...makeReq(), query: { id: 'lake1', page: String(page), limit: String(limit) } };
+      await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+      const response = json.mock.calls[0][0] as { data: Array<{ id: string }>; total: number; hasMore: boolean };
+      total = response.total;
+      for (const file of response.data) {
+        if (seenIds.has(file.id)) duplicateCount++;
+        seenIds.add(file.id);
+      }
+      hasMore = response.hasMore;
+      page++;
+      // Bounds the walk even if a regression made hasMore never settle.
+      if (page > 20) break;
+    }
+
+    expect(total).toBe(files.length);
+    expect(duplicateCount).toBe(0);
+    expect(seenIds.size).toBe(total);
+    expect(hasMore).toBe(false);
+
+    // fileName is the only sort buildFabFileSearchQuery gives an _id tiebreaker, so a page walk
+    // is only total-ordered while every page asks for it.
+    const orders = (h.search.mock.calls as [string, { order: unknown }][]).map(call => call[1].order);
+    expect(orders).toEqual(Array(4).fill({ by: 'fileName', direction: 'asc' }));
   });
 });

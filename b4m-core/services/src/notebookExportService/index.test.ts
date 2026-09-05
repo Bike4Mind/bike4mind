@@ -63,10 +63,16 @@ function makeAdapters(over: AdapterOverrides = {}) {
   return { adapters, uploaded };
 }
 
+const GOOD = '507f1f77bcf86cd799439011';
+const UPPER = '507F1F77BCF86CD799439011';
+
 const OPTIONS = {
   format: 'json',
   includeMetadata: true,
   includeArtifacts: true,
+  includeKnowledge: true,
+  includeTools: true,
+  includeAgents: true,
   maxFileSize: 1_000_000,
 } as unknown as Parameters<NotebookExportService['exportNotebooks']>[1];
 
@@ -75,6 +81,14 @@ async function exportOnce(over: AdapterOverrides = {}) {
   await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
   expect(uploaded).toHaveLength(1);
   return JSON.parse(uploaded[0]);
+}
+
+/** Same run, but hands back the adapters so a test can assert on what was NOT logged. */
+async function exportOnceWithAdapters(over: AdapterOverrides = {}) {
+  const { adapters, uploaded } = makeAdapters(over);
+  await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+  expect(uploaded).toHaveLength(1);
+  return { payload: JSON.parse(uploaded[0]), adapters };
 }
 
 describe('notebook export', () => {
@@ -139,13 +153,274 @@ describe('notebook export', () => {
     expect(find.mock.calls.map(([, opts]) => opts?.skip)).toEqual([0, 100]);
   });
 
-  it('names an artifact from its title, which is the field the entity actually has', async () => {
+  it('finds artifacts by their own id, not by _id', async () => {
+    // Artifact ids are not ObjectId-castable, so the real collection throws on an `_id` query.
+    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
+      if (!query.id?.$in) {
+        throw new Error('CastError: Cast to ObjectId failed for value "artifact_1_probe" at path "_id"');
+      }
+      return query.id.$in.map(id => ({ id, title: 'My Chart', type: 'recharts' }));
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts.map((a: { id: string }) => a.id)).toEqual(['artifact-1']);
+  });
+
+  it('warns by id about an artifact it could not export, so the gap is not silent', async () => {
+    const { adapters, uploaded } = makeAdapters({
+      artifactRepository: { find: vi.fn().mockResolvedValue([]) },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    expect(uploaded).toHaveLength(1);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Some artifacts were not exported',
+      expect.objectContaining({ notExported: ['artifact-1'] })
+    );
+  });
+
+  it('leaves a soft-deleted artifact out of the export, like every other artifact reader', async () => {
+    // What this pins is that the filter is SENT and that a matching row is excluded. It cannot
+    // establish MongoDB's own null-matches-missing behaviour, which is what makes the filter safe
+    // for the normal rows that have no `deletedAt` field at all - the repository here is a stub.
+    // That half rests on the schema: `deletedAt` has no default, so those rows omit the field, and
+    // an equality-to-null query matches missing-or-null.
+    const find = vi.fn(async (query: Record<string, unknown>) => {
+      // Mirrors the collection: a row whose deletedAt is set does not match `deletedAt: null`.
+      if (query.deletedAt !== null) {
+        return [{ id: 'artifact-1', title: 'Deleted Chart', type: 'recharts', deletedAt: new Date() }];
+      }
+      return [];
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts).toEqual([]);
+    expect(find).toHaveBeenCalledWith(expect.objectContaining({ deletedAt: null }));
+  });
+
+  it('leaves out an artifact the exporter cannot read, and scopes the query to them', async () => {
+    // `session.artifactIds` is client-supplied and written through unvalidated, so an id arriving
+    // at the export is not necessarily the caller's. The normal read path denies such a row; the
+    // export must not be the way around it. The stub answers only when the query carries the
+    // access clause, so this cannot pass by resolving everything.
+    const find = vi.fn().mockImplementation((query: Record<string, unknown>) => {
+      if (!query.$or) return [{ id: 'artifact-1', title: 'Someone Elses Artifact', type: 'react' }];
+      return [];
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts).toEqual([]);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: [
+          { userId: 'user-1' },
+          { 'permissions.canRead': 'user-1' },
+          { visibility: 'public' },
+          { 'permissions.isPublic': true },
+        ],
+      })
+    );
+  });
+
+  it('exports the resolvable knowledge files even when a session holds a non-ObjectId knowledgeId', async () => {
+    // FabFile is ObjectId-keyed, but session.knowledgeIds is a plain string array, so a junk
+    // entry makes the real collection throw and (before this) killed the whole export.
+    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
+      const ids = query._id?.$in ?? [];
+      const bad = ids.find(id => !/^[0-9a-fA-F]{24}$/.test(id));
+      if (bad) {
+        throw new Error(`CastError: Cast to ObjectId failed for value "${bad}" at path "_id"`);
+      }
+      return ids.map(id => ({ id, fileName: 'notes.txt', mimeType: 'text/plain', fileSize: 10 }));
+    });
+
+    // UPPER is here rather than in its own test: uppercase hex is a valid ObjectId rendering,
+    // and the stub's regex is case-insensitive, so one fixture covers both.
     const payload = await exportOnce({
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: ['not-an-objectid', GOOD, UPPER] }]),
+      },
+      knowledgeRepository: { find, findOne: vi.fn().mockResolvedValue(null) },
+    });
+
+    expect(payload.notebooks[0].knowledge.map((k: { id: string }) => k.id)).toEqual([GOOD, UPPER]);
+  });
+
+  it('warns by name about a knowledgeId it had to skip, so the gap is not silent', async () => {
+    const { adapters, uploaded } = makeAdapters({
+      sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: ['not-an-objectid'] }]) },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    expect(uploaded).toHaveLength(1);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('[knowledge]'), {
+      skipped: ['not-an-objectid'],
+    });
+  });
+
+  it.each(['tool', 'agent'])('drops a non-ObjectId %s id instead of failing the export', async kind => {
+    // Same `_id` hazard as knowledge; these two are reachable via notebooks imported before the
+    // id fix, which recorded uuids.
+    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
+      const ids = query._id?.$in ?? [];
+      if (ids.some(id => !/^[0-9a-fA-F]{24}$/.test(id))) {
+        throw new Error('CastError: Cast to ObjectId failed');
+      }
+      return ids.map(id => ({ id, name: `a ${kind} row` }));
+    });
+
+    const payload = await exportOnce({
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([{ ...SESSION, [`${kind}Ids`]: ['not-an-objectid', GOOD] }]),
+      },
+      [`${kind}Repository`]: { find },
+    });
+
+    expect(payload.notebooks[0][`${kind}s`].map((x: { id: string }) => x.id)).toEqual([GOOD]);
+  });
+
+  it('does not warn about a notebook that simply has no attachments', async () => {
+    const { adapters } = makeAdapters({
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([{ ...SESSION, artifactIds: [], knowledgeIds: [], toolIds: [], agentIds: [] }]),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('names an artifact from its title, which is the field the entity actually has', async () => {
+    const { payload, adapters } = await exportOnceWithAdapters({
       artifactRepository: {
         find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts' }]),
       },
     });
 
     expect(payload.notebooks[0].artifacts[0].name).toBe('My Chart');
+    // An export where every id resolved must say nothing. Without this a spurious warn - the kind
+    // an off-by-one in the notExported predicate produces - would ship green.
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('notebook export - notebookIds shape', () => {
+  it('rejects an id that cannot address a notebook instead of letting Mongo throw', async () => {
+    const { adapters } = makeAdapters();
+    const svc = new NotebookExportService(adapters);
+
+    await expect(
+      svc.exportNotebooks('user-1', { ...OPTIONS, notebookIds: ['not-an-objectid'] } as never)
+    ).rejects.toMatchObject({ code: 'INVALID_NOTEBOOK_ID' });
+
+    // Never dropped: the whole point is that the caller is told, not that fewer notebooks ship.
+    expect(adapters.sessionRepository.find).not.toHaveBeenCalled();
+  });
+
+  it('names the offending id, so the 400 is actionable', async () => {
+    const svc = new NotebookExportService(makeAdapters().adapters);
+
+    await expect(
+      svc.exportNotebooks('user-1', { ...OPTIONS, notebookIds: [GOOD, 'legacy-uuid'] } as never)
+    ).rejects.toThrow(/legacy-uuid/);
+  });
+
+  it('accepts uppercase hex, which addresses the same row', async () => {
+    const { adapters } = makeAdapters();
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      notebookIds: [UPPER],
+    } as never);
+
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [UPPER] } }));
+  });
+
+  it('anchors a date-only fromDate to midnight and stretches a date-only toDate to end of day', async () => {
+    // `new Date('2026-01-20')` is that day at 00:00Z, so an inclusive `$lte` on it returns nothing
+    // from the day the caller named. The modal resolves the picked day itself, so this form is what
+    // an API caller sends.
+    const { adapters } = makeAdapters();
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      fromDate: '2026-01-15',
+      toDate: '2026-01-20',
+    } as never);
+
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastUpdated: {
+          $gte: new Date('2026-01-15T00:00:00.000Z'),
+          $lte: new Date('2026-01-20T23:59:59.999Z'),
+        },
+      })
+    );
+  });
+
+  it('leaves a full ISO datetime toDate exactly where the caller put it', async () => {
+    const { adapters } = makeAdapters();
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      toDate: '2026-01-20T08:30:00.000Z',
+    } as never);
+
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({ lastUpdated: { $lte: new Date('2026-01-20T08:30:00.000Z') } })
+    );
+  });
+});
+
+describe('notebook export - log level', () => {
+  // The reason the status mapping exists at all: a 5xx-level line trips the CloudWatch filter and
+  // pages LiveOps. Answering 404 at the route is not enough if the service already logged `error`.
+  it('reports NO_NOTEBOOKS carrying a 404, and logs it at warn rather than error', async () => {
+    const { adapters } = makeAdapters({ sessionRepository: { find: vi.fn().mockResolvedValue([]) } });
+
+    await expect(new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS)).rejects.toMatchObject({
+      code: 'NO_NOTEBOOKS',
+      statusCode: 404,
+    });
+
+    expect(adapters.logger.error).not.toHaveBeenCalled();
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Notebook export rejected',
+      expect.objectContaining({ code: 'NO_NOTEBOOKS' })
+    );
+  });
+
+  it('reports INVALID_NOTEBOOK_ID carrying a 400, and logs it at warn too', async () => {
+    const { adapters } = makeAdapters();
+
+    await expect(
+      new NotebookExportService(adapters).exportNotebooks('user-1', {
+        ...OPTIONS,
+        notebookIds: ['not-an-objectid'],
+      } as never)
+    ).rejects.toMatchObject({ code: 'INVALID_NOTEBOOK_ID', statusCode: 400 });
+
+    expect(adapters.logger.error).not.toHaveBeenCalled();
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Notebook export rejected',
+      expect.objectContaining({
+        code: 'INVALID_NOTEBOOK_ID',
+        status: 400,
+        // The ids are the only actionable part of this line; they exist nowhere else in any log.
+        reason: expect.stringContaining('not-an-objectid'),
+      })
+    );
+  });
+
+  it('still logs an unexpected fault at error, so a real break stays loud', async () => {
+    const { adapters } = makeAdapters({
+      sessionRepository: { find: vi.fn().mockRejectedValue(new Error('mongo is on fire')) },
+    });
+
+    await expect(new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS)).rejects.toMatchObject({
+      code: 'EXPORT_FAILED',
+    });
+
+    expect(adapters.logger.error).toHaveBeenCalled();
   });
 });

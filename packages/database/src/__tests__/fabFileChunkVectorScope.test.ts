@@ -45,10 +45,11 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds scoping', () => {
   });
 });
 
-// Per-chunk embeddingModel, not FabFile.embeddingModel, is the source of truth here: a
-// re-embedded file's chunks can span more than one model (see IFabFileChunk.embeddingModel), and
-// a per-model retrieval index removal needs every model actually in use to reach every index.
-describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileIds', () => {
+// Per-chunk fields, not FabFile.embeddingModel, are the source of truth here: a re-embedded file's
+// chunks can span more than one model (see IFabFileChunk.embeddingModel), and a per-model retrieval
+// index removal needs every index a file can have documents in to reach them all. That is the UNION
+// of index residency (retrievalIndexModel) and the file-complete readiness stamp (embeddingModel).
+describe('FabFileChunkRepository.distinctRetrievalIndexModelsByFabFileIds', () => {
   setupMongoTest();
 
   beforeEach(async () => {
@@ -62,7 +63,7 @@ describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileIds', () => {
       { fabFileId: 'f2', text: 'c', tokenCount: 1, embeddingModel: 'model-a' },
     ]);
 
-    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds(['f1', 'f2']);
+    const models = await fabFileChunkRepository.distinctRetrievalIndexModelsByFabFileIds(['f1', 'f2']);
 
     expect(models.sort()).toEqual(['model-a', 'model-b']);
   });
@@ -73,25 +74,157 @@ describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileIds', () => {
       { fabFileId: 'out-of-scope', text: 'b', tokenCount: 1, embeddingModel: 'model-b' },
     ]);
 
-    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds(['in-scope']);
+    const models = await fabFileChunkRepository.distinctRetrievalIndexModelsByFabFileIds(['in-scope']);
 
     expect(models).toEqual(['model-a']);
   });
 
-  it('excludes chunks with no embeddingModel yet', async () => {
+  it('excludes chunks with neither field set', async () => {
     await FabFileChunk.create([{ fabFileId: 'f1', text: 'not vectorized', tokenCount: 1 }]);
 
-    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds(['f1']);
+    const models = await fabFileChunkRepository.distinctRetrievalIndexModelsByFabFileIds(['f1']);
 
     expect(models).toEqual([]);
+  });
+
+  // The bug this pairing exists for: vectorize indexes a message's chunks into OpenSearch, then
+  // the file never finishes, so embeddingModel is never stamped. Resolving from the stamp alone
+  // reports no index to remove while the documents are still live.
+  it('includes a model recorded only as index residency, with no readiness stamp', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'indexed but never stamped', tokenCount: 1, retrievalIndexModel: 'model-a' },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctRetrievalIndexModelsByFabFileIds(['f1']);
+
+    expect(models).toEqual(['model-a']);
+  });
+
+  it('dedupes a model recorded in both fields', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, retrievalIndexModel: 'model-a', embeddingModel: 'model-a' },
+      { fabFileId: 'f1', text: 'b', tokenCount: 1, retrievalIndexModel: 'model-b' },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctRetrievalIndexModelsByFabFileIds(['f1']);
+
+    expect(models.sort()).toEqual(['model-a', 'model-b']);
   });
 
   it('an empty id list returns nothing without querying', async () => {
     await FabFileChunk.create([{ fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' }]);
 
-    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds([]);
+    const models = await fabFileChunkRepository.distinctRetrievalIndexModelsByFabFileIds([]);
 
     expect(models).toEqual([]);
+  });
+});
+
+// The per-FILE pairing the removal path needs (#2087). The union above cannot express it: pairing
+// every file with every model in the batch issues one request per (file, model) cell, most of which
+// match nothing, and widens any single index failure to every file in the removal.
+describe('FabFileChunkRepository.retrievalIndexModelsByFabFileIds', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('groups models under the file that actually used them', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f2', text: 'c', tokenCount: 1, embeddingModel: 'model-b' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['f1', 'f2']);
+
+    expect(byFile).toEqual({ f1: ['model-a'], f2: ['model-b'] });
+  });
+
+  it('dedupes within a file and keeps every model a re-embedded file spans', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f1', text: 'b', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f1', text: 'c', tokenCount: 1, embeddingModel: 'model-b' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['f1']);
+
+    expect(byFile.f1.sort()).toEqual(['model-a', 'model-b']);
+  });
+
+  it('omits a requested file with no model-bearing chunks, rather than mapping it to an empty list', async () => {
+    // The port iterates this map, so an omitted file is how a no-op removal request is dropped.
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f2', text: 'not vectorized', tokenCount: 1 },
+    ]);
+
+    const byFile = await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['f1', 'f2', 'never-seen']);
+
+    expect(byFile).toEqual({ f1: ['model-a'] });
+  });
+
+  it('excludes chunks outside the requested file ids', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'in-scope', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'out-of-scope', text: 'b', tokenCount: 1, embeddingModel: 'model-b' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['in-scope']);
+
+    expect(byFile).toEqual({ 'in-scope': ['model-a'] });
+  });
+
+  // Same regression as the distinct variant above: a file whose vectorize never finished is
+  // present in the purge's fabFileIds but was absent from this map when it keyed on the stamp
+  // alone, so the port skipped it and its OpenSearch documents were never removed.
+  it('maps a file whose chunks carry only index residency, never a readiness stamp', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'indexed but never stamped', tokenCount: 1, retrievalIndexModel: 'model-a' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['f1']);
+
+    expect(byFile).toEqual({ f1: ['model-a'] });
+  });
+
+  it('unions the two fields per file and dedupes', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, retrievalIndexModel: 'model-a', embeddingModel: 'model-a' },
+      { fabFileId: 'f1', text: 'b', tokenCount: 1, retrievalIndexModel: 'model-b' },
+      { fabFileId: 'f2', text: 'c', tokenCount: 1, embeddingModel: 'model-c' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['f1', 'f2']);
+
+    expect(byFile.f1.sort()).toEqual(['model-a', 'model-b']);
+    expect(byFile.f2).toEqual(['model-c']);
+  });
+
+  // The write vectorize actually makes: residency rides along with the chunk's vector through
+  // `update`. Mongoose drops any field the schema does not declare, so a schema that lost
+  // retrievalIndexModel would leave this silently unwritten and the resolvers permanently blind -
+  // which no mocked-repository test can catch.
+  it('sees residency written by the repository update that carries the vector', async () => {
+    const [chunk] = await FabFileChunk.create([{ fabFileId: 'f1', text: 'a', tokenCount: 1 }]);
+
+    await fabFileChunkRepository.update({
+      id: String(chunk._id),
+      vector: [0.1, 0.2],
+      retrievalIndexModel: 'model-a',
+    });
+
+    const stored = await FabFileChunk.findById(chunk._id);
+    expect(stored?.retrievalIndexModel).toBe('model-a');
+    expect(stored?.embeddingModel).toBeUndefined();
+    expect(await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['f1'])).toEqual({ f1: ['model-a'] });
+  });
+
+  it('an empty id list returns nothing without querying', async () => {
+    await FabFileChunk.create([{ fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' }]);
+
+    expect(await fabFileChunkRepository.retrievalIndexModelsByFabFileIds([])).toEqual({});
   });
 });
 

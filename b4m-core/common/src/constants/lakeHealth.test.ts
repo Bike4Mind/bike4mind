@@ -1,15 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import {
-  DEFAULT_PASSAGE_TOKEN_TARGET,
-  CHARS_PER_TOKEN_SERVE_BOUND,
-  SERVE_CHUNK_CHARS_CEILING,
-  CONVERGENCE_PAUSED_NOTE,
-  CONVERGENCE_PAUSED_CHUNK_NOTE,
-} from './chunking';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, CHARS_PER_TOKEN_SERVE_BOUND, SERVE_CHUNK_CHARS_CEILING } from './chunking';
 import {
   resolveLakeHealthPolicy,
   evaluateMemberHealth,
   summarizeLakeHealth,
+  findDuplicateMembers,
   type LakeHealthMemberInput,
 } from './lakeHealth';
 import { isMemberIndexingInFlight } from './lakeConvergence';
@@ -448,7 +443,7 @@ describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, no
     chunkCount: 0,
     vectorizedChunkCount: 0,
     error: null,
-    notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+    chunkStallReason: 'rechunkPaused',
     chunkedCharCount: null,
     maxChunkCharLength: null,
     embeddedChunkCount: null,
@@ -473,8 +468,7 @@ describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, no
   });
 
   it('does NOT keep failing a member the rescue sweep rebuilt (marker outlives the repair)', () => {
-    // That path enqueues without a reset and nothing on the success path clears `notes`, so the
-    // marker survives a successful re-chunk. Keying on it alone would fail a healthy file forever.
+    // That path enqueues without a reset, so a marker left behind survives a successful re-chunk. Keying on it alone would fail a healthy file forever.
     const rebuilt = stranded({
       chunkCount: 1,
       vectorizedChunkCount: 1,
@@ -490,14 +484,14 @@ describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, no
   });
 
   it('leaves the vectorize-arm marker alone - it has chunks, so it grades on its real rollups', () => {
-    const r = evaluateMemberHealth(stranded({ chunkCount: 0, notes: CONVERGENCE_PAUSED_NOTE }), DEFAULT_POLICY);
+    const r = evaluateMemberHealth(stranded({ chunkCount: 0, chunkStallReason: 'vectorizePaused' }), DEFAULT_POLICY);
     expect(r.status.fullyVectorized).toBe('unknown');
   });
 });
 
 describe('evaluateMemberHealth - convergence-paused files must GRADE, not hide', () => {
-  // The kill switch (#1676) abandons a vectorize by writing CONVERGENCE_PAUSED_NOTE to `notes` and
-  // clearing isVectorizing. It never sets `error`, so before the notes arm such a file satisfied no
+  // The kill switch (#1676) abandons a vectorize by stamping `chunkStallReason` and
+  // clearing isVectorizing. It never sets `error`, so before that arm such a file satisfied no
   // settled condition and hid from BOTH sides of the reachable ratio - forever, since the handler
   // states these do not auto-resume. A lake where most files were paused mid-sweep would then report
   // a healthy share over the few that finished. Same failure mode `error` exists to catch.
@@ -509,7 +503,7 @@ describe('evaluateMemberHealth - convergence-paused files must GRADE, not hide',
       vectorizedChunkCount: 1, // stalled below chunkCount
       embeddedChunkCount: 1,
       embeddedCharCount: 2000,
-      notes: CONVERGENCE_PAUSED_NOTE,
+      chunkStallReason: 'vectorizePaused',
       ...over,
     });
 
@@ -522,16 +516,24 @@ describe('evaluateMemberHealth - convergence-paused files must GRADE, not hide',
   });
 
   it('still treats an ordinary mid-vectorize file as pending', () => {
-    // The discriminator must be the note, not merely "vectorizedChunkCount < chunkCount".
-    const r = evaluateMemberHealth(paused({ notes: null }), DEFAULT_POLICY);
+    // The discriminator must be the stall reason, not merely "vectorizedChunkCount < chunkCount".
+    const r = evaluateMemberHealth(paused({ chunkStallReason: null }), DEFAULT_POLICY);
     expect(r.status.fullyVectorized).toBe('unknown');
     expect(r.reachableChars).toBeNull();
     expect(r.measured).toBe(false);
   });
 
-  it('does not treat an unrelated note as a terminal stall', () => {
-    const r = evaluateMemberHealth(paused({ notes: 'No extractable text found in this file' }), DEFAULT_POLICY);
+  // #2016: `chunkStallReason` is enum-valued, so a value outside CHUNK_STALL_REASONS is a writer bug
+  // and must NOT be read as a stall - a fail-open here would grade a mid-vectorize file as settled.
+  it('does not treat an unrecognized stall reason as a terminal stall', () => {
+    const r = evaluateMemberHealth(paused({ chunkStallReason: 'somethingElse' }), DEFAULT_POLICY);
     expect(r.measured).toBe(false); // still pending, not graded
+  });
+
+  // The owner's own note is not a pipeline fact and must not move any grade (#2016).
+  it('ignores the owner note entirely', () => {
+    const r = evaluateMemberHealth(paused({ chunkStallReason: null, notes: 'my contract notes' }), DEFAULT_POLICY);
+    expect(r.measured).toBe(false);
   });
 
   it('keeps a paused file in the lake denominator instead of shrinking it', () => {
@@ -562,7 +564,7 @@ describe('evaluateMemberHealth - a rebuild in progress must read as pending, not
     chunkCount: 0,
     vectorizedChunkCount: 0,
     error: null,
-    notes: '',
+    chunkStallReason: null,
     chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
     chunkedCharCount: null,
     maxChunkCharLength: null,
@@ -599,7 +601,7 @@ describe('evaluateMemberHealth - a rebuild in progress must read as pending, not
   // behind - otherwise a halted member would hide in the pending bucket instead of failing P3.
   it('lets the halted marker and a terminal error outrank a leftover stamp', () => {
     expect(
-      evaluateMemberHealth(rebuilding({ notes: CONVERGENCE_PAUSED_CHUNK_NOTE }), DEFAULT_POLICY).status.fullyVectorized
+      evaluateMemberHealth(rebuilding({ chunkStallReason: 'rechunkPaused' }), DEFAULT_POLICY).status.fullyVectorized
     ).toBe('fail');
     const failed = evaluateMemberHealth(rebuilding({ error: 'boom', embeddedChunkCount: 0 }), DEFAULT_POLICY);
     expect(failed.status.fullyVectorized).toBe('pass'); // 0 embedded >= 0 chunks: settled, nothing owed
@@ -636,7 +638,7 @@ describe('lake health and convergence agree on what "still indexing" means', () 
     { name: 'terminally failed', over: { chunkCount: 2, vectorizedChunkCount: 0, error: 'boom' } },
     {
       name: 'halted by the kill switch',
-      over: { chunkCount: 2, vectorizedChunkCount: 0, notes: CONVERGENCE_PAUSED_NOTE },
+      over: { chunkCount: 2, vectorizedChunkCount: 0, chunkStallReason: 'vectorizePaused' },
     },
     { name: 'legacy null vector rollup', over: { chunkCount: 2, vectorizedChunkCount: null } },
     {
@@ -656,10 +658,100 @@ describe('lake health and convergence agree on what "still indexing" means', () 
         chunkCount: m.chunkCount,
         vectorizedChunkCount: m.vectorizedChunkCount,
         error: m.error,
-        notes: m.notes,
+        chunkStallReason: m.chunkStallReason,
         chunkRebuildRequestedAt: m.chunkRebuildRequestedAt,
       });
       expect(evaluateMemberHealth(m, DEFAULT_POLICY).status.fullyVectorized === 'unknown').toBe(inFlight);
     });
   }
+});
+
+describe('findDuplicateMembers', () => {
+  it('reports no groups when every fileName is unique', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'one.txt', fileSize: 10 },
+      { fabFileId: 'b', fileName: 'two.txt', fileSize: 20 },
+    ]);
+    expect(result).toEqual({ memberCount: 0, groupCount: 0, groups: [] });
+  });
+
+  it('groups members sharing an exact fileName, counts every member, and drops the per-member fileName', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'report.pdf', fileSize: 100 },
+      { fabFileId: 'b', fileName: 'report.pdf', fileSize: 100 },
+      { fabFileId: 'c', fileName: 'unique.txt', fileSize: 5 },
+    ]);
+    expect(result.memberCount).toBe(2);
+    expect(result.groupCount).toBe(1);
+    expect(result.groups).toEqual([
+      {
+        fileName: 'report.pdf',
+        members: [
+          { fabFileId: 'a', fileSize: 100 },
+          { fabFileId: 'b', fileSize: 100 },
+        ],
+        memberCount: 2,
+        contentComparison: 'unprovable',
+      },
+    ]);
+  });
+
+  it('reports "differing" when two measured sizes actually disagree', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'policy.md', fileSize: 100 },
+      { fabFileId: 'b', fileName: 'policy.md', fileSize: 250 },
+    ]);
+    expect(result.groups[0].contentComparison).toBe('differing');
+  });
+
+  it('reports "differing" when hashes disagree even at equal size', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'policy.md', fileSize: 100, serverTextHash: 'hash-a' },
+      { fabFileId: 'b', fileName: 'policy.md', fileSize: 100, serverTextHash: 'hash-b' },
+    ]);
+    expect(result.groups[0].contentComparison).toBe('differing');
+  });
+
+  it('reports "identical" only when every member carries a matching hash', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'policy.md', fileSize: 100, serverTextHash: 'hash-a' },
+      { fabFileId: 'b', fileName: 'policy.md', fileSize: 100, serverTextHash: 'hash-a' },
+    ]);
+    expect(result.groups[0].contentComparison).toBe('identical');
+  });
+
+  it('does not report "identical" when only some members carry the matching hash', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'policy.md', fileSize: 100, serverTextHash: 'hash-a' },
+      { fabFileId: 'b', fileName: 'policy.md', fileSize: 100, serverTextHash: null },
+    ]);
+    expect(result.groups[0].contentComparison).toBe('unprovable');
+  });
+
+  it('does not treat an unmeasured (null) size as a confirmed difference', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'policy.md', fileSize: null },
+      { fabFileId: 'b', fileName: 'policy.md', fileSize: 100 },
+    ]);
+    expect(result.groups[0].contentComparison).toBe('unprovable');
+  });
+
+  it('ignores members with no fileName', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: undefined, fileSize: 1 },
+      { fabFileId: 'b', fileName: undefined, fileSize: 2 },
+    ]);
+    expect(result).toEqual({ memberCount: 0, groupCount: 0, groups: [] });
+  });
+
+  it('sorts groups largest first', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'pair.txt', fileSize: 1 },
+      { fabFileId: 'b', fileName: 'pair.txt', fileSize: 1 },
+      { fabFileId: 'c', fileName: 'triple.txt', fileSize: 1 },
+      { fabFileId: 'd', fileName: 'triple.txt', fileSize: 1 },
+      { fabFileId: 'e', fileName: 'triple.txt', fileSize: 1 },
+    ]);
+    expect(result.groups.map(g => g.fileName)).toEqual(['triple.txt', 'pair.txt']);
+  });
 });

@@ -2,6 +2,7 @@ import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
 import DownloadMenu from '../common/DownloadMenu';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
+import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
 import ReasoningDisclosure from '@client/app/components/Session/AgentExecution/ReasoningDisclosure';
 import AutoRouteBadge from '@client/app/components/Session/AgentExecution/AutoRouteBadge';
 import UserPrompt from '@client/app/components/Session/UserPrompt';
@@ -549,6 +550,9 @@ const MessageContent: React.FC<ContentProps> = memo(
             messageId={messageData.id}
           />
         )}
+        {/* Rapid reply - the instant acknowledgement, above the streaming reply body
+            it precedes. Only the streaming message is handed a chatCompletion. */}
+        {chatCompletion && <RapidReplyBubble chatCompletion={chatCompletion} />}
         {/* Auto-route notice. Sits above the reply body (not in the footer chip
             row) so the user reads it before internalizing the agent-style answer -
             false-positive remediation via Dismiss is more discoverable that way.

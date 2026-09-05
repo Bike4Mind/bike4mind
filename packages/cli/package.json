@@ -1,6 +1,7 @@
 {
   "name": "@bike4mind/cli",
-  "version": "0.20.1",
+  "version": "0.20.2",
+  "mcpName": "io.github.bike4mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
   "license": "UNLICENSED",
@@ -45,7 +46,7 @@
     "test:all": "vitest run && vitest run --config vitest.e2e.config.ts",
     "start": "node dist/index.mjs",
     "eval:run": "tsx src/evals/cli.ts",
-    "postinstall": "node -e \"try { require('better-sqlite3') } catch(e) { if(e.message.includes('bindings')) { console.log('\\n⚠️  Rebuilding better-sqlite3 native bindings...'); require('child_process').execSync('pnpm rebuild better-sqlite3', {stdio:'inherit'}) } }\""
+    "postinstall": "node -e \"try { require('better-sqlite3') } catch (e) { if (e.message.includes('bindings')) { console.log('\\n\\u26a0\\ufe0f  Rebuilding better-sqlite3 native bindings...'); try { require('child_process').execSync('pnpm rebuild better-sqlite3', {stdio:'inherit'}) } catch { console.log('\\u26a0\\ufe0f  Could not rebuild better-sqlite3 automatically. If the CLI reports a native-bindings error, run: npm rebuild better-sqlite3') } } }\""
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",
@@ -59,7 +60,6 @@
     "@aws-sdk/client-transcribe": "^3.1080.0",
     "@aws-sdk/credential-provider-node": "^3.972.63",
     "@aws-sdk/s3-request-presigner": "^3.1080.0",
-    "@bike4mind/hearth": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
     "@joplin/turndown-plugin-gfm": "^1.0.67",
@@ -130,6 +130,7 @@
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
+    "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
     "@bike4mind/observability": "workspace:*",

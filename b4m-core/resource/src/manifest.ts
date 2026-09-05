@@ -93,6 +93,10 @@ export const DEFAULT_MANIFEST = {
   emailJobQueue: { kind: 'queue' },
   fabFileChunkQueue: { kind: 'queue' },
   fabFileVectorizeQueue: { kind: 'queue' },
+  // Optional so an install that upgraded without adding the new env vars still boots the
+  // worker (it warns and skips the consumer) instead of taking every other queue down with it.
+  imageEditQueue: { kind: 'queue', optional: true },
+  imageGenerationQueue: { kind: 'queue', optional: true },
   // Reached from the data-lake batch finalize path and from lakeMemoryExtraction. Both enqueue
   // sites sit inside a try/catch, so an unregistered key degraded to a logged error and a
   // feature that silently did nothing.

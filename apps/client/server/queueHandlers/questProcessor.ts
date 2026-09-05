@@ -30,6 +30,7 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   Quest,
+  scopedSettingsRepository,
   usageEventRepository,
 } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/utils';
@@ -133,6 +134,7 @@ const getStaticOptions = () => {
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
+      scopedSettings: scopedSettingsRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

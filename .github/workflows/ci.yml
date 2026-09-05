@@ -36,9 +36,9 @@ jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
   # merge-base diff on pull_request, push range on push) and emit two
   # orthogonal signals: `deployable` (run the build/test legs) and `docs-changed`
-  # (currently unconsumed: the Docusaurus build verification was removed
+  # (gates `help-docs` below - the Docusaurus build verification was removed
   # because this repo carries only docs-site markdown, not the site
-  # scaffolding; the output stays wired for when the check returns).
+  # scaffolding, but the help guards still have to run on a docs-only change).
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on both.
@@ -89,6 +89,16 @@ jobs:
 
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
+
+      # Also runs in `help-docs` below, and it has to live in both: this job is gated on
+      # `deployable`, that one on `docs-changed`, and the two shapes miss each other. An
+      # artifacts-only change (the generated JSON under apps/client/app/generated/, which
+      # no docs-path matches) is deployable-but-not-docs, so `help-docs` skips and the
+      # index-vs-embeddings invariant would go unguarded - it is pre-commit otherwise, and
+      # --no-verify walks past that. A docs-only change is the reverse: this job skips.
+      # Cheap enough to run twice on a code+docs PR, and cheaper than a job on every PR.
+      - name: Check help artifacts agree
+        run: sh .husky/check-help-content.sh
 
       # Resolve what "added" means for the two ASCII checks below.
       #
@@ -142,6 +152,9 @@ jobs:
 
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
+
+      - name: Check workflows pass values through env, not run-body interpolation
+        run: python3 scripts/check-no-run-interpolation.py
 
 
 
@@ -416,8 +429,13 @@ jobs:
 
   # Tests run as a matrix of shards so wall time is the slowest shard, not the
   # serial sum. The heavy suites are isolated onto their own runners:
-  #   - client: the large apps/client suite (thousands of fast unit files) - alone
-  #     so it keeps the whole box for file parallelism.
+  #   - client 1/3, 2/3, 3/3: the large apps/client unit suite (over a thousand files), split
+  #     across three runners by vitest's own `--shard`. Each leg owns its whole box
+  #     for file parallelism. Splitting by `--shard` rather than by directory is the
+  #     point: vitest slices a hash-sorted list of the resolved file paths, so the
+  #     legs tile the file set EXACTLY for any count - no hand-maintained bucket
+  #     lists, and a newly added test file cannot land in two legs or in none. The
+  #     leg count is pinned by checkClientTestShards.test.ts.
   #   - client-integration: the SAME package and filter as `client`, selected onto
   #     its real-Mongo `*.e2e.test.ts` files by a different script. apps/client is
   #     therefore the one package that appears in two legs; the two lanes are
@@ -446,18 +464,52 @@ jobs:
     # drag the test-shard fan-out onto the larger, pricier runner.
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
-    timeout-minutes: 20
+    # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
+    # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
+    # into - the job was cancelled during cleanup AFTER every test had passed, so a green
+    # suite reported red on a coin flip decided by runner speed (#2015). 30 buys headroom over
+    # that drift; SHARD_SOFT_BUDGET_SECONDS below is what actually watches for it.
+    timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      # Soft budget: crossing it annotates the run instead of killing it, so the next slow creep
+      # surfaces as a warning on a passing build rather than as someone's PR failing for no
+      # reason - which was the only signal this had that the client shard had gone from 15
+      # minutes to 20.
+      #
+      # 600, retuned down from the 1200 that matched the client shard's old pre-split runtime.
+      # With the client suite split three ways, no leg in this matrix is expected to approach 10
+      # minutes - the heaviest non-client leg was 4m51s on the pre-split run - so 1200 could no
+      # longer fire for anything and had stopped being an early warning. At 600 it also catches
+      # the specific way this split can silently break: if a leg stops sharding it runs the WHOLE
+      # suite (~942s in CI) and trips this, rather than just quietly costing 3x for no speedup.
+      SHARD_SOFT_BUDGET_SECONDS: '600'
 
     strategy:
       fail-fast: false
       matrix:
         shard:
           # Single-package shards own the whole runner, so no worker cap.
-          - name: client
+          #
+          # `args` is appended to the test command WITHOUT a `--` separator, and that matters:
+          # `pnpm ... test -- --shard=1/3` forwards the literal `--` on to vitest, which then
+          # reads everything after it as positional path filters. The shard flag is silently
+          # IGNORED and the leg runs the whole suite - measured, it is not a theory. Nothing
+          # errors, so all three legs would quietly do the full suite at 3x the cost. Keep the
+          # args bare. SHARD_SOFT_BUDGET_SECONDS above is the backstop if this regresses.
+          - name: client 1/3
             filter: '--filter @bike4mind/client'
             workers: ''
+            args: '--shard=1/3'
+          - name: client 2/3
+            filter: '--filter @bike4mind/client'
+            workers: ''
+            args: '--shard=2/3'
+          - name: client 3/3
+            filter: '--filter @bike4mind/client'
+            workers: ''
+            args: '--shard=3/3'
           # The client package's ~20 real-Mongo suites (`*.e2e.test.ts`), split off
           # the shard above. Each boots a mongod, and inline they pushed that job
           # past `timeout-minutes` even on runs where the suite itself passed - the
@@ -568,14 +620,27 @@ jobs:
           pnpm --filter @bike4mind/database exec node -e
           "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
 
+      # Paired with "Report shard duration" at the end of this job. Set before the test steps
+      # rather than derived from the job's own start so the number is test runtime, not
+      # test runtime plus install and core-build restore.
+      - name: Mark shard start
+        run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
+
       # `matrix.shard.script` is unset on every shard but client-integration, and an
       # unset matrix value is the empty string here, so `||` falls back to the unit
-      # `test` script.
+      # `test` script. `matrix.shard.args` is likewise empty on every leg but the three
+      # client ones, where it carries `--shard=i/3` - deliberately with no `--` separator
+      # before it, see the matrix entries above for why that is load-bearing.
       - name: Run Tests (${{ matrix.shard.name }})
-        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} ${{ matrix.shard.script || 'test' }}
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+          SHARD_FILTER: ${{ matrix.shard.filter }}
+          SHARD_SCRIPT: ${{ matrix.shard.script || 'test' }}
+          SHARD_ARGS: ${{ matrix.shard.args }}
+        run: |
+          # shellcheck disable=SC2086 # each carries several args; word splitting is the point
+          pnpm --recursive --workspace-concurrency=4 $SHARD_FILTER $SHARD_SCRIPT $SHARD_ARGS
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so
@@ -607,9 +672,30 @@ jobs:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
 
+      # Reports, never fails. Before this, the only signal that a shard's runtime had crept was
+      # a PR going red for no reason once the creep crossed `timeout-minutes` (#2015) - by which
+      # point the information arrives as a broken build rather than as a trend. A duration on
+      # every run, plus a warning annotation once a shard passes its soft budget, makes the
+      # slide visible while the build is still green.
+      #
+      # `always()` so a FAILING shard still reports: a shard that failed because it was slow is
+      # the exact run where the number is worth having. Guarded on SHARD_START_SECONDS being set
+      # so an early failure (before the mark step) reports nothing instead of nonsense.
+      - name: Report shard duration
+        if: always() && env.SHARD_START_SECONDS != ''
+        env:
+          SHARD_NAME: ${{ matrix.shard.name }}
+        run: |
+          elapsed=$(( $(date +%s) - SHARD_START_SECONDS ))
+          summary=$(printf '%s: %dm%02ds' "$SHARD_NAME" "$(( elapsed / 60 ))" "$(( elapsed % 60 ))")
+          echo "- Run Tests (${summary})" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$elapsed" -gt "$SHARD_SOFT_BUDGET_SECONDS" ]; then
+            echo "::warning title=Slow test shard::${summary} - over its ${SHARD_SOFT_BUDGET_SECONDS}s soft budget. Not a failure: split or speed up the shard before it reaches the job timeout."
+          fi
+
   # Aggregate gate for the sharded test matrix. Branch protection requires a
   # status check literally named "Run Tests"; the matrix above reports per-shard
-  # names ("Run Tests (client)", …), so this job re-exposes the exact required
+  # names ("Run Tests (client 1/3)", …), so this job re-exposes the exact required
   # context and passes only when every shard succeeded.
   test:
     name: Run Tests
@@ -624,8 +710,10 @@ jobs:
       contents: read
     steps:
       - name: Verify all test shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-shards.result }}
         run: |
-          result='${{ needs.test-shards.result }}'
+          result="$SHARDS_RESULT"
           echo "test-shards result: $result"
           test "$result" = "success"
 
@@ -710,12 +798,79 @@ jobs:
         env:
           CI: true
 
+  # Help guards for docs-touching runs. The help suites assert invariants that span
+  # docs-site/ and apps/client (every hard-coded help slug names a real article; the
+  # generated index covers exactly the corpus), and until now they only ran inside
+  # `test-shards` - which `needs: core-build`, gated on `deployable == 'true'`. Since
+  # `docs-site/**` is on the non-deployable exclude list, a docs-only PR skipped every
+  # shard, and a skipped required check counts as passing. So the guard fired in one
+  # direction only: break a helpId in a .tsx and CI caught it; rename or delete an
+  # article and forget the helpId and it shipped green. That second direction is exactly
+  # how the admin feedback help slug came to disagree with the component that names it.
+  #
+  # Gated on `docs-changed` (not `!deployable`) so "docs changed => help guards ran"
+  # holds regardless of deployability. On a deployable docs PR the suites also run in
+  # the shards; the duplicate is ~1 min and worth the unconditional guarantee.
+  #
+  # Deliberately does NOT need core-build: the help tooling imports only glob/gray-matter
+  # (see loadHelpArticles.ts), so this stays a light, standalone leg that a non-deployable
+  # run can satisfy on its own.
+  help-docs:
+    name: Help Docs Guards
+    needs: changes
+    if: needs.changes.outputs.docs-changed == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Run help corpus and help-id suites
+        run: pnpm --filter @bike4mind/scripts exec vitest run help/__tests__
+        env:
+          CI: true
+
+      # The index-vs-embeddings half of this script reads the two committed artifacts
+      # and ignores the staging area, so it works unchanged in CI. It was pre-commit
+      # only, which `--no-verify` bypasses; this is the first time the Help AI chat's
+      # "every indexed article has a vector" invariant is enforced anywhere else.
+      - name: Check help artifacts agree
+        run: sh .husky/check-help-content.sh
+
   # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
   # lockfile, config) is not tracked in this repo, so the build can never succeed
   # here and was failing the required CI Complete check on every docs-touching PR.
-  # Markdown content is still validated by the help-content tests in the test
-  # suite. Restore the job (and .github/workflows/_verify-docs-build.yml) when
-  # the scaffolding lands.
+  # Markdown content is still validated by the help-content tests, which the
+  # `help-docs` job above runs on every docs-touching change. Restore the job
+  # (and .github/workflows/_verify-docs-build.yml) when the scaffolding lands.
 
   # ============================================================
   # CI gate aggregation. The branch rulesets (main-protection + prod-protection)
@@ -723,7 +878,7 @@ jobs:
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
-  # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e)
+  # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e/help-docs)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
@@ -736,7 +891,7 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e]
+    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -749,11 +904,12 @@ jobs:
           OPENAPI: ${{ needs.openapi.result }}
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
+          HELP_DOCS: ${{ needs.help-docs.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1

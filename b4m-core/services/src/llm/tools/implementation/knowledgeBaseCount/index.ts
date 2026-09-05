@@ -5,7 +5,8 @@ import {
   normalizeExclusionMarkers,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { getDynamicDataLakeAccess, type ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import type { ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 /**
  * How many documents a library holds - the one knowledge-base question ranked passage retrieval
@@ -77,10 +78,8 @@ async function countScope(context: ToolContext, scope: CountScope): Promise<Coun
       '',
       filters,
       { page, limit: SCAN_PAGE_SIZE },
-      // Paging a non-total order can repeat or skip rows across pages; stableSort makes the
-      // fileName sort a total order so the walk visits each document exactly once.
       { by: 'fileName', direction: 'asc' },
-      { ...options, stableSort: true }
+      options
     );
     count += filterRetrievalExcluded(result.data, filter).length;
     if (!result.hasMore) return { count, exact: true };
@@ -88,7 +87,21 @@ async function countScope(context: ToolContext, scope: CountScope): Promise<Coun
   return { count, exact: false };
 }
 
-/** The scope arm a lake is counted through - see ResolvedLakeAccess.source for why they differ. */
+/**
+ * The scope a single lake is counted through: that lake's own membership predicate and nothing
+ * else, for both lake kinds.
+ *
+ * ONE query per lake, which is what makes a `registry` scope's unanchored prefix arm safe here -
+ * the precondition the `lakeMemberships` docblock states is "access gated upstream, query covers
+ * ONE lake", and access is gated by `resolveSessionLakeAccess`. Do not batch these into a shared
+ * cross-lake `$or`; that is the case `lakeMembershipsFrom` exists to filter.
+ *
+ * This used to fork on `lake.membership` being absent and hand-roll a `dataLakeTags` +
+ * `dataLakeTagPrefixes` pair for registry lakes. It emitted the same OR-set as the real predicate
+ * by coincidence, and the number here is reported to the user as "the same totals the library shows
+ * on its page" - a parity claim two independently-written predicates cannot hold. Keep it routed
+ * through the shared scope.
+ */
 function lakeScope(lake: ResolvedLakeAccess, context: ToolContext): CountScope {
   return {
     options: {
@@ -97,9 +110,7 @@ function lakeScope(lake: ResolvedLakeAccess, context: ToolContext): CountScope {
       restrictToDataLake: true,
       includeShared: true,
       userGroups: context.user.groups ?? [],
-      ...(lake.membership
-        ? { lakeMembership: lake.membership }
-        : { dataLakeTags: [lake.datalakeTag], dataLakeTagPrefixes: [lake.fileTagPrefix] }),
+      lakeMemberships: [lake.membership],
     },
   };
 }
@@ -140,7 +151,9 @@ export const knowledgeBaseCountTool: ToolDefinition = {
           return `This agent's knowledge base contains ${describeCount(scoped)}.${REPORTING_NOTE}`;
         }
 
-        const { lakes } = await getDynamicDataLakeAccess(context);
+        // Narrowed to the session's lake: a session scoped to one lake must not enumerate, or name,
+        // every other lake its owner can reach.
+        const { lakes } = await resolveSessionLakeAccess(context);
 
         if (lakes.length === 0) {
           // No curated library, but the caller's own and shared files are still what

@@ -1,3 +1,4 @@
+import { type ChunkStallReason } from '../../constants/chunking';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 
@@ -34,6 +35,8 @@ export enum FabFileSourceType {
   SALESFORCE = 'salesforce',
   GOOGLE_DRIVE = 'google_drive',
   SLACK = 'slack',
+  /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
+  PROPOSAL_APPROVAL = 'proposal_approval',
 }
 
 // Data Lake metadata interface
@@ -71,6 +74,23 @@ export interface IFabFileChunk {
    * an Atlas `$vectorSearch` index lookup keys on - not FabFile.embeddingModel.
    */
   embeddingModel?: string;
+  /**
+   * Which per-model retrieval index this chunk's document was written to, for a retrieval store
+   * that lives OUTSIDE Mongo (self-host OpenSearch; undefined on Atlas, whose vector index is on
+   * this collection itself and so is removed with the row).
+   *
+   * Deliberately NOT `embeddingModel`. That field is a READINESS stamp: fabFileVectorize writes it
+   * only once the whole file finishes, so the Atlas cutover read path can never treat a
+   * still-vectorizing file as ready. But OpenSearch documents are written per vectorize MESSAGE,
+   * long before that - so a file whose vectorize never finishes (spend-gate denial, exhausted SQS
+   * retries, a purge landing mid-flight) has live documents and no stamp, and every removal path
+   * resolves its index from the stamp. Recording index residency separately is what lets a removal
+   * find those documents.
+   *
+   * Written just BEFORE the OpenSearch write, not after: the write is fail-open, and a removal for
+   * an index that holds nothing is a harmless no-op, whereas a missed one orphans documents.
+   */
+  retrievalIndexModel?: string;
 }
 
 /**
@@ -151,7 +171,12 @@ export interface IFabFile {
    */
   organizationId?: string;
 
-  /** User notes for the file */
+  /**
+   * The OWNER's own note on the file, and nothing else. No pipeline path writes or clears it (#2016):
+   * the chunk/vector stall markers that used to share this string live in `chunkStallReason` and
+   * `noExtractableTextAt`, because every writer of a single prose field clobbers the others - a
+   * "Rebuild passages" wave silently deleted whatever the owner had typed.
+   */
   notes?: string;
 
   /**
@@ -223,16 +248,38 @@ export interface IFabFile {
    * same write that clears the chunk rollups (#1939). `null`/absent means no rebuild is outstanding.
    *
    * The reset and the queue send are two operations, so without this the gap between them carries no
-   * marker at all: `chunkCount: 0`, `error: null`, `notes: ''` is the shape of an image or a
+   * marker at all: `chunkCount: 0`, `error: null` and no stall reason is the shape of an image or a
    * still-uploading row, and the file drops out of health, convergence and the retrieval withhold at
    * once. Cleared by `commitFabFileChunks` when the rebuild lands, and UPGRADED to
-   * `CONVERGENCE_PAUSED_CHUNK_NOTE` by the chunk handler when the kill switch halts it instead - see
-   * `isChunkRebuildPending` for why a pending rebuild must not simply pre-write that marker.
+   * `chunkStallReason: 'rechunkPaused'` by the chunk handler when the kill switch halts it instead -
+   * see `isChunkRebuildPending` for why a pending rebuild must not simply pre-write that marker.
    *
    * `null` rather than undefined for the same reason as `extractedCharCount`: the repository's `$set`
    * strips undefined, which would leave a stale stamp in place.
    */
   chunkRebuildRequestedAt?: Date | null;
+
+  /**
+   * Why this file's chunk/vector pipeline is STALLED, or `null`/absent when it is not (#2016). Both
+   * arms of the convergence kill switch stamp it; `commitFabFileChunks` clears it when the repair
+   * lands. See `ChunkStallReason` for the values, `isChunkStalled` for the predicate every reader
+   * uses, and `CHUNK_STALL_NOTICES` for the owner-facing prose.
+   *
+   * `null` rather than undefined for the same reason as `chunkRebuildRequestedAt`: the repository's
+   * `$set` strips undefined, which would leave a stale marker in place.
+   */
+  chunkStallReason?: ChunkStallReason | null;
+
+  /**
+   * When chunking last produced ZERO chunks for this file (#2016) - usually a failed or partial
+   * extraction (image-only, a parser-unfriendly .docx), occasionally a genuinely empty document.
+   * `null`/absent means text was extracted.
+   *
+   * TERMINAL for the chunk rescue sweep (`buildFabFileChunkScanFilter`), which is why it is a stored
+   * fact rather than a re-derivation: re-enqueueing such a file would fail identically every cycle.
+   * `resetChunkStateByIds` clears it, so the explicit reprocess path is the way back in.
+   */
+  noExtractableTextAt?: Date | null;
 
   /**
    * Set when this file belongs to data lakes whose required chunk policy its current chunks do not
@@ -399,6 +446,9 @@ export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   embeddedChunkCount: null,
   embeddedCharCount: null,
   serverTextHash: null,
+  // Content-derived like the rest: the stamp asserts "no text in this file" about bytes the rewrite
+  // replaced. Leaving it would keep the rescue sweep's terminal guard closed against the new content.
+  noExtractableTextAt: null,
 } as const;
 
 export interface IFabFileListItem {
@@ -429,12 +479,21 @@ export interface FabFileChunkVector {
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
   deleteManyByFabFileId(fabFileId: string): Promise<void>;
   /**
-   * Every DISTINCT embeddingModel actually used by chunks of the given files - not
-   * FabFile.embeddingModel, which is only the file's current/latest model (see
-   * IFabFileChunk.embeddingModel: chunks can outlive a re-embed). A retrieval index keyed
-   * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
+   * Every DISTINCT per-model retrieval index the given files' chunks can have documents in - the
+   * union of `IFabFileChunk.retrievalIndexModel` (index residency, recorded per vectorize message)
+   * and `IFabFileChunk.embeddingModel` (the file-complete readiness stamp). Both are needed:
+   * residency alone misses chunks indexed before that field existed, and the stamp alone misses
+   * every file whose vectorize never finished. Neither is FabFile.embeddingModel, which is only the
+   * file's current/latest model and misses an index left by an earlier embed.
    */
-  distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
+  distinctRetrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
+  /**
+   * The same fact as above, but resolved PER FILE: `{ [fabFileId]: models }`, omitting any file with
+   * no model-bearing chunks. A per-model retrieval index needs the pairing, not the union - pairing
+   * every file with every model seen across the batch issues one request per (file, model) cell, so
+   * a two-model lake doubles its removal traffic and most of it matches nothing.
+   */
+  retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
@@ -519,21 +578,64 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
 }
 
 /**
- * Identifies a data lake for file-membership matching: a file belongs on an exact `datalakeTag`
- * match OR on a `fileTagPrefix` match against a file the lake's CREATOR OWNS. The predicate itself
- * is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
+ * One lake's live file counts under the membership predicate.
+ *
+ * They ship together because a browse surface showing `total` is committing to LIST that many
+ * files, and a prefix-keyed tag tree cannot list the `uncategorized` slice: those files carry the
+ * lake's meta-tag but no tag under its `fileTagPrefix`, so no branch of the tree contains them.
+ * Serving one without the other is what let a picker advertise 13 files above a tree totalling 12
+ * (#2031). `uncategorized` is always <= `total`; the difference is what the tree's branches cover.
+ */
+export type DataLakeMembershipFileCounts = {
+  /** Every member: the meta-tag arm OR the prefix arm. */
+  total: number;
+  /** Members with no tag under the lake's `fileTagPrefix`. 0 when the lake has no usable prefix. */
+  uncategorized: number;
+};
+
+/**
+ * Identifies a data lake for file-membership matching. The predicate itself is
+ * `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
  * `IFabFileRepository` can name it without the packages depending on each other.
  *
- * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens what
- * the filter selects, so a caller-supplied scope would reach another user's files - and on the
- * lifecycle paths, destroy them.
+ * TWO membership models, both legitimate, discriminated so a consumer cannot silently get the
+ * wrong one:
+ *
+ * - `owned` (DB lake): meta-tag OR (`fileTagPrefix` match AND the file is owned by the lake's
+ *   CREATOR). The prefix is user-chosen and unique only per creator, so the ownership conjunct is
+ *   what stops one lake's prefix from reaching another tenant's files.
+ * - `registry` (hardcoded DATA_LAKES lake): meta-tag OR `fileTagPrefix`, with NO ownership arm.
+ *   Such a lake is a shared knowledge base with many contributors and no creator to anchor to.
+ *   Safe ONLY because the prefix is compile-time config - see the ownership-bypass note on
+ *   `dataLakeTagPrefixes` in fabFileSearchQuery, which this replaces FOR PER-LAKE MEMBERSHIP only.
+ *   That mechanism is still live and must not be removed: the multi-lake retrieval surfaces
+ *   (semantic-search, the knowledge-base tools, ChatCompletionFeatures, and the tag-count prefix
+ *   arms) pass it for a whole SET of lakes at once, which a single-lake scope cannot express.
+ *
+ * A discriminated union rather than an optional `creatorUserId` because the previous shape could
+ * not express the registry model at all: the filter DEGRADED a creator-less scope to meta-tag-only,
+ * which under-counted registry lakes and forced the browse path to hand-roll the correct predicate
+ * at its own call site. The two then disagreed, violating the invariant stated on
+ * `countDataLakeFilesByMembership` below.
+ *
+ * Always build these from the lake DOCUMENT (`owned`) or the hardcoded registry entry
+ * (`registry`), never from request input: the prefix arm widens what the filter selects, and on
+ * the lifecycle paths that means destroying files.
  */
-export interface DataLakeMembershipScope {
-  datalakeTag: string;
-  fileTagPrefix?: string | null;
-  /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
-  creatorUserId?: string | null;
-}
+export type DataLakeMembershipScope =
+  | {
+      kind: 'owned';
+      datalakeTag: string;
+      fileTagPrefix?: string | null;
+      /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
+      creatorUserId?: string | null;
+    }
+  | {
+      kind: 'registry';
+      datalakeTag: string;
+      /** From the hardcoded DATA_LAKES registry ONLY - never a user-supplied prefix. */
+      fileTagPrefix?: string | null;
+    };
 
 /**
  * The model interface for the FabFile model.
@@ -624,6 +726,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to void.
    */
   deleteManyInIds(ids: string[]): Promise<void>;
+  /**
+   * Soft-delete the given ids, scoped to BOTH an owner and an upload batch, in one write. Exists for
+   * the upload-complete cleanup of browser-failed presign orphans: the scope is the security
+   * property (a stale or retried client sending stray ids must not be able to delete the caller's
+   * other files), and doing it as one `updateMany` rather than two queries per id keeps a large
+   * failure list from timing the request out before the batch is finalized. Returns how many rows
+   * were actually deleted.
+   */
+  softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number>;
 
   /**
    * Find all files in the given IDs.
@@ -663,19 +774,23 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[]; // Required when includeShared is true - user's group IDs for org-level sharing
       dataLakeTags?: string[]; // Include files tagged with these datalake: meta-tags
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
-      scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
       /**
-       * One lake's membership scope, matching the whole-lake writes exactly. Server-supplied
-       * only: it names the creator whose OWNED files the prefix arm matches, so it must never be
-       * read from request input.
+       * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
+       * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so
+       * it must never be read from request input.
        */
-      lakeMembership?: DataLakeMembershipScope;
+      lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean; // Allow-list-as-authority: skip the ownership predicate; ignored unless restrictToFileIds is present
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
-      stableSort?: boolean; // Add an `_id` tiebreaker so a multi-page walk can't drop/repeat a file (fileName sorts only)
+      /**
+       * NARROW to the files carrying no tag under ANY of these lake prefixes - an
+       * "Uncategorized" bucket. Never widens, so it means nothing without `restrictToDataLake`.
+       * See buildFabFileSearchQuery.options.lacksContentPrefixTags.
+       */
+      lacksContentPrefixTags?: string[];
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -719,7 +834,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]>;
@@ -735,7 +849,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]>;
 
@@ -751,7 +864,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
@@ -767,7 +879,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]>;
@@ -892,6 +1003,29 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   /**
+   * Files in a lake whose SERVER-VERIFIED extracted-text hash matches (META-TAG ONLY, mirroring
+   * findByContentHashesInDataLake). The acquisition queue's "the lake already holds this text"
+   * check (#1671): `serverTextHash` is stamped by the admission contract for every door, where
+   * `contentHash` is written by only the two presigned-URL uploads and never verified. Files that
+   * have not chunked yet carry no hash and so cannot match - a miss here means "not known to be
+   * present", never "known absent".
+   */
+  findByServerTextHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Whether ONE named file is still a member of a lake: same META-TAG scope as
+   * findByServerTextHashesInDataLake, not deleted and not archived - but NOT filtered on `status`,
+   * unlike every hash-keyed sibling. The acquisition queue asks this about the file a prior approval
+   * admitted (#1671), where a stored `approved` status alone would keep answering "the lake already
+   * holds this" long after ordinary file management removed the file, leaving the source permanently
+   * unproposable with no human ever seeing it again.
+   *
+   * The `status` divergence is deliberate: the caller already knows a human approved THIS file, so a
+   * file still mid-ingest ('pending', before the S3 ObjectCreated handler completes it) is held, not
+   * absent. Excluding it would re-open the source for the whole approval->ingest window and let a
+   * reviewer be handed a second card for content already on its way in.
+   */
+  isLiveDataLakeMember(fabFileId: string, datalakeTag: string): Promise<boolean>;
+  /**
    * Files in a lake ingested from any of the given Google Drive file ids (META-TAG ONLY,
    * mirroring findByContentHashesInDataLake). driveFileId is the Drive re-sync dedup key:
    * it is stable across edits where contentHash is not, so it decides create-vs-skip-vs-update.
@@ -905,7 +1039,39 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
    */
   findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
+   * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
+   * actually landed - `status: 'pending'` alone does not prove that (every fresh row is minted
+   * pending and stays that way until an S3 objectCreated event, or the ingester's own markUploaded
+   * call, confirms the upload; see the model comment). Without the exclusion, a throw between
+   * minting the FabFile and finishing `storage.upload` would strand that driveFileId as
+   * permanently "already ingested" - invisible to every future slice's walk - with no bytes ever
+   * uploaded for it. A brand-new file's superseded copy is excluded the same way a vectorized one
+   * is included: both signal the SAME thing, that this driveFileId's current attempt is durable.
+   */
+  findDriveFileIdsByBatchId(batchId: string): Promise<string[]>;
+  /**
+   * Confirm a FabFile's bytes have landed, synchronously from the uploader itself - the same
+   * `pending` -> `complete` transition the S3 objectCreated handler makes asynchronously off the
+   * bucket event, done here instead so a resumed ingest slice's findDriveFileIdsByBatchId does not
+   * have to race that event to tell "uploaded" apart from "row minted, never uploaded". Idempotent
+   * with objectCreated's own transition (both guard on `status !== 'complete'`), so it is harmless
+   * if the S3 event flips it first or flips it again after.
+   */
+  markUploaded(fabFileId: string): Promise<void>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
+  /**
+   * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
+   * stored count is not already higher and the file has not been stamped terminal, so a stale
+   * rollup can never regress a count or reopen `isVectorizing` on a settled file. Returns true
+   * if this call advanced the file.
+   */
+  advanceVectorizeProgress(
+    fabFileId: string,
+    vectorizedChunkCount: number,
+    rollup?: { embeddedChunkCount: number; embeddedCharCount: number }
+  ): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
   // fileTagPrefix match on a file the lake's creator OWNS. See buildDataLakeMembershipFilter
@@ -931,6 +1097,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     Array<{
       fabFileId: string;
       fileName?: string;
+      // Byte size, for the duplicate-members check: a same-fileName pair with differing size is
+      // confirmed to differ in content (a same-length substitution can still hide behind equal
+      // size, so equality is evidence, not proof).
+      fileSize: number | null;
+      // Server-verified content hash, for the same check: a same-fileName pair with matching hashes
+      // is confirmed IDENTICAL, and with differing hashes is confirmed to differ - proof `fileSize`
+      // alone cannot offer either direction of.
+      serverTextHash: string | null;
       chunkCount: number;
       // vectorizedChunkCount + error drive the in-flight vs settled decision in the pure evaluator;
       // omitting them here would silently disable that gate (rows arrive without them -> treated as
@@ -938,11 +1112,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       vectorizedChunkCount: number | null;
       error: string | null;
       // Third terminal-stall input, same keep-in-sync rule as the two above: the convergence kill
-      // switch stalls a file via `notes` (CONVERGENCE_PAUSED_NOTE) without ever setting `error`.
-      notes: string | null;
+      // switch stalls a file via `chunkStallReason` without ever setting `error`.
+      chunkStallReason: ChunkStallReason | null;
       // Fourth in-flight input, same keep-in-sync rule: a file whose passages a wave just reset is
-      // chunkless with no error and no note, so this stamp is the only thing that tells "rebuilding"
-      // from "never had passages" (#1939).
+      // chunkless with no error and no stall reason, so this stamp is the only thing that tells
+      // "rebuilding" from "never had passages" (#1939).
       chunkRebuildRequestedAt: Date | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
@@ -972,18 +1146,31 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       fileName?: string;
       tags: { name: string }[];
       chunkCount: number;
-      // Same keep-in-sync rule as findDataLakeHealthMembers: vectorizedChunkCount, error and notes
-      // together decide settled vs in-flight, and a row arriving without one silently disables that
-      // arm of the decision rather than failing.
+      // Same keep-in-sync rule as findDataLakeHealthMembers: vectorizedChunkCount, error and
+      // chunkStallReason together decide settled vs in-flight, and a row arriving without one
+      // silently disables that arm of the decision rather than failing.
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       /** See findDataLakeHealthMembers - the pending-rebuild stamp is an in-flight input here too. */
       chunkRebuildRequestedAt: Date | null;
       maxChunkCharLength: number | null;
       chunkedPassageTokenTarget: number | null;
     }>
   >;
+  /**
+   * One page of a lake's LIVE members for the lake-memory extraction producer, ascending by `_id`,
+   * projecting only the three fields that producer reads. Live-only and bounded in the database, unlike
+   * `findIdsByDataLakeTag` above, which reports every member the lake ever had.
+   *
+   * `after` is a keyset boundary, and an unparseable one is ignored rather than throwing. Ask for one
+   * row past the cap to tell "the lake continues" from "the slice filled exactly" without a count
+   * query. See the implementation for why each of those is load-bearing.
+   */
+  findLakeMemoryExtractionMembers(
+    scope: DataLakeMembershipScope,
+    options: { after?: string | null; limit: number }
+  ): Promise<Array<{ fabFileId: string; fileName?: string; tags: { name: string }[] }>>;
   /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
@@ -1018,7 +1205,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
    * `countFailedFilesByScope` (needs a non-empty error) - which is how they stayed invisible to
    * "Rebuild passages", the one affordance an owner would actually reach for to repair them. They
-   * are identified by CONVERGENCE_PAUSED_CHUNK_NOTE, the same marker health, convergence and the
+   * are identified by `chunkStallReason`, the same marker health, convergence and the
    * retrieval withhold key on, OR by a `chunkRebuildRequestedAt` stamp older than
    * REBUILD_PENDING_STALE_MS - a rebuild nothing ever committed, which is what a producer killed
    * between the reset and the sends leaves behind (#1939). Same in-flight exclusion as
@@ -1039,8 +1226,23 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Stamps `chunkRebuildRequestedAt` in the SAME write (#1939), so the state this creates is never
    * unmarked: the send that follows can fail, and the producer can die before it, without leaving a
    * chunkless file that no reader can tell from an image.
+   *
+   * Does NOT touch `notes` (#2016) - that is the owner's own text, and this reset used to blank it on
+   * every rebuild wave and every per-file reprocess. It does clear the two machine-written markers
+   * (`chunkStallReason`, `noExtractableTextAt`), which is what makes reprocess the documented way
+   * back in for a file the rescue sweep has written off.
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  /**
+   * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
+   * chunkless reasons by whether a producer actually removed its passages, and clearing the
+   * pending-rebuild stamp in the SAME write so the file is never both paused and pending.
+   *
+   * A dedicated method rather than an `update` from the caller because the reason to write depends on
+   * a field the same statement clears - see the implementation for why that has to be one statement
+   * and why it has to be idempotent.
+   */
+  markConvergencePaused(id: string): Promise<void>;
   /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
@@ -1048,12 +1250,30 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
-   * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
+   * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
    * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that
-   * carry only the membership tag and over-counts multi-tagged ones.
+   * carry only the membership tag and over-counts multi-tagged ones - and see
+   * `DataLakeMembershipFileCounts` for why the uncategorized slice ships alongside the total.
    */
-  countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
+  countDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, DataLakeMembershipFileCounts>>;
+  /**
+   * DISTINCT live files across every scope. The per-lake counts above deliberately count a file
+   * once per lake it belongs to, so they can sum HIGHER than this; use this wherever an
+   * "all lakes" figure sits above those per-lake rows, so the two describe one population.
+   */
+  countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number>;
+  /**
+   * The same distinct count narrowed to the files categorized under NONE of `tagPrefixes` - the
+   * bucket for a MERGED (all-lakes) tree. Not a sum of the per-lake `uncategorized` figures,
+   * which judge each lake on its own and so both double-count and over-count.
+   */
+  countDistinctUncategorizedDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[],
+    tagPrefixes: string[]
+  ): Promise<number>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
@@ -1132,6 +1352,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * malformed one throws a CastError partway through the delete.
    */
   hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
+  /**
+   * Hard-delete ONE file, atomically, answering whether THIS call is the one that removed it.
+   *
+   * The single-document sibling of `hardDeleteByIds`, and the difference is the whole point: a
+   * `deleteMany` cannot say which of two concurrent callers actually removed the row, so a caller
+   * that owes a side effect per destruction (returning the owner's storage quota, say) would pay
+   * it twice. `false` means the row was already gone.
+   */
+  hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }

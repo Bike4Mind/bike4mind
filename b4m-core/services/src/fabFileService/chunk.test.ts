@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile, commitFabFileChunks, prepareFabFileChunks } from './chunk';
-import { ChunkClaimLostError, CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, ChunkClaimLostError } from '@bike4mind/common';
 import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -31,7 +31,7 @@ describe('chunkFabfile', () => {
         deleteManyByFabFileId: Mock;
         bulkInsert: Mock;
         update: Mock;
-        distinctEmbeddingModelsByFabFileIds: Mock;
+        distinctRetrievalIndexModelsByFabFileIds: Mock;
       };
       users: { findById: Mock };
     };
@@ -61,7 +61,7 @@ describe('chunkFabfile', () => {
           deleteManyByFabFileId: vi.fn(),
           bulkInsert: vi.fn().mockResolvedValue([]),
           update: vi.fn(),
-          distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
+          distinctRetrievalIndexModelsByFabFileIds: vi.fn().mockResolvedValue([]),
         },
         users: { findById: vi.fn() },
       },
@@ -73,7 +73,7 @@ describe('chunkFabfile', () => {
   it('deletes every OLD model the chunk store actually used, not just FabFile.embeddingModel, and not the new one being written', async () => {
     // A file re-embedded more than once can have chunks under more than one prior model (see
     // IFabFileChunk.embeddingModel) - fabFile.embeddingModel alone is only the CURRENT one.
-    mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([
+    mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds.mockResolvedValue([
       'text-embedding-ada-002',
       'text-embedding-3-small-old',
     ]);
@@ -85,14 +85,14 @@ describe('chunkFabfile', () => {
       mockAdapter as never
     );
 
-    expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).toHaveBeenCalledWith(['file-1']);
+    expect(mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds).toHaveBeenCalledWith(['file-1']);
     expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledTimes(2);
     expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith('file-1', 'text-embedding-ada-002');
     expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith('file-1', 'text-embedding-3-small-old');
   });
 
   it('skips the delete calls when the chunk store has no prior models for this file', async () => {
-    mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([]);
+    mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds.mockResolvedValue([]);
     mockAdapter.searchIndex = { deleteByFabFileId: vi.fn() };
 
     await chunkFabfile(
@@ -111,7 +111,7 @@ describe('chunkFabfile', () => {
       mockAdapter as never
     );
     expect(mockAdapter.db.fabFileChunks.bulkInsert).toHaveBeenCalled();
-    expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds).not.toHaveBeenCalled();
     expect(result).toEqual([]);
   });
 
@@ -310,13 +310,12 @@ describe('chunkFabfile', () => {
   });
 
   // The root-cause half of the "repaired file stays withheld forever" defect. The RESCUE SWEEP
-  // enqueues without a reset, and resetChunkStateByIds is the only other writer of `notes: ''`, so
-  // before this a fully re-chunked and re-vectorized file kept its kill-switch marker - and every
-  // reader keying on that note went on treating it as broken.
+  // enqueues without a reset, so before this a fully re-chunked and re-vectorized file kept its
+  // kill-switch marker - and every reader keying on it went on treating the file as broken.
   it('clears a convergence kill-switch marker when a rebuild succeeds', async () => {
-    for (const marker of [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE]) {
+    for (const chunkStallReason of CHUNK_STALL_REASONS) {
       mockAdapter.db.fabFiles.update.mockClear();
-      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes: marker });
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, chunkStallReason });
 
       await chunkFabfile(
         mockUser,
@@ -324,17 +323,20 @@ describe('chunkFabfile', () => {
         mockAdapter as never
       );
 
-      const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { notes?: string };
-      expect(updatedFile.notes).toBe('');
+      const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { chunkStallReason?: string | null };
+      expect(updatedFile.chunkStallReason).toBeNull();
     }
   });
 
-  // The payload is a `$set` of named fields, so an unconditional `notes: ''` would erase an unrelated
-  // note on EVERY ordinary re-chunk. The key must be absent, not empty - `toBeUndefined` alone would
-  // also pass for `notes: undefined`, which Mongoose would still strip, so assert the key is missing.
-  it('leaves an unrelated note untouched - the clear is conditional, not an unconditional wipe', async () => {
-    const unrelated = 'No extractable text: scanned image';
-    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes: unrelated });
+  // #2016: the markers moved off `notes` precisely so no pipeline write can touch the owner's own
+  // text. The key must be ABSENT, not empty - `toBeUndefined` alone would also pass for
+  // `notes: undefined`, and this asserts the commit never names the field at all.
+  it("never writes notes - the owner's note survives a re-chunk", async () => {
+    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+      ...mockFabFile,
+      notes: 'my own note about this contract',
+      chunkStallReason: 'rechunkPaused',
+    });
 
     await chunkFabfile(
       mockUser,
@@ -346,13 +348,13 @@ describe('chunkFabfile', () => {
     expect('notes' in updatedFile).toBe(false);
   });
 
-  // #1939. Unconditional, unlike the note clear above: the field carries exactly one fact and this
-  // run IS the rebuild it recorded. Left set, a fully rebuilt file reads as in-flight forever -
+  // #1939. Unconditional, like the stall-reason clear above: the field carries exactly one fact and
+  // this run IS the rebuild it recorded. Left set, a fully rebuilt file reads as in-flight forever -
   // withheld from search, parked as unmeasured in health, skipped by convergence.
   it('always clears the pending-rebuild stamp, whether or not a marker was present', async () => {
-    for (const notes of ['', CONVERGENCE_PAUSED_CHUNK_NOTE, 'No extractable text: scanned image']) {
+    for (const chunkStallReason of [null, 'rechunkPaused'] as const) {
       mockAdapter.db.fabFiles.update.mockClear();
-      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes });
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, chunkStallReason });
 
       await chunkFabfile(
         mockUser,
@@ -385,7 +387,7 @@ describe('prepareFabFileChunks / commitFabFileChunks (#1681)', () => {
         deleteManyByFabFileId: vi.fn(),
         bulkInsert: vi.fn().mockResolvedValue([{ id: 'c1' }]),
         update: vi.fn(),
-        distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
+        distinctRetrievalIndexModelsByFabFileIds: vi.fn().mockResolvedValue([]),
       },
       users: { findById: vi.fn() },
     },

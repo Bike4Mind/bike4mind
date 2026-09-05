@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, type IDataLakeDocument } from '@bike4mind/common';
-import { getDynamicDataLakeAccess, type DataLakeAccessContext } from './getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  type DataLakeAccessContext,
+  type ResolvedLakeAccess,
+} from './getDynamicDataLakeTags';
+import { registryMembershipScope } from './lakeMembershipScope';
 
 const dbLake = (overrides: Partial<IDataLakeDocument> & Pick<IDataLakeDocument, 'id'>): IDataLakeDocument =>
   ({
@@ -66,6 +72,9 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     });
     // Static DATA_LAKES: the opti lake requires the Opti tag.
     expect(res.dataLakeTags.sort()).toEqual(['datalake:opti-knowledge']);
+    // An absent repo is NOT a degraded view: there are no dynamic lakes to have missed, so this
+    // registry-only answer is the whole picture and may be used to prove a tag unreachable.
+    expect(res.lakeViewComplete).toBe(true);
   });
 
   it('resolves the membership set via db.organizations and passes it to the collection query', async () => {
@@ -160,6 +169,9 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(warn).toHaveBeenCalled();
     // Degrades to the static registry rather than throwing - narrowing, never widening.
     expect(res.scopedTagPrefixes).toEqual([]);
+    // The warn is dropped whenever no logger is passed, so the flag is the only durable signal.
+    // Consumers that would otherwise read an absent tag as proof of unreachability key on this.
+    expect(res.lakeViewComplete).toBe(false);
   });
 
   it('propagates a membership-lookup failure instead of degrading to member-of-nothing', async () => {
@@ -310,5 +322,100 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     // Asserts the re-add outcome, not what was handed to the query - a raw === against the
     // uncoerced context value would compare an object to a string and silently drop the lake.
     expect(res.dataLakeTags).toEqual(['datalake:mine']);
+  });
+});
+
+// #2243: the membership arms a retrieval query should carry - one per DYNAMIC lake, none for a
+// registry lake (no creator to anchor a prefix arm to).
+/**
+ * Link 1 of the count/browse parity chain (#2265). The count surface passes
+ * `ResolvedLakeAccess.membership` through verbatim (pinned in knowledgeBaseCount/index.test.ts) and
+ * the single-lake browse builds `registryMembershipScope(lake)` (pinned in
+ * apps/client/pages/api/data-lakes/[id]/__tests__/registryScopeParity.test.ts). What closes the
+ * chain is this: the scope the RESOLVER attaches to a registry lake is that same function's output,
+ * not a second construction that merely agrees.
+ *
+ * Asserted against `registryMembershipScope` rather than a literal on purpose - a literal here
+ * would be the third independent copy of the predicate, which is the drift this issue removed.
+ */
+describe('registry lakes carry the shared registry membership scope', () => {
+  const optiConfig = DATA_LAKES.find(dl => dl.id === 'opti-knowledge')!;
+
+  it('attaches registryMembershipScope, byte for byte, to a resolved registry lake', async () => {
+    const res = await getDynamicDataLakeAccess({
+      db: { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } },
+      user: { tags: ['Opti'] },
+    });
+
+    const opti = res.lakes.find(l => l.datalakeTag === optiConfig.datalakeTag)!;
+    expect(opti.source).toBe('registry');
+    expect(opti.membership).toEqual(registryMembershipScope(optiConfig));
+  });
+
+  it('gives it kind "registry", so the multi-lake fan-outs still drop its unanchored prefix arm', async () => {
+    const res = await getDynamicDataLakeAccess({
+      db: { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } },
+      user: { tags: ['Opti'] },
+    });
+
+    // The guard that replaced "membership is absent for registry lakes": presence proves nothing
+    // now, the discriminant is the whole check.
+    expect(res.lakes.every(l => l.membership.kind === 'registry')).toBe(true);
+    expect(lakeMembershipsFrom(res.lakes)).toEqual([]);
+  });
+
+  it('keeps a DB lake creator-anchored, so the two kinds are not collapsed', async () => {
+    const res = await getDynamicDataLakeAccess(
+      ctx([dbLake({ id: 'acme', createdByUserId: 'creator-1', isPublic: true })])
+    );
+
+    const acme = res.lakes.find(l => l.datalakeTag === 'datalake:acme')!;
+    expect(acme.membership).toEqual({
+      kind: 'owned',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'creator-1',
+    });
+    expect(lakeMembershipsFrom(res.lakes)).toEqual([acme.membership]);
+  });
+});
+
+describe('lakeMembershipsFrom', () => {
+  const dynamicLake = (id: string, creatorUserId: string): ResolvedLakeAccess => ({
+    id,
+    name: id,
+    slug: id,
+    datalakeTag: `datalake:${id}`,
+    fileTagPrefix: `${id}:`,
+    membership: { kind: 'owned', datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:`, creatorUserId },
+    source: 'dynamic',
+  });
+  // A registry lake carries a scope too, an UNANCHORED one - so what this helper drops is decided
+  // by `kind`, not by the field being absent. Fixtures that omit it can no longer express the case.
+  const registryLake = (id: string): ResolvedLakeAccess => ({
+    id,
+    name: id,
+    slug: id,
+    datalakeTag: `datalake:${id}`,
+    fileTagPrefix: `${id}:`,
+    membership: { kind: 'registry', datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:` },
+    source: 'registry',
+  });
+
+  it('keeps dynamic lakes in order and drops registry ones', () => {
+    const lakes = [registryLake('opti'), dynamicLake('acme', 'creator-1'), dynamicLake('globex', 'creator-2')];
+
+    expect(lakeMembershipsFrom(lakes)).toEqual([
+      dynamicLake('acme', 'creator-1').membership,
+      dynamicLake('globex', 'creator-2').membership,
+    ]);
+  });
+
+  it('returns [] for an all-registry lake set', () => {
+    expect(lakeMembershipsFrom([registryLake('opti'), registryLake('house')])).toEqual([]);
+  });
+
+  it('returns [] for an empty lake set', () => {
+    expect(lakeMembershipsFrom([])).toEqual([]);
   });
 });

@@ -22,13 +22,16 @@ import React from 'react';
 // vi.mock factories are hoisted, so anything they reference must be created via
 // vi.hoisted. `subscribeToAction` is a stable identity so the subscription
 // effect (keyed on it) doesn't re-run across renders.
-const { navigateMock, toastMock, handlers, subscribeToAction, dispatchUiSideEffectsMock } = vi.hoisted(() => {
+const { navigateMock, toastMock, handlers, subscribeToAction, dispatchUiSideEffectsMock, ws } = vi.hoisted(() => {
   const handlers: Record<string, (msg: unknown) => Promise<void>> = {};
   return {
     navigateMock: vi.fn(),
     toastMock: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
     dispatchUiSideEffectsMock: vi.fn(),
     handlers,
+    // Mutable socket state so a test can mount with the socket already up (or
+    // still down) without re-mocking the module.
+    ws: { readyState: 3 /* CLOSED */, sendJsonMessage: vi.fn() },
     subscribeToAction: (action: string, cb: (msg: unknown) => Promise<void>) => {
       handlers[action] = cb;
       return () => {
@@ -42,7 +45,14 @@ const { navigateMock, toastMock, handlers, subscribeToAction, dispatchUiSideEffe
 vi.mock('@client/app/router', () => ({ router: { navigate: navigateMock } }));
 vi.mock('sonner', () => ({ toast: toastMock }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ subscribeToAction }),
+  // ReadyState is re-exported by the real module and the hook compares against
+  // it, so the mock has to carry it too.
+  ReadyState: { UNINSTANTIATED: -1, CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
+  useWebsocket: () => ({
+    subscribeToAction,
+    readyState: ws.readyState,
+    sendJsonMessage: ws.sendJsonMessage,
+  }),
 }));
 vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
@@ -307,5 +317,208 @@ describe('useAgentExecutionSubscriptions — iteration_step UI side-effects', ()
     });
 
     expect(dispatchUiSideEffectsMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression coverage for the run that never finishes on screen.
+ *
+ * Agent progress is pushed to the connection id captured when the run started,
+ * and a failed push is only logged. So a socket that dies mid-run misses every
+ * later frame including `completed`, and the UI keeps showing "In Progress"
+ * for a run the server finished long ago (observed on production: a ~2 minute
+ * run still spinning 81 minutes later). The repair round-trip existed on both
+ * ends already - it just had no caller. These tests pin the caller.
+ */
+describe('useAgentExecutionSubscriptions -- recovering a run after the socket comes back', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  const reconnectCalls = () =>
+    ws.sendJsonMessage.mock.calls.map(c => c[0] as Record<string, unknown>).filter(m => m.command === 'reconnect');
+
+  it('asks the server to re-state a still-running execution once the socket is open', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([
+      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
+    ]);
+    // The response does not echo the sessionId back, so it must be queued for
+    // `reconnect_result` to stamp on - keyed by executionId so a sweep over
+    // several runs cannot be mis-paired by arrival order.
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'sess-1', executionId: 'exec-1' },
+    ]);
+  });
+
+  it('stays silent while the socket is down', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 3; // CLOSED
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([]);
+  });
+
+  it('does not re-ask about a run that already finished', () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-1', 'sess-1');
+    store.setStatus('exec-1', 'completed');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([]);
+  });
+
+  it('sends nothing when this tab is not watching any run', () => {
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([]);
+  });
+});
+
+/**
+ * A socket-open sweep asks about several runs at once, and each request is answered by an
+ * independent server invocation whose cost scales with that run's child count - so the
+ * responses routinely come back in a different order than they were sent. Correlating them
+ * by arrival order would stamp a live run with another session's id, which is worse than the
+ * spinner this recovery exists to clear: the run vanishes from the session the user is
+ * looking at and reappears under one it does not belong to, and nothing corrects it.
+ */
+describe('useAgentExecutionSubscriptions -- reconnect responses pair with the run that asked', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  const reconnectResult = (executionId: string) =>
+    handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId,
+      status: 'running',
+    });
+
+  it('keeps each session on its own run when the responses arrive out of order', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-1', 'sess-A');
+    store.startExecution('exec-2', 'sess-B');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    // exec-2 answers first - the case that arrival-order pairing gets wrong.
+    await reconnectResult('exec-2');
+    await reconnectResult('exec-1');
+
+    const executions = useAgentExecutionStore.getState().executions;
+    expect(executions['exec-2']?.sessionId).toBe('sess-B');
+    expect(executions['exec-1']?.sessionId).toBe('sess-A');
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+  });
+
+  it('still answers the mount-time probe, which has no execution id to key on', async () => {
+    // The probe asks "is anything running in this session?" before any id exists.
+    useAgentExecutionStore.getState().registerPendingReconnect('sess-C');
+    mountSubscriptions();
+
+    await reconnectResult('exec-9');
+
+    expect(useAgentExecutionStore.getState().executions['exec-9']?.sessionId).toBe('sess-C');
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+  });
+});
+
+/**
+ * Production never mounts into an already-open socket - it mounts once at app root and the
+ * socket goes down and comes back underneath it. The mount-time cases above cannot see a
+ * regression in that transition, so drive it directly.
+ */
+describe('useAgentExecutionSubscriptions -- the sweep runs on the transition, not just at mount', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  const reconnectCalls = () =>
+    ws.sendJsonMessage.mock.calls.map(c => c[0] as Record<string, unknown>).filter(m => m.command === 'reconnect');
+
+  it('sweeps when a mounted subscriber sees the socket come back', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    const { rerender } = mountSubscriptions();
+    expect(reconnectCalls()).toEqual([]);
+
+    ws.readyState = 1; // OPEN
+    rerender();
+
+    expect(reconnectCalls()).toEqual([
+      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
+    ]);
+  });
+
+  it('does not re-sweep while the socket stays open', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 1; // OPEN
+    const { rerender } = mountSubscriptions();
+    rerender();
+    rerender();
+
+    expect(reconnectCalls()).toHaveLength(1);
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- sweep hygiene', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it('a swept run with no sessionId still gets a keyed queue entry (no send-without-enqueue)', () => {
+    // A stray event synthesises an active execution with no sessionId; the sweep
+    // must still enqueue for it, or its keyed response would drain a concurrent
+    // mount-time probe's un-keyed entry and stamp that session onto the wrong run.
+    useAgentExecutionStore.getState().setStatus('exec-orphan', 'running');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: undefined, executionId: 'exec-orphan' },
+    ]);
+  });
+
+  it('a churning dispatcher identity does not re-fire the sweep (the ref guard)', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 1; // OPEN
+    const { rerender } = mountSubscriptions();
+    const sent = () =>
+      ws.sendJsonMessage.mock.calls.filter(c => (c[0] as { command?: string }).command === 'reconnect');
+    expect(sent()).toHaveLength(1);
+
+    // The token refresh case: `sendJsonMessage` gets a new identity every refresh,
+    // so the dispatcher memoised over it churns too. Keyed on readyState alone (via
+    // the ref), the sweep must not re-send.
+    ws.sendJsonMessage = vi.fn();
+    rerender();
+
+    expect(
+      ws.sendJsonMessage.mock.calls.filter(c => (c[0] as { command?: string }).command === 'reconnect')
+    ).toHaveLength(0);
   });
 });

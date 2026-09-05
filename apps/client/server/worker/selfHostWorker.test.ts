@@ -121,6 +121,29 @@ describe('SelfHostWorker', () => {
     worker.stop();
   });
 
+  it('names every polled queue and scheduled task in its boot log', async () => {
+    // The only signal a self-host operator has that a consumer was skipped (its env var unset,
+    // so main.ts warned and moved on) is which names this line does NOT contain. A count alone
+    // reads identically whether 5 or 6 consumers were meant to be up.
+    const worker = new SelfHostWorker(mockLogger);
+    mockReceiveFromQueue.mockResolvedValue([]);
+    worker.registerQueueHandler('imageGenerationQueue', 'http://sqs/imageGenerationQueue', vi.fn());
+    worker.registerQueueHandler('imageEditQueue', 'http://sqs/imageEditQueue', vi.fn());
+    worker.registerScheduledTask('scheduler', 60_000, async () => {});
+
+    // start() logs synchronously, so stop the pollers BEFORE asserting: a failing expect() here
+    // would otherwise leave two loops spinning on the resolved-[] mock and starve later tests.
+    worker.start();
+    await worker.stop();
+
+    const bootLine = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
+      .map(([message]) => String(message))
+      .find(message => message.includes('started'));
+    expect(bootLine).toContain('imageGenerationQueue');
+    expect(bootLine).toContain('imageEditQueue');
+    expect(bootLine).toContain('scheduler');
+  });
+
   it('fires a scheduled task on its interval', async () => {
     vi.useFakeTimers();
     const worker = new SelfHostWorker(mockLogger);

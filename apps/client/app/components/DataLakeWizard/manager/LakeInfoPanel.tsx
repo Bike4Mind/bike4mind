@@ -1,5 +1,16 @@
 import { useState } from 'react';
-import { Box, Button, Chip, DialogActions, DialogContent, DialogTitle, Modal, ModalDialog, Tooltip, Typography } from '@mui/joy';
+import {
+  Box,
+  Button,
+  Chip,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Modal,
+  ModalDialog,
+  Tooltip,
+  Typography,
+} from '@mui/joy';
 import StorageIcon from '@mui/icons-material/Storage';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -12,7 +23,14 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
-import { useArchiveDataLake, usePermanentDeleteDataLake, useUnderChunkedCount, useRechunkDataLake, useLakeConvergencePlan, useConvergeDataLake } from '@client/app/hooks/data/dataLakes';
+import {
+  useArchiveDataLake,
+  usePermanentDeleteDataLake,
+  useUnderChunkedCount,
+  useRechunkDataLake,
+  useLakeConvergencePlan,
+  useConvergeDataLake,
+} from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';

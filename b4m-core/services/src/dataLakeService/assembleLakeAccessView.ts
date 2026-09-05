@@ -11,6 +11,7 @@ import type {
   LakeAccessHistoryEntry,
   LakeAccessSurface,
   LakeAccessView,
+  LakeCandidateCapPressure,
   LakeGrantStatus,
 } from '@bike4mind/common';
 import { ORG_MEMBERSHIP_ACL_PERMISSIONS } from '@bike4mind/common';
@@ -104,6 +105,32 @@ export function aggregateAccessHistory(
     .sort((a, b) => b.lastAccessedAt.getTime() - a.lastAccessedAt.getTime());
 }
 
+/**
+ * Project the per-event candidate-cap flag into the two counters + date the view publishes. Pure
+ * over the same event list `aggregateAccessHistory` sees, so the numbers describe exactly the same
+ * window.
+ *
+ * PRESENCE-BASED, not surface-filtered: a row raises `turnsWithSignal` iff it carries the field at
+ * all, so a surface that starts reporting its own cap later is counted with no change here. An
+ * absent field raises neither counter - see `ILakeAccessEvent.candidateCapReached` for why absent
+ * must never be read as `false`.
+ */
+export function aggregateCandidateCapPressure(
+  events: Pick<ILakeAccessEventDocument, 'candidateCapReached' | 'createdAt'>[]
+): LakeCandidateCapPressure {
+  const pressure: LakeCandidateCapPressure = { turnsWithSignal: 0, turnsAtCap: 0 };
+  for (const event of events) {
+    if (typeof event.candidateCapReached !== 'boolean') continue;
+    pressure.turnsWithSignal += 1;
+    if (!event.candidateCapReached) continue;
+    pressure.turnsAtCap += 1;
+    if (!pressure.lastAtCapAt || event.createdAt.getTime() > pressure.lastAtCapAt.getTime()) {
+      pressure.lastAtCapAt = event.createdAt;
+    }
+  }
+  return pressure;
+}
+
 export interface AssembleLakeAccessViewAdapters {
   db: {
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
@@ -150,12 +177,23 @@ export async function assembleLakeAccessView(
   { db, historyLimit = LAKE_ACCESS_VIEW_HISTORY_LIMIT, now = new Date() }: AssembleLakeAccessViewAdapters
 ): Promise<LakeAccessView> {
   // All-grants read (no activeAsOf): the view must render lapsed rows too, tagging each active/expired.
-  const [grantRows, events] = await Promise.all([
+  // One event MORE than the window, purely as a probe: fetching exactly `historyLimit` cannot
+  // distinguish "this lake has exactly that many reads" from "there are more behind the window", and
+  // captioning a COMPLETE audit trail as partial is the one thing a compliance surface must not do.
+  // The extra row is sliced off below and never reaches the aggregates. Same technique, and the same
+  // reasoning, as assembleLakeConfigHistory.
+  const [grantRows, fetchedEvents] = await Promise.all([
     db.dataLakeAccessGrants.listByLake(lake.id),
-    db.lakeAccessEvents.listByLake(lake.id, { limit: historyLimit }),
+    db.lakeAccessEvents.listByLake(lake.id, { limit: historyLimit + 1 }),
   ]);
 
+  const historyTruncated = fetchedEvents.length > historyLimit;
+  const events = historyTruncated ? fetchedEvents.slice(0, historyLimit) : fetchedEvents;
+
   const history = aggregateAccessHistory(events);
+  // Same already-sliced window as the history above - a projection of rows already in hand, never
+  // a second listByLake read.
+  const candidateCapPressure = aggregateCandidateCapPressure(events);
   const channels = deriveAccessChannels(lake);
 
   // One batched name resolution across every user id the view references: user-principal grants,
@@ -205,8 +243,9 @@ export async function assembleLakeAccessView(
 
   // When the audit read hit the cap, the per-row aggregates only cover the fetched window. Events
   // come back newest-first, so the oldest fetched event is the window's start - carried so a consumer
-  // can qualify readCount/firstAccessedAt rather than present them as all-time.
-  const historyTruncated = events.length >= historyLimit;
+  // can qualify readCount/firstAccessedAt rather than present them as all-time. `historyTruncated` is
+  // decided by the probe row above, so a complete trail of exactly `historyLimit` reads reports
+  // untruncated and carries no window date.
   const windowStartsAt = historyTruncated ? events[events.length - 1]?.createdAt : undefined;
 
   const grants: LakeAccessGrantView[] = grantRows.map((g: IDataLakeAccessGrantDocument) => ({
@@ -233,6 +272,7 @@ export async function assembleLakeAccessView(
     })),
     historyTruncated,
     windowStartsAt,
+    candidateCapPressure,
     generatedAt: now,
   };
 }

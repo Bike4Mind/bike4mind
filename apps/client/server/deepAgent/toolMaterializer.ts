@@ -16,6 +16,7 @@ import {
   lakeAccessEventRepository,
   organizationRepository,
   projectRepository,
+  scopedSettingsRepository,
   userRepository,
 } from '@bike4mind/database';
 import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -98,6 +99,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),

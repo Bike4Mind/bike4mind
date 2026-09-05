@@ -15,17 +15,25 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
-import type { DataLakeConfig } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  STATIC_LAKE_IDS,
+  getAccessibleDataLakes,
+  hasDeveloperUserTag,
+  isImageServeable,
+} from '@bike4mind/common';
+import type { DataLakeConfig, DataLakeMembershipScope } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
+import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
 import { toAccessContext } from './toAccessContext';
 import { grantingLakes, isFileInAccessibleLake, normalizedLakePrefix } from './grantingLakes';
@@ -63,9 +71,27 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
 
   // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
   // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
+  // Grants and settings only matter on the `listDataLakes` (non-admin) branch below - without
+  // them it degrades both grant reads to empty, so a lake reached by an owner or curator grant is
+  // absent from every browse surface - including the file-access check in `pages/api/files/[id]`
+  // - even though the read gate admits it. Settings rides along, unlike the Slack `list` reply
+  // which deliberately omits it: this is a READ surface, so it must track the
+  // `EnforceLakeReadGrants` cutover rather than freeze at owner/curator, or a reader-granted lake
+  // would pass the gate post-cutover and still be invisible here.
+  //
+  // `listAllDataLakes` (admin branch) gets neither adapter: it never calls
+  // `resolveEnforceReadGrants`/`grantedLakeIdsFor`, so an admin already sees every draft/active
+  // lake regardless, and the one grant read that adapter would trigger only feeds the `isOwn`
+  // label - which this content-scope path never reads (see the return-type comment above).
   const dynamic = ctx.isAdmin
     ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
-    : await dataLakeService.listDataLakes(ctx, { db: { dataLakes: dataLakeRepository } });
+    : await dataLakeService.listDataLakes(ctx, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          settings: adminSettingsRepository,
+        },
+      });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of
   // requiredUserTag/requiredEntitlement filter, reusing the keys toAccessContext already
@@ -80,27 +106,32 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
 }
 
 export interface DataLakeArticlesQuery {
-  id?: string;
+  // `string[]` for the same reason as `tags`/`search` below: /api/data-lakes/articles has no `[id]`
+  // route segment, so `id` comes purely from the query string and is repeatable.
+  id?: string | string[];
   tags?: string | string[];
   search?: string | string[];
   page?: string;
   limit?: string;
   sortBy?: string;
   sortDir?: string;
+  /** 'true' narrows to the merged-tree Uncategorized bucket - see queryDataLakeArticles. */
+  uncategorized?: string | string[];
 }
 
 /**
  * Split the accessible lakes' file-tag prefixes by provenance:
  *  - OPEN - static-registry lakes (opti:): shared KB, ownership-bypass by design.
- *  - SCOPED - dynamic (user-created) lakes: prefix is user-controlled, so it must be
- *    matched only within owner/org access (see buildOwnershipConditions). Mixing them
- *    is the cross-tenant leak this guards against.
+ *  - SCOPED - dynamic (user-created) lakes: prefix is user-controlled and must never be
+ *    promoted into an ownership bypass. Gating a dynamic-lake file is `lakeMemberships`'
+ *    job now (each arm anchored to that lake's CREATOR - see buildLakeMembershipScopes); this
+ *    split feeds only the tag tree's positional regex-grouping list (`allPrefixes` below).
  * The unique `datalakeTag` (exact match, never a prefix) safely covers every lake.
  *
- * Normalized through `normalizeTagPrefix` - the same predicate `buildOwnershipConditions`
+ * Normalized through `normalizeTagPrefix` - the same predicate `buildDataLakeMembershipFilter`
  * applies - because the tag-count aggregates build their regex straight from what we return
  * here. Handing them the raw field let the two disagree: a lake stored with a padded prefix
- * (` a:` passes create validation, which never trims) matched `^(a:)` in the ownership arm
+ * (` a:` passes create validation, which never trims) matched `^(a:)` in the membership arm
  * but `^( a:)` in the counter, so its files were browsable yet counted zero. An unusable
  * prefix drops out entirely rather than reaching a regex as an empty alternation.
  */
@@ -114,6 +145,84 @@ function splitTagPrefixes(lakes: DataLakeConfig[]): { openTagPrefixes: string[];
   }
   return { openTagPrefixes, scopedTagPrefixes };
 }
+
+/**
+ * One membership scope per lake, anchored to THAT lake's creator - the same predicate the
+ * single-lake browse, health, archive and permanent delete run on. `DataLakeConfig` (what both
+ * browse surfaces receive) carries no owner id, so the creator has to come from a batched DB
+ * read rather than the config itself.
+ *
+ * A lake in the hardcoded registry takes the `registry` scope (meta-tag OR its compile-time
+ * prefix, no ownership arm) instead. Doc-less and not in the registry should be unreachable
+ * (every dynamic entry is derived from a document) but fails closed to meta-tag-only rather than
+ * dropping the lake's key from the result, so an anomaly is visible instead of silently absent.
+ *
+ * ONE batched read, never one per lake: an admin's lake set is every lake of every tenant, and a
+ * per-lake fan-out would issue that many concurrent findOnes against a pool of two. The meta-tags
+ * are derived here rather than taken as a parameter: a caller passing a narrower list would drop
+ * those lakes from the lookup, and each would fall to the fail-closed meta-tag-only branch below -
+ * under-retrieval with no signal.
+ *
+ * The arm-count probe lives here, not at the call sites, because these two callers are the only
+ * UNBOUNDED ones (a retrieval site is already narrowed to a session's one-to-few lakes) and this is
+ * where the one-arm-per-lake shape is minted.
+ */
+async function buildLakeMembershipScopes(
+  lakes: DataLakeConfig[],
+  surface: string,
+  logger?: Logger
+): Promise<DataLakeMembershipScope[]> {
+  const lakeDocs = await dataLakeRepository.findByDatalakeTags(lakes.map(dl => dl.datalakeTag));
+  const lakeDocsByTag = new Map(lakeDocs.map(doc => [doc.datalakeTag, doc]));
+  const scopes = lakes.map((lake): DataLakeMembershipScope => {
+    const doc = lakeDocsByTag.get(lake.datalakeTag);
+    if (doc) {
+      // `?? lake.fileTagPrefix`: a doc whose own prefix is unset must not silently lose the
+      // prefix arm it had before this scope existed.
+      return {
+        kind: 'owned',
+        datalakeTag: lake.datalakeTag,
+        fileTagPrefix: doc.fileTagPrefix ?? lake.fileTagPrefix,
+        creatorUserId: doc.createdByUserId,
+      };
+    }
+    // POSITIVE evidence of registry-ness, never the absence of a document: the registry arm drops
+    // the ownership conjunct, so misclassifying a dynamic lake into it would turn that lake's
+    // USER-CHOSEN prefix into a cross-tenant read arm. Before the union, the same doc-less branch
+    // produced `creatorUserId: undefined` and the filter fail-closed it to meta-tag-only, so a
+    // misclassification here was inert - that backstop is gone, and this is what replaces it.
+    //
+    // Safe DESPITE `getDynamicDataLakeTags`' standing warning against `STATIC_LAKE_IDS` for this
+    // decision (a DB row can shadow a registry id and turn its prefix into a bypass): the
+    // doc-present branch above runs FIRST, so a shadowed row is already `owned` and never reaches
+    // here. It is the ordering that makes this safe, not the classifier.
+    if (STATIC_LAKE_IDS.has(lake.id)) {
+      return dataLakeService.registryMembershipScope(lake);
+    }
+    return { kind: 'owned', datalakeTag: lake.datalakeTag };
+  });
+  dataLakeService.warnIfManyLakeMemberships(scopes, logger, surface);
+  return scopes;
+}
+
+/**
+ * The dynamic-lake subset, for a query that ORs every lake's arm into ONE `$or`.
+ *
+ * A `registry` scope's prefix arm carries no ownership conjunct by design, which is safe only where
+ * each scope is applied on its own. Dropped into a shared cross-lake `$or` it stops being that
+ * lake's arm and becomes an unanchored prefix match on the whole result set - a bypass any of the
+ * OR'd lakes can ride. Registry lakes keep matching through the OPEN `dataLakeTagPrefixes` arm.
+ *
+ * `queryDataLakeTagCounts` deliberately does NOT use this: `countDataLakeFilesByMembership` re-applies
+ * each scope in its own `$facet` branch, so the pipeline's cross-lake `$or` only widens the candidate
+ * pool and never a per-lake count - each number still comes from that lake's own filter.
+ *
+ * An ALLOW-list on `kind`, not `!== 'registry'`: the invariant is "only creator-anchored arms may
+ * enter the shared `$or`", and a future third kind whose prefix arm is likewise unanchored would
+ * ride a deny-list in silently, with no type error.
+ */
+const dynamicMembershipScopesFor = (scopes: DataLakeMembershipScope[]): DataLakeMembershipScope[] =>
+  scopes.filter(scope => scope.kind === 'owned');
 
 /**
  * Browse articles across the given lakes (resolved by `resolveAccessibleLakes`).
@@ -135,8 +244,12 @@ export async function queryDataLakeArticles(
   // lakes safely - membership IS the meta-tag) OR a static-registry (open) prefix.
   // A dynamic lake's user-controlled prefix is deliberately NOT a grant here - that
   // was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
-  if (query.id) {
-    const file = await fabFileRepository.findById(query.id);
+  // Narrowed like `search`/`tags` below: an array reaching findById casts to a Mongoose CastError
+  // and 500s the deep-link read. /api/data-lakes/articles has no `[id]` route segment, so nothing
+  // else overwrites this with a single value.
+  const articleId = firstQueryValue(query.id);
+  if (articleId) {
+    const file = await fabFileRepository.findById(articleId);
     const grantedLakeIds = file && !file.deletedAt ? grantingLakes(lakes, file.tags?.map(t => t.name) ?? []) : [];
     if (!file || grantedLakeIds.length === 0) {
       return { data: [], total: 0, hasMore: false };
@@ -164,6 +277,19 @@ export async function queryDataLakeArticles(
   const sortDir = query.sortDir === 'desc' ? ('desc' as const) : ('asc' as const);
 
   const user = req.user!;
+  // Dynamic-lake arms, each anchored to that lake's creator (#2243). Registry scopes are dropped
+  // because these all land in one cross-lake `$or` - see dynamicMembershipScopesFor.
+  const lakeMemberships = dynamicMembershipScopesFor(
+    await buildLakeMembershipScopes(lakes, 'data-lake-articles-browse', req.logger)
+  );
+
+  // The merged tree's Uncategorized bucket: lake members categorized under NONE of the accessible
+  // prefixes, so a file categorized in any one lake stays out of it (it is already reachable under
+  // that lake's branch). `restrictToDataLake` is not optional here - the narrowing is a top-level
+  // AND, so without it the broad owner/shared arms stay in and the "bucket" would be every
+  // personal file the caller owns that happens to carry none of these prefixes.
+  const uncategorizedOnly = firstQueryValue(query.uncategorized) === 'true';
+  const allTagPrefixes = [...openTagPrefixes, ...scopedTagPrefixes];
   const result = await fabFilesService.search(
     user.id,
     {
@@ -200,7 +326,8 @@ export async function queryDataLakeArticles(
       userGroups: user.groups ?? [],
       dataLakeTags,
       dataLakeTagPrefixes: openTagPrefixes,
-      scopedTagPrefixes,
+      lakeMemberships,
+      ...(uncategorizedOnly ? { restrictToDataLake: true, lacksContentPrefixTags: allTagPrefixes } : {}),
     }
   );
 
@@ -218,44 +345,77 @@ export async function queryDataLakeTagCounts(
   tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>>;
   uniqueArticleCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeUniqueFilesByPrefix>>;
   lakeFileCounts: Record<string, number>;
+  uncategorizedFileCounts: Record<string, number>;
+  totalLakeFileCount: number;
+  totalUncategorizedFileCount: number;
 }> {
   if (lakes.length === 0) {
-    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} }, lakeFileCounts: {} };
+    return {
+      tagCounts: [],
+      uniqueArticleCounts: { total: 0, byPrefix: {} },
+      lakeFileCounts: {},
+      uncategorizedFileCounts: {},
+      totalLakeFileCount: 0,
+      totalUncategorizedFileCount: 0,
+    };
   }
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
   const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(lakes);
   // The positional prefix list drives the tree's regex grouping (both static + dynamic
-  // content tags appear as branches); the ownership filter inside the counter - built
-  // from these split options - is what scopes dynamic-prefix files to the owner/org, so
-  // a colliding prefix can't surface another tenant's tags in the tree.
+  // content tags appear as branches). The ownership gate that keeps a colliding prefix from
+  // surfacing another tenant's tags is `$or: buildOwnershipConditions(...)` inside the counter -
+  // base access (owned/shared/group), not a prefix arm of these options.
   const allPrefixes = [...openTagPrefixes, ...scopedTagPrefixes];
   const user = req.user!;
   const countOptions = {
     userGroups: user.groups ?? [],
     dataLakeTags,
     dataLakeTagPrefixes: openTagPrefixes,
-    scopedTagPrefixes,
   };
 
   // Per-lake sizes come from the membership predicate, not from `<prefix>:` tag matches: a lake
   // whose files carry only the meta-tag (what the upload wizard produces) counts 0 under the
-  // prefix rule, and a file carrying several taxonomy tags counts several times. The lake docs
-  // are fetched because the predicate's prefix arm has to be anchored to the lake's CREATOR -
-  // the config the browse surfaces receive deliberately carries no owner id. A static registry
-  // lake has no doc and no creator, so it falls back to meta-tag-only matching, which is the
-  // safe direction (see buildDataLakeMembershipFilter).
-  const lakeDocs = await Promise.all(dataLakeTags.map(tag => dataLakeRepository.findByDatalakeTag(tag)));
-  const membershipScopes = lakes.map((lake, i) => ({
-    datalakeTag: lake.datalakeTag,
-    fileTagPrefix: lakeDocs[i]?.fileTagPrefix ?? lake.fileTagPrefix,
-    creatorUserId: lakeDocs[i]?.createdByUserId,
-  }));
+  // prefix rule, and a file carrying several taxonomy tags counts several times. It previously
+  // fell through to meta-tag-only for a registry lake, which UNDER-COUNTED it against its own
+  // browse - the browse has always matched the open prefix arm. That is the drift the
+  // discriminated scope exists to stop; these counts and GET /api/data-lakes/:id/articles now
+  // resolve the same membership for both lake kinds.
+  // Registry scopes are KEPT here, unlike the browse above: each scope gets its own $facet branch
+  // rather than sharing one $or, so an unanchored prefix arm stays confined to its own lake's count.
+  const membershipScopes = await buildLakeMembershipScopes(lakes, 'data-lake-tag-counts', req.logger);
 
-  const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
-    fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
-    fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
-    fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
-  ]);
+  // The membership legs share one predicate on purpose, so the numbers the picker and the tree
+  // show can be reconciled by a user rather than merely coexisting:
+  //   lakeFileCounts[tag]           - what the picker shows for a lake
+  //   uncategorizedFileCounts[tag]  - the slice of it the prefix-keyed tree cannot render, so the
+  //                                   tree can offer it as a bucket instead of dropping it
+  //   totalLakeFileCount            - the all-lakes row, DISTINCT across lakes
+  //   totalUncategorizedFileCount   - the MERGED tree's bucket: distinct members categorized under
+  //                                   no accessible prefix, so a file categorized in any one lake
+  //                                   stays out of it
+  // `uniqueArticleCounts` stays prefix-based: it sizes the tag TREE, which is prefix-keyed.
+  const [tagCounts, uniqueArticleCounts, membershipCounts, totalLakeFileCount, totalUncategorizedFileCount] =
+    await Promise.all([
+      fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
+      fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
+      fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
+      fabFileRepository.countDistinctDataLakeFilesByMembership(membershipScopes),
+      fabFileRepository.countDistinctUncategorizedDataLakeFilesByMembership(membershipScopes, allPrefixes),
+    ]);
 
-  return { tagCounts, uniqueArticleCounts, lakeFileCounts };
+  const lakeFileCounts: Record<string, number> = {};
+  const uncategorizedFileCounts: Record<string, number> = {};
+  for (const [datalakeTag, counts] of Object.entries(membershipCounts)) {
+    lakeFileCounts[datalakeTag] = counts.total;
+    uncategorizedFileCounts[datalakeTag] = counts.uncategorized;
+  }
+
+  return {
+    tagCounts,
+    uniqueArticleCounts,
+    lakeFileCounts,
+    uncategorizedFileCounts,
+    totalLakeFileCount,
+    totalUncategorizedFileCount,
+  };
 }

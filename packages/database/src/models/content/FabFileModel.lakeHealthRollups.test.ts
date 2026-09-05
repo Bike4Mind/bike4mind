@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, KnowledgeType } from '@bike4mind/common';
+import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, FabFileChunk, fabFileChunkRepository, fabFileRepository } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -74,6 +74,8 @@ describe('lake-health rollup primitives (#1666)', () => {
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
       embeddedCharCount: 9000,
+      fileSize: 42,
+      serverTextHash: 'abc123',
       tags: [{ name: tag, strength: 1 }],
     });
     await makeFile('unmeasured.txt', {
@@ -102,7 +104,12 @@ describe('lake-health rollup primitives (#1666)', () => {
       chunkedCharCount: 9000,
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
+      fileSize: 42,
+      serverTextHash: 'abc123',
     });
+    // No fileSize/serverTextHash stamped: projected as null, not coerced (feeds findDuplicateMembers).
+    expect(byName['unmeasured.txt'].fileSize).toBeNull();
+    expect(byName['unmeasured.txt'].serverTextHash).toBeNull();
     // The terminal-failure marker is projected so the evaluator can grade a failed file (not hide it).
     expect(byName['failed.txt'].error).toBe('embedding provider rejected the request');
     // Unmeasured file: the #1666 CHAR rollups come back as null, NOT coerced to 0.
@@ -164,18 +171,18 @@ describe('lake-health rollup primitives (#1666)', () => {
       // switch stopped mid-wave is chunkless and is admitted by its marker alone.
       await makeFile('mine-paused.txt', {
         chunkCount: 0,
-        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        chunkStallReason: 'rechunkPaused',
         tags: [{ name: tag, strength: 1 }],
       });
       await makeFile('other-lake-paused.txt', {
         chunkCount: 0,
-        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        chunkStallReason: 'rechunkPaused',
         tags: [{ name: 'datalake:other', strength: 1 }],
       });
       // Prefix arm, owned by the creator: a member, and admitted by the marker despite no chunks.
       await makeFile('mine-by-prefix-paused.txt', {
         chunkCount: 0,
-        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        chunkStallReason: 'rechunkPaused',
         tags: [{ name: 'acme:reports', strength: 1 }],
       });
 

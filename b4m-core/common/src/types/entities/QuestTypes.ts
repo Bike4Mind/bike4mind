@@ -60,6 +60,72 @@ export const QUEST_COMPLEXITY_VALUES = ['Easy', 'Medium', 'Hard'] as const;
 export type QuestComplexity = (typeof QUEST_COMPLEXITY_VALUES)[number];
 
 /**
+ * Retired vocabularies, and what each token meant, so a document written before the vocabulary
+ * was unified can be interpreted in ONE place instead of every reader re-guessing.
+ *
+ * SCOPED TO SUB-QUEST STATUS ONLY. Several of these tokens are live canonical values in a
+ * NEIGHBOURING vocabulary: `pending`, `blocked` and `failed` are all current members of
+ * NODE_STATUS_VALUES in ./QuestNodeTypes.ts, persisted by a live mongoose enum
+ * (packages/database/src/models/content/QuestNodeModel.ts). Retired here does not mean retired
+ * there, and running these tables over a quest-node status would silently corrupt it. Nothing
+ * projects a node status onto a sub-quest today, which is what keeps the two apart.
+ *
+ * Only tokens with a documented provenance are listed. `pending` and `in-progress` were the V2
+ * questmaster artifact zod schema's statuses (`pending` was its initial state); `blocked` came
+ * from the deleted V1 artifact repository interface; the lowercase complexities were that same
+ * V2 schema's ratings. Speculative aliases are deliberately absent: a status reader in the UI
+ * has long branched on `done`/`started`/`failed`/`error` too, but none of those was ever a
+ * SUB-QUEST status, so treating them as this vocabulary's history would be inventing it.
+ *
+ * `blocked -> not_started` is the one judgment call rather than a rename: the canonical
+ * sub-quest vocabulary has no blocked state, and unblocked-and-not-yet-begun is the closest
+ * true meaning.
+ *
+ * SAME TRAP ON COMPLEXITY: `low`/`medium`/`high` are retired complexity ratings here while being
+ * the live canonical `priority` values on the very same document (QuestMasterPlanModel's
+ * `priority` enum). Never point normalizeQuestComplexity at a priority - it would rewrite every
+ * one of them into a plausible-looking wrong answer.
+ */
+export const LEGACY_SUBQUEST_STATUS_ALIASES: Readonly<Record<string, SubQuestStatus>> = {
+  'in-progress': 'in_progress',
+  pending: 'not_started',
+  blocked: 'not_started',
+};
+
+export const LEGACY_QUEST_COMPLEXITY_ALIASES: Readonly<Record<string, QuestComplexity>> = {
+  low: 'Easy',
+  medium: 'Medium',
+  high: 'Hard',
+};
+
+/**
+ * Resolve a persisted sub-quest status to the canonical vocabulary.
+ *
+ * Returns `null` for a token that is neither canonical nor a known retired alias. That is
+ * deliberate and load-bearing: collapsing an unrecognized value into `not_started` would make an
+ * unreadable row indistinguishable from a genuinely-unstarted one, and would let a migration
+ * silently rewrite data whose meaning nobody actually knows. Callers must decide - the migration
+ * skips and logs.
+ */
+export const normalizeSubQuestStatus = (value: unknown): SubQuestStatus | null => {
+  if (typeof value !== 'string') return null;
+  if ((SUBQUEST_STATUS_VALUES as readonly string[]).includes(value)) return value as SubQuestStatus;
+  // Object.hasOwn, not `?? null`: these alias tables are plain object literals, so a stored token
+  // naming an Object.prototype member ('constructor', 'toString', '__proto__') would resolve to
+  // the INHERITED member, the nullish coalesce would never fire, and this would return a function
+  // typed as a SubQuestStatus. The migration writes exactly what this returns, through the raw
+  // driver, so that lands in the database.
+  return Object.hasOwn(LEGACY_SUBQUEST_STATUS_ALIASES, value) ? LEGACY_SUBQUEST_STATUS_ALIASES[value] : null;
+};
+
+/** Complexity counterpart of normalizeSubQuestStatus, with the same null-on-unknown contract. */
+export const normalizeQuestComplexity = (value: unknown): QuestComplexity | null => {
+  if (typeof value !== 'string') return null;
+  if ((QUEST_COMPLEXITY_VALUES as readonly string[]).includes(value)) return value as QuestComplexity;
+  return Object.hasOwn(LEGACY_QUEST_COMPLEXITY_ALIASES, value) ? LEGACY_QUEST_COMPLEXITY_ALIASES[value] : null;
+};
+
+/**
  * A blocker preventing progress on the quest plan
  */
 export type QuestBlocker = {

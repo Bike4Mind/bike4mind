@@ -9,15 +9,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * rejected query never reaches the service, and an accepted one arrives coerced.
  */
 
-const { mockBrowse, LAKES_REPO, USERS_REPO, GRANTS_REPO, mockToAccessContext, mockRecord } = vi.hoisted(() => ({
-  mockBrowse: vi.fn(),
-  // Distinguishable sentinels so the adapter case can assert identity pass-through.
-  LAKES_REPO: { __tag: 'dataLakeRepository' },
-  USERS_REPO: { __tag: 'userRepository' },
-  GRANTS_REPO: { __tag: 'dataLakeAccessGrantRepository' },
-  mockToAccessContext: vi.fn(),
-  mockRecord: vi.fn().mockResolvedValue(undefined),
-}));
+const { mockBrowse, LAKES_REPO, USERS_REPO, GRANTS_REPO, SETTINGS_REPO, mockToAccessContext, mockRecord } = vi.hoisted(
+  () => ({
+    mockBrowse: vi.fn(),
+    // Distinguishable sentinels so the adapter case can assert identity pass-through.
+    LAKES_REPO: { __tag: 'dataLakeRepository' },
+    USERS_REPO: { __tag: 'userRepository' },
+    GRANTS_REPO: { __tag: 'dataLakeAccessGrantRepository' },
+    SETTINGS_REPO: {
+      __tag: 'adminSettingsRepository',
+      findBySettingNames: vi.fn().mockResolvedValue([]),
+      findAll: vi.fn().mockResolvedValue([]),
+      getSettingsValue: vi.fn().mockResolvedValue(undefined),
+    },
+    mockToAccessContext: vi.fn(),
+    mockRecord: vi.fn().mockResolvedValue(undefined),
+  })
+);
 
 // The route is baseApi().use(...).get(fn), so `use` must return the chain and `get` returns the
 // raw handler - which makes the module's default export the handler itself.
@@ -45,13 +53,11 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: USERS_REPO,
   dataLakeAccessGrantRepository: GRANTS_REPO,
   lakeAccessEventRepository: { record: mockRecord },
-  adminSettingsRepository: {
-    findBySettingNames: vi.fn().mockResolvedValue([]),
-    findAll: vi.fn().mockResolvedValue([]),
-  },
+  adminSettingsRepository: SETTINGS_REPO,
 }));
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope for this
-// query-bounds test; stub it so the actor is just whatever the caller's req.user resolves to.
+// query-bounds test; stub it. What matters at this seam is that the route builds the actor
+// through toAccessContext, so the catalog is gated per caller.
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 
 import handler from '@pages/api/data-lakes/public';
@@ -60,6 +66,8 @@ type RouteHandler = (req: unknown, res: unknown) => Promise<unknown>;
 const route = handler as unknown as RouteHandler;
 
 const EMPTY_RESULT = { data: [], total: 0 };
+
+const ACCESS_CONTEXT = { userId: 'u1', isAdmin: false, userTags: ['opti'], entitlementKeys: ['medlib:pro'] };
 
 // `query` is always passed, even when empty: BrowseQuery.parse(undefined) throws its own
 // invalid_type error, which would satisfy a rejection assertion for the wrong reason.
@@ -91,9 +99,7 @@ describe('GET /api/data-lakes/public - query bounds', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockBrowse.mockResolvedValue(EMPTY_RESULT);
-    mockToAccessContext.mockImplementation((req: { user: { id: string; isAdmin?: boolean } }) =>
-      Promise.resolve({ userId: req.user.id, isAdmin: !!req.user.isAdmin })
-    );
+    mockToAccessContext.mockImplementation(async () => ACCESS_CONTEXT);
   });
 
   it('rejects a limit above the cap', () => expectRejected({ limit: '61' }, 'limit'));
@@ -140,9 +146,7 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockBrowse.mockResolvedValue(EMPTY_RESULT);
-    mockToAccessContext.mockImplementation((req: { user: { id: string; isAdmin?: boolean } }) =>
-      Promise.resolve({ userId: req.user.id, isAdmin: !!req.user.isAdmin })
-    );
+    mockToAccessContext.mockImplementation(async () => ACCESS_CONTEXT);
   });
 
   it('trims the search term', async () => {
@@ -163,9 +167,14 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     expect(browseOpts().search).toBe('');
   });
 
-  it('passes a non-admin caller through as isAdmin false, not undefined', async () => {
-    await route(makeReq({}, { id: 'u1' }), makeRes());
-    expect(browseArgs()[0]).toEqual({ userId: 'u1', isAdmin: false });
+  // `toAccessContext` is mocked, so this seam pins wiring only (resolution itself is owned by
+  // toAccessContext.test.ts): the route must hand the service the caller's resolved context,
+  // which is what makes the catalog per-caller.
+  it('passes the resolved access context through as the browse actor', async () => {
+    const req = makeReq({}, { id: 'u1' });
+    await route(req, makeRes());
+    expect(mockToAccessContext).toHaveBeenCalledWith(req);
+    expect(browseArgs()[0]).toBe(ACCESS_CONTEXT);
   });
 
   it('passes the repositories through by identity', async () => {
@@ -173,6 +182,9 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     expect(browseArgs()[2].db.dataLakes).toBe(LAKES_REPO);
     expect(browseArgs()[2].db.users).toBe(USERS_REPO);
     expect(browseArgs()[2].db.dataLakeAccessGrants).toBe(GRANTS_REPO);
+    // The grant repo alone is not enough: grant-reachable discovery also reads the read-grant
+    // cutover flag, so the settings repo has to arrive with it.
+    expect(browseArgs()[2].db.settings).toBe(SETTINGS_REPO);
   });
 
   it('returns the service result as JSON', async () => {

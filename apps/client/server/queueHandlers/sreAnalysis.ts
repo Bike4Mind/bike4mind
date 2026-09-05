@@ -309,6 +309,7 @@ export async function runSreAnalysis(payload: SreEventPayload, logger: Logger): 
       // Atomic CAS ensures exactly-once side-effect emission even under SQS redelivery.
       const transitioned = await sreErrorTrackingRepository.atomicTransition(
         tracking.id,
+        repoSlug,
         'analyzing',
         'recurrence_detected',
         {
@@ -388,6 +389,7 @@ export async function runSreAnalysis(payload: SreEventPayload, logger: Logger): 
     const priorPrNumbers = priorFixHistory.map(h => h.prNumber);
     const transitioned = await sreErrorTrackingRepository.atomicTransition(
       tracking.id,
+      repoSlug,
       'analyzing',
       'recurrence_detected',
       {

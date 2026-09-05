@@ -20,10 +20,10 @@ import type { ConventionRule, EndpointContract, ResponseSpec } from './types';
  * Statuses a public endpoint may declare (CONVENTIONS.md section 1).
  *
  * 402 is deliberately absent: insufficient credits is a 422 with an
- * `insufficient_credits` errorCode on every endpoint except /api/ai/tts, which
- * carries a `status-table` exemption. A status cannot be aliased the way a URL
- * or a field can, so a new endpoint choosing 402 must fail here rather than
- * quietly doubling the vocabulary.
+ * `insufficient_credits` errorCode everywhere. /api/ai/tts was the lone holdout
+ * and has since been moved onto 422, so nothing declares 402 today. A status
+ * cannot be aliased the way a URL or a field can, so an endpoint choosing 402
+ * must fail here rather than quietly doubling the vocabulary.
  */
 const ALLOWED_STATUSES = new Set([200, 201, 202, 204, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503]);
 
