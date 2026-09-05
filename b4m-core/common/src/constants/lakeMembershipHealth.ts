@@ -39,6 +39,11 @@ export interface LakeMembershipMemberInput {
   serverTextHash?: string | null;
   fileSize?: number | null;
   createdAt?: Date | null;
+  /**
+   * Who uploaded this member. Neither membership arm carries an ownership conjunct, so a group can
+   * span contributors - see the note on DuplicateGroupMember.userId.
+   */
+  userId?: string | null;
   arm: MembershipArm;
 }
 
@@ -47,6 +52,17 @@ export interface DuplicateGroupMember {
   serverTextHash: string | null;
   fileSize: number | null;
   createdAt: Date | null;
+  /**
+   * The uploader, carried because a same-name group can span two of them and the repair arm must be
+   * able to notice. The meta-tag arm matches on the tag alone and a registry lake's prefix arm has no
+   * ownership conjunct either, so any principal's file bearing the lake's tag is a member: two
+   * contributors can upload the same document, bucket `proven-identical`, and have one proposed for
+   * removal. A plan that cannot see the survivor and the casualty have different owners cannot gate
+   * on it. Null when the owner is unknown, which is never grounds to collapse.
+   *
+   * In-process only - stripped at the API boundary by `toWireMembershipReport`.
+   */
+  userId: string | null;
   arm: MembershipArm;
 }
 
@@ -155,13 +171,19 @@ export function byNewestFirst(a: DuplicateGroupMember, b: DuplicateGroupMember):
  * compared for equality. Without that, two size-less members satisfied `null === null` and the
  * conjunct went vacuous exactly where it cannot discriminate - on the re-export case it exists to
  * catch - handing the collapse arm a group it was never meant to be given.
+ *
+ * An ABSENT size is not a size disagreement, though, and the two land in different buckets. Matching
+ * fingerprints with a size nobody recorded is "cannot tell" (`unverified`), not "these are different
+ * documents" (`differing`) - only a measured disagreement earns the latter. Both keep the group out
+ * of auto-collapse, which is what the strictness is for; routing an unknown to `differing` would have
+ * the report assert something it never established.
  */
 function classifyGroup(members: DuplicateGroupMember[]): DuplicateBucket {
   if (!members.every(m => isFingerprint(m.serverTextHash))) return 'unverified';
   const [first, ...rest] = members;
-  const sameHash = rest.every(m => m.serverTextHash === first.serverTextHash);
-  const sameSize = typeof first.fileSize === 'number' && rest.every(m => m.fileSize === first.fileSize);
-  return sameHash && sameSize ? 'proven-identical' : 'differing';
+  if (!rest.every(m => m.serverTextHash === first.serverTextHash)) return 'differing';
+  if (!members.every(m => typeof m.fileSize === 'number')) return 'unverified';
+  return rest.every(m => m.fileSize === first.fileSize) ? 'proven-identical' : 'differing';
 }
 
 /** Worst-first: the buckets needing a human come before the one that collapses itself. */
@@ -198,6 +220,7 @@ export function summarizeLakeMembership(
       serverTextHash: isFingerprint(member.serverTextHash) ? member.serverTextHash : null,
       fileSize: typeof member.fileSize === 'number' ? member.fileSize : null,
       createdAt: member.createdAt ?? null,
+      userId: member.userId ?? null,
       arm: member.arm,
     };
     const existing = byName.get(member.fileName);
@@ -239,5 +262,44 @@ export function summarizeLakeMembership(
     bucketCounts,
     duplicateGroups: options.maxGroups === undefined ? groups : groups.slice(0, options.maxGroups),
     scanTruncated: options.scanTruncated ?? false,
+  };
+}
+
+/**
+ * The membership report as it leaves the process.
+ *
+ * `serverTextHash` and `userId` are facts the repair arm reasons over, not client data. The hash in
+ * particular is a stable, global content identifier: emitting it hands any lake reader a confirmation
+ * oracle ("this lake holds exactly the document I already hold") and lets one document be correlated
+ * across lakes under different names, neither of which the fabFileId and fileName enumeration already
+ * on the wire provides. What a client needs from a hash comparison is the derived `bucket`, which is
+ * already here.
+ *
+ * Stripped at the boundary rather than never computed, because `summarizeLakeMembership` must keep
+ * both fields for `lakeMembershipRepair` to gate on. See the read gate on GET
+ * /api/data-lakes/:id/health: it admits `public`, so this payload's audience is wider than the lake's
+ * owner.
+ */
+export type WireDuplicateGroupMember = Omit<DuplicateGroupMember, 'serverTextHash' | 'userId'>;
+export type WireDuplicateGroup = Omit<DuplicateGroup, 'members'> & { members: WireDuplicateGroupMember[] };
+export type WireLakeMembershipReport = Omit<LakeMembershipReport, 'duplicateGroups'> & {
+  duplicateGroups: WireDuplicateGroup[];
+};
+
+export function toWireMembershipReport(report: LakeMembershipReport): WireLakeMembershipReport {
+  return {
+    ...report,
+    duplicateGroups: report.duplicateGroups.map(group => ({
+      ...group,
+      // An allowlist rather than a delete, so a field added to DuplicateGroupMember later stays OFF
+      // the wire until someone names it here. Adding one without deciding is a type error, not a
+      // silent disclosure.
+      members: group.members.map(m => ({
+        fabFileId: m.fabFileId,
+        fileSize: m.fileSize,
+        createdAt: m.createdAt,
+        arm: m.arm,
+      })),
+    })),
   };
 }

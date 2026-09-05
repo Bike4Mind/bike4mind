@@ -228,7 +228,15 @@ const PromptMetaPerformanceSchema = z.object({
   totalResponseTime: z.number().optional(),
   contextRetrievalTime: z.number().optional(),
   modelInferenceTime: z.number().optional(),
+  /**
+   * Time to First Visible Token: elapsed ms until the first chunk the user can actually
+   * see. Left unset when a turn streamed nothing visible (thinking-only, or a turn that
+   * errored before answering), so absence reads as "never rendered" rather than as fast.
+   * Pair with firstChunkTime to tell a slow model from a long hidden-reasoning window.
+   */
   firstTokenTime: z.number().optional(),
+  /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
+  firstChunkTime: z.number().optional(),
   clientFirstTokenTime: z.number().optional(), // Time from client sending prompt to client rendering first token
   streamingPerformance: z
     .object({

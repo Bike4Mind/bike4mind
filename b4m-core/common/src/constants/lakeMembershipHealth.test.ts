@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isFingerprint,
   summarizeLakeMembership,
+  toWireMembershipReport,
   type LakeMembershipMemberInput,
   type MembershipArm,
 } from './lakeMembershipHealth';
@@ -84,24 +85,40 @@ describe('summarizeLakeMembership bucketing', () => {
     expect(report.duplicateGroups[0].bucket).toBe('differing');
   });
 
-  it('does NOT prove identity when neither member has a known size', () => {
+  it('calls a same-hash pair with no known size UNVERIFIED, not differing', () => {
     // The size conjunct went vacuous exactly where it cannot discriminate: `fileSize` is optional on
     // the schema and coalesces to null, so two size-less members satisfied null === null and reached
     // the one bucket that removes membership with no owner prompt. Same rule as `isFingerprint` - a
     // missing value is never compared for equality.
+    //
+    // But an unknown size is not a size DISAGREEMENT, and the bucket has to say which happened:
+    // `differing` asserts these are different documents, which nothing here established.
     const report = summarize([
       member({ serverTextHash: 'aaa', fileSize: null }),
       member({ serverTextHash: 'aaa', fileSize: null }),
     ]);
 
-    expect(report.duplicateGroups[0].bucket).toBe('differing');
+    expect(report.duplicateGroups[0].bucket).toBe('unverified');
     expect(report.bucketCounts['proven-identical']).toBe(0);
   });
 
-  it('does NOT prove identity when only one member has a known size', () => {
+  it('calls a same-hash pair with only one known size UNVERIFIED', () => {
     const report = summarize([
       member({ serverTextHash: 'aaa', fileSize: 100 }),
       member({ serverTextHash: 'aaa', fileSize: null }),
+    ]);
+
+    expect(report.duplicateGroups[0].bucket).toBe('unverified');
+    expect(report.bucketCounts['proven-identical']).toBe(0);
+  });
+
+  it('still calls a MEASURED size disagreement differing, so the two unknowns stay distinguishable', () => {
+    // The pair to the two above: same hashes, both sizes known, and they disagree. This is the case
+    // that earns `differing` - a fact was established. Pinned beside them so a future simplification
+    // cannot collapse "cannot tell" and "proven different" back into one bucket.
+    const report = summarize([
+      member({ serverTextHash: 'aaa', fileSize: 100 }),
+      member({ serverTextHash: 'aaa', fileSize: 250 }),
     ]);
 
     expect(report.duplicateGroups[0].bucket).toBe('differing');
@@ -283,5 +300,62 @@ describe('summarizeLakeMembership disclosure and shape', () => {
     expect(report.totalMembers).toBe(0);
     expect(report.duplicateNameCount).toBe(0);
     expect(report.armSplit).toEqual({ 'meta-tag': 0, prefix: 0 });
+  });
+});
+
+describe('member ownership', () => {
+  it('carries each member owner through to the group', () => {
+    // Neither arm has an ownership conjunct, so a same-name group can span contributors. The repair
+    // arm gates removal on that; it can only do so if the owner survives summarization.
+    const report = summarize([
+      member({ serverTextHash: 'aaa', fileSize: 100, userId: 'u1' }),
+      member({ serverTextHash: 'aaa', fileSize: 100, userId: 'u2' }),
+    ]);
+
+    expect(report.duplicateGroups[0].bucket).toBe('proven-identical');
+    expect(report.duplicateGroups[0].members.map(m => m.userId).sort()).toEqual(['u1', 'u2']);
+  });
+
+  it('records an unknown owner as null rather than dropping the field', () => {
+    const report = summarize([member({ serverTextHash: 'aaa' }), member({ serverTextHash: 'aaa' })]);
+
+    expect(report.duplicateGroups[0].members.every(m => m.userId === null)).toBe(true);
+  });
+});
+
+describe('toWireMembershipReport', () => {
+  const inProcess = () =>
+    summarize([
+      member({ serverTextHash: 'aaa', fileSize: 100, userId: 'u1' }),
+      member({ serverTextHash: 'aaa', fileSize: 100, userId: 'u2' }),
+    ]);
+
+  it('drops serverTextHash and userId from every member', () => {
+    // The hash is a stable global content identifier and the read gate on the health route admits
+    // `public`, so neither belongs on the wire. The derived bucket is what a client needs.
+    const wire = toWireMembershipReport(inProcess());
+    const [m] = wire.duplicateGroups[0].members;
+
+    expect(Object.keys(m).sort()).toEqual(['arm', 'createdAt', 'fabFileId', 'fileSize']);
+    expect('serverTextHash' in m).toBe(false);
+    expect('userId' in m).toBe(false);
+  });
+
+  it('leaves the in-process report untouched, since the repair arm reads it', () => {
+    const report = inProcess();
+    toWireMembershipReport(report);
+
+    expect(report.duplicateGroups[0].members[0].serverTextHash).toBe('aaa');
+    expect(report.duplicateGroups[0].members.map(m => m.userId).sort()).toEqual(['u1', 'u2']);
+  });
+
+  it('keeps every derived field a reader actually needs', () => {
+    const wire = toWireMembershipReport(inProcess());
+
+    expect(wire.duplicateGroups[0].bucket).toBe('proven-identical');
+    expect(wire.duplicateGroups[0].memberCount).toBe(2);
+    expect(wire.totalMembers).toBe(2);
+    expect(wire.bucketCounts['proven-identical']).toBe(1);
+    expect(wire.scope).toEqual(SCOPE);
   });
 });

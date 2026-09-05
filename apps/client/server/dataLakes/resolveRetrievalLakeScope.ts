@@ -59,7 +59,13 @@ export function withStaticRegistryBypass(
     // Per-lake entries follow the same widening, or a privileged caller could search a registry
     // lake but not count it. Registry-sourced by construction, like the prefixes above, and
     // keyed on the globally-unique meta-tag so a lake the scope already resolved keeps its own
-    // (possibly membership-carrying) entry.
+    // entry (and with it that lake's creator-anchored scope, rather than a weaker registry copy).
+    //
+    // The scope comes from `registryMembershipScope`, i.e. off the same compile-time registry
+    // config as the prefixes, which is property 1 above applied to this bucket: reading it off
+    // `scope` would let a DB row shadowing a registry id launder its user-controlled prefix into
+    // an unanchored arm. Multi-lake retrieval drops these anyway (`lakeMembershipsFrom`); what
+    // they buy is the whole-lake count, which is per-lake and access-gated.
     lakes: [
       ...scope.lakes,
       ...registry
@@ -70,6 +76,7 @@ export function withStaticRegistryBypass(
           slug: lake.slug,
           datalakeTag: lake.datalakeTag,
           fileTagPrefix: lake.fileTagPrefix,
+          membership: dataLakeService.registryMembershipScope(lake),
           source: 'registry' as const,
         })),
     ],
