@@ -8,6 +8,8 @@ interface ValidateChatInputParams {
   currentUser: { currentCredits?: number; emailVerified?: boolean | null; tags?: string[] | null } | null;
   effectiveCredits: number;
   enforceCredits: boolean;
+  /** Active model id, so a pin the catalog no longer serves can be named rather than described as absent. */
+  selectedModel?: string;
 }
 
 /**
@@ -21,14 +23,22 @@ export function validateChatInput({
   currentUser,
   effectiveCredits,
   enforceCredits,
+  selectedModel,
 }: ValidateChatInputParams): string | null {
   if (!accessibleModels || accessibleModels.length === 0) {
     return "You don't have access to any AI models. Please contact your administrator to request the appropriate permissions.";
   } else if (maxInputTokens <= 0) {
-    // contextWindowLimit is 0 - the selected model isn't in modelInfo (still loading,
-    // or no model selected). Surface that directly instead of the misleading
-    // "Input exceeds maximum allowed (0 tokens)" message the next branch produces.
-    return 'No AI model selected. Please pick a model in AI Settings before sending.';
+    // contextWindowLimit is 0 - the selected model isn't in modelInfo. Surface that directly instead
+    // of the misleading "Input exceeds maximum allowed (0 tokens)" message the next branch produces.
+    //
+    // A model IS selected here when the catalog has dropped it (retired upstream, or pulled by the
+    // admin catalog overlay) while a session's `lastUsedModel` or the persisted store still pins it.
+    // Naming it says what actually has to happen - replace the pin - where "none selected" sends the
+    // user to a picker that looks fine. The catalog is known loaded: the branch above already
+    // rejected an empty accessibleModels, and that list is built from the same catalog.
+    return selectedModel
+      ? `The model ${selectedModel} is no longer available. Please pick a different model in AI Settings.`
+      : 'No AI model selected. Please pick a model in AI Settings before sending.';
   } else if (inputText.length > maxInputTokens) {
     return `Input exceeds maximum allowed (${maxInputTokens} tokens) for your current max output setting of ${effectiveMaxOutputTokens} tokens`;
   } else if (!inputText.trim()) {

@@ -558,11 +558,16 @@ export const LLMProvider: React.FC = () => {
     // their identity is stable and they don't need to be in deps. accessibleModels
     // IS in deps so we re-run when models arrive after isAdminSettingsLoading has
     // already flipped false (see comment above).
+    // activeModel IS in deps because a model can go unresolvable AFTER this effect has settled -
+    // session hydration (useHydrateModelFromSession) applies `lastUsedModel` unvalidated, and the
+    // persisted store rehydrates a pin whose model has since left the catalog. Keyed only on the
+    // inputs it resolves FROM, the repair below could never see that. The body is idempotent, so
+    // re-running on a model the user picked themselves is a no-op.
     // modelInfoRepo is read (via modelInfoRepoRef) but deliberately NOT in deps: it and accessibleModels
     // derive from the same cached catalog query, so accessibleModels already covers its arrival. Adding
     // it would re-run this effect on every catalog refetch for no new decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels]);
+  }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels, activeModel]);
 
   // Re-fit max_tokens whenever the active text/chat model changes (see refitMaxTokensForModel -
   // it corrects both a too-high carry-over and a too-low one). Skip image models: their catalog
