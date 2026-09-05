@@ -207,20 +207,26 @@ export const purgeDataLakeDocument = async (
   // `versions[]`, each under its own object key (see appendEditedVersion), and `filePath` names only
   // the newest - so deleting that alone leaves the original document's bytes behind while the
   // receipt claims the file is gone.
-  const storageKeys = Array.from(
-    new Set(
-      [file.filePath, ...(file.versions ?? []).map(version => version?.filePath)].filter(
-        (path): path is string => typeof path === 'string' && path.length > 0
-      )
-    )
-  );
+  //
+  // ORDER MATTERS: prior versions first, `filePath` LAST. When the sweep cannot clear every key it
+  // deliberately keeps the row so a retry can still name them, and that row is only useful while
+  // `filePath` still resolves - download presigns it and reprocess refetches the bytes through it.
+  // Deleting the current object while an older version survived would keep a row addressing an
+  // object that is gone, which is worse than keeping both.
+  const isStorageKey = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
+  const currentKey = isStorageKey(file.filePath) ? file.filePath : null;
+  const versionKeys = Array.from(
+    new Set((file.versions ?? []).map(version => version?.filePath).filter(isStorageKey))
+    // Deduped against the current key too: a version row may repeat it, and it must be attempted
+    // last, not at whichever position it first appears in `versions[]`.
+  ).filter(path => path !== currentKey);
 
   // BEFORE the chunks and the row: those two writes are the ones a retry cannot re-derive once
   // done (chunks feed the lake-health rollups, and the row is the only thing naming these keys).
   // If the object store refuses, nothing destructive has happened yet, so the document, its
   // chunks and its rollups stay consistent and a retry converges.
   const storageKeysUnreached: string[] = [];
-  for (const path of storageKeys) {
+  const deleteKey = async (path: string) => {
     try {
       await storage.delete(path);
     } catch (error) {
@@ -230,6 +236,25 @@ export const purgeDataLakeDocument = async (
         filePath: path,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
+    }
+  };
+
+  for (const path of versionKeys) {
+    await deleteKey(path);
+  }
+  if (currentKey) {
+    if (storageKeysUnreached.length > 0) {
+      // Not attempted, on purpose - see the ordering note above. Still counted as unreached so
+      // `storageObjectsRemaining` keeps meaning "objects still stored", which is what the receipt
+      // and its dialog copy report.
+      storageKeysUnreached.push(currentKey);
+      logger?.info('[dataLake] permanent deletion skipped the current object to keep the kept row addressable', {
+        fabFileId: file.id,
+        filePath: currentKey,
+        unreachedVersionKeys: storageKeysUnreached.length - 1,
+      });
+    } else {
+      await deleteKey(currentKey);
     }
   }
   const storageObjectDeleted = storageKeysUnreached.length === 0;
@@ -283,7 +308,7 @@ export const purgeDataLakeDocument = async (
     embeddingModels,
     documentDeleted,
     storageObjectDeleted,
-    storageObjectsTotal: storageKeys.length,
+    storageObjectsTotal: versionKeys.length + (currentKey ? 1 : 0),
     storageObjectsRemaining: storageKeysUnreached.length,
     retrievalIndexOutcome: retrievalIndex ? 'purged' : vectorsCollocated ? 'collocated' : 'unwired',
     verified,

@@ -939,7 +939,11 @@ export interface DataLakeDocumentPurgeReceipt {
   storageObjectDeleted: boolean;
   /** How many stored objects the document had (current revision plus every prior version). */
   storageObjectsTotal: number;
-  /** How many of them the object store refused. 0 whenever `storageObjectDeleted` is true. */
+  /**
+   * How many of them are still stored. 0 whenever `storageObjectDeleted` is true. Unreached rather
+   * than strictly refused: once any prior version's key fails, the sweep stops before the current
+   * `filePath` so the row it keeps stays addressable, and counts that un-attempted key here too.
+   */
   storageObjectsRemaining: number;
   /**
    * What happened to the separate retrieval index. NOT read back - the port has no read operation.
