@@ -136,8 +136,11 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     // The cap lives in the detector, which allocates it PER KIND. A slice here would re-create the
     // starvation that allocation exists to prevent: findings sort by kind name, so one prolific kind
     // would take the whole budget again and evict the cross-document findings the feature is for.
-    const findings = Array.from({ length: 200 }, (_, i) => ({
-      kind: i < 100 ? 'expired-claim' : 'metric-disagreement',
+    // Deliberately LONGER than INCONSISTENCY_FINDINGS_CAP (200). At exactly the cap a route-level
+    // `.slice(0, CAP)` returns the same 200 findings and this test passes with the regression
+    // present - which is the whole thing it is named for.
+    const findings = Array.from({ length: 260 }, (_, i) => ({
+      kind: i < 130 ? 'expired-claim' : 'metric-disagreement',
       subject: String(i),
       evidence: [{ fabFileId: `f${i}`, fileName: null, excerpt: 'x' }],
       documentCount: 2,
@@ -150,7 +153,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     await done;
 
     const stored = h.update.mock.calls[0][0].inconsistencyReport;
-    expect(stored.findings).toHaveLength(200);
+    expect(stored.findings).toHaveLength(260);
     expect(new Set(stored.findings.map((f: { kind: string }) => f.kind))).toEqual(
       new Set(['expired-claim', 'metric-disagreement'])
     );

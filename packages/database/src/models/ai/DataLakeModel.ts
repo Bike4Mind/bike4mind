@@ -60,7 +60,7 @@ const DataLakeSchema = new mongoose.Schema(
     // (#1662): a member file whose effective target differs is reported as a conflict, never
     // re-chunked. No index (tiny collection, only read from a lake already in hand).
     requiredPassageTokenTarget: { type: Number },
-    // Last inconsistency report (#2242) and when it ran. `mongoose.Schema.Types.Mixed` deliberately: this is a
+    // Last inconsistency report and when it ran. `mongoose.Schema.Types.Mixed` deliberately: this is a
     // report payload the pure detector owns the shape of, and re-declaring its fields here would give
     // two sources of truth that drift.
     //
@@ -71,8 +71,9 @@ const DataLakeSchema = new mongoose.Schema(
     // route) must pass it too. Said explicitly because the previous wording implied the detector
     // enforced the persisted size, which would have let the next writer add no cap of its own.
     //
-    // Excluded from the six list/browse projections below: this is the collection's only unbounded
-    // field, and it rides along on every unprojected lake read otherwise.
+    // Excluded from every list/browse query on DataLakeRepository via LIST_PROJECTION, which is
+    // where the exclusion has to live: this field is on the LAKE schema, so naming it in a
+    // DataLakeBatchRepository projection is a silent no-op.
     inconsistencyReport: { type: mongoose.Schema.Types.Mixed, default: null },
     inconsistencyComputedAt: { type: Date, default: null },
     fileTagPrefix: { type: String, required: true },
@@ -280,6 +281,12 @@ const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): 
   return { $or: arms };
 };
 
+// The lakes collection's only unbounded field. Every list/browse query below excludes it: the two
+// routes that read a report (health, inconsistencies) each load a SINGLE lake by id or slug, so no
+// list path has a reader, and without this a per-lake report multiplies by the page size on reads
+// that never look at it.
+const LIST_PROJECTION = '-inconsistencyReport';
+
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
@@ -309,7 +316,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (datalakeTags.length === 0) return [];
     // Same globally-unique index as findByDatalakeTag, so the result carries at most one lake
     // per tag and a caller can key it by `datalakeTag` without losing a match.
-    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } });
+    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } }).select(LIST_PROJECTION);
     return docs.map(doc => doc.toJSON() as IDataLakeDocument);
   }
 
@@ -326,10 +333,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   async findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
-    const results = await this.dataLakeModel.find({
-      status: 'active',
-      $or: [{ requiredUserTag: { $in: allTags } }, { requiredUserTag: null }, { requiredUserTag: '' }],
-    });
+    const results = await this.dataLakeModel
+      .find({
+        status: 'active',
+        $or: [{ requiredUserTag: { $in: allTags } }, { requiredUserTag: null }, { requiredUserTag: '' }],
+      })
+      .select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
@@ -390,12 +399,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // including private gateless ones. Only when a userId is supplied.
     if (userId) accessArms.unshift({ createdByUserId: userId });
 
-    const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms });
+    const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
   async findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]> {
-    const results = await this.dataLakeModel.find({ organizationId: orgId });
+    const results = await this.dataLakeModel.find({ organizationId: orgId }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
@@ -476,7 +485,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
           $or: [{ createdByUserId: ctx.userId }, ...nonOwnerArms],
         };
 
-    const results = await this.dataLakeModel.find(filter);
+    const results = await this.dataLakeModel.find(filter).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
@@ -535,7 +544,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     const total = await this.dataLakeModel.countDocuments(filter);
     // `_id` breaks name ties so the ordering is total: without it, same-named lakes have no
     // stable order under skip/limit, and one could appear on two pages or be skipped between them.
-    const results = await this.dataLakeModel.find(filter).sort({ name: 1, _id: 1 }).skip(offset).limit(limit);
+    const results = await this.dataLakeModel
+      .find(filter)
+      .select(LIST_PROJECTION)
+      .sort({ name: 1, _id: 1 })
+      .skip(offset)
+      .limit(limit);
     return { lakes: results.map(r => r.toJSON() as IDataLakeDocument), total };
   }
 
@@ -866,7 +880,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         userId,
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -878,7 +892,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         dataLakeId,
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -890,7 +904,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       .find({ status: { $in: BATCH_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
       .sort({ updatedAt: 1 })
       .limit(limit)
-      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -1089,7 +1103,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       })
       .sort({ taxonomyStartedAt: 1 })
       .limit(limit)
-      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -1136,7 +1150,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         userId,
         taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport')
+      .select('-files -taxonomySuggestions.fileAssignments')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
@@ -1158,7 +1172,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         userId,
         taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 }

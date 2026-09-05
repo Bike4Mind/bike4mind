@@ -97,6 +97,24 @@ describe('detectLakeInconsistencies', () => {
     expect(report.findings).toEqual([]);
   });
 
+  it('counts the members it read text for, so 0 distinguishes "scanned nothing" from "clean"', async () => {
+    // The zero case above is the only one that was asserted, and hardcoding memberCount to 0 fails
+    // nothing without this. The field exists to tell those two apart, and this is the other half.
+    //
+    // It counts members that yielded TEXT, not members matched: 'd' has no chunk sample and is not
+    // counted, which is the distinction an owner reading {findingCount: 0} needs.
+    const adapters = makeAdapters([memberRow('a'), memberRow('b'), memberRow('c'), memberRow('d')], {
+      a: ['Uptime is 99.9%'],
+      b: ['Uptime is 99.9%'],
+      c: ['Uptime is 99.9%'],
+    });
+
+    const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
+
+    expect(report.memberCount).toBe(3);
+    expect(report.findings).toEqual([]);
+  });
+
   it('isolates an unreadable member instead of failing the whole report', async () => {
     // A report is worth more partial than not at all, and the omission is logged rather than silent.
     const adapters = makeAdapters([memberRow('bad'), memberRow('a'), memberRow('b')], {

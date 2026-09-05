@@ -173,8 +173,12 @@ const ORG = /\b([A-Z][A-Za-z0-9&.-]+(?:\s+[A-Z][A-Za-z0-9&.-]+){1,3})\b/g;
  * rounding error - it was most of what this rule emitted.
  *
  * `through|until|thru` therefore now requires a lead-in that makes the claim a commitment about the
- * future. The cost is recall on phrasings not in the list; the alternative was a rule whose findings
- * a reader learns to skip.
+ * future. The alternative was a rule whose findings a reader learns to skip.
+ *
+ * The recall cost is wider than "phrasings not in the list": the lead-in must be ADJACENT, so
+ * `supported in all regions through 2024` misses even though `supported` is in the list. Widening
+ * the gap is deliberately deferred with the rest of the rule tuning - anything permissive enough to
+ * span a clause also spans a sentence boundary and re-admits the historical narrative above.
  */
 const DATED_CLAIM =
   /\b(?:(?:supported|available|valid|effective|maintained|offered|guaranteed|current)\s+(?:through|until|thru)|expected\s+(?:in|by)|available\s+(?:in|by)|ga\s+in)\s+((?:19|20)\d{2})\b/i;

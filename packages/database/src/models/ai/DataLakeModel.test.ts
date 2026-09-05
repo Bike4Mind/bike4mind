@@ -2279,3 +2279,45 @@ describe('DataLakeRepository.findByDatalakeTags', () => {
     await expect(dataLakeRepository.findByDatalakeTags([])).resolves.toEqual([]);
   });
 });
+
+describe('DataLakeRepository - LIST_PROJECTION excludes inconsistencyReport', () => {
+  setupMongoTest();
+
+  // The exclusion first shipped on DataLakeBatchRepository's projections, where the field does not
+  // exist on the schema at all - so Mongo accepted the token, dropped nothing, and every list read
+  // still carried the report. Nothing failed. Every list method is asserted here BY NAME rather
+  // than by a loop over the class, so adding a seventh list query without the projection is a
+  // visible omission rather than a silently-passing suite.
+  const REPORT = { findings: [], countsByKind: {}, sampled: true, truncated: false, memberCount: 3 };
+
+  const seed = () =>
+    dataLakeRepository.create(
+      baseLake({
+        slug: 'reported',
+        isPublic: true,
+        organizationId: 'orgA',
+        createdByUserId: 'alice',
+        inconsistencyReport: REPORT,
+      } as never)
+    );
+
+  const ctx = { userId: 'alice', isAdmin: false, userTags: [], entitlementKeys: [], organizationIds: ['orgA'] };
+
+  it('omits it from all six list queries and keeps it on the single-lake read', async () => {
+    const created = await seed();
+
+    expect((await dataLakeRepository.findByDatalakeTags(['datalake:reported']))[0].inconsistencyReport).toBeUndefined();
+    expect((await dataLakeRepository.findActiveByUserTags([]))[0].inconsistencyReport).toBeUndefined();
+    expect(
+      (await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'alice'))[0].inconsistencyReport
+    ).toBeUndefined();
+    expect((await dataLakeRepository.findByOrganizationId('orgA'))[0].inconsistencyReport).toBeUndefined();
+    expect((await dataLakeRepository.findAccessible(ctx as never))[0].inconsistencyReport).toBeUndefined();
+    expect((await dataLakeRepository.findPublicLakes(ctx as never)).lakes[0].inconsistencyReport).toBeUndefined();
+
+    // The positive control, and the reason the exclusion is safe: the health and inconsistencies
+    // routes both resolve a single lake by id or slug, and that path still carries the report.
+    const single = await dataLakeRepository.findById(created.id);
+    expect(single?.inconsistencyReport).toMatchObject({ memberCount: 3 });
+  });
+});

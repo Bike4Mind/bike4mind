@@ -165,6 +165,15 @@ describe('expired claims', () => {
     expect(report.findings[0].documentCount).toBe(30);
   });
 
+  it('keeps two distinct expiry years as two findings', () => {
+    // The grouping test above pins that ONE year collapses; nothing pinned that two do not. A
+    // "collapse every expired claim into one" simplification passes the whole suite without this.
+    const report = run([doc('a', 'Supported until 2020.'), doc('b', 'Supported until 2021.')], 2026);
+
+    expect(report.findings).toHaveLength(2);
+    expect(report.findings.map(f => f.subject).sort()).toEqual(['2020', '2021']);
+  });
+
   it('does not fire on a retrospective statement of fact', () => {
     // "Revenue grew through 2024" is permanently true. The bare through/until form could not tell a
     // commitment from a historical narrative, and historical narrative is among the most common
