@@ -2398,6 +2398,16 @@
           "anchor": "performance-metrics-info"
         },
         {
+          "level": 4,
+          "text": "Time to First Visible Token (TTFVT)",
+          "anchor": "time-to-first-visible-token-ttfvt"
+        },
+        {
+          "level": 4,
+          "text": "Troubleshooting: TTFVT looks better than users report",
+          "anchor": "troubleshooting-ttfvt-looks-better-than-users-report"
+        },
+        {
           "level": 3,
           "text": "Record Count",
           "anchor": "record-count"
@@ -12033,6 +12043,16 @@
               "anchor": "performance-metrics-info"
             },
             {
+              "level": 4,
+              "text": "Time to First Visible Token (TTFVT)",
+              "anchor": "time-to-first-visible-token-ttfvt"
+            },
+            {
+              "level": 4,
+              "text": "Troubleshooting: TTFVT looks better than users report",
+              "anchor": "troubleshooting-ttfvt-looks-better-than-users-report"
+            },
+            {
               "level": 3,
               "text": "Record Count",
               "anchor": "record-count"
@@ -19279,5 +19299,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "a5961124a94a99d9"
+  "version": "f869326413360b97"
 }
