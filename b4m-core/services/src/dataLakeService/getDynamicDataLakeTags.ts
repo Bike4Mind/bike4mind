@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { isDatalakeTagWellFormed } from './createDataLake';
-import { lakeMembershipScope } from './lakeMembershipScope';
+import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
 
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
@@ -62,10 +62,9 @@ export interface DataLakeAccessContext {
  * flattened unions: they answer "may this file be searched" but lose which lake a file belongs
  * to, the creator its prefix arm is anchored to, and the lake's product-facing name.
  *
- * `source` is load-bearing, not decoration. A registry lake's files carry only prefixed content
- * tags - no write path stamps its meta-tag - so a membership-scope count of one returns 0; it
- * has to be counted through the OPEN prefix arm instead. See lakeMembershipScope and the
- * articles route's `isFallback` branch, which this must stay in agreement with.
+ * `source` is load-bearing, not decoration: it is what tells a consumer whether this lake's
+ * `membership` is creator-anchored (`owned`) or unanchored (`registry`), and only the former may
+ * enter a cross-lake `$or` - see `lakeMembershipsFrom`.
  */
 export interface ResolvedLakeAccess {
   id: string;
@@ -74,31 +73,48 @@ export interface ResolvedLakeAccess {
   datalakeTag: string;
   fileTagPrefix: string;
   /**
-   * The whole-lake membership predicate, DB lakes only - the same scope the single-lake browse
-   * and every lifecycle write run on, so a count built from it equals the lake page's total.
-   * Absent for registry lakes: they have no creator to anchor the prefix arm to.
+   * The whole-lake membership predicate - the same scope the single-lake browse and every
+   * lifecycle write run on, so a count built from it equals the lake page's total.
+   *
+   * REQUIRED, for both lake kinds, and deliberately not optional. Every construction site must
+   * produce one (`lakeMembershipScope` for a DB lake, `registryMembershipScope` for a registry
+   * lake), because an absent value used to force each whole-lake consumer to hand-roll its own
+   * registry fallback - and the count surface's copy drifted from the browse's and under-counted
+   * every registry lake. A required field is what makes that class of drift unrepresentable.
    */
-  membership?: DataLakeMembershipScope;
+  membership: DataLakeMembershipScope;
   source: 'registry' | 'dynamic';
 }
 
 /**
- * The membership arms a retrieval query should carry for a resolved access set: one per lake that
- * HAS a membership scope. Registry lakes have none (no creator to anchor to) and keep using the
- * OPEN `dataLakeTagPrefixes` arm - dropping them here is what stops a registry lake being silently
- * demoted to meta-tag-only matching.
+ * The membership arms a MULTI-LAKE retrieval query may carry: one per lake whose scope is
+ * creator-anchored. Registry lakes have a scope too, but an unanchored one, so they are dropped
+ * here and keep matching through the OPEN `dataLakeTagPrefixes` arm instead.
  *
- * INVARIANT: every scope this returns is creator-anchored to a DYNAMIC lake. Two independent
- * guards hold it, because presence alone is no longer enough: `membership` is set ONLY on the
- * `source: 'dynamic'` branch below, AND the `kind` filter here drops a registry scope even if some
- * future construction site attaches one. #2216 gave `DataLakeMembershipScope` that discriminant
- * precisely so this could be checked - a registry scope's prefix arm carries no ownership conjunct
- * (see `buildDataLakeMembershipFilter`), so letting one reach a retrieval query would reopen the
- * cross-tenant promotion the SCOPED/OPEN split exists to forbid. Registry lakes keep using the
- * OPEN `dataLakeTagPrefixes` arm instead.
+ * INVARIANT: every scope this returns is creator-anchored. A registry scope's prefix arm carries
+ * no ownership conjunct (see `buildDataLakeMembershipFilter`), so beside other lakes' arms in one
+ * shared `$or` it stops being that lake's arm and becomes an unanchored prefix match any of the
+ * OR'd lakes can ride - the cross-tenant promotion the SCOPED/OPEN split exists to forbid.
+ *
+ * This `kind` filter is the ONLY guard on that. It used to be the second of two, backed by
+ * "`membership` is set only on the dynamic branch"; every lake now carries a scope, so presence
+ * proves nothing and the discriminant #2216 added is the whole check. It is an ALLOW-list on
+ * `owned` rather than `!== 'registry'` for that reason: a future third kind whose prefix arm is
+ * likewise unanchored would ride a deny-list in silently, with no type error. Stays in step with
+ * `dynamicMembershipScopesFor` (apps/client/server/dataLakes/index.ts), the same allow-list on the
+ * browse fan-out.
+ *
+ * Single-lake consumers do NOT filter: a query covering exactly one access-gated lake is where an
+ * unanchored prefix arm is safe, and narrowing a registry lake out there is what under-counted it.
+ * See `knowledgeBaseCount`'s `lakeScope` and the articles route.
+ *
+ * The optional read is not a live state - `membership` is required - it is the direction this
+ * degrades if some loosely-typed producer ever hands over a partial lake: contribute NO arm, i.e.
+ * match less. The count surface deliberately does the opposite and throws, because there a missing
+ * scope would silently report a wrong NUMBER; here it can only narrow a search.
  */
 export const lakeMembershipsFrom = (lakes: ResolvedLakeAccess[]): DataLakeMembershipScope[] =>
-  lakes.flatMap(l => (l.membership && l.membership.kind !== 'registry' ? [l.membership] : []));
+  lakes.flatMap(l => (l.membership?.kind === 'owned' ? [l.membership] : []));
 
 /** Above this many per-lake `$or` arms, subplanning cost may start to show in latency (R3). */
 const LARGE_MEMBERSHIP_ARM_COUNT = 50;
@@ -320,17 +336,18 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
           slug: dl.slug,
           datalakeTag: dl.datalakeTag,
           fileTagPrefix: dl.fileTagPrefix,
-          // A creator-less row fails closed to meta-tag-only matching inside the filter builder,
-          // which is the safe direction (see buildDataLakeMembershipFilter).
-          ...(isDynamic
-            ? {
-                membership: lakeMembershipScope({
-                  datalakeTag: dl.datalakeTag,
-                  fileTagPrefix: dl.fileTagPrefix,
-                  createdByUserId: creatorUserId,
-                }),
-              }
-            : {}),
+          // Both kinds get a scope, so no whole-lake consumer has to hand-roll a registry
+          // fallback. A creator-less DB row fails closed to meta-tag-only matching inside the
+          // filter builder, which is the safe direction (see buildDataLakeMembershipFilter); a
+          // registry lake's arm is unanchored by design and is dropped from multi-lake retrieval
+          // queries by `lakeMembershipsFrom`, not by being left absent here.
+          membership: isDynamic
+            ? lakeMembershipScope({
+                datalakeTag: dl.datalakeTag,
+                fileTagPrefix: dl.fileTagPrefix,
+                createdByUserId: creatorUserId,
+              })
+            : registryMembershipScope(dl),
           source: isDynamic ? ('dynamic' as const) : ('registry' as const),
         };
       }),

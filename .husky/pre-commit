@@ -43,7 +43,7 @@ fi
 
 # Check staged files for hardcoded deprecated model IDs
 echo "Running deprecated model usage check on staged files..."
-if ! git diff --cached --name-only --diff-filter=ACM -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs' '*.json' | xargs -r npx tsx packages/scripts/src/checkDeprecatedModelUsage.ts --files; then
+if ! git diff --cached --name-only --diff-filter=ACM -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs' '*.json' | xargs -r pnpm --filter @bike4mind/scripts exec tsx src/checkDeprecatedModelUsage.ts --files; then
   FINAL_EXIT_CODE=1
 fi
 
@@ -84,6 +84,12 @@ fi
 # Line-level, not file-level: ~645 tracked files already carry an em-dash.
 echo "Running smart-punctuation check..."
 if ! bash scripts/check-no-smart-punctuation.sh; then
+  FINAL_EXIT_CODE=1
+fi
+
+# Check that no workflow interpolates ${{ }} inside a run: body
+echo "Running workflow run-interpolation check..."
+if ! python3 scripts/check-no-run-interpolation.py; then
   FINAL_EXIT_CODE=1
 fi
 

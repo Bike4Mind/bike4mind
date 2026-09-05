@@ -104,6 +104,7 @@ export * from './utils/generatedMedia';
 export * from './navigation';
 export * from './sample';
 export * from './rateLimitHeaders';
+export * from './embeddingRateLimitHeaders';
 export { default as dayjs } from './utils/dayjsConfig';
 export * from './slackManifestTemplate';
 export * from './surfaces';

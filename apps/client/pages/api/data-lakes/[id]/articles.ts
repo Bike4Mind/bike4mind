@@ -73,8 +73,9 @@ const handler = baseApi()
     //
     // This was a hand-rolled `dataLakeTags`/`dataLakeTagPrefixes` pair on the registry arm,
     // justified as "nothing else needs to agree with this arm". Things did need to agree: the count
-    // surfaces resolved membership separately and under-counted every registry lake against this
-    // very list. Both now go through the same scope - keep it that way.
+    // surface (`count_knowledge_base`) carried a copy of that same pair and reports its number as
+    // the total this page shows. Both now go through the same scope, pinned by
+    // `registryScopeParity.test.ts` - keep it that way.
     const lakeMembership = dataLakeService.isFallbackLake(dataLake)
       ? dataLakeService.registryMembershipScope(dataLake)
       : dataLakeService.lakeMembershipScope(dataLake);

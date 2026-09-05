@@ -105,9 +105,11 @@ jobs:
 
       - name: Export digest
         if: github.event_name != 'pull_request'
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest='${{ steps.build.outputs.digest }}'
+          digest="$BUILD_DIGEST"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
@@ -164,7 +166,9 @@ jobs:
           # shellcheck disable=SC2046 # word splitting is the point: many -t and digest args
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+            $(for digest in *; do printf '%s@sha256:%s ' "$IMAGE" "$digest"; done)
 
       - name: Inspect published image
-        run: docker buildx imagetools inspect '${{ env.IMAGE }}:${{ steps.meta.outputs.version }}'
+        env:
+          META_VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$META_VERSION"

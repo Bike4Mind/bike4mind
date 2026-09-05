@@ -3004,6 +3004,49 @@
       "accessLevel": "admin"
     },
     {
+      "slug": "admin/data-lake-cost-governance",
+      "title": "Data Lake Cost Governance",
+      "description": "Set the embedding spend and throughput levers for data-lake ingestion, and read the provider's live rate limits to set them from",
+      "category": "admin",
+      "sidebarPosition": 38,
+      "tags": [
+        "admin",
+        "data-lakes",
+        "cost",
+        "embedding",
+        "rate-limits"
+      ],
+      "headings": [
+        {
+          "level": 1,
+          "text": "Data Lake Cost Governance",
+          "anchor": "data-lake-cost-governance"
+        },
+        {
+          "level": 2,
+          "text": "The levers",
+          "anchor": "the-levers"
+        },
+        {
+          "level": 2,
+          "text": "Provider limits",
+          "anchor": "provider-limits"
+        },
+        {
+          "level": 3,
+          "text": "When it says the limits are unavailable",
+          "anchor": "when-it-says-the-limits-are-unavailable"
+        },
+        {
+          "level": 2,
+          "text": "Troubleshooting",
+          "anchor": "troubleshooting"
+        }
+      ],
+      "filePath": "admin/data-lake-cost-governance.md",
+      "accessLevel": "admin"
+    },
+    {
       "slug": "features/integrations",
       "title": "External Integrations",
       "description": "Connect Bike4Mind to GitHub, Slack, Jira, and Confluence for AI-powered workflow automation",
@@ -12604,6 +12647,49 @@
           ],
           "filePath": "admin/help-analytics.md",
           "accessLevel": "admin"
+        },
+        {
+          "slug": "admin/data-lake-cost-governance",
+          "title": "Data Lake Cost Governance",
+          "description": "Set the embedding spend and throughput levers for data-lake ingestion, and read the provider's live rate limits to set them from",
+          "category": "admin",
+          "sidebarPosition": 38,
+          "tags": [
+            "admin",
+            "data-lakes",
+            "cost",
+            "embedding",
+            "rate-limits"
+          ],
+          "headings": [
+            {
+              "level": 1,
+              "text": "Data Lake Cost Governance",
+              "anchor": "data-lake-cost-governance"
+            },
+            {
+              "level": 2,
+              "text": "The levers",
+              "anchor": "the-levers"
+            },
+            {
+              "level": 2,
+              "text": "Provider limits",
+              "anchor": "provider-limits"
+            },
+            {
+              "level": 3,
+              "text": "When it says the limits are unavailable",
+              "anchor": "when-it-says-the-limits-are-unavailable"
+            },
+            {
+              "level": 2,
+              "text": "Troubleshooting",
+              "anchor": "troubleshooting"
+            }
+          ],
+          "filePath": "admin/data-lake-cost-governance.md",
+          "accessLevel": "admin"
         }
       ],
       "subcategories": [],
@@ -19213,5 +19299,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "d4a707e7692ad10c"
+  "version": "f869326413360b97"
 }

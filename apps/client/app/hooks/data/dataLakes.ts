@@ -1,6 +1,7 @@
 import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
+  DataLakeDocumentPurgeReceipt,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
   IDataLakeBatchDocument,
@@ -918,6 +919,66 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
   });
 }
 
+/**
+ * Hook: permanently destroy one lake document, its chunks and its vectors, and keep the receipt
+ * the server returns as proof. The reversible sibling is `useRemoveFileFromDataLake`, which only
+ * unpicks lake membership - this one is unrecoverable and removes the file everywhere, so the
+ * caller is expected to confirm first and to show the receipt afterwards.
+ *
+ * A receipt with `verified: false` is surfaced as a warning, not a success: the request completed
+ * but the sweep did not converge, and telling the owner their content is gone would be a claim
+ * the server explicitly declined to make.
+ */
+export function usePurgeDataLakeDocument(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (fabFileId: string) => {
+      const res = await api.post<DataLakeDocumentPurgeReceipt>(
+        `/api/data-lakes/${dataLakeId}/files/${fabFileId}/purge`
+      );
+      return res.data;
+    },
+    onSuccess: receipt => {
+      if (receipt.verified) {
+        toast.success(
+          `Deleted permanently: the document and its ${receipt.chunksBefore} chunk(s) and vectors are gone.`
+        );
+      } else {
+        toast.error(`Deletion did not finish: ${receipt.chunksRemaining} chunk(s) still remain.`);
+      }
+      // `filesRoot`, not `filesOf(dataLakeId)`: membership removal is lake-scoped and this is not,
+      // so any OTHER lake's cached file list is stale too.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+      // Health is computed from the chunk/vector rollups this purge destroys outright, so the badge
+      // would otherwise keep counting the destroyed document's chunks as reachable content until it
+      // goes stale. Root prefix for the same reason as filesRoot: every lake that held the document
+      // is affected, not just this one.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      // The document is gone globally, not just from this lake, so the Files list is stale too.
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      if (dataLakeId) {
+        // Purging an under-chunked document can move the purged lake's rebuild badge, and can
+        // reach recomputeLakeStats' draft -> active flip, which writes a config-history row - same
+        // two keys invalidateLakeFileMembershipQueries refreshes for a membership change.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      // Same extraction as the other lake doors: this is the irreversible one, and a mid-sweep
+      // failure is exactly the case where "Request failed with status code 500" is the one message
+      // that cannot tell the owner whether their document is half destroyed. Body key is `error`
+      // (server/middlewares/errorHandler.ts).
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to permanently delete this file');
+    },
+  });
+}
+
 export type LakeRebuildStatus = { underChunkedCount: number; failedCount: number };
 
 /** Extra polls after the backlog clears, at SETTLE_MS each - about three minutes of cover. */
@@ -989,18 +1050,34 @@ export function useRechunkDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (limit?: number) => {
-      const res = await api.post<{ detected: number; enqueued: number; remaining: number }>(
-        `/api/data-lakes/${dataLakeId}/rechunk`,
-        limit ? { limit } : {}
-      );
+      const res = await api.post<{
+        detected: number;
+        enqueued: number;
+        remaining: number;
+        // Present only on the refusal arm. Typed optional because the success arm omits it entirely,
+        // and read FIRST below: a paused run also returns `enqueued: 0`, which is indistinguishable
+        // from "nothing to do" on the counts alone.
+        outcome?: 'paused';
+      }>(`/api/data-lakes/${dataLakeId}/rechunk`, limit ? { limit } : {});
       return res.data;
     },
     onSuccess: data => {
-      toast.success(
-        data.enqueued > 0
-          ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
-          : 'All files are already chunked into passages.'
-      );
+      if (data.outcome === 'paused') {
+        // A warning, not a success: the server refused and changed nothing. Without this arm the
+        // refusal fell through to "All files are already chunked into passages" as a GREEN success -
+        // which is not merely uninformative but false, since the gate only runs when at least one
+        // file was detected. Wording mirrors useConvergeDataLake's paused arm below.
+        toast.warning(
+          'Background lake work is paused, so nothing was rebuilt. No files were changed - re-run this ' +
+            'once an administrator turns convergence back on.'
+        );
+      } else {
+        toast.success(
+          data.enqueued > 0
+            ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
+            : 'All files are already chunked into passages.'
+        );
+      }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });

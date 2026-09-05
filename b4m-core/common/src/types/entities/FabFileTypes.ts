@@ -1097,6 +1097,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     Array<{
       fabFileId: string;
       fileName?: string;
+      // Byte size, for the duplicate-members check: a same-fileName pair with differing size is
+      // confirmed to differ in content (a same-length substitution can still hide behind equal
+      // size, so equality is evidence, not proof).
+      fileSize: number | null;
+      // Server-verified content hash, for the same check: a same-fileName pair with matching hashes
+      // is confirmed IDENTICAL, and with differing hashes is confirmed to differ - proof `fileSize`
+      // alone cannot offer either direction of.
+      serverTextHash: string | null;
       chunkCount: number;
       // vectorizedChunkCount + error drive the in-flight vs settled decision in the pure evaluator;
       // omitting them here would silently disable that gate (rows arrive without them -> treated as
@@ -1226,6 +1234,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
   /**
+   * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
+   * chunkless reasons by whether a producer actually removed its passages, and clearing the
+   * pending-rebuild stamp in the SAME write so the file is never both paused and pending.
+   *
+   * A dedicated method rather than an `update` from the caller because the reason to write depends on
+   * a field the same statement clears - see the implementation for why that has to be one statement
+   * and why it has to be idempotent.
+   */
+  markConvergencePaused(id: string): Promise<void>;
+  /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
    * "rebuild done" from "some files gave up".
@@ -1334,6 +1352,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * malformed one throws a CastError partway through the delete.
    */
   hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
+  /**
+   * Hard-delete ONE file, atomically, answering whether THIS call is the one that removed it.
+   *
+   * The single-document sibling of `hardDeleteByIds`, and the difference is the whole point: a
+   * `deleteMany` cannot say which of two concurrent callers actually removed the row, so a caller
+   * that owes a side effect per destruction (returning the owner's storage quota, say) would pay
+   * it twice. `false` means the row was already gone.
+   */
+  hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }
