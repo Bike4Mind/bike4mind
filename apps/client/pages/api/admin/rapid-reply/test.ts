@@ -327,6 +327,10 @@ const handler = baseApi()
         // Use the latency from rapid reply results, not the total test time
         const rapidReplyLatency = rapidReplyResults.rapidResponse.latency || 0;
         rapidReplyTtfvt = rapidReplyLatency; // TTFVT is the same as latency for rapid reply
+        // rapidReplyTtfvtState is deliberately left at its initializer: reaching this branch means
+        // the rapid model produced content, so there is nothing frozen to report. Deriving it from
+        // questPromptMeta here would grade the MAIN model's stamps and report them as the rapid
+        // model's - that model's own timing is rapidResponse.ttfvt.
 
         console.log(`🧪 Rapid reply test completed successfully`);
         console.log(`🧪 TTFVT: ${rapidReplyTtfvt}ms`);
