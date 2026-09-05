@@ -171,12 +171,21 @@ const FileBrowserContent = () => {
 
   // Files can be selected from either list (Overview's recentFiles or the paginated
   // allFiles), so bulk actions must resolve selections against both, not just allFiles.
+  //
+  // recentFiles is merged ONLY on Overview, because that is the only view where its query is
+  // enabled. Elsewhere it is disabled, and invalidateQueries refetches active observers only - so
+  // its cache keeps whatever tags the files had when Overview was last open, indefinitely (the
+  // observer stays mounted, so it is not garbage-collected either). Merging it second would let
+  // those stale objects WIN the id collision, and a membership decision read off them sees no
+  // lake tag on a file that already has one - which inverts a second add into a silent bulk
+  // remove. Selection cannot span the two lists anyway; `selectionScope` below clears it on
+  // switch.
   const filesById = useMemo(() => {
     const m = new Map<string, IFabFileDocument>();
     for (const f of allFiles) m.set(f.id, f);
-    for (const f of recentFiles) m.set(f.id, f);
+    if (viewAction.viewMode === 'home') for (const f of recentFiles) m.set(f.id, f);
     return m;
-  }, [allFiles, recentFiles]);
+  }, [allFiles, recentFiles, viewAction.viewMode]);
   const selectedFiles = Array.from(selectedIds)
     .map(id => filesById.get(id))
     .filter((f): f is IFabFileDocument => Boolean(f));

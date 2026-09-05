@@ -1259,10 +1259,13 @@ export function useConvergeDataLake(dataLakeId: string | null) {
  *
  * A dedicated add-only door DOES exist (`POST /api/data-lakes/:id/files/:fabFileId`, see
  * addFileToDataLake) - it mints a restore record and an audit row and is per-file, not batched.
- * This hook deliberately uses the shared toggle door instead, for the batch: `addFileToLake`
- * (which both doors ultimately call) now carries the same ownership conjunct
- * `addFileToDataLake`'s cold-add path applies, so the two doors' access decisions agree; what
- * this door does not get is the restore record or the per-write audit row.
+ * This hook deliberately uses the shared toggle door instead, for the batch. Both doors now apply
+ * the same ownership conjunct, so their access decisions agree - but each applies it in its own
+ * pre-write pass, NOT in the `addFileToLake` write they both call. `addFileToLake` cannot carry it:
+ * `addFileToDataLake`'s restore path calls it deliberately WITHOUT one. So a new caller of
+ * `addFileToLake` inherits no ownership check and has to grade the file's owner itself - see the
+ * conjunct in `toggleTags` and `addFileToDataLake`'s own docblock. What this door does not get is
+ * the restore record or the per-write audit row.
  *
  * IMPORTANT: the toggle endpoint TOGGLES the tag, so this must only ever be called with ids that
  * are NOT already members - reposting the tag for an existing member would remove it (and its

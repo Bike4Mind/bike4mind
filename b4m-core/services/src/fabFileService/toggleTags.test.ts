@@ -334,6 +334,49 @@ describe('toggleTags - data lake meta-tags', () => {
   });
 });
 
+// Membership IS read access - the meta-tag arm of buildDataLakeMembershipFilter carries no
+// ownership conjunct - so stamping the tag on a file the actor does not own publishes that owner's
+// private, merely read-shared file to every reader of the lake. Every other meta-tag test in this
+// file builds files with `userId: 'owner'` and calls as 'owner', so `file.userId === actor.userId`
+// is true throughout and the rest of the check is dead under test: delete it and they all still
+// pass. These three are the cases that fail when it is deleted.
+describe('toggleTags - meta-tag join file-ownership conjunct', () => {
+  const runAs = (userId: string, adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
+    toggleTags(userId, params, adapters as any);
+  const refusal = 'You do not have permission to add files to this data lake';
+
+  it('refuses a lake manager joining a file it does not own', async () => {
+    // 'owner' created lake1, so canManageLake passes and this conjunct is the only thing between a
+    // legitimate manager and a third party's file.
+    const adapters = makeAdapters([{ id: 'f1', userId: 'someone-else', tags: [] }]);
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(refusal);
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets a platform admin join a file the lake effective owner owns', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+  });
+
+  it('refuses a platform admin joining an unrelated third party file', async () => {
+    // isAdmin only satisfies the FIRST half of the second disjunct; the file's owner must still be
+    // an effective owner of the lake. Admin is not a licence to publish anyone's file anywhere.
+    const adapters = makeAdapters([{ id: 'f1', userId: 'third-party', tags: [] }]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await expect(runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(refusal);
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+});
+
+
 // A join above stamps only the meta-tag (addFileToLake never touches content tags), and a leave
 // clears every prefixed tag under that lake's own prefix - the fallback tagger's own reconciler
 // logic (additions, retractions, nested/shared prefixes, reserved namespace, collisions) is
