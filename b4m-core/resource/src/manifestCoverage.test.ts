@@ -129,11 +129,10 @@ const UNREACHABLE_ON_SELF_HOST: Record<string, string> = {
  * than rediscovering. Emptying this list is the goal; growing it needs a reason.
  */
 const PENDING_SCOPE_DECISION: Record<string, string> = {
-  // Self-host generates images through a local backend (IMAGE_GEN_BASE_URL) and the tools gate
-  // themselves off via isLocalImageBackendAvailable, so nothing enqueues today. Wiring the
-  // hosted queue path would be the wrong fix rather than a missing one.
-  imageGenerationQueue: 'feature gated off upstream; self-host uses a local image backend',
-  imageEditQueue: 'feature gated off upstream; self-host uses a local image backend',
+  // imageGenerationQueue and imageEditQueue used to sit here, on the reading that self-host
+  // generates through a local backend (IMAGE_GEN_BASE_URL) and nothing enqueues. That decision has
+  // since been made the other way - both are registered in all three files now - so they are
+  // reachable AND wired, and exempting them would be the stale claim this guard exists to catch.
   videoGenerationQueue: 'no self-host video path at all yet',
 
   // User-facing, handler in open core, no AWS-only dependency. These are the strongest
