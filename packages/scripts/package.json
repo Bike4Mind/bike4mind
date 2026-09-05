@@ -51,7 +51,8 @@
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
-    "count-tokens-probe": "tsx count-tokens-probe.ts"
+    "count-tokens-probe": "tsx count-tokens-probe.ts",
+    "retrieval:recall-probe": "tsx retrieval/recall-probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
