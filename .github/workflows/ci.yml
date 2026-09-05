@@ -153,6 +153,9 @@ jobs:
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
+      - name: Check workflows pass values through env, not run-body interpolation
+        run: python3 scripts/check-no-run-interpolation.py
+
 
 
 
@@ -629,10 +632,15 @@ jobs:
       # client ones, where it carries `--shard=i/3` - deliberately with no `--` separator
       # before it, see the matrix entries above for why that is load-bearing.
       - name: Run Tests (${{ matrix.shard.name }})
-        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} ${{ matrix.shard.script || 'test' }} ${{ matrix.shard.args }}
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+          SHARD_FILTER: ${{ matrix.shard.filter }}
+          SHARD_SCRIPT: ${{ matrix.shard.script || 'test' }}
+          SHARD_ARGS: ${{ matrix.shard.args }}
+        run: |
+          # shellcheck disable=SC2086 # each carries several args; word splitting is the point
+          pnpm --recursive --workspace-concurrency=4 $SHARD_FILTER $SHARD_SCRIPT $SHARD_ARGS
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so
@@ -675,9 +683,11 @@ jobs:
       # so an early failure (before the mark step) reports nothing instead of nonsense.
       - name: Report shard duration
         if: always() && env.SHARD_START_SECONDS != ''
+        env:
+          SHARD_NAME: ${{ matrix.shard.name }}
         run: |
           elapsed=$(( $(date +%s) - SHARD_START_SECONDS ))
-          summary=$(printf '%s: %dm%02ds' '${{ matrix.shard.name }}' "$(( elapsed / 60 ))" "$(( elapsed % 60 ))")
+          summary=$(printf '%s: %dm%02ds' "$SHARD_NAME" "$(( elapsed / 60 ))" "$(( elapsed % 60 ))")
           echo "- Run Tests (${summary})" >> "$GITHUB_STEP_SUMMARY"
           if [ "$elapsed" -gt "$SHARD_SOFT_BUDGET_SECONDS" ]; then
             echo "::warning title=Slow test shard::${summary} - over its ${SHARD_SOFT_BUDGET_SECONDS}s soft budget. Not a failure: split or speed up the shard before it reaches the job timeout."
@@ -700,8 +710,10 @@ jobs:
       contents: read
     steps:
       - name: Verify all test shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-shards.result }}
         run: |
-          result='${{ needs.test-shards.result }}'
+          result="$SHARDS_RESULT"
           echo "test-shards result: $result"
           test "$result" = "success"
 

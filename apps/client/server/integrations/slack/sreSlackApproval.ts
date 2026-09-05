@@ -646,34 +646,31 @@ export async function postSreTimeoutSummaryMessage(
 }
 
 /**
- * Get allowed approver IDs from the SRE config (admin settings).
- * Resolves per-repo slack config using the tracking doc's repoSlug.
- * Returns empty array if not configured (anyone can approve).
+ * Resolve the tracking doc's repo and that repo's allowed approver IDs from the
+ * SRE config (admin settings). `approverIds` is empty when the repo is
+ * unconfigured or no approvers are set; callers must treat that as "nobody may
+ * approve", never as "anyone may". `repoSlug` is the repo the subsequent state
+ * transition is bound to, so it is resolved here rather than read back off the
+ * document the transition returns.
  */
-async function getAllowedApproverIds(trackingId?: string): Promise<string[]> {
+async function resolveApprovalContext(trackingId: string): Promise<{ repoSlug: string; approverIds: string[] }> {
   const rawConfig = await adminSettingsRepository.getSettingsValue('sreAgentConfig');
   const sreConfig = SreAgentConfigSchema.parse(rawConfig ?? {});
 
-  // Resolve per-repo slack config if we have a tracking doc with repoSlug
-  let repoSlug = SRE_DEFAULT_REPO_SLUG;
-  if (trackingId) {
-    const tracking = await sreErrorTrackingRepository.findFullById(trackingId);
-    if (tracking?.repoSlug) {
-      repoSlug = tracking.repoSlug;
-    }
-  }
+  const tracking = await sreErrorTrackingRepository.findFullById(trackingId);
+  const repoSlug = tracking?.repoSlug ?? SRE_DEFAULT_REPO_SLUG;
+
   const repoConfig = resolveFullConfig(sreConfig, repoSlug);
-  if (!repoConfig) return [];
+  if (!repoConfig) return { repoSlug, approverIds: [] };
 
   const configApprovers = repoConfig.slack?.approverIds || '';
-  if (configApprovers.trim()) {
-    return configApprovers
+  return {
+    repoSlug,
+    approverIds: configApprovers
       .split(',')
       .map((s: string) => s.trim())
-      .filter(Boolean);
-  }
-
-  return [];
+      .filter(Boolean),
+  };
 }
 
 /**
@@ -702,6 +699,7 @@ async function sendSlackResponse(responseUrl: string, message: Record<string, un
 async function processApprovalAsync(
   actionId: string,
   trackingId: string,
+  repoSlug: string,
   user: { id: string; name?: string },
   responseUrl?: string
 ): Promise<void> {
@@ -717,15 +715,18 @@ async function processApprovalAsync(
 
       // Atomic state transition: only proceed if still awaiting_approval.
       // Include dispatchedAt atomically to prevent gap if Lambda crashes between transition and updateStatus.
-      const tracking = await sreErrorTrackingRepository.atomicTransition(trackingId, 'awaiting_approval', 'fixing', {
-        dispatchedAt: new Date(),
-      });
+      const tracking = await sreErrorTrackingRepository.atomicTransition(
+        trackingId,
+        repoSlug,
+        'awaiting_approval',
+        'fixing',
+        { dispatchedAt: new Date() }
+      );
       if (!tracking) {
         await respond({ text: ':warning: This fix request has already been processed.' });
         return;
       }
 
-      const repoSlug = tracking.repoSlug ?? SRE_DEFAULT_REPO_SLUG;
       const repoConfig = resolveFullConfig(sreConfig, repoSlug);
 
       if (!repoConfig) {
@@ -769,7 +770,12 @@ async function processApprovalAsync(
       await respond({ text: `:white_check_mark: Fix approved by <@${user.id}>. Dispatched to Surgeon.` });
     } else {
       // sre_reject_fix - atomic transition from awaiting_approval
-      const tracking = await sreErrorTrackingRepository.atomicTransition(trackingId, 'awaiting_approval', 'wont_fix');
+      const tracking = await sreErrorTrackingRepository.atomicTransition(
+        trackingId,
+        repoSlug,
+        'awaiting_approval',
+        'wont_fix'
+      );
       if (!tracking) {
         await respond({ text: ':warning: This fix request has already been processed.' });
         return;
@@ -795,7 +801,8 @@ async function processApprovalAsync(
  * Returns an immediate response (within Slack's 3-second deadline) and processes
  * the actual approval asynchronously via response_url.
  *
- * Authorization: checks approver against config approverIds.
+ * Authorization: checks approver against config approverIds, denying by default
+ * when that list is empty or unset.
  * Atomic: uses findOneAndUpdate to transition status, preventing double-approve.
  */
 export async function handleSreApprovalAction(
@@ -808,12 +815,28 @@ export async function handleSreApprovalAction(
     return { response: { text: 'Missing tracking ID.', response_type: 'ephemeral' } };
   }
 
-  // Authorization check (fast - can run synchronously before the 3s deadline)
-  const allowedApprovers = await getAllowedApproverIds(trackingId);
-  if (allowedApprovers.length > 0 && !allowedApprovers.includes(user.id)) {
+  // Authorization check (fast - can run synchronously before the 3s deadline).
+  // An empty allowlist denies everyone: an unconfigured repo must not fall back
+  // to letting any workspace member drive the fix pipeline.
+  const { repoSlug, approverIds } = await resolveApprovalContext(trackingId);
+  if (approverIds.length === 0) {
+    logger.warn('[SRE-SLACK-APPROVAL] Approval denied - no approvers configured', {
+      userId: user.id,
+      userName: user.name,
+      trackingId,
+    });
+    return {
+      response: {
+        response_type: 'ephemeral',
+        text: ':no_entry: No SRE approvers are configured for this repo. Set approver Slack IDs in the SRE agent admin settings.',
+      },
+    };
+  }
+  if (!approverIds.includes(user.id)) {
     logger.warn('[SRE-SLACK-APPROVAL] Unauthorized approval attempt', {
       userId: user.id,
       userName: user.name,
+      trackingId,
     });
     return {
       response: {
@@ -836,7 +859,7 @@ export async function handleSreApprovalAction(
 
   // Return response + deferred work. Caller awaits deferred after res.json()
   // to prevent Lambda freeze from killing it mid-flight.
-  const deferred = processApprovalAsync(actionId, trackingId, user, responseUrl).catch(err => {
+  const deferred = processApprovalAsync(actionId, trackingId, repoSlug, user, responseUrl).catch(err => {
     logger.error('[SRE-SLACK-APPROVAL] Async processing failed', { error: err, trackingId });
     if (responseUrl) {
       sendSlackResponse(responseUrl, {

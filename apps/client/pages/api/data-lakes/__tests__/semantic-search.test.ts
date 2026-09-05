@@ -148,7 +148,12 @@ import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/service
 import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
 import { emptySupersessionReport } from '../../../../../../b4m-core/services/src/dataLakeService/supersession';
 
-const ACME_MEMBERSHIP = { datalakeTag: 'datalake:acme-handbook', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+const ACME_MEMBERSHIP = {
+  kind: 'owned' as const,
+  datalakeTag: 'datalake:acme-handbook',
+  fileTagPrefix: 'acme:',
+  creatorUserId: 'creator-1',
+};
 
 const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
@@ -355,12 +360,23 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(searchParams()).not.toHaveProperty('scopedTagPrefixes');
   });
 
-  it('forwards an EMPTY lakeMemberships rather than omitting it, for a lake with no membership scope', async () => {
+  it('forwards an EMPTY lakeMemberships rather than omitting it, for a registry-only lake set', async () => {
     // The service defaults the field to [], so omission is invisible unless the empty case is
     // asserted for presence rather than truthiness.
+    //
+    // Reached through a REGISTRY lake rather than a membership-less one: every lake carries a scope
+    // now (#2265), and what empties this list is `lakeMembershipsFrom` dropping the unanchored
+    // `registry` kind - which is also the live path, since registry lakes match through the OPEN
+    // `dataLakeTagPrefixes` arm instead.
     mockResolveScope.mockResolvedValue({
       ...DYNAMIC_SCOPE,
-      lakes: [{ ...DYNAMIC_SCOPE.lakes[0], membership: undefined }],
+      lakes: [
+        {
+          ...DYNAMIC_SCOPE.lakes[0],
+          membership: { kind: 'registry' as const, datalakeTag: 'datalake:acme-handbook', fileTagPrefix: 'acme:' },
+          source: 'registry' as const,
+        },
+      ],
     });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());

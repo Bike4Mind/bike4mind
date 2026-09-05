@@ -786,13 +786,25 @@ export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
  * 120 calls/min permits ~3.1M tokens/min - several times the smallest paid embeddings tier. The two
  * levers are complementary: calls/min bounds RPM, this bounds TPM, and a call must fit both.
  *
- * Default is 60% of OpenAI's published Tier-1 embeddings quota (1M TPM), which is the floor across
- * the supported cloud providers. The other 40% is deliberate headroom for QUERY-side embedding,
- * which is exempt from this gate (see enforceEmbeddingSpendGate's doc comment): a retrieval query
- * must not queue behind a backfill. Operators on a higher tier raise it to their own dashboard
- * number, minus that same headroom.
+ * The default is deliberately LOW - it has to be safe on the smallest tier any deployment might
+ * be on, including self-hosts nobody here can see. It is not a claim about what any particular
+ * account can do, and reading it as one is the mistake to avoid: a provider tier is a property of
+ * the provider organization, so it cannot be derived from this codebase at all.
+ *
+ * The real number is measurable per deployment: Admin -> Settings -> AI -> Data Lake Cost
+ * Governance reads the configured provider's live ceiling (GET /api/admin/embedding-limits) and
+ * shows it beside this lever, so an operator sets this from their own measured quota rather than
+ * from a guess baked in here. Leave headroom below the measured ceiling for QUERY-side embedding,
+ * which is exempt from this gate (see enforceEmbeddingSpendGate) and shares the same per-model
+ * pool - a retrieval query must not queue behind a backfill.
  */
 export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT = 600_000;
+/**
+ * Share of a MEASURED provider ceiling the admin panel suggests for this lever. The remainder is
+ * the query lane. Lives here, next to the lever it advises on, so the suggestion and the default
+ * cannot drift apart into two different ideas of how much headroom is right.
+ */
+export const EMBEDDING_THROUGHPUT_SUGGESTED_SHARE = 0.6;
 export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX = 50_000_000;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
@@ -4483,7 +4495,9 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
 /**
  * Redact secrets from a single setting before it leaves the server.
  *
- * Two boundaries, both fail-closed against the stored value reaching a client:
+ * Three boundaries, all fail-closed against the stored value reaching a client:
+ *  - a `settingName` with no entry in `settingsMap` (removed/renamed setting, orphaned row)
+ *    is treated as sensitive and masked, rather than falling through unmasked,
  *  - any setting tagged `isSensitive` collapses to a mask (never the real value),
  *  - sreAgentConfig (which is NOT isSensitive) has its per-repo webhookSecret and
  *    callbackToken masked; parsed through the schema first so the v1->v2 migration
@@ -4494,7 +4508,7 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
  */
 export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc {
   const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
-  if (definition?.isSensitive) {
+  if (!definition || definition.isSensitive) {
     return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
   }
 
@@ -4526,10 +4540,13 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
  * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
  * value stays empty. The authoritative mask carrying the real last-4 still comes from
  * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ *
+ * A `settingName` absent from `settingsMap` is treated as sensitive too, matching
+ * redactSettingSecrets - an orphaned row must never broadcast unmasked.
  */
 export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
   const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
-  if (definition?.isSensitive) {
+  if (!definition || definition.isSensitive) {
     const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
     return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
   }

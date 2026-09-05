@@ -8,7 +8,7 @@ import {
   partitionByIndexAvailability,
 } from './retrievalUnavailable';
 import { emptyEmbeddingMismatchReport } from './embeddingMismatch';
-import { CHUNK_STALL_NOTICES } from '@bike4mind/common';
+import { CHUNK_STALL_NOTICES, CHUNK_STALL_REASONS } from '@bike4mind/common';
 import { buildSupersessionReport } from './supersession';
 
 /** A settled, fully-embedded file - every case below perturbs one field. */
@@ -68,7 +68,7 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
   // vector count is what distinguishes repaired from stranded. commitFabFileChunks also clears the
   // marker now; this asserts the reader holds even if that clear is ever lost.
   it('serves a REPAIRED file that still carries the marker - it has vectors again', () => {
-    for (const chunkStallReason of ['vectorizePaused', 'rechunkPaused'] as const) {
+    for (const chunkStallReason of CHUNK_STALL_REASONS) {
       const repaired = { ...settled, chunkCount: 8, vectorizedChunkCount: 8, chunkStallReason };
       expect(partitionByIndexAvailability([repaired]).withheld).toEqual([]);
     }

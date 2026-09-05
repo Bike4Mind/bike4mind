@@ -22,6 +22,7 @@ import {
   deriveServeCharBudget,
   isChunkRebuildPending,
   isChunkStalled,
+  isChunklessStall,
 } from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
@@ -92,6 +93,14 @@ export function resolveLakeHealthPolicy(opts: {
 export type LakeHealthMemberInput = {
   fabFileId: string;
   fileName?: string;
+  /** Byte size (`FabFile.fileSize`); `null` until measured. Feeds `findDuplicateMembers` only. */
+  fileSize?: number | null;
+  /**
+   * Server-verified SHA-256 over normalized extracted text (`FabFile.serverTextHash`), stamped at
+   * chunk time; `null` until measured. Feeds `findDuplicateMembers` only: unlike `fileSize`, a hash
+   * match is PROOF of identity, not just evidence, so it is the stronger of the two discriminators.
+   */
+  serverTextHash?: string | null;
   /** Chunks created for the file (`FabFile.chunkCount`). */
   chunkCount: number;
   /**
@@ -204,7 +213,11 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset), so keying on
   // the reason alone would fail a repaired file forever.
   // Same guard, same reason, as `decideMemberConvergence`'s own arm.
-  const passagesRemoved = member.chunkCount === 0 && member.chunkStallReason === 'rechunkPaused';
+  //
+  // `isChunklessStall`, not the bare `rechunkPaused`: `unchunkedPaused` is the same halted state on a
+  // file that arrived empty rather than one a wave emptied, and it grades identically here. NOT the
+  // full CHUNK_STALL_REASONS - a vectorize-paused file still has its passages.
+  const passagesRemoved = member.chunkCount === 0 && isChunklessStall(member.chunkStallReason);
   // A rebuild that was REQUESTED and has not committed (#1939). Deliberately NOT folded into
   // `passagesRemoved`: the passages are equally gone, but this one is expected back, so forcing P3
   // to `fail` here would make every ordinary "Rebuild passages" wave and every per-file reprocess
@@ -330,19 +343,33 @@ export type LakeHealthReport = {
  * signal is the P3 `fail` tally and the drill-down row, which is what `deriveLakeHealthBadge` reads
  * to drop the lake off `healthy` regardless of the percentage beside it.
  */
-export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: LakeHealthPolicy): LakeHealthReport {
-  // The CHUNK arm only, matching `findDataLakeHealthMembers`'s own `$match` and
-  // `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
-  // already admitted by `chunkCount > 0` and needs no exception here.
-  //
-  // The pending-rebuild stamp (#1939) is admitted for the same reason as the marker and with the
-  // opposite grade: chunkless because a wave took its passages, but expected back, so it lands in
-  // `coverage` as an unmeasured member rather than in the ratio. Coverage below 1 is the honest
-  // report while a rebuild is running - and it is also what keeps a rebuild that was never enqueued
-  // visible instead of silently reducing the lake to the members it still has.
-  const withChunks = members.filter(
-    m => m.chunkCount > 0 || m.chunkStallReason === 'rechunkPaused' || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+/**
+ * The members `summarizeLakeHealth` grades: chunked, or chunkless via a marker that says so. A
+ * chunkless member with no marker at all is the one thing left out - nothing distinguishes it from an
+ * image or a pending upload. Exported so a sibling report over the same scan - e.g.
+ * `findDuplicateMembers` in `computeLakeHealth` - agrees by construction about which members are "in"
+ * the lake, rather than by a comment promising the two filters stay in sync.
+ *
+ * The CHUNK arm only (`isChunklessStall`), matching `findDataLakeHealthMembers`'s own `$match` and
+ * `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
+ * already admitted by `chunkCount > 0` and needs no exception here.
+ *
+ * The pending-rebuild stamp (#1939) is admitted for the same reason as the marker and with the
+ * opposite grade: chunkless because a wave took its passages, but expected back, so it lands in
+ * `coverage` as an unmeasured member rather than in the ratio. Coverage below 1 is the honest
+ * report while a rebuild is running - and it is also what keeps a rebuild that was never enqueued
+ * visible instead of silently reducing the lake to the members it still has.
+ */
+export function selectLakeHealthMembers<
+  T extends Pick<LakeHealthMemberInput, 'chunkCount' | 'chunkStallReason' | 'chunkRebuildRequestedAt'>,
+>(members: T[]): T[] {
+  return members.filter(
+    m => m.chunkCount > 0 || isChunklessStall(m.chunkStallReason) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
   );
+}
+
+export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: LakeHealthPolicy): LakeHealthReport {
+  const withChunks = selectLakeHealthMembers(members);
   const results = withChunks.map(m => evaluateMemberHealth(m, policy));
 
   const predicates = {
@@ -382,6 +409,107 @@ export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: La
   };
 }
 
+/** One member of a duplicate-fileName group (#2239). `fileName` lives on the group, not repeated here. */
+export type LakeHealthDuplicateMember = {
+  fabFileId: string;
+  fileSize: number | null;
+};
+
+/**
+ * >= 2 live members sharing one exact `fileName` within a lake. This is a same-NAME check, not the
+ * identity-key derivation the admission checkpoint uses (#2238, itself blocked on #2235) - neither
+ * has landed, and this surface does not depend on either. A shared fileName is exactly the
+ * population that check would miss anyway: deliberate retention of a superseded document is normally
+ * expressed through naming (`policy-v2.md` beside `policy-v3.md`), which yields a different name and
+ * never groups here - so a same-name repeat is strong evidence of an accumulated upload generation,
+ * not a deliberate kept-both decision.
+ */
+export type LakeHealthDuplicateGroup = {
+  fileName: string;
+  /** Members of this group, possibly truncated for payload size - see `memberCount` for the exact total. */
+  members: LakeHealthDuplicateMember[];
+  /** Exact member count for this group, even when `members` above is truncated. */
+  memberCount: number;
+  /**
+   * What the group's `fileSize`/`serverTextHash` values can prove about content, computed over the
+   * FULL group before any truncation of `members`:
+   *  - `differing` - two both-measured `fileSize` values disagree, or two `serverTextHash` values do:
+   *    PROOF the content differs, reached either way a same-name pair can diverge.
+   *  - `identical` - every member carries a `serverTextHash` and they all match: PROOF of identity
+   *    (#2245 bucket A), the thing `fileSize` alone can never give.
+   *  - `unprovable` - neither proof applies: sizes are equal-or-unmeasured and hashes are missing on
+   *    at least one member, so equal size is evidence of identity but never proof (a same-length
+   *    substitution, e.g. a changed digit, preserves byte length exactly).
+   */
+  contentComparison: 'differing' | 'identical' | 'unprovable';
+};
+
+export type LakeHealthDuplicatesReport = {
+  /** Total members across every duplicate-name group in the lake - exact, even when `groups` is capped. */
+  memberCount: number;
+  /** Total duplicate-name groups in the lake - exact, even when `groups` is capped. */
+  groupCount: number;
+  /** Duplicate-name groups, largest group first, possibly capped for payload size - see `groupCount`. */
+  groups: LakeHealthDuplicateGroup[];
+};
+
+/**
+ * Group a lake's members by exact fileName and report every group with more than one member
+ * (#2239). Pure and report-only: it names what a bulk repair action would later act on, but takes
+ * none - no gate and no executor exist yet for a cross-member delete/supersede (#2245's job).
+ *
+ * Deliberately UNCAPPED here - a caller reporting this over the network (`computeLakeHealth`) is
+ * responsible for capping `groups`/`members` for payload size, same as `affectedMembers`. Capping in
+ * THIS function would risk computing `contentComparison` over a truncated group, understating a
+ * confirmed difference; the caller's cap must be applied only after this returns.
+ */
+export function findDuplicateMembers(
+  members: Array<Pick<LakeHealthMemberInput, 'fabFileId' | 'fileName' | 'fileSize' | 'serverTextHash'>>
+): LakeHealthDuplicatesReport {
+  type Row = { fabFileId: string; fileSize: number | null; serverTextHash: string | null };
+  const byName = new Map<string, Row[]>();
+  for (const m of members) {
+    if (!m.fileName) continue;
+    const entry: Row = {
+      fabFileId: m.fabFileId,
+      fileSize: nonNegOrNull(m.fileSize),
+      serverTextHash: m.serverTextHash && m.serverTextHash.length > 0 ? m.serverTextHash : null,
+    };
+    const group = byName.get(m.fileName);
+    if (group) group.push(entry);
+    else byName.set(m.fileName, [entry]);
+  }
+
+  const groups: LakeHealthDuplicateGroup[] = [];
+  let memberCount = 0;
+  for (const [fileName, groupMembers] of byName) {
+    if (groupMembers.length < 2) continue;
+    memberCount += groupMembers.length;
+    groups.push({
+      fileName,
+      members: groupMembers.map(m => ({ fabFileId: m.fabFileId, fileSize: m.fileSize })),
+      memberCount: groupMembers.length,
+      contentComparison: compareGroupContent(groupMembers),
+    });
+  }
+  // Largest group first, so the drill-down leads with the lake's biggest accumulation.
+  groups.sort((a, b) => b.memberCount - a.memberCount);
+
+  return { memberCount, groupCount: groups.length, groups };
+}
+
+function compareGroupContent(
+  members: Array<{ fileSize: number | null; serverTextHash: string | null }>
+): LakeHealthDuplicateGroup['contentComparison'] {
+  const sizes = members.map(m => m.fileSize).filter((s): s is number => s !== null);
+  const hashes = members.map(m => m.serverTextHash).filter((h): h is string => h !== null);
+  const distinctSizes = new Set(sizes);
+  const distinctHashes = new Set(hashes);
+  if (distinctSizes.size > 1 || distinctHashes.size > 1) return 'differing';
+  if (distinctHashes.size === 1 && hashes.length === members.length) return 'identical';
+  return 'unprovable';
+}
+
 /**
  * The shape GET /api/data-lakes/:id/health returns - the report with its drill-down list capped and
  * an exact count beside it, plus a scan-bound flag. Defined here so the handler, the service and the
@@ -394,6 +522,12 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
   affectedMemberCount: number;
   /** True when the lake exceeded the member scan bound, so every ratio here is partial. */
   scanTruncated: boolean;
+  /**
+   * Duplicate-fileName members (#2239). Report-only - see `findDuplicateMembers`. `groups` (and each
+   * group's `members`) are capped for payload size by the caller; `memberCount`/`groupCount` on the
+   * report and `memberCount` on each group stay exact.
+   */
+  duplicateMembers: LakeHealthDuplicatesReport;
 };
 
 function emptyTally(): PredicateTally {
