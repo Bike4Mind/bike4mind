@@ -6,12 +6,16 @@ import {
   dataLakeAccessGrantRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  adminSettingsRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 
 /**
  * GET  /api/data-lakes/:id/rechunk           -> { underChunkedCount, failedCount }
@@ -72,6 +76,39 @@ const handler = baseApi()
 
     let enqueued = 0;
     if (wave.length > 0) {
+      // Kill switch BEFORE the reset, for the reason /converge documents at the same point: the
+      // consumer's check only drops messages already on the queue, and by then
+      // `resetChunkStateByIds` has deleted this wave's passages and nulled its health rollups. A
+      // consumer-side stamp alone cannot protect this route - the destruction happens on the
+      // producer side.
+      //
+      // Gated even though this door repairs rather than converges: it deletes and re-embeds a whole
+      // wave at full spend, which is exactly what an operator turning the switch on is trying to
+      // stop. Refusing is also recoverable in a way the alternative is not - the files stay
+      // searchable and the admin can retry once the switch is off, whereas a wave halted mid-flight
+      // leaves them with no passages at all.
+      if (
+        await isConvergenceHalted(
+          { origin: CONVERGENCE_ORIGIN, lakeId: lake.id },
+          {
+            adminSettings: adminSettingsRepository,
+            scopedSettings: scopedSettingsRepository,
+            dataLakes: dataLakeRepository,
+          },
+          req.logger
+        )
+      ) {
+        req.logger?.log?.(
+          `[convergence] lake ${lake.id}: background lake work is paused; rechunk refused before touching ${wave.length} member(s)`
+        );
+        return res.json({
+          detected: detected.length,
+          enqueued: 0,
+          remaining: detected.length,
+          outcome: 'paused',
+        });
+      }
+
       const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
       if (!queueUrl) throw new Error('Chunk queue URL not found');
       // Reset the wave, then enqueue exactly what the reset changed. The reset is preconditioned on
@@ -96,7 +133,17 @@ const handler = baseApi()
       // is run once. Documented for owners in knowledge-management.md. Retrieval first, conformance
       // second - a wrong-sized searchable file still answers; an unsearchable one does not.
       const results = await Promise.allSettled(
-        resetIds.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: userById.get(id)! }))
+        resetIds.map(id =>
+          sendToQueue(queueUrl, {
+            fabFileId: id,
+            userId: userById.get(id)!,
+            // Provenance for the #1676 kill switch, matching /converge. The producer gate above is
+            // what protects the passages; this is what stops an in-flight wave from continuing to
+            // re-embed if the switch is turned on after the messages were sent.
+            origin: CONVERGENCE_ORIGIN,
+            lakeId: lake.id,
+          })
+        )
       );
       const failed = results.filter(r => r.status === 'rejected').length;
       const skipped = userById.size - resetIds.length;

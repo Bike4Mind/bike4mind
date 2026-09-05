@@ -1308,6 +1308,183 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
 });
 
 /**
+ * Forced retrieval's own supersession collapse. This path does its own candidate scan rather than
+ * routing through semanticDataLakeSearch, so the collapse (and its ORDER relative to the two
+ * partitions before it) has to be asserted here separately.
+ */
+describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => {
+  const OWNER = 'u1';
+  const LAKE = {
+    id: 'lakeX',
+    slug: 'x',
+    name: 'Lake X',
+    fileTagPrefix: 'x:',
+    datalakeTag: 'datalake:x',
+    createdByUserId: OWNER,
+    status: 'active',
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const gen = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    fileName: 'Protocol.pdf',
+    tags: [{ name: 'datalake:x' }],
+    vectorized: true,
+    embeddingModel: 'text-embedding-ada-002',
+    chunkCount: 1,
+    vectorizedChunkCount: 1,
+    ...over,
+  });
+
+  const makeCtx = (files: Array<Record<string, unknown>>, collapseEnabled: boolean) => {
+    const chunksByFile = Object.fromEntries(
+      files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.id}`, vector: [1, 0] }]])
+    );
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: OWNER, tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
+        },
+        dataLakes: {
+          findActiveByUserTags: vi.fn(),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
+        },
+        adminSettings: {
+          getSettingsValue: vi.fn((key: string) =>
+            Promise.resolve(key === 'EnableRetrievalSupersessionCollapse' ? collapseEnabled : undefined)
+          ),
+        },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    return { content: messages.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n'), quest };
+  };
+
+  const twoGenerations = [
+    gen('old', { createdAt: new Date('2024-01-01') }),
+    gen('new', { createdAt: new Date('2025-01-01') }),
+  ];
+
+  it("grounds on the newest generation only and never loads the older one's chunks", async () => {
+    const ctx = makeCtx(twoGenerations, true);
+    const { content } = await run(ctx);
+    const scanned = (ctx.db.fabfilechunks.findVectorsByFabFileIds as ReturnType<typeof vi.fn>).mock.calls.flatMap(
+      c => c[0] as string[]
+    );
+    expect(scanned).toEqual(['new']);
+    expect(content).toContain('content of new');
+    expect(content).not.toContain('content of old');
+  });
+
+  /**
+   * Prefix-only members of a dynamic lake, which meta-tag attribution alone could never group. This
+   * path builds its own candidate shape rather than reusing `RankableFile`, so it needs its own
+   * proof that the file's `userId` - what the creator-anchored prefix arm is conjoined with -
+   * actually reaches `partitionBySupersession` here.
+   */
+  it('collapses prefix-only generations the lake creator owns', async () => {
+    const prefixOnly = [
+      gen('old', { tags: [{ name: 'x:hr' }], userId: OWNER, createdAt: new Date('2024-01-01') }),
+      gen('new', { tags: [{ name: 'x:hr' }], userId: OWNER, createdAt: new Date('2025-01-01') }),
+    ];
+    const ctx = makeCtx(prefixOnly, true);
+    const { content } = await run(ctx);
+    expect(content).toContain('content of new');
+    expect(content).not.toContain('content of old');
+  });
+
+  // The ownership conjunct is the whole reason a user-chosen prefix is reversible at all, so the
+  // refusal gets asserted at this site too rather than only in the unit suite.
+  it('does not collapse prefix-only files the lake creator does not own', async () => {
+    const notOwned = [
+      gen('old', { tags: [{ name: 'x:hr' }], userId: 'someone-else', createdAt: new Date('2024-01-01') }),
+      gen('new', { tags: [{ name: 'x:hr' }], userId: 'someone-else', createdAt: new Date('2025-01-01') }),
+    ];
+    const { content } = await run(makeCtx(notOwned, true));
+    expect(content).toContain('content of old');
+    expect(content).toContain('content of new');
+  });
+
+  it('reports the collapse in the coverage warning with ids and the matching tier', async () => {
+    const { quest } = await run(makeCtx(twoGenerations, true));
+    const reasons =
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
+    const line = reasons.find(r => r.includes('older document version'));
+    expect(line).toBeDefined();
+    expect(line).toContain('old');
+    expect(line).toContain('new');
+    expect(line).toContain('fileName');
+  });
+
+  it('flag off (the shipped default): both generations still ground the turn', async () => {
+    const ctx = makeCtx(twoGenerations, false);
+    const { content, quest } = await run(ctx);
+    const scanned = (ctx.db.fabfilechunks.findVectorsByFabFileIds as ReturnType<typeof vi.fn>).mock.calls.flatMap(
+      c => c[0] as string[]
+    );
+    expect(scanned.sort()).toEqual(['new', 'old']);
+    expect(content).toContain('content of old');
+    expect(quest.promptMeta?.retrievalCoverage).toBeUndefined();
+  });
+
+  it('collapses AFTER the availability partition: a withheld newest generation cannot suppress the older one', async () => {
+    // The newest generation has chunks but none vectorized - withheld as mid-(re)index upstream.
+    const ctx = makeCtx(
+      [
+        gen('old', { createdAt: new Date('2024-01-01') }),
+        gen('new', { createdAt: new Date('2025-01-01'), vectorizedChunkCount: 0 }),
+      ],
+      true
+    );
+    const { content, quest } = await run(ctx);
+    expect(content).toContain('content of old');
+    const reasons =
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
+    expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
+    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+  });
+
+  it('collapses AFTER the embedding-model partition: a foreign-model newest generation cannot suppress the older one', async () => {
+    // Two same-model files carry the majority vote, so the third (foreign-model) file is excluded
+    // before the collapse and must not win the Protocol.pdf key.
+    const ctx = makeCtx(
+      [
+        gen('old', { createdAt: new Date('2024-01-01') }),
+        gen('unrelated', { fileName: 'Other.pdf' }),
+        gen('new', { createdAt: new Date('2025-01-01'), embeddingModel: 'voyage-3' }),
+      ],
+      true
+    );
+    const { content, quest } = await run(ctx);
+    expect(content).toContain('content of old');
+    const reasons =
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
+    expect(reasons.some(r => r.includes('embedded with a different model'))).toBe(true);
+    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+  });
+});
+
+/**
  * Retrieval-scoped lake-prompt injection on the FORCED path (#1108). A lake's operating
  * instructions ride a turn ONLY when that turn actually grounds on the lake's files - identified by
  * the `datalake:` provenance tags on the injected source files. The always-on DataLakePromptFeature

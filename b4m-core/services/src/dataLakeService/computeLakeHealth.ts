@@ -9,6 +9,7 @@ import {
   type IFabFileRepository,
   type IScopedSettingsRepository,
   summarizeLakeMembership,
+  toWireMembershipReport,
   effectiveTagPrefixArm,
   type DataLakeMembershipScope,
   type LakeHealthApiResponse,
@@ -127,7 +128,7 @@ export async function computeLakeHealth(
       affectedMembers: [],
       affectedMemberCount: 0,
       scanTruncated: false,
-      membership: summarizeLakeMembership([], { scope: membershipScopeDisclosure(scope) }),
+      membership: toWireMembershipReport(summarizeLakeMembership([], { scope: membershipScopeDisclosure(scope) })),
       duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
       inconsistency: storedInconsistency(lake),
     };
@@ -160,7 +161,7 @@ export async function computeLakeHealth(
     affectedMembers: report.affectedMembers.slice(0, AFFECTED_MEMBERS_RETURNED),
     affectedMemberCount: report.affectedMembers.length,
     scanTruncated,
-    membership,
+    membership: toWireMembershipReport(membership),
     duplicateMembers: {
       memberCount: duplicates.memberCount,
       groupCount: duplicates.groupCount,
@@ -217,8 +218,12 @@ function storedInconsistency(
 function membershipScopeDisclosure(scope: DataLakeMembershipScope): LakeMembershipReport['scope'] {
   return {
     // Empty string rather than null is how a registry lake's synthetic document spells "no creator",
-    // so `??` was not enough: it shipped `''`, which matches neither documented state.
-    creatorUserId: (scope.kind === 'owned' && scope.creatorUserId) || null,
+    // so `??` was not enough: it shipped `''`, which matches neither documented state. The polarity
+    // matches `effectiveTagPrefixArm`'s own test (`kind !== 'registry'`) rather than the
+    // complementary `=== 'owned'`: with two kinds either spelling agrees, but by coincidence of two
+    // conditions rather than by construction, and being unable to disagree is the whole point of
+    // deriving the filter and this disclosure from one decision.
+    creatorUserId: (scope.kind !== 'registry' && scope.creatorUserId) || null,
     fileTagPrefix: effectiveTagPrefixArm(scope),
   };
 }

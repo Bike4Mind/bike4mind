@@ -69,6 +69,7 @@ type MembershipRow = {
   serverTextHash: string | null;
   fileSize: number | null;
   createdAt: Date | null;
+  userId: string | null;
   arm: 'meta-tag' | 'prefix';
 };
 
@@ -275,6 +276,7 @@ describe('computeLakeHealth membership dimension (#2245)', () => {
     serverTextHash: null,
     fileSize: 100,
     createdAt: new Date('2026-01-01T00:00:00Z'),
+    userId: 'u1',
     arm: 'meta-tag',
     ...over,
   });
@@ -383,6 +385,23 @@ describe('computeLakeHealth membership dimension (#2245)', () => {
     await computeLakeHealth(lake, adapters as never);
 
     expect(membershipStartedBeforeHealthResolved).toBe(true);
+  });
+
+  it('strips the per-member fingerprint and owner from the response', async () => {
+    // This handler's read gate admits `public`, and serverTextHash is a stable global content
+    // identifier - a confirmation oracle over any document a reader already holds, and a way to
+    // correlate one document across lakes under different names. Both fields exist for the repair
+    // arm, which reads the report in-process; neither has ever had a client reader.
+    const result = await computeLakeHealth(
+      lake,
+      makeAdapters([], [row({ serverTextHash: 'aaa' }), row({ fabFileId: 'f2', serverTextHash: 'aaa' })]) as never
+    );
+
+    const [member] = result.membership.duplicateGroups[0].members;
+    expect(member).not.toHaveProperty('serverTextHash');
+    expect(member).not.toHaveProperty('userId');
+    // The derived verdict survives, which is the part a client needs from the hash comparison.
+    expect(result.membership.duplicateGroups[0].bucket).toBe('proven-identical');
   });
 
   it('caps a duplicate group members array but keeps an exact memberCount', async () => {

@@ -1,5 +1,6 @@
 import {
   CHUNK_STALL_REASONS,
+  CHUNKLESS_STALL_REASONS,
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
@@ -1425,10 +1426,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * function's doc).
    *
    * ONE exception, and it is the case this report exists for: a member the convergence kill switch
-   * stopped mid-rewrite is chunkless because its passages were DELETED, not because it never had
-   * any. Excluding it made a lake report "Reachable 100%" over the members it still had while a
-   * document sat entirely unsearchable and absent from the drill-down - the green-counters-but-
-   * broken reading the four rules exist to catch. Admitted by its marker so it grades its real zero.
+   * stopped is chunkless because the switch halted the work that would have given it passages -
+   * whether a wave had already DELETED them (`rechunkPaused`) or it arrived empty and none were ever
+   * built (`unchunkedPaused`). Excluding it made a lake report "Reachable 100%" over the members it
+   * still had while a document sat entirely unsearchable and absent from the drill-down - the green-
+   * counters-but-broken reading the four rules exist to catch. Admitted by CHUNKLESS_STALL_REASONS
+   * (the chunk arm only - a vectorize-paused file keeps its chunks) so it grades its real zero.
    *
    * `limit` bounds how many rows reach app memory. It fetches one extra to detect overflow, so the
    * caller can report coverage as partial and log it, rather than silently truncating a percentage.
@@ -1468,7 +1471,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never enqueued. It grades as in-flight, not as a failure; see evaluateMemberHealth.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { chunkStallReason: 'rechunkPaused' },
+            { chunkStallReason: { $in: [...CHUNKLESS_STALL_REASONS] } },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
         }),
@@ -1529,6 +1532,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       serverTextHash: string | null;
       fileSize: number | null;
       createdAt: Date | null;
+      userId: string | null;
       arm: MembershipArm;
     }>
   > {
@@ -1558,6 +1562,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           serverTextHash: { $ifNull: ['$serverTextHash', null] },
           fileSize: { $ifNull: ['$fileSize', null] },
           createdAt: { $ifNull: ['$createdAt', null] },
+          // Neither arm carries an ownership conjunct for a registry lake, so a same-name group can
+          // span contributors. The repair arm gates deletion on that; without it here the payload
+          // cannot express the gate.
+          userId: { $ifNull: [{ $toString: '$userId' }, null] },
           // Which arm admitted this member. The meta-tag is authoritative when present; everything
           // else reaching this $match did so through the prefix arm.
           arm: {
@@ -1599,16 +1607,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           deletedAt: null,
           archivedAt: null,
           status: { $ne: 'pending' },
-          // `chunkCount > 0` OR the halted-rewrite marker. A member the kill switch stopped mid-wave
-          // has no chunks BECAUSE ITS OWN WERE DELETED, and excluding it is what let it disappear
-          // from this plan at the same time as from health and from search - repairable by exactly
-          // the rewrite this plan produces, but only if it is allowed to reach the grader.
+          // `chunkCount > 0` OR a chunk-arm halt marker. A member the kill switch stopped has no
+          // chunks because the switch halted the work that would have built them - its own were
+          // deleted, or none ever existed - and excluding it is what let it disappear from this plan
+          // at the same time as from health and from search - repairable by exactly the rewrite this
+          // plan produces, but only if it is allowed to reach the grader.
           // Same third arm as findDataLakeHealthMembers, same reason (#1939): a member between its
           // reset and its rebuild is chunkless and unmarked, and dropping it here is what let a
           // never-enqueued rebuild disappear from the plan that would have re-driven it.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { chunkStallReason: 'rechunkPaused' },
+            { chunkStallReason: { $in: [...CHUNKLESS_STALL_REASONS] } },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
           // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
@@ -1845,6 +1854,39 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       )
       .lean();
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
+  async markConvergencePaused(id: string): Promise<void> {
+    // One pipeline update rather than read-then-write, because the reason to write DEPENDS on a field
+    // the same statement clears. A separate read could be overtaken by a concurrent
+    // `resetChunkStateByIds`, and the file would then be labelled as having lost passages a wave was
+    // in the middle of removing, or vice versa.
+    //
+    // `chunkRebuildRequestedAt` is the discriminator: `resetChunkStateByIds` stamps it in the write
+    // that deletes the passages, so non-null means a producer really did remove them and null means
+    // the file reached the handler already empty (the rescue sweep selects on `chunkCount: 0` and
+    // never resets). Getting this wrong is user-visible - `describePipelineStall` shows the reason's
+    // prose to the file's owner, `knowledge_base_search` reports it to the model, and lake health
+    // files it under "passages removed".
+    //
+    // Idempotent by the outer `$cond`: a redelivery after a successful mark finds the stamp already
+    // nulled and would otherwise downgrade the accurate "passages removed" reason to the
+    // never-chunked one. fabFileChunkQueue's visibility timeout is 60 minutes with `dlq: {retry: 3}`,
+    // so a second delivery is an ordinary occurrence. An existing chunk-arm reason is kept as-is.
+    await this.fabFileModel.updateOne({ _id: id }, [
+      {
+        $set: {
+          chunkStallReason: {
+            $cond: [
+              { $in: ['$chunkStallReason', [...CHUNKLESS_STALL_REASONS]] },
+              '$chunkStallReason',
+              { $cond: [{ $ifNull: ['$chunkRebuildRequestedAt', false] }, 'rechunkPaused', 'unchunkedPaused'] },
+            ],
+          },
+          chunkRebuildRequestedAt: null,
+        },
+      },
+    ]);
   }
 
   async resetChunkStateByIds(ids: string[]): Promise<string[]> {

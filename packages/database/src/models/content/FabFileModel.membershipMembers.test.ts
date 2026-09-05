@@ -134,4 +134,40 @@ describe('FabFileRepository.findDataLakeMembershipMembers', () => {
 
     expect(rows).toHaveLength(3);
   });
+
+  it('projects fileSize, and an absent one as null', async () => {
+    // The size conjunct decides whether a group can be auto-collapsed, so a regression to `undefined`
+    // here silently degrades every bucket. Its sibling `serverTextHash` is pinned above; this was the
+    // one input to that rule with no assertion against a real mongod.
+    const tags = [{ name: 'datalake:acme', strength: 1 }];
+    await makeFile({ tags, fileName: 'sized.pdf', fileSize: 4096 });
+    await makeFile({ tags, fileName: 'unsized.pdf' });
+
+    const rows = await fabFileRepository.findDataLakeMembershipMembers(SCOPE);
+    const bySize = Object.fromEntries(rows.map(r => [r.fileName, r.fileSize]));
+
+    expect(bySize['sized.pdf']).toBe(4096);
+    expect(bySize['unsized.pdf']).toBeNull();
+  });
+
+  it("carries the member's owner, including one who is not the lake creator", async () => {
+    // The meta-tag arm has no ownership conjunct, so another principal's tagged file IS a member -
+    // the case the creator-anchored prefix arm above rejects. A same-name group can therefore span
+    // owners, and the repair arm can only refuse to collapse across them if the owner is projected.
+    await makeFile({ tags: [{ name: 'datalake:acme', strength: 1 }], fileName: 'shared.pdf' });
+    await FabFile.create({
+      userId: 'someone-else',
+      fileName: 'shared.pdf',
+      mimeType: 'application/pdf',
+      type: KnowledgeType.FILE,
+      filePath: 'shared.pdf',
+      status: 'complete',
+      tags: [{ name: 'datalake:acme', strength: 1 }],
+    });
+
+    const rows = await fabFileRepository.findDataLakeMembershipMembers(SCOPE);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map(r => r.userId).sort()).toEqual([CREATOR, 'someone-else']);
+  });
 });

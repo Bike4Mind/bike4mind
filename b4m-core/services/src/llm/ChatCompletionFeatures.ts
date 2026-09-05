@@ -74,6 +74,12 @@ import {
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
+import {
+  buildSupersessionReport,
+  formatSupersededSample,
+  partitionBySupersession,
+  type SupersessionReport,
+} from '../dataLakeService/supersession';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
@@ -1569,6 +1575,14 @@ interface ForcedRetrievalCoverage {
    * failure mode this whole feature exists to prevent.
    */
   filesWithheldReindexing: number;
+  /**
+   * Older generations of a document this lake also holds a newer generation of, dropped before the
+   * chunk scan (see dataLakeService/supersession.ts). Reported with ids and the matching tier, not
+   * just a count: the weakest identity tier is a bare file name, so a wrong collapse has to be
+   * diagnosable from the transcript. Always zero unless the admin setting is on.
+   */
+  filesSupersededCollapsed: number;
+  superseded: SupersessionReport['sample'];
   chunksScanned: number;
   chunksSkippedDimMismatch: number;
   filesWithDimMismatch: number;
@@ -1691,7 +1705,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       coverage.stoppedByChunkBudget ||
       coverage.stoppedByCursorStall ||
       anyMismatch ||
-      coverage.filesWithheldReindexing > 0;
+      coverage.filesWithheldReindexing > 0 ||
+      coverage.filesSupersededCollapsed > 0;
     if (!partial) return false;
 
     const reasons: string[] = [];
@@ -1724,6 +1739,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       reasons.push(
         `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
           'their passages are being replaced and the replacements are not searchable yet; they return on their own'
+      );
+    }
+    if (coverage.filesSupersededCollapsed > 0) {
+      // Names the ids and the tier, and says the suppression is recoverable - the same contract
+      // describeSupersession states, for the same reason: this collapse can be wrong on the bare
+      // file-name tier and the reader is the only one who can tell.
+      const named = formatSupersededSample(coverage.superseded, coverage.filesSupersededCollapsed);
+      reasons.push(
+        `${coverage.filesSupersededCollapsed} older document version(s) were not ranked because this lake holds a ` +
+          `newer version of the same source document (${named}) - they are still retrievable by id or name`
       );
     }
     if (coverage.chunksSkippedDimMismatch > 0) {
@@ -1783,6 +1808,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     } catch (err) {
       this.logger.warn('📋 Forced retrieval: lake-prompt resolution failed; injecting no lake prompt', err);
       return null;
+    }
+  }
+
+  /**
+   * Fails CLOSED and never throws, including on a host with no adminSettings adapter wired: a
+   * settings outage must not change which documents ground a turn, and this is an opt-in narrowing,
+   * so the safe answer under uncertainty is "do not collapse". `=== true` rather than a truthiness
+   * check so a legacy string value cannot switch a default-off feature on.
+   */
+  private async readSupersessionCollapseSetting(): Promise<boolean> {
+    try {
+      return (
+        (await this.chatCompletion.db.adminSettings?.getSettingsValue('EnableRetrievalSupersessionCollapse')) === true
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -2079,10 +2120,29 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // core: their vectors never enter memory and never spend the per-turn chunk budget below,
       // which one large re-embedded file sorting early could otherwise exhaust on its own,
       // reporting a budget cap when the real cause was the mismatch.
-      const { rankable: scanCandidates, foreign: excludedForeignFiles } = partitionFilesByEmbeddingModel(
+      const { rankable: modelMatchedFiles, foreign: excludedForeignFiles } = partitionFilesByEmbeddingModel(
         indexedFiles,
         embeddingModel
       );
+
+      // Collapse superseded generations LAST, after both partitions above. Order is load-bearing:
+      // a withheld or foreign-model member can never rank, so letting one win a key would suppress
+      // the servable older generation and leave the lake contributing nothing for that document.
+      // Off unless the admin setting says otherwise - the weakest identity tier is a bare file
+      // name, so this ships default-off (see EnableRetrievalSupersessionCollapse).
+      const supersessionCollapseEnabled = await this.readSupersessionCollapseSetting();
+      const collapse =
+        supersessionCollapseEnabled && lakes.length > 0
+          ? partitionBySupersession(
+              modelMatchedFiles.map(f => ({ ...f, fileTags: f.tags?.map(t => t.name) ?? [] })),
+              { lakes }
+            )
+          : { servable: modelMatchedFiles, superseded: [] };
+      const scanCandidates = collapse.servable;
+      const supersession = buildSupersessionReport(collapse.superseded);
+      if (supersession.count > 0) {
+        this.logger.warn(`🔒 Forced retrieval: suppressed ${supersession.count} superseded document(s) before ranking`);
+      }
 
       // 3. Score the candidate files' chunks in batches, keeping only above-floor candidates.
       //    Batched + projected rather than one unbounded read per file: the whole point is that
@@ -2096,6 +2156,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         moreFilesBeyondCap: fileResults.hasMore === true,
         filesExcludedForeignModel: excludedForeignFiles.length,
         filesWithheldReindexing: reindexingFiles.length,
+        filesSupersededCollapsed: supersession.count,
+        superseded: supersession.sample,
         chunksScanned: 0,
         chunksSkippedDimMismatch: 0,
         filesWithDimMismatch: 0,
