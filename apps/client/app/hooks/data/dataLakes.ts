@@ -1050,18 +1050,34 @@ export function useRechunkDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (limit?: number) => {
-      const res = await api.post<{ detected: number; enqueued: number; remaining: number }>(
-        `/api/data-lakes/${dataLakeId}/rechunk`,
-        limit ? { limit } : {}
-      );
+      const res = await api.post<{
+        detected: number;
+        enqueued: number;
+        remaining: number;
+        // Present only on the refusal arm. Typed optional because the success arm omits it entirely,
+        // and read FIRST below: a paused run also returns `enqueued: 0`, which is indistinguishable
+        // from "nothing to do" on the counts alone.
+        outcome?: 'paused';
+      }>(`/api/data-lakes/${dataLakeId}/rechunk`, limit ? { limit } : {});
       return res.data;
     },
     onSuccess: data => {
-      toast.success(
-        data.enqueued > 0
-          ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
-          : 'All files are already chunked into passages.'
-      );
+      if (data.outcome === 'paused') {
+        // A warning, not a success: the server refused and changed nothing. Without this arm the
+        // refusal fell through to "All files are already chunked into passages" as a GREEN success -
+        // which is not merely uninformative but false, since the gate only runs when at least one
+        // file was detected. Wording mirrors useConvergeDataLake's paused arm below.
+        toast.warning(
+          'Background lake work is paused, so nothing was rebuilt. No files were changed - re-run this ' +
+            'once an administrator turns convergence back on.'
+        );
+      } else {
+        toast.success(
+          data.enqueued > 0
+            ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
+            : 'All files are already chunked into passages.'
+        );
+      }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
