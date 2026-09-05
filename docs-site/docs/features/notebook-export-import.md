@@ -230,7 +230,7 @@ POST /api/notebooks/export
 **Request Body:**
 ```json
 {
-  "notebookIds": ["id1", "id2"],
+  "notebookIds": ["507f1f77bcf86cd799439011", "67dbe18a7f9cf1fa5d9686aa"],
   "includeKnowledge": true,
   "includeArtifacts": true,
   "includeTools": true,
@@ -243,6 +243,23 @@ POST /api/notebooks/export
   "toDate": "2024-12-31T23:59:59Z"
 }
 ```
+
+**Field constraints:**
+
+| Field | Constraint |
+|---|---|
+| `notebookIds` | 24-character hex notebook ids, 1 to 50 entries. **Omit the field to export everything you own**; an empty array is rejected rather than treated as "all". |
+| `fromDate`, `toDate` | Either a full ISO timestamp or a bare `YYYY-MM-DD`. A bare date carries no offset, so it is read as a UTC day, and a bare `toDate` covers that whole day. |
+| `maxFileSize` | Bytes. Files above the limit are referenced by URL instead of embedded. |
+
+**Responses:**
+
+| Status | When |
+|---|---|
+| `200` | Export succeeded. |
+| `400` | The request body was rejected. `errors[]` names the offending field. |
+| `404` | The account owns no notebooks matching the request. |
+| `500` | A genuine server fault. Caller mistakes answer 4xx and never reach here. |
 
 ### Import Endpoint
 ```

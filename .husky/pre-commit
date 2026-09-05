@@ -43,7 +43,7 @@ fi
 
 # Check staged files for hardcoded deprecated model IDs
 echo "Running deprecated model usage check on staged files..."
-if ! git diff --cached --name-only --diff-filter=ACM -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs' '*.json' | xargs -r npx tsx packages/scripts/src/checkDeprecatedModelUsage.ts --files; then
+if ! git diff --cached --name-only --diff-filter=ACM -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs' '*.json' | xargs -r pnpm --filter @bike4mind/scripts exec tsx src/checkDeprecatedModelUsage.ts --files; then
   FINAL_EXIT_CODE=1
 fi
 
