@@ -21,6 +21,8 @@ describe('useSendMessage - model id reaches input validation', () => {
   });
 
   it('passes the active model so an unavailable pin can be named', () => {
-    expect(callMatch?.[0] ?? '').toMatch(/selectedModel:\s*model,/);
+    // Matches shorthand and any identifier, so renaming the local does not turn this red - the
+    // property being bound to something real is the contract, not what that something is called.
+    expect(callMatch?.[0] ?? '').toMatch(/selectedModel\s*(?::\s*(?!undefined|null)[A-Za-z_$][\w$.]*)?\s*[,}]/);
   });
 });

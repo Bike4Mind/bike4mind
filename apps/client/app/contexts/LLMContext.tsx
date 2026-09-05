@@ -587,7 +587,15 @@ export const LLMProvider: React.FC = () => {
     if (!activeModel || !modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
-    if (!info) return;
+    if (!info) {
+      // A model absent from a LOADED catalog is a dead pin, and the effect above is about to replace
+      // it. Record it anyway: that effect stamps the dead id as the `from` of the transition, so the
+      // handshake below only matches if this ref names it too. Bailing without recording leaves the
+      // last GOOD model here, the landing then reads as a switch the user asked for, and a ceiling
+      // they lowered is raised to the replacement's default.
+      refitModelRef.current = activeModel;
+      return;
+    }
     const previousModel = refitModelRef.current;
     const modelChanged = previousModel !== null && previousModel !== activeModel;
     refitModelRef.current = activeModel;

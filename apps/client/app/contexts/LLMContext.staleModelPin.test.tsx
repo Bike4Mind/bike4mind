@@ -84,6 +84,29 @@ describe('LLMProvider default-model effect - a model that goes unresolvable afte
     await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
   });
 
+  it('preserves a lowered max_tokens while repairing the pin', async () => {
+    // The repair hands the refit effect a `from` id that effect never fitted (a dead pin is absent
+    // from modelInfoRepo, so it bails before recording it). If the handshake misses, the refit effect
+    // reads the landing as a user-initiated switch and raises the ceiling back to the new model's
+    // default - silently discarding a value the user lowered on purpose.
+    render(<LLMProvider />);
+    await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
+
+    act(() => {
+      useLLM.getState().setLLM({ max_tokens: 4096 });
+    });
+    // Make the repair land on a DIFFERENT model than the one in refitModelRef, which is what turns
+    // the missed handshake into an observable raise.
+    h.adminDefaultModel = TERRA.id;
+
+    act(() => {
+      useLLM.getState().setLLM({ model: RETIRED_PIN });
+    });
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(TERRA.id));
+    expect(useLLM.getState().max_tokens).toBe(4096);
+  });
+
   it('leaves a model the user picked after mount alone', async () => {
     // The guard against over-fixing: the repair must fire on unresolvable ids only, never undo a
     // deliberate switch to another accessible model.
