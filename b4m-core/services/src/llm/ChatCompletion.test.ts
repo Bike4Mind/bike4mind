@@ -1499,6 +1499,88 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
     });
 
+    // The TTFVT pair is per-attempt, not per-turn. A failed primary that DID put visible text
+    // on screen stamps firstTokenTime; if the retry paths did not clear it, a fallback whose
+    // whole stream is hidden reasoning would inherit that stamp and report the frozen turn as
+    // measured - the one reading the metric exists to rule out. Kept separate from the failover
+    // test above, whose assertions need a fallback that streams something visible.
+    it('clears the first-visible-token stamp on retry, so a hidden-only fallback reads as never-rendered', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      // Primary streams VISIBLE text - so it stamps - and then fails.
+      let stampedByPrimary: number | undefined;
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['visible text from primary'], { inputTokens: 999, outputTokens: 999 });
+          stampedByPrimary = mockQuest.promptMeta.performance.firstTokenTime;
+          throw new Error('ServiceUnavailableException: primary outage');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      // Fallback streams an unterminated thinking block only: chunks arrive, nothing renders.
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['<think>reasoning that never closes'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      // Without this the test is vacuous: it would pass on a build that never stamps at all.
+      expect(stampedByPrimary).toEqual(expect.any(Number));
+
+      // Asserted field-wise rather than through ttfvtState: the whole turn elapses inside a
+      // millisecond here, so firstChunkTime stamps as 0 and the state derivation's truthy test
+      // reads that as 'unknown'. Unreachable on a real turn (processStartTime is taken before
+      // prompt assembly and the DB reads), but it makes the derived state useless as an assertion.
+      const performance = mockQuest.promptMeta.performance;
+      expect(performance.firstTokenTime).toBeUndefined();
+      expect(performance.firstChunkTime).toEqual(expect.any(Number));
+    });
+
     // Bounded multi-hop traversal (provider-wide outage): primary fails, the first fallback
     // also fails, and the loop advances to a second fallback that succeeds. Each hop passes the
     // accumulated tried-models set so no model is re-selected; billing settles on the final hop

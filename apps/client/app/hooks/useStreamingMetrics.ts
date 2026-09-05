@@ -103,6 +103,11 @@ export function useStreamingMetrics() {
   // stay comparable: a bare non-empty check counts a hidden <think> marker and makes the
   // client number land BELOW the server's on any extended-thinking turn, inverting the
   // gap the admin troubleshooting guide reads as network + render time.
+  //
+  // Same PREDICATE, different INPUT. The server feeds it modelVisibleSlots(), which discounts an
+  // append-mode rapid-reply prefix; this reads quest.replies raw, prefix included. And recording
+  // once per quest id makes the number attempt-1-relative where the server's is relative to the
+  // attempt that answered. The admin metrics doc carries the same caveat for the same reason.
   const recordFirstTokenIfNeeded = useCallback((quest: { id?: string; replies?: (string | null | undefined)[] }) => {
     const hasFirstToken = hasVisibleReplyText(quest.replies ?? []);
     if (hasFirstToken && quest.id && !clientFirstTokenRecordedRef.current.has(quest.id)) {

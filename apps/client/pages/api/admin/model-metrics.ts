@@ -47,6 +47,7 @@ interface ModelMetricResponse {
     contextRetrievalTime?: number;
     modelInferenceTime?: number;
     firstTokenTime?: number;
+    firstChunkTime?: number;
     clientFirstTokenTime?: number;
     processPickupTime?: number;
     streamingPerformance?: {

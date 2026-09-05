@@ -65,12 +65,19 @@ changing, not the product getting slower, so do not compare across it.
 
 - **`never rendered` rows in Raw Data.** These are frozen turns, and they are the ones users
   complain about. They are excluded from the First Token trend chart rather than averaged into it,
-  so the chart cannot show them -- sort or scan the Raw Data tab instead, where they are flagged in
-  red. There is no dedicated filter or counter for them yet; more of them appearing is the signal,
+  so the chart cannot show them -- scan the Raw Data tab instead, where they are flagged in
+  red. There is no TTFVT sort key, so scanning is the only way in. There is no dedicated filter or counter for them yet; more of them appearing is the signal,
   even while the chart looks flat.
-- **TTFVT far below Client First Token Time.** Both count the same visible text, so TTFVT stops at
-  the server and the gap is network plus client render time. Compare the two before attributing
-  slowness to the model.
+- **TTFVT far below Client First Token Time.** Both apply the same visibility rule, so ordinarily
+  TTFVT stops at the server and the gap is network plus client render time. Compare the two before
+  attributing slowness to the model.
+
+  Three cases break that comparison, and all three make the client number the odd one out. On an
+  append-mode rapid reply the server discounts the seeded prefix and the client does not. On a
+  retried turn the server's stamp is relative to the attempt that finally answered, while the client
+  records once per quest and so stays relative to the first attempt. And a turn with no TTFVT at all
+  may have been retried rather than never streamed. Treat a large gap on any of these as an artifact
+  of what each side measured, not as client-side slowness.
 - **Turns with no TTFVT and no first-chunk time.** The response was not streamed at all. Check the
   model's streaming support rather than reading it as a latency problem.
 

@@ -133,7 +133,14 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                   </Typography>
                   <Typography level="body-xs">
                     {formatDuration(metric.performance?.totalResponseTime)}
-                    {` · ${formatTtfvt(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)} ttfvt`}
+                    {' \u00b7 '}
+                    <Typography
+                      component="span"
+                      level="body-xs"
+                      sx={{ color: ttfvtColor(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime) }}
+                    >
+                      {`${formatTtfvt(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)} ttfvt`}
+                    </Typography>
                   </Typography>
                 </Stack>
 
@@ -326,7 +333,7 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                           </Typography>
                           <Typography
                             level="body-xs"
-                            color={ttfvtColor(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)}
+                            sx={{ color: ttfvtColor(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime) }}
                           >
                             TTFVT: {formatTtfvt(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)}
                           </Typography>
@@ -396,10 +403,12 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                                     <Typography
                                       level="body-sm"
                                       fontWeight="bold"
-                                      color={ttfvtColor(
-                                        metric.performance?.firstTokenTime,
-                                        metric.performance?.firstChunkTime
-                                      )}
+                                      sx={{
+                                        color: ttfvtColor(
+                                          metric.performance?.firstTokenTime,
+                                          metric.performance?.firstChunkTime
+                                        ),
+                                      }}
                                     >
                                       {formatTtfvt(
                                         metric.performance?.firstTokenTime,

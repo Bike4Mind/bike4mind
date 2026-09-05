@@ -8,10 +8,11 @@ import {
 } from './streamedReplyAccumulator';
 
 /**
- * Feeds a chunk sequence through the accumulator and reports, per chunk, whether the
- * transcript had anything visible in it afterwards. This is the pair ChatCompletionProcess
- * stamps TTFVT off, so the index at which `false` first flips to `true` is the chunk the
- * metric attributes the first visible token to.
+ * Feeds a chunk sequence through the accumulator and reports, per chunk, whether the transcript
+ * had anything visible in it afterwards. This is transcript visibility, NOT the stamp: production
+ * stamps through `shouldStampFirstVisibleToken`, which runs `modelVisibleSlots` first, and this
+ * harness calls `hasVisibleReplyText` on the raw slots. The stamp itself is covered separately
+ * below.
  */
 const visibilityAfterEachChunk = (chunks: Array<{ text: string; index?: number }>, transitionMode = 'replace') => {
   const replies: ReplySlots = {};

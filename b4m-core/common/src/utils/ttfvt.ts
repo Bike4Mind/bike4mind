@@ -4,8 +4,9 @@
  * - `measured`       the user saw text, and firstTokenTime says when.
  * - `never-rendered` the model streamed (firstChunkTime proves it) but nothing ever became
  *                    visible. The frozen-turn case the metric exists to expose.
- * - `unknown`        neither timing was recorded: the turn never streamed at all (a media
- *                    generation, a failure before the first chunk) or predates the fields.
+ * - `unknown`        neither timing was recorded. Usually the turn never streamed at all (a media
+ *                    generation, a failure before the first chunk) or it predates the fields - but
+ *                    a retry also clears both stamps, so this does not prove nothing streamed.
  *
  * `unknown` is NOT a quieter `never-rendered`. Collapsing the two makes every non-streaming
  * turn look like a frozen one and drowns the signal, so every surface that styles or labels

@@ -3557,6 +3557,10 @@ export class ChatCompletionProcess {
        * shown, and `promptMeta.model` is relabelled to whichever model finally answers. Keeping
        * a first attempt's fast TTFVT would attribute it to the model that replaced it - the row
        * would claim sub-second on a turn the user watched freeze.
+       *
+       * Scope: the two TTFVT fields only. `streamStartTime` is deliberately NOT reset here - it is
+       * declared outside the retry loop and `streamingPerformance` is a whole-turn measure, so
+       * those numbers span every attempt while the TTFVT pair is per-attempt.
        */
       const resetStreamStateForRetry = () => {
         for (const key of Object.keys(replies)) {
