@@ -1,3 +1,4 @@
+import type { WireLakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -523,9 +524,24 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
   /** True when the lake exceeded the member scan bound, so every ratio here is partial. */
   scanTruncated: boolean;
   /**
+   * The MEMBERSHIP dimension (#2245): who is in this lake and whether any document is here twice.
+   * Separate from the predicates above because every one of them can pass on a lake carrying two
+   * upload generations of the same files - each generation genuinely is chunked and vectorized.
+   *
+   * OVERLAPS `duplicateMembers` below, which #2317 added independently while this was in review, and
+   * the two DISAGREE by construction: this grades over the membership population (which keeps
+   * chunkless members on purpose), `duplicateMembers` grades over the health population (which drops
+   * them). Two duplicate counts for one lake is not a shape to ship - one of them should go, and
+   * which one is a product decision (#2245 says it supersedes the report-only half of #2239). Kept
+   * side by side only so a merge did not silently delete either.
+   */
+  membership: WireLakeMembershipReport;
+  /**
    * Duplicate-fileName members (#2239). Report-only - see `findDuplicateMembers`. `groups` (and each
    * group's `members`) are capped for payload size by the caller; `memberCount`/`groupCount` on the
    * report and `memberCount` on each group stay exact.
+   *
+   * See the note on `membership` above: these two are redundant and expected to disagree.
    */
   duplicateMembers: LakeHealthDuplicatesReport;
 };

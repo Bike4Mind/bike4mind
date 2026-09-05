@@ -1,9 +1,4 @@
-import {
-  DATALAKE_TAG_PREFIX,
-  isReservedTagPrefix,
-  normalizeTagPrefix,
-  type DataLakeMembershipScope,
-} from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, effectiveTagPrefixArm, type DataLakeMembershipScope } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 /**
@@ -31,10 +26,13 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
  */
 export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): Record<string, unknown> {
   const metaArm = { 'tags.name': scope.datalakeTag };
-  const prefix = normalizeTagPrefix(scope.fileTagPrefix);
-  // A reserved-namespace prefix is dropped because it would match every OTHER lake's membership
-  // tag. Matching less is the safe direction.
-  if (!prefix || isReservedTagPrefix(prefix)) {
+  // Whether the prefix arm runs at all is `effectiveTagPrefixArm`'s decision, not this function's,
+  // so a caller that discloses the scope it queried cannot claim an arm this filter dropped (#2243).
+  // It drops an unusable prefix, a reserved-namespace one (which would match every OTHER lake's
+  // membership tag), and an owned scope with no creator to anchor to - matching less, the safe
+  // direction, in all three cases.
+  const prefix = effectiveTagPrefixArm(scope);
+  if (!prefix) {
     return metaArm;
   }
   // Anchored so the index on `tags.name` still bounds the scan; escaped because a user-chosen
@@ -53,12 +51,9 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
     return { $or: [metaArm, prefixArm] };
   }
 
-  // OWNED lake: the prefix is user-chosen and unique only per creator, so it MUST be conjoined
-  // with positive ownership. With no creator to anchor to there is nothing safe to match on, so
-  // fail closed to the meta-tag alone.
-  if (!scope.creatorUserId) {
-    return metaArm;
-  }
+  // OWNED lake: the prefix is user-chosen and unique only per creator, so it MUST be conjoined with
+  // positive ownership. `effectiveTagPrefixArm` already returned null for a creator-less owned
+  // scope, so `creatorUserId` is set here.
   return {
     $or: [metaArm, { $and: [prefixArm, { userId: scope.creatorUserId }] }],
   };

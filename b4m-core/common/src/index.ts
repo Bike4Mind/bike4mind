@@ -33,6 +33,7 @@ export * from './constants/systemUsers';
 export * from './constants/agentExecutionStatus';
 export * from './constants/chunking';
 export * from './constants/lakeHealth';
+export * from './constants/lakeMembershipHealth';
 export * from './constants/lakeConvergence';
 export * from './constants/convergenceProvenance';
 export * from './constants/lakeAccessAudit';
