@@ -486,6 +486,76 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     expect(out).toContain('covered only 200 of 500 documents');
   });
 
+  describe('supersession collapse threading', () => {
+    const contextWithFlag = (enabled: boolean) =>
+      semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: {
+            getSettingsValue: vi.fn(async (key: string) =>
+              key === 'EnableRetrievalSupersessionCollapse' ? enabled : 'text-embedding-ada-002'
+            ),
+          },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+
+    it('passes the flag and the resolved lakes through - both are needed for a collapse to run', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+      });
+
+      await run(contextWithFlag(true));
+
+      const params = semanticDataLakeSearchMock.mock.calls[0][0];
+      expect(params.supersessionCollapseEnabled).toBe(true);
+      expect(params.lakes).toEqual([{ id: 'lake-x', datalakeTag: 'datalake:x' }]);
+    });
+
+    it('defaults the flag to false when the setting is unset (the shipped default)', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+      });
+
+      await run(contextWithFlag(false));
+
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].supersessionCollapseEnabled).toBe(false);
+    });
+
+    it('reaches the model as a NOTE naming the suppressed ids and the matching tier', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+        embeddingModel: 'text-embedding-ada-002',
+        supersession: {
+          count: 1,
+          sample: [{ fileId: 'old-id', fileName: 'Protocol.pdf', tier: 'fileName', supersededBy: 'new-id' }],
+          partial: true,
+        },
+      });
+
+      const out = await run(contextWithFlag(true));
+
+      expect(out).toContain('older file version(s) were not ranked');
+      expect(out).toContain('old-id');
+      expect(out).toContain('new-id');
+      expect(out).toContain('fileName');
+      // Recoverability is part of the notice: the bare-filename tier can be wrong, so the model has
+      // to know the suppressed member is still fetchable rather than gone.
+      expect(out).toContain('retrieve one by id or name');
+    });
+  });
+
   it('forwards the resolved scan budgets into the search', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
       results: [hit],
