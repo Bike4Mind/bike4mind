@@ -71,9 +71,11 @@ const DataLakeSchema = new mongoose.Schema(
     // route) must pass it too. Said explicitly because the previous wording implied the detector
     // enforced the persisted size, which would have let the next writer add no cap of its own.
     //
-    // Excluded from every list/browse query on DataLakeRepository via LIST_PROJECTION, which is
-    // where the exclusion has to live: this field is on the LAKE schema, so naming it in a
-    // DataLakeBatchRepository projection is a silent no-op.
+    // Excluded from every multi-document read on DataLakeRepository - the named list methods via
+    // LIST_PROJECTION, and the inherited `find` via an override that injects the same exclusion.
+    // Both are needed: the exclusion has to live on the class that owns the field, so naming it in a
+    // DataLakeBatchRepository projection is a silent no-op, and naming it only on the named methods
+    // misses the door every service outside this file actually uses.
     inconsistencyReport: { type: mongoose.Schema.Types.Mixed, default: null },
     inconsistencyComputedAt: { type: Date, default: null },
     fileTagPrefix: { type: String, required: true },
@@ -281,15 +283,40 @@ const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): 
   return { $or: arms };
 };
 
-// The lakes collection's only unbounded field. Every list/browse query below excludes it: the two
-// routes that read a report (health, inconsistencies) each load a SINGLE lake by id or slug, so no
-// list path has a reader, and without this a per-lake report multiplies by the page size on reads
-// that never look at it.
+// The lakes collection's only unbounded field. Every multi-document read on this class excludes it:
+// the two routes that read a report (health, inconsistencies) each load a SINGLE lake by id or slug,
+// so no list path has a reader, and without this a per-lake report multiplies by the result size on
+// reads that never look at it.
+//
+// Two forms because there are two ways out of this class. The named methods below use the string on
+// `.select()`; the `find` OVERRIDE covers the inherited one, which is published on
+// IDataLakeRepository and is how every service outside this file reads lakes.
 const LIST_PROJECTION = '-inconsistencyReport';
+const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
 
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
+  }
+
+  /**
+   * Inherited `find`, narrowed to exclude the report - the projection on the named methods below
+   * cannot reach here, and this is the door nearly every caller uses.
+   *
+   * `IBaseRepository.find` declares no options parameter, so services read lakes through it with no
+   * projection and get whole documents; one of them (`listDataLakes.listAllDataLakes`) reads every
+   * draft+active lake unpaginated. Excluding at the six named methods left that path carrying the
+   * full report, which is the same silent no-op this exclusion was written to fix, one level up.
+   *
+   * Injected ONLY when the caller named no projection of its own: Mongo refuses a projection mixing
+   * inclusion with exclusion, so a caller that arrives with an inclusion set has to win outright
+   * rather than be merged with. No caller passes one today; this keeps the first one that does from
+   * failing at the server.
+   */
+  async find(filter: Record<string, unknown>, options: Record<string, unknown> = {}) {
+    const { skip, limit, sort, ...projection } = options;
+    if (Object.keys(projection).length > 0) return super.find(filter, options);
+    return super.find(filter, { ...options, ...LIST_PROJECTION_FIELDS });
   }
 
   async findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null> {
