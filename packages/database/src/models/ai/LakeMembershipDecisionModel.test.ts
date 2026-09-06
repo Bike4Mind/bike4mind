@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { ILakeMembershipDecision } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/common';
 import { lakeMembershipDecisionRepository as repo, LakeMembershipDecisionModel } from './LakeMembershipDecisionModel';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -155,6 +156,48 @@ describe('LakeMembershipDecisionRepository', () => {
       await expect(repo.update({ id: created.id, decision: undefined, keptFabFileId: 'f1' } as never)).rejects.toThrow(
         /must be written together/
       );
+    });
+
+    // The class, not just the message. All the assertions above match on text, so reverting these
+    // throws to a plain Error would leave every one of them green - and the class is what makes this
+    // a 400: the API error handler branches on `instanceof HTTPError` and falls through to 500.
+    it('rejects with BadRequestError, which is what makes the pairing failure a 400', async () => {
+      const created = await repo.upsertDecision(decision({ decision: 'keep-newest', keptFabFileId: null }));
+
+      await expect(repo.update({ id: created.id, keptFabFileId: 'f1' } as never)).rejects.toBeInstanceOf(
+        BadRequestError
+      );
+    });
+
+    // Three payload shapes that reach Mongo through the guarded verbs but carry their pairing
+    // somewhere the `$set` read cannot see it. Each is refused rather than skipped, because the
+    // early return for "names neither half" would otherwise wave all three straight through.
+    it('refuses a $setOnInsert naming a half, whose pairing depends on whether the row existed', async () => {
+      await expect(
+        LakeMembershipDecisionModel.findOneAndUpdate(
+          { dataLakeId: 'lake-1', fileName: 'policy.md' },
+          { $setOnInsert: { ...decision({ decision: 'keep-specific', keptFabFileId: null }) } },
+          { upsert: true }
+        ).exec()
+      ).rejects.toThrow(/not \$setOnInsert/);
+    });
+
+    it('refuses unsetting half the pair, a change no value test on the payload can see', async () => {
+      const created = await repo.upsertDecision(decision({ decision: 'keep-specific', keptFabFileId: 'f1' }));
+
+      await expect(
+        LakeMembershipDecisionModel.updateOne({ _id: created.id }, { $unset: { keptFabFileId: 1 } }).exec()
+      ).rejects.toThrow(/cannot be unset/);
+    });
+
+    it('refuses a pipeline update, whose writes the server computes and this hook cannot read', async () => {
+      const created = await repo.upsertDecision(decision({ decision: 'keep-newest', keptFabFileId: null }));
+
+      await expect(
+        LakeMembershipDecisionModel.updateOne({ _id: created.id }, [
+          { $set: { decision: 'keep-newest', keptFabFileId: 'f1' } },
+        ]).exec()
+      ).rejects.toThrow(/pipeline updates are not supported/);
     });
 
     it('lets a partial update that names neither field through', async () => {

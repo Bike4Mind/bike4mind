@@ -5,8 +5,7 @@ import type {
   ILakeMembershipDecisionDocument,
   ILakeMembershipDecisionRepository,
 } from '@bike4mind/common';
-import { LAKE_MEMBERSHIP_DECISION_SOURCES, LAKE_MEMBERSHIP_DECISION_VALUES } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, LAKE_MEMBERSHIP_DECISION_SOURCES, LAKE_MEMBERSHIP_DECISION_VALUES } from '@bike4mind/common';
 
 // See ILakeMembershipDecision (in @bike4mind/common) for the record's contract: the durable tombstone
 // that stops a membership repair re-asking a question its owner already answered.
@@ -68,15 +67,43 @@ LakeMembershipDecisionSchema.pre('validate', function () {
 
 // Every write verb that reaches Mongo through a Query is listed, including the four nothing calls
 // today: leaving a door unguarded because it is currently unused is how the service-only check
-// became bypassable in the first place. The replace verbs need no special handling here - a
-// replacement names every field, so it satisfies the both-halves test by construction.
+// became bypassable in the first place. The replace verbs are NOT inert here - mongoose applies
+// schema defaults AFTER this hook, so a replacement that omits keptFabFileId reads as one half and
+// is refused even though `default: null` would have landed. Name both halves on a replace.
 //
-// `bulkWrite` is the one door this cannot close: it goes straight to the driver collection without
-// building a Query, so only a model-level `pre('bulkWrite')` would see it.
+// What this still cannot close: `bulkWrite`, which goes straight to the driver collection without
+// building a Query, so only a model-level `pre('bulkWrite')` would see it. Everything else that
+// evades the payload read below is refused outright rather than waved through - see the guards.
 LakeMembershipDecisionSchema.pre(
   ['findOneAndUpdate', 'findOneAndReplace', 'updateOne', 'updateMany', 'replaceOne'],
   function () {
-    const update = (this.getUpdate() ?? {}) as Record<string, unknown> & { $set?: Record<string, unknown> };
+    const raw = this.getUpdate() ?? {};
+    // A pipeline update is an array of stages, and its writes are computed by the server - there is
+    // no payload here to read a pairing out of. Refused rather than skipped, which is what the
+    // early return below would otherwise do.
+    if (Array.isArray(raw)) {
+      throw new BadRequestError('pipeline updates are not supported on this collection');
+    }
+    const update = raw as Record<string, unknown> & {
+      $set?: Record<string, unknown>;
+      $setOnInsert?: Record<string, unknown>;
+      $unset?: Record<string, unknown>;
+    };
+
+    // Two operators whose effect on the pairing this hook cannot determine, so neither is allowed
+    // to touch it. `$setOnInsert` applies only when the upsert inserts, so the pair it produces is a
+    // property of whether the row already existed, not of the write - the one thing this guard
+    // insists a pairing must be. `$unset` removes a half, which is a pairing change no value test
+    // can see. Both have an unambiguous spelling: name both halves in `$set`.
+    const namesEitherHalf = (o?: Record<string, unknown>) =>
+      o !== undefined && ('decision' in o || 'keptFabFileId' in o);
+    if (namesEitherHalf(update.$setOnInsert)) {
+      throw new BadRequestError('name decision and keptFabFileId in $set, not $setOnInsert');
+    }
+    if (namesEitherHalf(update.$unset)) {
+      throw new BadRequestError('decision and keptFabFileId cannot be unset; write both explicitly');
+    }
+
     // A write can name the fields at the top level or under $set.
     const fields = { ...update, ...(update.$set ?? {}) };
     // Presence of a VALUE, not of a key. `{ decision: undefined }` is ordinary well-typed TypeScript
