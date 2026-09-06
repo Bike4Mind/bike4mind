@@ -60,8 +60,6 @@ const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
 
 export interface EditableLake {
   id: string;
-  /** Scope tag (`datalake:<tag>`'s bare form), the same identifier `retrievalTags` narrows on. */
-  datalakeTag: string;
   name: string;
   description: string;
   requiredUserTag: string;
@@ -308,10 +306,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     if (!lake) return;
     setStartingTestChat(true);
     try {
-      await startChatWithLakes({
-        retrievalTags,
-        corpusGroundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
-      });
+      await startChatWithLakes({ retrievalTags });
       setTestScopeOpen(false);
     } catch {
       toast.error('Could not start a test chat for this lake');

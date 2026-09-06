@@ -110,7 +110,6 @@ export default function DataLakeManagerPanel() {
     return l
       ? {
           id: l.id,
-          datalakeTag: l.datalakeTag,
           name: l.name,
           description: l.description ?? '',
           requiredUserTag: l.requiredUserTag ?? '',

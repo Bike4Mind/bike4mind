@@ -144,7 +144,6 @@ beforeEach(() => {
 
 const gatedLake = {
   id: 'lake-1',
-  datalakeTag: 'lake-1',
   name: 'Test Lake',
   description: 'desc',
   requiredUserTag: 'Opti',
@@ -160,7 +159,6 @@ const gatedLake = {
 
 const openLake = {
   id: 'lake-2',
-  datalakeTag: 'lake-2',
   name: 'Open Lake',
   description: 'desc',
   requiredUserTag: '',
@@ -176,7 +174,6 @@ const openLake = {
 
 const entitlementGatedLake = {
   id: 'lake-3',
-  datalakeTag: 'lake-3',
   name: 'Entitled Lake',
   description: 'desc',
   requiredUserTag: '',
@@ -1125,11 +1122,10 @@ describe('DataLakeSettingsModal - Test this lake', () => {
     await user.click(screen.getByTestId('test-lake-scope-checkbox-lake-1').querySelector('input')!);
     await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
 
-    // Tags come back in the fetched-lakes list order (lake-1, lake-2), not selection order.
-    expect(startChatWithLakesMock).toHaveBeenCalledWith({
-      retrievalTags: ['lake-1', 'lake-2'],
-      corpusGroundingMode: openLake.groundingMode,
-    });
+    // Tags come back in the fetched-lakes list order (lake-1, lake-2), not selection order. The
+    // exact-object match also pins that no `corpusGroundingMode` rides along: /api/sessions/create
+    // strips it off any request without a `dataLakeId`, so sending one would be a silent no-op.
+    expect(startChatWithLakesMock).toHaveBeenCalledWith({ retrievalTags: ['lake-1', 'lake-2'] });
     // The scope dialog is a separate flow from the settings form - confirming it must not also
     // close the settings modal out from under the caller.
     expect(onClose).not.toHaveBeenCalled();

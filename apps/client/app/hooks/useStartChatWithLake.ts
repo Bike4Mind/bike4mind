@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { ISessionDocument, DataLakeGroundingMode } from '@bike4mind/common';
+import type { ISessionDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -64,11 +64,15 @@ export default function useStartChatWithLake() {
  * Multi-lake counterpart, for testing a lake's scoping alongside (or against) its neighbors.
  * There is no `dataLakeId` for a subset, so this sends the same request shape an API-key caller
  * sends to reach the same scope: `retrievalTags` (one `datalakeTag` per lake) plus
- * `forceKnowledgeRetrieval` and `corpusGroundingMode` set explicitly. Both are required here
- * because resolveLakeSessionDefaults only derives them for the single-lake `dataLakeId` path
- * (sessionService/resolveLakeSessionDefaults.ts), and /api/sessions/create deletes any
- * client-sent `corpusGroundingMode` unless `dataLakeId` is present - a subset request that omitted
- * these would silently create an unscoped, non-retrieving session.
+ * `forceKnowledgeRetrieval`, set explicitly because resolveLakeSessionDefaults only derives them
+ * for the single-lake `dataLakeId` path (sessionService/resolveLakeSessionDefaults.ts). Omitting
+ * them would silently create an unscoped, non-retrieving session.
+ *
+ * `corpusGroundingMode` is deliberately NOT sent: /api/sessions/create strips any client-sent value
+ * before the merge and only the `dataLakeId` arm re-supplies one, so a subset request cannot set it
+ * at all. The test session inherits the size-only deferral default instead of the lake's configured
+ * mode - invisible on the empty session created here, and only divergent once files are attached to
+ * it. Carrying the mode through needs that server-side strip relaxed, not another client field.
  */
 export function useStartChatWithLakes() {
   const { setCurrentSession, setCurrentSessionId } = useSessions();
@@ -77,16 +81,12 @@ export function useStartChatWithLakes() {
   const closeManager = useDataLakeWizardStore(s => s.closeManager);
 
   return useCallback(
-    async (params: {
-      retrievalTags: string[];
-      corpusGroundingMode: DataLakeGroundingMode;
-    }): Promise<ISessionDocument> =>
+    async (params: { retrievalTags: string[] }): Promise<ISessionDocument> =>
       createAndOpenSession(
         {
           name: 'New Notebook',
           retrievalTags: params.retrievalTags,
           forceKnowledgeRetrieval: true,
-          corpusGroundingMode: params.corpusGroundingMode,
         },
         { queryClient, setCurrentSession, setCurrentSessionId, closeManager, navigate }
       ),
