@@ -26,10 +26,9 @@ from pathlib import Path
 
 WORKFLOWS = Path(".github/workflows")
 
-# pr-bot-review.yml is being reworked separately to remove the review agent's
-# general shell; its run-body interpolations go away with that change. Delete
-# this entry once that lands - it is not a standing exemption.
-EXEMPT = {"pr-bot-review.yml"}
+# Empty on purpose. An entry here is a workflow the rule is not actually holding
+# on, so it needs a comment saying why and when it goes away.
+EXEMPT: set[str] = set()
 
 RUN_KEY = re.compile(r"^(\s*)(?:-\s+)?run:\s*(\S.*)?$")
 STEPS_KEY = re.compile(r"^(\s*)steps:\s*$")
