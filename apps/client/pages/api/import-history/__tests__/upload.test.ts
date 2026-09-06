@@ -61,8 +61,14 @@ const makeRes = () => {
   }) as unknown as Response['status'];
   res.json = vi.fn((payload: unknown) => {
     res.body = payload;
+    res.listeners.finish?.forEach(fn => fn());
     return res;
   }) as unknown as Response['json'];
+  res.listeners = {} as Record<string, Array<() => void>>;
+  res.on = vi.fn((event: string, fn: () => void) => {
+    (res.listeners[event] ??= []).push(fn);
+    return res;
+  }) as unknown as Response['on'];
   return res;
 };
 
@@ -73,6 +79,7 @@ const makeReq = (opts: { query?: Record<string, unknown>; userId?: string; chunk
     user: { id: opts.userId ?? 'user-1' },
     ability: { can: () => true },
     destroy: vi.fn(),
+    socket: { end: vi.fn() },
     async *[Symbol.asyncIterator]() {
       for (const c of chunks) yield Buffer.from(c);
     },
@@ -134,6 +141,17 @@ describe('PUT /api/import-history/upload (self-host proxy)', () => {
     expect(res.status).toHaveBeenCalledWith(413);
     expect(res.body).toEqual(expect.objectContaining({ maxBytes: MAX_HISTORY_UPLOAD_BYTES }));
     expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('tears the socket down with a FIN after the 413 flushes, never an RST', async () => {
+    // Measured against real sockets: destroying the request discards the queued response, so the
+    // client gets ECONNRESET instead of the size message. Ending after 'finish' delivers it.
+    spoolMock.mockRejectedValueOnce(new UploadTooLargeError(MAX_HISTORY_UPLOAD_BYTES));
+    const res = makeRes();
+    const req = makeReq();
+    await captured.put!(req, res);
+    expect(req.destroy).not.toHaveBeenCalled();
+    expect(req.socket.end).toHaveBeenCalledTimes(1);
   });
 
   it('uploads the spooled file by path so the bytes never sit in memory', async () => {

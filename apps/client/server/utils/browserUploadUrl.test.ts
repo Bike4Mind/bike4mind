@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   resolveBrowserAppFileUploadUrl,
   resolveBrowserHistoryImportUploadUrl,
+  resolveBrowserNotebookImportUploadUrl,
   resolveBrowserUploadUrl,
 } from './browserUploadUrl';
 
@@ -86,5 +87,33 @@ describe('resolveBrowserHistoryImportUploadUrl', () => {
     delete process.env.B4M_SELF_HOST;
     const presigned = 'https://bucket.s3.us-east-2.amazonaws.com/u1/OpenAI/1.zip?sig=x';
     expect(resolveBrowserHistoryImportUploadUrl('OpenAI', presigned)).toBe(presigned);
+  });
+});
+
+describe('resolveBrowserNotebookImportUploadUrl', () => {
+  afterEach(() => {
+    delete process.env.B4M_SELF_HOST;
+  });
+
+  it('returns the same-origin proxy route in self-host, carrying only the importId', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    expect(
+      resolveBrowserNotebookImportUploadUrl(
+        '1234567890',
+        'http://b4m-history.localhost:9000/notebooks/u1/1234567890.json?sig=x'
+      )
+    ).toBe('/api/notebooks/import/upload?importId=1234567890');
+  });
+
+  it('returns the direct S3 presigned URL when hosted', () => {
+    process.env.B4M_SELF_HOST = 'false';
+    const presigned = 'https://bucket.s3.us-east-2.amazonaws.com/notebooks/u1/1234567890.json?sig=x';
+    expect(resolveBrowserNotebookImportUploadUrl('1234567890', presigned)).toBe(presigned);
+  });
+
+  it('treats an unset B4M_SELF_HOST as hosted (returns the presign unchanged)', () => {
+    delete process.env.B4M_SELF_HOST;
+    const presigned = 'https://bucket.s3.us-east-2.amazonaws.com/notebooks/u1/1234567890.json?sig=x';
+    expect(resolveBrowserNotebookImportUploadUrl('1234567890', presigned)).toBe(presigned);
   });
 });

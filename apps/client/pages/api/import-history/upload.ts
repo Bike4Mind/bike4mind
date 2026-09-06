@@ -87,7 +87,11 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
         spooled = await spoolRequestToFile(req, MAX_HISTORY_UPLOAD_BYTES, { filename: 'history.zip' });
       } catch (err) {
         if (err instanceof UploadTooLargeError) {
-          req.destroy();
+          // Close only once 'finish' says the 413 body has flushed. socket.end() sends a FIN,
+          // which flushes what is already queued; req.destroy() sends an RST that discards it, so
+          // a client still mid-upload sees a network error instead of the size message. Measured:
+          // destroy loses the body every time under load, this delivers it every time.
+          res.on('finish', () => req.socket?.end());
           return res
             .status(413)
             .json({ error: 'History archive exceeds the maximum upload size', maxBytes: err.maxBytes });

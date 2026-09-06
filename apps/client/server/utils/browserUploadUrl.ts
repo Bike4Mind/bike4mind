@@ -42,3 +42,19 @@ export const resolveBrowserHistoryImportUploadUrl = (source: string, directPresi
   process.env.B4M_SELF_HOST === 'true'
     ? `/api/import-history/upload?source=${encodeURIComponent(source)}`
     : directPresignedUrl;
+
+/**
+ * The same rewrite for the notebook import (notebooks/import/upload.ts), which uploads the
+ * exported notebook JSON to the history-import bucket under a `notebooks/` prefix.
+ *
+ * importId is the one piece the client supplies, and that is safe only because it is not what
+ * scopes the write: the key is `notebooks/<userId>/<importId>.json`, and the userId segment
+ * comes from the authenticated request, so a caller can only ever write under their own prefix.
+ * importId exists solely to pair this data object with the server-written
+ * `<importId>.options.json` sibling that pages/api/notebooks/import.ts already wrote - it is an
+ * identifier, not a permission.
+ */
+export const resolveBrowserNotebookImportUploadUrl = (importId: string, directPresignedUrl: string): string =>
+  process.env.B4M_SELF_HOST === 'true'
+    ? `/api/notebooks/import/upload?importId=${encodeURIComponent(importId)}`
+    : directPresignedUrl;

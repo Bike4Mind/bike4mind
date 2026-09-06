@@ -11,9 +11,11 @@ import { join } from 'path';
  * app's Bearer to a same-origin path while withholding it from a presign.
  *
  * A raw `axios.put` / `fetch(..., {method:'PUT'})` / `xhr.open('PUT', ...)` bypasses that
- * decision, which is why the same bug has now shipped three times: fab-file uploads (#855), the
- * data-lake batch path (#1062), and the LLM history import (#1365). Each looked fine hosted and
- * failed identically on self-host.
+ * decision, which is why the same bug has now shipped four times: fab-file uploads (#855), the
+ * data-lake batch path (#1062), and the LLM history import plus the notebook import (#1365).
+ * Each looked fine hosted and failed identically on self-host. The XHR shape is in the pattern
+ * because the notebook call site used it, so an axios-only scan read as green over a live
+ * bypass.
  *
  * Exemptions are per-file and must say why. "It is not an upload" is a fine reason; "not got
  * round to it" is the bug this test exists to catch.
@@ -36,8 +38,6 @@ const ALLOWED_RAW_PUT: Record<string, string> = {
     'draft bundle upload; the server already returns a same-origin proxy URL on self-host (mintDraftUploadUrl) and that route authorizes by signed capability token, not by Bearer, so the raw PUT is correct',
   'apps/client/app/utils/blogImageUpload.ts':
     'PUTs to a third-party blog host presign, not B4M storage - no B4M proxy to route through (#1365 decision: out of scope, a CSP/blog-integration concern)',
-  'apps/client/app/components/ProfileModal/NotebookImportModal.tsx':
-    'NOT a sanctioned exemption - a known live bypass. It XHR-PUTs at the notebook-import presign, which pages/api/notebooks/import.ts does not rewrite, so the notebook data object never lands on self-host (#1365 criterion 5). Listed so the scan records the hole instead of missing it; delete this entry when the call site routes through uploadFileToUrl',
 };
 
 const rawPutCallSites = (): string[] => {

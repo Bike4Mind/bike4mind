@@ -3,6 +3,7 @@ import { Session } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { S3Storage } from '@bike4mind/fab-pipeline';
+import { resolveBrowserNotebookImportUploadUrl } from '@server/utils/browserUploadUrl';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -57,9 +58,10 @@ const handler = baseApi().post(
       optionsKey,
     });
 
+    // Self-host gets the same-origin proxy below; hosted keeps the presign untouched.
     return res.json({
       success: true,
-      uploadUrl,
+      uploadUrl: resolveBrowserNotebookImportUploadUrl(String(timestamp), uploadUrl),
       importId: timestamp,
     });
   })
