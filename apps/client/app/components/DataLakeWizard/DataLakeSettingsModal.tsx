@@ -21,6 +21,7 @@ import {
   Tabs,
   Textarea,
 } from '@mui/joy';
+import { toast } from 'sonner';
 import {
   useDataLakeProposals,
   useDataLakeSpend,
@@ -40,9 +41,11 @@ import {
   OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '@bike4mind/common';
 import type { DataLakeGroundingMode } from '@bike4mind/common';
+import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
 import { DataLakeProposalsPanel } from './DataLakeProposalsPanel';
+import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
 /** The modal's tabs. Settings is always present; the other three are each permission-gated and only
  *  appear when they have content - see showSpendTab / showHistoryTab / showProposalsTab. */
@@ -57,6 +60,8 @@ const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
 
 export interface EditableLake {
   id: string;
+  /** Scope tag (`datalake:<tag>`'s bare form), the same identifier `retrievalTags` narrows on. */
+  datalakeTag: string;
   name: string;
   description: string;
   requiredUserTag: string;
@@ -177,6 +182,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const hasGate = !!(lake?.requiredUserTag || lake?.requiredEntitlement);
   // Publishing exposes every file in the lake to all users, so it takes an explicit confirm.
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
+  const [testScopeOpen, setTestScopeOpen] = useState(false);
+  const startChatWithLakes = useStartChatWithLakes();
+  const [startingTestChat, setStartingTestChat] = useState(false);
   // The org the lake is CURRENTLY scoped to - which for a multi-org owner may not be the
   // active switcher org. Name it from the account list so the "Shared" copy is unambiguous.
   const lakeOrgName = lake?.organizationId
@@ -294,6 +302,22 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       },
       { onSuccess: onClose }
     );
+  };
+
+  const handleConfirmTestScope = async (retrievalTags: string[]) => {
+    if (!lake) return;
+    setStartingTestChat(true);
+    try {
+      await startChatWithLakes({
+        retrievalTags,
+        corpusGroundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+      });
+      setTestScopeOpen(false);
+    } catch {
+      toast.error('Could not start a test chat for this lake');
+    } finally {
+      setStartingTestChat(false);
+    }
   };
 
   // A plain JSX value (not a nested component function): a component DEFINED inside another
@@ -611,10 +635,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
               <Button variant="plain" color="neutral" onClick={onClose}>
                 Cancel
               </Button>
+              {lake?.canManage && (
+                <Button
+                  variant="outlined"
+                  color="neutral"
+                  onClick={() => setTestScopeOpen(true)}
+                  data-testid={`datalake-settings-test-btn-${lake.id}`}
+                  sx={{ mr: 'auto' }}
+                >
+                  Test this lake
+                </Button>
+              )}
             </DialogActions>
           )}
         </ModalDialog>
       </Modal>
+      {testScopeOpen && lake && (
+        <TestLakeScopeDialog
+          anchorLakeId={lake.id}
+          onClose={() => setTestScopeOpen(false)}
+          onConfirm={handleConfirmTestScope}
+          confirming={startingTestChat}
+        />
+      )}
       <Modal open={confirmPublicOpen} onClose={() => setConfirmPublicOpen(false)}>
         <ModalDialog role="alertdialog" data-testid="datalake-publish-confirm" sx={{ maxWidth: '28rem' }}>
           <DialogTitle>Make this data lake public?</DialogTitle>
