@@ -64,6 +64,11 @@ export const SimplifiedChatRequestSchema = z.object({
   // Returned inline on this response only and never persisted, since a stored prompt would
   // reach every reader of the quest. Server-authored blocks stay redacted even here.
   includeSystemPrompt: z.boolean().optional(),
+  // Caller-supplied system-prompt text (API-only channel; the app UI has no equivalent field).
+  // Rendered as a defended, deference-postured block appended after every other system-prompt
+  // source - it can refine behavior but never override org/session/lake instructions. Capped to
+  // match PROMPT_TEXT_MAX (briefcasePrompt.ts); an oversized value is a 422, never truncated.
+  systemPrompt: z.string().max(16_000).optional(),
 });
 
 export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;

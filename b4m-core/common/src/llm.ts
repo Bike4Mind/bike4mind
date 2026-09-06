@@ -221,6 +221,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * in-app completion wants. See PROMPT_MODE_SOURCES in services/llm/systemPromptSources.
    */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /**
+   * Caller-supplied system-prompt text (API-only). Rendered as a defended,
+   * deference-postured block appended last in the system-prompt stack. Capped to match
+   * PROMPT_TEXT_MAX (briefcasePrompt.ts); enforced upstream as a 422, never truncated.
+   */
+  systemPrompt: z.string().max(16_000).optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */

@@ -40,7 +40,8 @@ export type PromptSourceId =
   | 'project'
   | 'recentImages'
   | 'urls'
-  | 'attachedFiles';
+  | 'attachedFiles'
+  | 'callerPrompt';
 
 /**
  * Assembly order, and the single place it is defined. Order is prompt-visible - the Anthropic
@@ -71,6 +72,10 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'recentImages',
   'urls',
   'attachedFiles',
+  // Caller-supplied systemPrompt (API-only). Appended last, after every source above it -
+  // including the caller's own attached files/URLs - so it sits inside the per-caller cached
+  // tail (see markShareablePrefixBoundary) rather than in front of anything shareable.
+  'callerPrompt',
 ];
 
 /**
@@ -127,7 +132,7 @@ export type PromptMode = 'raw' | 'grounded' | 'surface';
  * Sources that carry the caller's own content rather than guidance we wrote. Kept in every mode:
  * silently dropping an attached file would be a worse surprise than any prompt we removed.
  */
-const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'attachedFiles'];
+const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'attachedFiles', 'callerPrompt'];
 
 export const PROMPT_MODE_SOURCES: Record<PromptMode, PromptSourceId[]> = {
   raw: CALLER_SUPPLIED_SOURCES,
@@ -167,6 +172,10 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   skills: 12,
   agentDetection: 13,
   questMaster: 14,
+  // Unlike the priority-0 caller-content sources above, this one IS a system-role message that
+  // reaches the budget - it is the caller's own per-request guidance, ranked just behind the
+  // tenant/session band it must defer to.
+  callerPrompt: 15,
 
   // Grounding data. Absent, the model does not degrade politely - it fabricates, or denies it can see
   // something the user knows it was given.
@@ -246,7 +255,7 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  */
 export const PROMPT_SOURCE_METADATA: Record<
   PromptSourceId,
-  { origin: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org'; name: string }
+  { origin: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org' | 'caller'; name: string }
 > = {
   dateContext: { origin: 'hardcoded', name: 'date_time_context' },
   extraContext: { origin: 'user', name: 'extra_context' },
@@ -268,6 +277,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   recentImages: { origin: 'hardcoded', name: 'recent_images' },
   urls: { origin: 'user', name: 'url_content' },
   attachedFiles: { origin: 'user', name: 'attached_files' },
+  callerPrompt: { origin: 'caller', name: 'caller_prompt' },
 };
 
 /**

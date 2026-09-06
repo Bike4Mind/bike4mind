@@ -157,6 +157,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import {
@@ -2930,6 +2931,9 @@ export class ChatCompletionProcess {
             : [],
         urls: urlMessages,
         attachedFiles: fabMessages,
+        // Caller-supplied systemPrompt (API-only), appended last so it sits at the tail of the
+        // stack - after even the caller's own attached files/URLs above.
+        callerPrompt: renderCallerPromptMessages(parsedBody.systemPrompt),
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
       // Close the deployment-wide shareable prefix with a cache breakpoint. Applied after the

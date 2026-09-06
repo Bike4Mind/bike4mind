@@ -215,6 +215,10 @@
           },
           "includeSystemPrompt": {
             "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string",
+            "maxLength": 16000
           }
         },
         "required": [
@@ -1805,7 +1809,7 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "Request body failed schema validation.",
             "content": {
               "application/json": {
                 "schema": {

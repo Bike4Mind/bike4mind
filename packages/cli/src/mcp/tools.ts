@@ -81,6 +81,11 @@ const sendMessageShape = {
   message: z.string().describe('The message to send'),
   notebookId: z.string().optional().describe('Notebook to send to; defaults to the most recent'),
   model: z.string().optional().describe('Model id to use; defaults to the instance default'),
+  systemPrompt: z
+    .string()
+    .max(16_000)
+    .optional()
+    .describe('Caller-supplied system-prompt text for this message only; refines but never overrides other guidance'),
 };
 
 const searchKnowledgeBaseShape = {
@@ -146,7 +151,7 @@ export async function createNotebook(client: B4mApiClient, args: { name?: string
 
 export async function sendMessage(
   client: B4mApiClient,
-  args: { message: string; notebookId?: string; model?: string }
+  args: { message: string; notebookId?: string; model?: string; systemPrompt?: string }
 ) {
   const res = await client.sendChat(args);
   const questId = res.id;
