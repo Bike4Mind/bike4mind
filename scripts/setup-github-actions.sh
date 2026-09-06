@@ -37,7 +37,18 @@ read -p "GitHub repository name: " GITHUB_REPO
 setup_account() {
     local account_name=$1
     local profile_name=$2
-    
+
+    # The trust policy below admits only tokens minted for this GitHub
+    # Environment, so the name has to match the `environment:` key on the job
+    # that assumes the role. The Environment must already exist in repository
+    # settings; the role is unassumable until it does.
+    local github_environment
+    if [ "$account_name" = "prod" ]; then
+        github_environment="production"
+    else
+        github_environment="$account_name"
+    fi
+
     echo -e "${BLUE}Setting up $account_name account...${NC}"
     
     # Get AWS account ID
@@ -73,10 +84,8 @@ setup_account() {
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:GITHUB_ORG/GITHUB_REPO:*"
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:GITHUB_ORG/GITHUB_REPO:environment:GITHUB_ENVIRONMENT"
         }
       }
     }
@@ -90,7 +99,8 @@ EOF
     echo -e "${BLUE}  ACCOUNT_ID -> ${AWS_ACCOUNT_ID}${NC}"
     echo -e "${BLUE}  GITHUB_ORG -> ${GITHUB_ORG}${NC}"
     echo -e "${BLUE}  GITHUB_REPO -> ${GITHUB_REPO}${NC}"
-    TRUST_POLICY=$(echo "$TRUST_POLICY" | sed "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" | sed "s/GITHUB_ORG/${GITHUB_ORG}/g" | sed "s/GITHUB_REPO/${GITHUB_REPO}/g")
+    echo -e "${BLUE}  GITHUB_ENVIRONMENT -> ${github_environment}${NC}"
+    TRUST_POLICY=$(echo "$TRUST_POLICY" | sed "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" | sed "s/GITHUB_ORG/${GITHUB_ORG}/g" | sed "s/GITHUB_REPO/${GITHUB_REPO}/g" | sed "s/GITHUB_ENVIRONMENT/${github_environment}/g")
     
     # Validate JSON before writing to file
     echo -e "${BLUE}Validating trust policy JSON...${NC}"
@@ -118,7 +128,19 @@ EOF
     echo -e "${BLUE}Checking if role already exists...${NC}"
     echo -e "${BLUE}Command: aws iam get-role --role-name $ROLE_NAME --profile $profile_name${NC}"
     if aws iam get-role --role-name "$ROLE_NAME" --profile "$profile_name" >/dev/null 2>&1; then
-        echo -e "${YELLOW}IAM role already exists in $account_name, continuing...${NC}"
+        echo -e "${YELLOW}IAM role already exists in $account_name, updating its trust policy...${NC}"
+        echo -e "${BLUE}Command: aws iam update-assume-role-policy --role-name $ROLE_NAME --policy-document (inline) --profile $profile_name${NC}"
+        if aws iam update-assume-role-policy \
+            --role-name "$ROLE_NAME" \
+            --policy-document "$TRUST_POLICY" \
+            --profile "$profile_name"; then
+            echo -e "${GREEN}Trust policy updated for $account_name${NC}"
+        else
+            echo -e "${RED}Failed to update trust policy for $account_name${NC}"
+            echo -e "${RED}Trust policy content:${NC}"
+            echo "$TRUST_POLICY"
+            exit 1
+        fi
     else
         echo -e "${BLUE}Role does not exist, creating it...${NC}"
         # Create the role
@@ -398,6 +420,10 @@ echo -e "${GREEN}Dev Role ARN: $DEV_ROLE_ARN${NC}"
 echo -e "${GREEN}Prod Role ARN: $PROD_ROLE_ARN${NC}"
 echo ""
 echo -e "${YELLOW}Important Note:${NC}"
+echo "Each role trusts exactly one GitHub Environment: 'dev' for the dev role, 'production' for the prod role."
+echo "Create those Environments in the repository settings and give every job that assumes a role the matching"
+echo "'environment:' key, or AssumeRoleWithWebIdentity will be denied."
+echo ""
 echo "The script automatically updates existing policies with the latest permissions from the script."
 echo "This ensures your policies always have the most current permissions needed for deployment."
 echo ""
