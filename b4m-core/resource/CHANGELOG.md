@@ -1,5 +1,15 @@
 # @bike4mind/resource
 
+## 0.6.0
+
+### Minor Changes
+
+- [#2178](https://github.com/Bike4Mind/bike4mind/pull/2178) [`c17fbcc`](https://github.com/Bike4Mind/bike4mind/commit/c17fbccb067921f8ab1b9b352eda91285bbd9720) Thanks [@onoya](https://github.com/onoya)! - give image generation and image edit a local queue consumer
+
+### Patch Changes
+
+- [#2060](https://github.com/Bike4Mind/bike4mind/pull/2060) [`c5c6cc6`](https://github.com/Bike4Mind/bike4mind/commit/c5c6cc6d007bfe49f6c335ebc1c18fa8272ad64b) Thanks [@poysama](https://github.com/poysama)! - register the drive-lake and lake-memory queues, and guard the drift
+
 ## 0.5.0
 
 ### Minor Changes

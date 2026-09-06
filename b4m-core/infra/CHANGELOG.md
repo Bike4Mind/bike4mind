@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 1.0.0
+
+### Major Changes
+
+- [#2147](https://github.com/Bike4Mind/bike4mind/pull/2147) [`49f96c3`](https://github.com/Bike4Mind/bike4mind/commit/49f96c3ca5303a29ac6acb318d6178a7ec7efa48) Thanks [@vinchi777](https://github.com/vinchi777)! - give the chunk-stall markers their own fields so they stop clobbering the user's note
+
 ## 0.10.0
 
 ### Minor Changes

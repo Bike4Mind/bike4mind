@@ -1,5 +1,17 @@
 # @bike4mind/cli
 
+## 0.20.3
+
+### Patch Changes
+
+- [#2076](https://github.com/Bike4Mind/bike4mind/pull/2076) [`0b11eb7`](https://github.com/Bike4Mind/bike4mind/commit/0b11eb73ef02ce7acbf9fdfab991e36cec755ef7) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - make the published package installable, and add the MCP registry entry
+
+- [#2138](https://github.com/Bike4Mind/bike4mind/pull/2138) [`9c5588c`](https://github.com/Bike4Mind/bike4mind/commit/9c5588c25e8025755ebe0eab77c4af208ef27538) Thanks [@onoya](https://github.com/onoya)! - derive every sub-quest status surface from one enum
+
+- [#2345](https://github.com/Bike4Mind/bike4mind/pull/2345) [`e285e73`](https://github.com/Bike4Mind/bike4mind/commit/e285e738ff13227869492811f1a10865d6d82f03) Thanks [@vinchi777](https://github.com/vinchi777)! - hide gemini-2.5-flash and redirect pinned sessions
+
+- [#2379](https://github.com/Bike4Mind/bike4mind/pull/2379) [`9e88972`](https://github.com/Bike4Mind/bike4mind/commit/9e889727a1d83a25e38ccec9354c6ffbb2150b70) Thanks [@vinchi777](https://github.com/vinchi777)! - skip npm's audit when removing a plugin
+
 ## 0.20.2
 
 ### Patch Changes
