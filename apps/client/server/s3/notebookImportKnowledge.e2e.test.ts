@@ -78,7 +78,8 @@ function makeService(overrides: Record<string, unknown> = {}, uploaded: string[]
     chatHistoryRepository: createChatHistoryWrites(),
     // The real model write the handler performs, so a schema mismatch fails here as it does live.
     knowledgeRepository: { create: async (d: Record<string, unknown>) => (await FabFile.create([d]))[0] },
-    artifactRepository: { create: async () => null },
+    artifactIdTaken: async () => false,
+    createArtifact: async () => null,
     toolRepository: { create: async () => null },
     agentRepository: { create: async () => null },
     userRepository: { findById: async () => ({ id: USER }) },

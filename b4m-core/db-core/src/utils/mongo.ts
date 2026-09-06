@@ -523,8 +523,10 @@ export function convertIds(ids: Array<string | mongoose.Types.ObjectId>): Array<
  * also accepts a number and casts it to a fabricated id. Pinned against a real server in
  * packages/database/src/models/content/FabFileModel.objectIdCasting.integration.test.ts.
  *
- * `artifactIds` must NOT be filtered with this - those are `artifact_<ts>_<rand>`, matched on a
- * string `id` field rather than `_id`.
+ * `artifactIds` must NOT be filtered with this - those are minted as
+ * `artifact_<type>_<identifier>_<ts>_<index>` (see `createArtifactId` in @bike4mind/common, whose
+ * doc owns that shape) and matched on a string `id` field rather than `_id`. Rows predating that
+ * minter carry a shorter `artifact_<ts>_<rand>`; neither form is an ObjectId.
  */
 export function usableObjectIds(
   ids: string[] | undefined,

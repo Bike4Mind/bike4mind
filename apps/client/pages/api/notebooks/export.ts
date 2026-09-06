@@ -5,6 +5,7 @@ import {
   questRepository,
   fabFileRepository,
   artifactRepository,
+  artifactContentRepository,
   agentRepository,
   Tool,
 } from '@bike4mind/database';
@@ -69,6 +70,7 @@ const handler = baseApi().post(
       chatHistoryRepository: questRepository,
       knowledgeRepository: fabFileRepository,
       artifactRepository,
+      artifactContentRepository,
       toolRepository: {
         find: async (query: any) => {
           return await Tool.find(query);

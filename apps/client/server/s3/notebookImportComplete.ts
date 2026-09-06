@@ -1,6 +1,7 @@
 /* eslint @typescript-eslint/no-explicit-any: "error" */
 import { InboxType, isImageServeable } from '@bike4mind/common';
-import { notebookImportService } from '@bike4mind/services';
+import type { ArtifactType } from '@bike4mind/common';
+import { artifactService, notebookImportService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
@@ -9,6 +10,8 @@ import {
   Quest,
   FabFile,
   Artifact,
+  ArtifactContent,
+  ArtifactVersion,
   Agent,
   Tool,
   User,
@@ -17,7 +20,13 @@ import {
 } from '@bike4mind/database';
 import { withContext } from '@server/s3/utils';
 import type { ClientSession, FilterQuery } from 'mongoose';
-import type { IChatHistoryItem, IChatHistoryItemDocument } from '@bike4mind/common';
+import type {
+  IArtifactContentDocument,
+  IArtifactDocument,
+  IArtifactVersionDocument,
+  IChatHistoryItem,
+  IChatHistoryItemDocument,
+} from '@bike4mind/common';
 import { Resource } from 'sst';
 import { getFilesStorage } from '@server/utils/storage';
 import { v4 as uuidv4 } from 'uuid';
@@ -76,6 +85,90 @@ export const createChatHistoryWrites = (session?: ClientSession) => {
   };
 };
 
+/**
+ * Binds one model's `create` to a transaction, for a service that only knows how to call `create`.
+ *
+ * `T` is named by the caller rather than inferred from a `Model<T>`: @bike4mind/database types these
+ * models on documents whose `_id`/`contentId` are ObjectIds, while the ports the services want
+ * declare them strings, so the cast is load-bearing and no signature can tie the two together.
+ */
+const withSession = <T>(
+  session: ClientSession | undefined,
+  model: { create: (docs: unknown[], options: Record<string, unknown>) => Promise<unknown[]> }
+) => ({
+  // Same presence-check hazard as createChatHistoryWrites: `{ session: undefined }` escapes the
+  // transaction rather than being ignored, so the key has to be absent.
+  create: async (data: unknown) => {
+    const [created] = await model.create([data], session ? { session } : {});
+    return created as T;
+  },
+});
+
+/**
+ * The artifact writes an import performs. Exported for the same reason as the message writes above:
+ * an artifact is three linked documents, and a test that re-implements that link cannot catch it
+ * regressing - see notebookImportArtifact.e2e.test.ts.
+ */
+export const createArtifactWrites = (session?: ClientSession) => ({
+  // Both collections: `create` writes the content row FIRST, so an interrupted create leaves an
+  // orphaned `artifact_contents` row with no `artifacts` row to find it by - the state
+  // `persistAgentArtifacts.clearPartialArtifact` exists to repair. Checking only `artifacts` lets
+  // that orphan reach a server-side E11000 on (artifactId, version), aborting the transaction the
+  // whole import runs inside.
+  //
+  // Refused rather than repaired, deliberately: this id comes from a user-uploaded file, so
+  // repairing means hard-deleting rows on the strength of it. Known dead end - an account holding
+  // an orphan can never import that artifact, and no UI clears one.
+  //
+  // Session-bound, so it sees rows written earlier in this same import. Sequential, so the
+  // ordinary already-imported case answers on the first query.
+  artifactIdTaken: async (id: string) => {
+    const artifactQuery = Artifact.exists({ id });
+    if ((await (session ? artifactQuery.session(session) : artifactQuery)) !== null) return true;
+
+    const contentQuery = ArtifactContent.exists({ artifactId: id });
+    return (await (session ? contentQuery.session(session) : contentQuery)) !== null;
+  },
+  // Delegates to the same creation path the artifacts API uses rather than hand-building a
+  // payload that drifts from the schema; see NotebookImportAdapters.createArtifact for why.
+  // The service's adapter seam is what lets its three writes join this transaction.
+  createArtifact: async ({
+    userId,
+    ...params
+  }: {
+    userId: string;
+    id?: string;
+    sessionId: string;
+    type: ArtifactType;
+    title: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ id: unknown }> => {
+    const written = await artifactService.create(
+      userId,
+      {
+        ...params,
+        metadata: params.metadata ?? {},
+        // Private regardless of what the source artifact was: an import must not publish
+        // anything on the importer's behalf. Tags are not carried by the export format.
+        visibility: 'private',
+        tags: [],
+      },
+      {
+        db: {
+          artifacts: withSession<IArtifactDocument>(session, Artifact),
+          artifactContents: withSession<IArtifactContentDocument>(session, ArtifactContent),
+          artifactVersions: withSession<IArtifactVersionDocument>(session, ArtifactVersion),
+        },
+      }
+    );
+    // The stored row, not the payload's id: when no id was supplied the creation path minted one,
+    // and that is the id readers resolve the artifact by. The service's `takeStoreId` reads it -
+    // the same seam every other attachment kind goes through.
+    return written.artifact as { id: unknown };
+  },
+});
+
 const processNotebookImport = async (
   userId: string,
   dataKey: string,
@@ -107,33 +200,11 @@ const processNotebookImport = async (
       const adapters = {
         sessionRepository: createSessionWrites(),
         chatHistoryRepository: createChatHistoryWrites(session),
-        knowledgeRepository: {
-          create: async (data: Record<string, unknown>) => {
-            // Use model directly with session for transaction support
-            const [created] = await FabFile.create([data], { session });
-            return created;
-          },
-        },
-        artifactRepository: {
-          create: async (data: Record<string, unknown>) => {
-            // Use model directly with session for transaction support
-            const [created] = await Artifact.create([data], { session });
-            return created;
-          },
-        },
-        toolRepository: {
-          create: async (data: Record<string, unknown>) => {
-            const [created] = await Tool.create([data], { session });
-            return created;
-          },
-        },
-        agentRepository: {
-          create: async (data: Record<string, unknown>) => {
-            // Use model directly with session for transaction support
-            const [created] = await Agent.create([data], { session });
-            return created;
-          },
-        },
+        // These three only ever have an id read back off them, which is all the port asks for.
+        knowledgeRepository: withSession<{ id: unknown }>(session, FabFile),
+        ...createArtifactWrites(session),
+        toolRepository: withSession<{ id: unknown }>(session, Tool),
+        agentRepository: withSession<{ id: unknown }>(session, Agent),
         userRepository: {
           findById: async (id: string) => User.findById(id).session(session),
         },
