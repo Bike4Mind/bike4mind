@@ -5,6 +5,7 @@ import {
   materializeAttachmentContent,
   composeFirstIterationMessage,
   attachmentNoticeBlock,
+  attachmentNoticeStrings,
   MAX_INLINED_IMAGE_BYTES,
 } from './agentExecutor.attachmentContent';
 
@@ -187,6 +188,106 @@ describe('materializeAttachmentContent', () => {
     const result = await materializeAttachmentContent([file('a')], ['ghost'], extract, logger);
 
     expect(result.notices).toEqual([expect.objectContaining({ fabFileId: 'ghost', band: 'unresolved' })]);
+  });
+});
+
+describe('materializeAttachmentContent delivery report (#1576 ask 1, agent door)', () => {
+  it('counts every requested id, delivered and dropped alike', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn().mockResolvedValue(
+      extractorResult({
+        userMessages: [{ role: 'user', content: 'A BODY' }],
+        deliveredFileIds: ['a', 'b'],
+        fullyDeliveredFileIds: ['a'],
+      })
+    );
+
+    const result = await materializeAttachmentContent([file('a'), file('b'), file('c')], ['ghost'], extract, logger);
+
+    expect(result.delivery).toEqual({
+      requested: 4,
+      delivered: 2,
+      fullyDelivered: 1,
+      dropped: 2,
+      droppedIds: ['c', 'ghost'],
+    });
+  });
+
+  // The state the whole ask turns on: nothing failed, so `notices` is empty and carries no signal
+  // at all. Only the report distinguishes this from a run that was given no attachments.
+  it('reports a wholly successful run, which produces no notices to infer from', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn().mockResolvedValue(
+      extractorResult({
+        userMessages: [{ role: 'user', content: 'A BODY' }],
+        deliveredFileIds: ['a', 'b'],
+        fullyDeliveredFileIds: ['a', 'b'],
+      })
+    );
+
+    const result = await materializeAttachmentContent([file('a'), file('b')], [], extract, logger);
+
+    expect(result.notices).toEqual([]);
+    expect(result.delivery).toEqual({
+      requested: 2,
+      delivered: 2,
+      fullyDelivered: 2,
+      dropped: 0,
+      droppedIds: [],
+    });
+  });
+
+  it('reports every id as dropped when extraction throws, rather than reporting nothing', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn().mockRejectedValue(new Error('storage down'));
+
+    const result = await materializeAttachmentContent([file('a')], ['ghost'], extract, logger);
+
+    expect(result.delivery).toEqual({
+      requested: 2,
+      delivered: 0,
+      fullyDelivered: 0,
+      dropped: 2,
+      droppedIds: ['a', 'ghost'],
+    });
+  });
+
+  it('reports unresolved-only ids as dropped when the extractor is never reached', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn();
+
+    const result = await materializeAttachmentContent([], ['ghost-1', 'ghost-2'], extract, logger);
+
+    expect(extract).not.toHaveBeenCalled();
+    expect(result.delivery).toMatchObject({ requested: 2, delivered: 0, dropped: 2 });
+  });
+});
+
+describe('attachmentNoticeStrings', () => {
+  it('is the message text alone, matching what the chat door persists', () => {
+    const notices: FabFileNotice[] = [
+      { fabFileId: 'a', fileName: 'a.md', band: 'unresolved', message: '"a.md" was not sent.', delivered: false },
+    ];
+    expect(attachmentNoticeStrings(notices)).toEqual(['"a.md" was not sent.']);
+  });
+
+  it('caps the list and says how many it left out, so a large workbench cannot flood the banner', () => {
+    const notices: FabFileNotice[] = Array.from({ length: 25 }, (_, i) => ({
+      fabFileId: `f${i}`,
+      fileName: `f${i}.md`,
+      band: 'unresolved' as const,
+      message: `"f${i}.md" was not sent.`,
+      delivered: false,
+    }));
+
+    const lines = attachmentNoticeStrings(notices);
+
+    expect(lines).toHaveLength(21);
+    expect(lines[20]).toBe('...and 5 more attachment(s) not listed here.');
+  });
+
+  it('is empty when nothing went wrong', () => {
+    expect(attachmentNoticeStrings([])).toEqual([]);
   });
 });
 

@@ -172,7 +172,13 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
+import type {
+  ToolTelemetry,
+  ToolErrorCategory,
+  SystemPromptDetail,
+  DataLakeGroundingMode,
+  IAttachmentDelivery,
+} from '@bike4mind/common';
 import {
   buildAlwaysOnFloorDetails,
   buildInjectedBlockDetails,
@@ -2451,12 +2457,17 @@ export class ChatCompletionProcess {
         actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
         attachmentNotices,
+        attachmentDelivery,
       } = dataSources;
 
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
       // even on a turn that later errors out, and this is the only durable record the user sees.
-      if (attachmentNotices.length > 0) {
-        quest.attachmentNotices = attachmentNotices;
+      // The delivery report goes with it and is written even when nothing failed - a turn whose
+      // attachments all arrived produces no notices, and that silence is exactly what #1576 is
+      // about: it reads identically to a turn that attached nothing.
+      if (attachmentNotices.length > 0 || attachmentDelivery) {
+        if (attachmentNotices.length > 0) quest.attachmentNotices = attachmentNotices;
+        if (attachmentDelivery) quest.attachmentDelivery = attachmentDelivery;
         await saveQuest(quest);
       }
 
@@ -5955,6 +5966,10 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  in a system message inside `fabMessages`. Stored on the quest so the transcript says the same
      *  thing - an attachment must never fail silently (#2228). */
     attachmentNotices: string[];
+    /** Affirmative delivery report - the counts behind the notices, and the only record of a turn
+     *  whose attachments ALL arrived (which produces no notices at all). `undefined` when the turn
+     *  carried no attachments, so a caller can tell "none sent" from "none arrived". */
+    attachmentDelivery?: IAttachmentDelivery;
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -6103,6 +6118,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
 
     const fileNotices: FabFileNotice[] = fabResult?.fileNotices ?? [];
+    let attachmentDelivery: IAttachmentDelivery | undefined;
     if (dedupedFileIds.length > 0) {
       // The one line a production attachment report is read from: what was asked for, what actually
       // reached the model, and why the rest did not. Requested-minus-delivered is computed here (not
@@ -6113,14 +6129,17 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         acc[notice.band] = (acc[notice.band] ?? 0) + 1;
         return acc;
       }, {});
-      const summary = {
+      attachmentDelivery = {
+        // Counts everything handed to fabFilesToMessages - the turn's own attachments AND the
+        // session/message/system files inlined alongside them. So `delivered > 0` is not by itself
+        // proof that a CALLER's attachment arrived; `droppedIds` is what answers that exactly.
         requested: dedupedFileIds.length,
         delivered: delivered.size,
         fullyDelivered: fullyDeliveredKnowledgeIds.size,
         dropped: droppedIds.length,
         droppedIds,
-        bands: bandTally,
       };
+      const summary = { ...attachmentDelivery, bands: bandTally };
       if (droppedIds.length > 0 || fileNotices.length > 0) {
         logger.warn('📎 Attachment delivery summary', summary);
       } else {
@@ -6141,6 +6160,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       actuallyInlinedKnowledgeIds,
       fullyInlinedAttachmentIds,
       attachmentNotices: toAttachmentNoticeStrings(fileNotices),
+      attachmentDelivery,
     };
   }
 }

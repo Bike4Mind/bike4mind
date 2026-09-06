@@ -1,4 +1,4 @@
-import type { MessageContentObject, IMessage, IFabFileDocument } from '@bike4mind/common';
+import type { MessageContentObject, IMessage, IFabFileDocument, IAttachmentDelivery } from '@bike4mind/common';
 // Type-only, so it is erased at compile time and this module carries no runtime dependency on
 // `@bike4mind/utils` (whose native deps the client test resolver cannot load).
 import type { FabFileNotice } from '@bike4mind/utils';
@@ -56,6 +56,10 @@ export interface MaterializedAttachments {
   fullyInlinedFileIds: string[];
   /** Per-file delivery problems, already phrased for a reader. */
   notices: FabFileNotice[];
+  /** Requested-vs-delivered counts for the run, persisted onto the linked quest so the agent path
+   *  records attachment outcomes the way the chat path does. Present on every return, including
+   *  the fallbacks - a run whose extraction failed wholesale still owes the caller that report. */
+  delivery: IAttachmentDelivery;
 }
 
 const EMPTY: MaterializedAttachments = {
@@ -64,7 +68,19 @@ const EMPTY: MaterializedAttachments = {
   inlinedFileIds: [],
   fullyInlinedFileIds: [],
   notices: [],
+  delivery: { requested: 0, delivered: 0, fullyDelivered: 0, dropped: 0, droppedIds: [] },
 };
+
+/** Nothing arrived, so every requested id is a drop. Shared by both fallback returns. */
+function allDropped(requestedIds: string[]): IAttachmentDelivery {
+  return {
+    requested: requestedIds.length,
+    delivered: 0,
+    fullyDelivered: 0,
+    dropped: requestedIds.length,
+    droppedIds: requestedIds,
+  };
+}
 
 interface MinimalLogger {
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -103,8 +119,12 @@ export async function materializeAttachmentContent(
     delivered: false,
   }));
 
+  // Every id the turn was given, in one list: the drop set of both fallbacks below, and the
+  // denominator of the delivery report.
+  const requestedIds = [...files.map(file => file.id), ...missingIds];
+
   if (files.length === 0) {
-    return { ...EMPTY, notices: unresolvedNotices };
+    return { ...EMPTY, notices: unresolvedNotices, delivery: allDropped(requestedIds) };
   }
 
   let result: Awaited<ReturnType<ProcessFabFiles>>;
@@ -115,7 +135,7 @@ export async function materializeAttachmentContent(
       fileCount: files.length,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { ...EMPTY, notices: unresolvedNotices };
+    return { ...EMPTY, notices: unresolvedNotices, delivery: allDropped(requestedIds) };
   }
 
   const textParts: string[] = [];
@@ -176,10 +196,17 @@ export async function materializeAttachmentContent(
     });
   }
 
+  const fullyInlinedFileIds = result.fullyDeliveredFileIds.filter(id => inlined.has(id));
+  const delivery: IAttachmentDelivery = {
+    requested: requestedIds.length,
+    delivered: inlined.size,
+    fullyDelivered: fullyInlinedFileIds.length,
+    dropped: requestedIds.length - inlined.size,
+    droppedIds: requestedIds.filter(id => !inlined.has(id)),
+  };
+
   logger.info('[AttachmentContent] Materialized attachment content for the agent run', {
-    requested: files.length + missingIds.length,
-    delivered: result.deliveredFileIds.length,
-    fullyDelivered: result.fullyDeliveredFileIds.length,
+    ...delivery,
     textParts: textParts.length,
     inlinedImageBytes: imageBytes,
     notices: notices.length,
@@ -190,8 +217,9 @@ export async function materializeAttachmentContent(
     imageBlocks,
     inlinedFileIds: Array.from(inlined),
     // Intersected with `inlined` so the two sets cannot disagree; see the limitation noted there.
-    fullyInlinedFileIds: result.fullyDeliveredFileIds.filter(id => inlined.has(id)),
+    fullyInlinedFileIds,
     notices,
+    delivery,
   };
 }
 
@@ -219,6 +247,20 @@ export function composeFirstIterationMessage(
  * under a line per file. Change one, change the other.
  */
 const MAX_NOTICE_LINES = 20;
+
+/**
+ * The transcript lines persisted onto the linked quest, mirroring `toAttachmentNoticeStrings` in
+ * `b4m-core/services/src/llm/attachmentNotices.ts` - the chat path's version of the same list.
+ * Duplicated rather than imported for the reason MAX_NOTICE_LINES is: this module's imports stay
+ * type-only. Same cap, same one-sentence-per-file shape, so a reader cannot tell which door a
+ * notice came from. Change one, change the other.
+ */
+export function attachmentNoticeStrings(notices: FabFileNotice[]): string[] {
+  const overflow = Math.max(0, notices.length - MAX_NOTICE_LINES);
+  const lines = notices.slice(0, MAX_NOTICE_LINES).map(notice => notice.message);
+  if (overflow > 0) lines.push(`...and ${overflow} more attachment(s) not listed here.`);
+  return lines;
+}
 
 /**
  * The block appended to the query for attachments that did NOT arrive intact. Mirrors the chat

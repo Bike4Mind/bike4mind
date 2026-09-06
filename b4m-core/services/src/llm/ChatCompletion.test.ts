@@ -776,10 +776,25 @@ describe('ChatCompletionProcess', () => {
     });
 
     it('a lake-resolution failure degrades to ownership-only, never widens', async () => {
-      (service as any).accessibleDataLakeAccessMemo = { dataLakeTags: [], dataLakeTagPrefixes: [], lakes: [] };
+      // The memo must stay undefined: pre-setting it to the fallback value skips the try/catch in
+      // getAccessibleDataLakeAccess entirely and asserts nothing about degradation. Reject inside
+      // the resolver instead - findMembershipOrgIds propagates by design (see the placement note in
+      // getDynamicDataLakeAccess), which is the outage this door's catch exists to absorb.
+      const findMembershipOrgIds = vi.fn().mockRejectedValue(new Error('org read failed'));
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn() },
+        organizations: { findMembershipOrgIds },
+      };
 
       const access = await (service as any).attachmentLakeAccess();
 
+      // Proves the resolver was really entered and really rejected - without this the assertion
+      // below would also pass on a resolver that quietly returned no lakes.
+      expect(findMembershipOrgIds).toHaveBeenCalled();
+      // Remove the catch and this call rejects instead of returning the ownership-only shape.
       expect(access).toEqual({ lakeMemberships: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
     });
 
@@ -2651,11 +2666,36 @@ describe('ChatCompletionProcess', () => {
         expect(saved[0]).toEqual(['"context.md" could not be read and was not sent.']);
       });
 
-      it('leaves the quest untouched when every attachment delivered', async () => {
+      it('writes no notice when every attachment delivered - there is nothing to warn about', async () => {
         await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabPromptMessages: [] });
 
         const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
         expect(saved).toEqual([]);
+      });
+
+      // #1576 ask 1. The turn above writes no notice, and before the delivery report that silence
+      // was the ONLY thing on the quest - indistinguishable from a turn that attached nothing at
+      // all, which is how a 600-answer eval ran in the wrong configuration unnoticed. The report is
+      // the affirmative half, so it must be written on exactly the path that produces no notices.
+      it('still records the delivery report on a turn where nothing failed', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabPromptMessages: [] });
+
+        const reports = mockDb.quests.update.mock.calls
+          .map((c: any[]) => c[0]?.attachmentDelivery)
+          .filter(Boolean);
+        expect(reports.length).toBeGreaterThan(0);
+        expect(reports[0]).toMatchObject({ requested: expect.any(Number), delivered: expect.any(Number) });
+      });
+
+      it('names the undelivered ids in the report, not just a count', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabFileNotices: [notice] });
+
+        const reports = mockDb.quests.update.mock.calls
+          .map((c: any[]) => c[0]?.attachmentDelivery)
+          .filter(Boolean);
+        expect(reports.length).toBeGreaterThan(0);
+        expect(reports[0].droppedIds).toContain('f1');
+        expect(reports[0].dropped).toBeGreaterThan(0);
       });
 
       // The no-regression half: surfacing failures must not cost a healthy attachment its delivery.

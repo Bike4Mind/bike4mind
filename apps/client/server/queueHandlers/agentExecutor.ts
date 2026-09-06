@@ -91,9 +91,9 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
-import { creditService, apiKeyService, estimateGeneratedMediaUsd, dataLakeService } from '@bike4mind/services';
+import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
-import { resolveRetrievalLakeScopeForUser } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -134,6 +134,7 @@ import {
   materializeAttachmentContent,
   composeFirstIterationMessage,
   attachmentNoticeBlock,
+  attachmentNoticeStrings,
 } from './agentExecutor.attachmentContent';
 import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
@@ -2191,46 +2192,10 @@ async function processExecution(
     // rebuilding the ability set every iteration.
     const fabFileReadScope = accessibleBy(defineAbilitiesFor(user as IUserDocument), Permission.read).ofType(FabFile);
 
-    // The attachment door's lake arms (parity with the chat door's `attachmentLakeAccess`), resolved
-    // through `resolveRetrievalLakeScopeForUser` since this executor has no `req`. Opted OUT of the
-    // privileged static-registry bypass (`staticRegistryBypass: false`): that widening escalates
-    // registry reach from passages (semantic-search) to whole inlined documents, and the chat
-    // attachment door structurally cannot follow it, so inheriting it here would ship the two
-    // attachment doors disagreeing for exactly the caller class most likely to notice.
-    //
-    // A FUNCTION-LOCAL lazy memo, not module-scoped: a handoff is a FRESH invocation (published to
-    // Resource.agentContinuationQueue, not an in-process resume), so this memo neither spans nor
-    // needs to span wakes - laziness, not the memo, is what avoids resolving on a wake that will not
-    // use it. Hoisted to module scope it would survive Lambda warm-container reuse keyed on
-    // nothing, leaking one user's lake buckets into the next user's run.
-    //
-    // This resolver has no fail-safe of its own (unlike the chat door's `getAccessibleDataLakeAccess`),
-    // so the catch here is load-bearing: an unhandled throw would fail the whole run rather than
-    // degrading to today's ownership-only behaviour.
-    let lakeAccessMemo: Promise<AttachmentLakeAccess> | undefined;
-    const attachmentLakeAccess = () =>
-      (lakeAccessMemo ??= (async (): Promise<AttachmentLakeAccess> => {
-        try {
-          const scope = await resolveRetrievalLakeScopeForUser(user as IUserDocument, {
-            logger,
-            staticRegistryBypass: false,
-          });
-          const lakeMemberships = dataLakeService.lakeMembershipsFrom(scope.lakes);
-          dataLakeService.warnIfManyLakeMemberships(lakeMemberships, logger, 'attachment-resolution:agent');
-          return {
-            lakeMemberships,
-            dataLakeTags: scope.dataLakeTags,
-            dataLakeTagPrefixes: scope.dataLakeTagPrefixes,
-          };
-        } catch (err) {
-          // Degrade to today's ownership-only behaviour. Widening on error is never correct here,
-          // and neither is failing the run.
-          logger.warn('[AttachmentLakeAccess] Resolution failed; falling back to ownership-only', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-          return {};
-        }
-      })());
+    // The attachment door's lake arms, parity with the chat door's `attachmentLakeAccess`. Built
+    // per invocation and kept a thunk on purpose - see `createAttachmentLakeAccess` for why the
+    // memo must not be hoisted and why its catch is load-bearing.
+    const attachmentLakeAccess = createAttachmentLakeAccess(user as IUserDocument, logger);
 
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
@@ -2379,6 +2344,21 @@ async function processExecution(
         // the empty array.
         inlinedAttachmentIds.push(...materialized.inlinedFileIds);
         fullyInlinedAttachmentIds.push(...materialized.fullyInlinedFileIds);
+
+        // Parity with the chat door, which persists the same two values on its quest before the
+        // completion runs. Best-effort on purpose: content materialization is an enhancement over
+        // the metadata preamble, so failing to RECORD its outcome must not take the run down.
+        await questRepository
+          .recordAttachmentOutcomeByAgentExecutionId(executionId, {
+            notices: attachmentNoticeStrings(materialized.notices),
+            delivery: materialized.delivery,
+          })
+          .catch(err =>
+            logger.warn('[AttachmentContent] Could not record the attachment outcome on the quest', {
+              executionId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
       }
 
       let firstIterationQuery = await maybeBuildFirstIterationQuery(
