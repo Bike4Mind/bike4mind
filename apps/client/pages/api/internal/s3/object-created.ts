@@ -4,7 +4,10 @@ import { FabFile, adminSettingsRepository } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
 import { sendToQueue } from '@server/utils/sqs';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
+import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
+import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
 import { Resource } from 'sst';
+import type { Context, S3Event } from 'aws-lambda';
 import crypto from 'crypto';
 
 /**
@@ -23,8 +26,26 @@ import crypto from 'crypto';
  */
 
 interface MinioS3Record {
-  s3?: { object?: { key?: string } };
+  s3?: { bucket?: { name?: string }; object?: { key?: string } };
 }
+
+/**
+ * Hosted wires a separate ObjectCreated notification per bucket (infra/buckets.ts). Self-host has
+ * exactly one webhook for all of them, so the bucket has to be read off the record and routed
+ * here, or every event lands in the fab-file logic below. That is what happened: history-import
+ * and notebook-import objects were uploaded and then silently never processed, because this
+ * route was the only consumer and it only ever spoke fab-file.
+ *
+ * The handlers are the SAME ones hosted invokes, called with the record re-wrapped as the S3
+ * event shape they already parse - no second copy of the logic, and their existing idempotency
+ * (keyed on the S3 key) covers a redelivered notification.
+ */
+const selfHostLambdaContext = (functionName: string) =>
+  ({
+    awsRequestId: `selfhost-webhook-${functionName}`,
+    functionName,
+    functionVersion: '$LATEST',
+  }) as unknown as Context;
 
 const secretOk = (authorizationHeader: string | string[] | undefined): boolean => {
   const expected = process.env.INTERNAL_S3_WEBHOOK_SECRET;
@@ -61,9 +82,45 @@ const handler = baseApi({ auth: false }).post(
       key.startsWith('cc-bridge-downloads/');
 
     const records = ((req.body as { Records?: MinioS3Record[] } | undefined)?.Records ?? []) as MinioS3Record[];
-    const enableAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
+
+    // Route each record to the handler its bucket owns before any fab-file work happens. A record
+    // with no bucket name keeps the historical behaviour (fab-file), so this cannot regress the
+    // one path that already worked.
+    const fabFileRecords: MinioS3Record[] = [];
+    const forHandler: Array<{ name: string; run: (e: S3Event, c: Context) => Promise<unknown>; record: MinioS3Record }> =
+      [];
 
     for (const record of records) {
+      const bucket = record.s3?.bucket?.name;
+      if (!bucket || bucket === Resource.fabFileBucket.name) {
+        fabFileRecords.push(record);
+        continue;
+      }
+      if (bucket === Resource.historyImportBucket.name) {
+        // One bucket, two handlers, split by prefix - exactly how hosted filters it.
+        const key = decodeS3Key(record.s3?.object?.key ?? '');
+        forHandler.push(
+          key.startsWith('notebooks/')
+            ? { name: 'notebookImportComplete', run: notebookImportComplete, record }
+            : { name: 'historyUploadComplete', run: historyUploadComplete, record }
+        );
+        continue;
+      }
+      req.logger.info(`No self-host handler for bucket ${bucket}; ignoring object ${record.s3?.object?.key}`);
+    }
+
+    for (const { name, run, record } of forHandler) {
+      // Deliberately not awaited: an import runs for minutes and hosted invokes these as an async
+      // Lambda, so blocking MinIO's webhook here would time it out and provoke a redelivery. The
+      // job row is written early inside the handler, so progress is still visible.
+      void run({ Records: [record] } as unknown as S3Event, selfHostLambdaContext(name)).catch(err =>
+        req.logger.error(`[${name}] self-host dispatch failed: ${err instanceof Error ? err.message : String(err)}`)
+      );
+    }
+
+    const enableAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
+
+    for (const record of fabFileRecords) {
       const rawKey = record.s3?.object?.key;
       if (!rawKey) continue;
       // MinIO URL-encodes the key like S3 does.
