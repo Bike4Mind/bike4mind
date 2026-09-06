@@ -84,6 +84,118 @@ function settingsUpdateExemption(stage: string): UriPathMatch | undefined {
   return uriPathMatches(commonRuleSetScopeDown(stage)).find(m => m.searchString === '/api/settings/update');
 }
 
+/**
+ * The six machine-posted scanner-ingest endpoints, each a static route file under
+ * apps/client/pages/api/admin/security-dashboard/ with nothing routed below it.
+ *
+ * They post raw scanner output, which the signature groups read as an attack payload. Probed
+ * live against staging: a benign report body reaches the app (403 application/json from the
+ * ingest token check), a real ZAP "SQL Injection" alert body comes back as a CloudFront 403 from
+ * SQLiRuleSet, and a `${jndi:` body comes back the same way from KnownBadInputsRuleSet. Managed
+ * rule groups enforce as soon as the firewall is attached, while every production rate limit is
+ * only counting, so a group missing from the exemption list breaks the weekly ingest at the
+ * moment the firewall goes on rather than a week later.
+ */
+const INGEST_PATHS = [
+  '/api/admin/security-dashboard/attack-simulation-ingest',
+  '/api/admin/security-dashboard/cloud-prowler-ingest',
+  '/api/admin/security-dashboard/code-semgrep-ingest',
+  '/api/admin/security-dashboard/packages-ingest',
+  '/api/admin/security-dashboard/secrets-ingest',
+  '/api/admin/security-dashboard/web-owasp-ingest',
+];
+
+// EXACTLY, not STARTS_WITH: an exemption is a hole in a rule group, so a prefix match hands that
+// hole to every future sibling route, and these paths have no siblings. LOWERCASE so casing
+// cannot change which requests fall through it.
+const ingestExemptions = (): UriPathMatch[] =>
+  INGEST_PATHS.map(searchString => ({
+    searchString,
+    positionalConstraint: 'EXACTLY',
+    textTransformations: ['LOWERCASE'],
+  }));
+
+/**
+ * Which managed rule groups may narrow themselves, and the complete exemption list each one
+ * carries. Pinned as whole sets, because an assertion that only looks for what should be present
+ * cannot see what should not: the previous version of this check used toContain on the search
+ * string alone, so both a widened match and an extra exempted path passed it.
+ *
+ * Any group absent from this table must carry no scope-down at all.
+ */
+const EXPECTED_SCOPE_DOWNS: Record<string, UriPathMatch[]> = {
+  'AWS-AWSManagedRulesCommonRuleSet': [
+    { searchString: '/api/modals/', positionalConstraint: 'STARTS_WITH', textTransformations: ['NONE'] },
+    { searchString: '/api/settings/update', positionalConstraint: 'EXACTLY', textTransformations: ['LOWERCASE'] },
+    ...ingestExemptions(),
+  ],
+  'AWS-AWSManagedRulesSQLiRuleSet': [
+    { searchString: '/api/ai/llm', positionalConstraint: 'STARTS_WITH', textTransformations: ['NONE'] },
+    { searchString: '/api/modals/', positionalConstraint: 'STARTS_WITH', textTransformations: ['NONE'] },
+    ...ingestExemptions(),
+  ],
+  'AWS-AWSManagedRulesKnownBadInputsRuleSet': ingestExemptions(),
+};
+
+/** Managed rule group rules for a stage, by rule name. */
+function managedRules(stage: string): Map<string, WafRule> {
+  const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+  // any: ManagedRuleGroupStatement is deeply nested and not usefully typed here
+  return new Map(rules.filter(r => (r.Statement as any).ManagedRuleGroupStatement).map(r => [r.Name, r]));
+}
+
+/** Stable order for comparing two exemption lists as sets. */
+const sortMatches = (matches: UriPathMatch[]): UriPathMatch[] =>
+  [...matches].sort((a, b) =>
+    `${a.searchString} ${a.positionalConstraint}`.localeCompare(`${b.searchString} ${b.positionalConstraint}`)
+  );
+
+/**
+ * The exemption list of a scope-down, accepting only the literal shape
+ * NotStatement -> OrStatement -> ByteMatchStatement on UriPath.
+ *
+ * Structural on purpose, rather than a recursive search for paths. Every shape it rejects is a
+ * live bypass that a path walker reads as a pass:
+ *   - no NotStatement: the scope-down inverts, and the group applies to the exempted paths ONLY
+ *   - AndStatement in place of the Or: NOT(A AND B) is true for every request once two paths are
+ *     listed, so the group silently stops applying to anything at all
+ *   - a leaf on a non-UriPath FieldToMatch: invisible to a path walker, so the list reads as
+ *     empty and an empty-equals-empty assertion passes for entirely the wrong reason
+ *   - any other statement type: a nested managed group, label or IP match is not a path exemption
+ */
+// any: deeply nested AWS WAF statement shapes
+function scopeDownExemptions(where: string, scopeDown: any): UriPathMatch[] {
+  expect(
+    Object.keys(scopeDown ?? {}),
+    `${where} must negate its exemptions; an inclusion applies the group to those paths ONLY`
+  ).toEqual(['NotStatement']);
+
+  const negated = scopeDown.NotStatement.Statement;
+  expect(
+    Object.keys(negated ?? {}),
+    `${where} must negate an OrStatement; NOT(A AND B) is true for every request and disables the group`
+  ).toEqual(['OrStatement']);
+  expect(Object.keys(negated.OrStatement), `${where} OrStatement shape`).toEqual(['Statements']);
+
+  // any: see above
+  const statements: any[] = negated.OrStatement.Statements;
+  statements.forEach((statement, i) => {
+    expect(Object.keys(statement), `${where} entry ${i} must be a plain ByteMatchStatement`).toEqual([
+      'ByteMatchStatement',
+    ]);
+    expect(
+      Object.keys(statement.ByteMatchStatement.FieldToMatch ?? {}),
+      `${where} entry ${i} must match on UriPath, or these path assertions cannot see it`
+    ).toEqual(['UriPath']);
+  });
+
+  return statements.map(s => ({
+    searchString: s.ByteMatchStatement.SearchString,
+    positionalConstraint: s.ByteMatchStatement.PositionalConstraint,
+    textTransformations: (s.ByteMatchStatement.TextTransformations ?? []).map((t: { Type: string }) => t.Type),
+  }));
+}
+
 describe('wafPolicy', () => {
   describe('getDevWafMeta', () => {
     it('returns WAF metadata with default name suffix for dev stage', () => {
@@ -284,6 +396,67 @@ describe('wafPolicy', () => {
         expect(shadow.Statement).toEqual(origin!.Statement);
       }
     });
+  });
+
+  // Replaces the CommonRuleSet-only ingest check that used to live under `terminating Allow
+  // rules`. That one asserted the six paths were present on one of the five groups, with
+  // toContain on the search string, which is how the SQLi and KnownBadInputs gaps survived
+  // review: CommonRuleSet is the group whose exemption was written, and the other two signature
+  // groups were never asked about.
+  //
+  // Both stages, every claim. The dev policy is what staging and every preview stage deploy, and
+  // it is the file the production rollout argument's traffic measurement came from, so a
+  // production-only guard leaves the bypass re-addable in the file that actually runs.
+  describe('managed rule group scope-downs', () => {
+    for (const stage of ['dev', 'production']) {
+      it(`exempts exactly the intended paths from exactly the intended ${stage} rule groups`, () => {
+        const managed = managedRules(stage);
+        expect(managed.size, `${stage} must have managed rule groups`).toBeGreaterThan(0);
+
+        // Which groups are narrowed is itself the invariant. AdminProtection and
+        // AmazonIpReputationList are unscoped, and a scope-down appearing on either would be an
+        // unreviewed hole that a per-group assertion would never look for.
+        const scopedDown = [...managed.values()]
+          // any: see the helpers above
+          .filter(rule => (rule.Statement as any).ManagedRuleGroupStatement.ScopeDownStatement)
+          .map(rule => rule.Name)
+          .sort();
+        expect(scopedDown, `${stage}: only these groups may narrow themselves`).toEqual(
+          Object.keys(EXPECTED_SCOPE_DOWNS).sort()
+        );
+
+        for (const [ruleName, expected] of Object.entries(EXPECTED_SCOPE_DOWNS)) {
+          const rule = managed.get(ruleName);
+          expect(rule, `${stage}: ${ruleName} must exist`).toBeDefined();
+
+          // any: see the helpers above
+          const scopeDown = (rule!.Statement as any).ManagedRuleGroupStatement.ScopeDownStatement;
+          const found = scopeDownExemptions(`${stage} ${ruleName} scope-down`, scopeDown);
+          expect(sortMatches(found), `${stage}: ${ruleName} exemption list`).toEqual(sortMatches(expected));
+        }
+      });
+
+      // Stated separately from the table above so the failure names the actual defect. The three
+      // signature groups inspect the same request body for different families, so an ingest path
+      // exempted from one and not the others is still blocked; the exemption is only meaningful
+      // if every group that has one carries the identical six.
+      it(`exempts the scanner ingest paths identically in every scoped ${stage} group`, () => {
+        const managed = managedRules(stage);
+
+        for (const ruleName of Object.keys(EXPECTED_SCOPE_DOWNS)) {
+          // any: see the helpers above
+          const scopeDown = (managed.get(ruleName)!.Statement as any).ManagedRuleGroupStatement.ScopeDownStatement;
+          const ingest = scopeDownExemptions(`${stage} ${ruleName} scope-down`, scopeDown).filter(m =>
+            INGEST_PATHS.includes(m.searchString)
+          );
+
+          expect(
+            sortMatches(ingest),
+            `${stage}: ${ruleName} must exempt all six scanner-ingest paths, spelled identically`
+          ).toEqual(sortMatches(ingestExemptions()));
+        }
+      });
+    }
   });
 
   // Every path match in a rate limit's scope-down, at any nesting depth. A limit may assert one
@@ -517,23 +690,6 @@ describe('wafPolicy', () => {
           .flatMap(r => uriPathMatches(r.Statement).map(m => m.searchString));
         const adminExemptions = exemptedPaths.filter(path => path.includes('/api/admin'));
         expect(adminExemptions, `${stage}: no Allow rule may reference the admin prefix`).toEqual([]);
-      }
-    });
-
-    it('exempts the scanner ingest paths from CommonRuleSet on both stages', () => {
-      for (const stage of ['dev', 'production']) {
-        const excluded = uriPathMatches(commonRuleSetScopeDown(stage)).map(m => m.searchString);
-
-        for (const path of [
-          '/api/admin/security-dashboard/web-owasp-ingest',
-          '/api/admin/security-dashboard/code-semgrep-ingest',
-          '/api/admin/security-dashboard/packages-ingest',
-          '/api/admin/security-dashboard/secrets-ingest',
-          '/api/admin/security-dashboard/cloud-prowler-ingest',
-          '/api/admin/security-dashboard/attack-simulation-ingest',
-        ]) {
-          expect(excluded, `${stage}: ${path} must stay exempt from CommonRuleSet`).toContain(path);
-        }
       }
     });
 
