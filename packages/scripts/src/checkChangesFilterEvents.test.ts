@@ -19,8 +19,9 @@ import path from 'node:path';
  * `merge_group` path specifically cannot be reached from a `pull_request` run, so the PR that adds
  * a trigger to ci.yml is green regardless of what the action does with it. Hence a static
  * cross-check: every trigger ci.yml declares must have its own arm, and every env var an arm reads
- * must actually be plumbed into the step's `env:` block. That second half is not redundant - an
- * arm on its own is a no-op, reading unset variables and failing open exactly as before.
+ * must be plumbed into the step's `env:` block and bound to that event's own payload. That second
+ * half is not redundant - an arm on its own is a no-op, reading unset variables and failing open
+ * exactly as before.
  *
  * Deliberately letting an event fail open is still allowed: write the arm explicitly
  * (`BASE=""; HEAD=""`) so the decision is visible in the action rather than inherited by silence.
@@ -80,20 +81,29 @@ function readCaseArms(contents: string): Array<{ labels: string[]; body: string 
   return arms;
 }
 
-/** Env keys declared on the composite step (6-space `env:`, keys 8 spaces in). */
-function readStepEnvKeys(contents: string): string[] {
+/**
+ * Env bindings declared on the composite step, as key -> value expression (6-space `env:`, keys 8
+ * spaces in). The value is half the contract: a key bound to another event's payload is declared
+ * yet still expands empty on the event whose arm reads it.
+ */
+function readStepEnvBindings(contents: string): Array<{ key: string; value: string }> {
   const lines = contents.split('\n');
   const start = lines.findIndex(line => /^ {6}env:\s*$/.test(line));
   if (start === -1) return [];
 
-  const keys: string[] = [];
+  const bindings: Array<{ key: string; value: string }> = [];
   for (const line of lines.slice(start + 1)) {
     if (/^\s*#/.test(line)) continue;
-    const match = /^ {8}([A-Z_][A-Z0-9_]*):/.exec(line);
+    const match = /^ {8}([A-Z_][A-Z0-9_]*):\s*(.*)$/.exec(line);
     if (!match) break;
-    keys.push(match[1]);
+    bindings.push({ key: match[1], value: match[2].trim() });
   }
-  return keys;
+  return bindings;
+}
+
+/** Env keys declared on the composite step (6-space `env:`, keys 8 spaces in). */
+function readStepEnvKeys(contents: string): string[] {
+  return readStepEnvBindings(contents).map(binding => binding.key);
 }
 
 /** Shell variable names an arm body reads, as `$NAME` or `${NAME}`. */
@@ -135,6 +145,12 @@ describe('changes-filter event dispatch vs ci.yml triggers', () => {
 
   it('keeps the fail-open default arm as the safety net', () => {
     expect(handled.has('*'), 'the `*)` arm is what catches an event nobody anticipated').toBe(true);
+
+    const fallback = arms.find(arm => arm.labels.includes('*'));
+    const blanksRange =
+      'the `*)` safety net must blank the range, not just exist; any other range diffs the wrong commits';
+    expect(fallback?.body, blanksRange).toMatch(/BASE=""/);
+    expect(fallback?.body, blanksRange).toMatch(/HEAD=""/);
   });
 
   it('plumbs every env var the arms read through the step env block', () => {
@@ -146,6 +162,19 @@ describe('changes-filter event dispatch vs ci.yml triggers', () => {
     expect(
       [...new Set(missing)],
       "vars read by a case arm but absent from the step's `env:` block; they expand empty and fail open"
+    ).toEqual([]);
+  });
+
+  it("binds each event's SHA vars to that event's own payload", () => {
+    const misbound = readStepEnvBindings(action).filter(({ key, value }) => {
+      if (key.startsWith('MERGE_GROUP_')) return !value.includes('github.event.merge_group.');
+      if (key.startsWith('PR_')) return !value.includes('github.event.pull_request.');
+      if (key.startsWith('PUSH_')) return !/github\.event\.(before|after)/.test(value);
+      return false;
+    });
+    expect(
+      misbound.map(({ key, value }) => `${key}: ${value}`),
+      "env keys wired to another event's payload; declared, but empty on the event whose arm reads them"
     ).toEqual([]);
   });
 });
@@ -218,6 +247,26 @@ describe('readCaseArms', () => {
 
   it('finds nothing when the dispatch is absent', () => {
     expect(readCaseArms('runs:\n  using: composite\n')).toEqual([]);
+  });
+});
+
+describe('readStepEnvBindings', () => {
+  it('pairs each key with its value expression and stops at the next step key', () => {
+    const bindings = readStepEnvBindings(
+      [
+        '    - id: filter',
+        '      env:',
+        '        EVENT_NAME: ${{ github.event_name }}',
+        '        # a comment between keys does not end the block',
+        '        MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}',
+        '      run: |',
+        '        set -euo pipefail',
+      ].join('\n')
+    );
+    expect(bindings).toEqual([
+      { key: 'EVENT_NAME', value: '${{ github.event_name }}' },
+      { key: 'MERGE_GROUP_HEAD_SHA', value: '${{ github.event.merge_group.head_sha || github.sha }}' },
+    ]);
   });
 });
 

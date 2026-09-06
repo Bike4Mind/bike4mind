@@ -129,11 +129,12 @@ runs:
             HEAD="$PR_HEAD_SHA"
             BASE="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null || true)" ;;
           merge_group)
-            # Merge-queue run: the group's own base..head. base_sha is by construction
-            # the base-branch commit the group was built on, so it is an ancestor of
-            # head_sha and two-dot already equals three-dot - no merge-base needed.
-            # The range covers the whole BATCH (any PRs queued ahead of this one too),
-            # which is the right unit: a queue run tests the speculative merge, not one PR.
+            # Merge-queue run: this entry's own base..head. base_sha is the commit this
+            # entry was built on (target-branch tip, or the previous entry's speculative
+            # head in a stacked group), so it is an ancestor of head_sha and two-dot
+            # equals three-dot. The range is this entry's own change: each queue entry is
+            # gated on exactly the diff its own PR CI evaluated, and a trailing entry that
+            # is wholly non-deployable skips the build legs - the batch is not re-tested.
             BASE="$MERGE_GROUP_BASE_SHA"; HEAD="$MERGE_GROUP_HEAD_SHA" ;;
           *)
             BASE=""; HEAD="" ;;
