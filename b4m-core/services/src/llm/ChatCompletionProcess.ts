@@ -1,4 +1,5 @@
 import {
+  type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
   IMessage,
@@ -954,10 +955,11 @@ export class ChatCompletionProcess {
   /**
    * How many of `ids` are reachable AS LAKE CONTENT by this caller.
    *
-   * Deliberately a second read rather than reusing `getAttachedKnowledgeFiles`, whose CASL scope has
-   * no lake arm: an organization lake widens reach through the lake creator's identity, so a member
-   * attaching a teammate's lake file is invisible to an ownership/share-based reader. Classifying a
-   * corpus as "personal" off that reader alone is how such a session lost its grounding.
+   * Deliberately a second read rather than reusing `getAttachedKnowledgeFiles`: that method now also
+   * carries a lake arm (see `attachmentLakeAccess`), but it answers a different question - ownership-
+   * OR-lake reachability - while this one asks whether the file is lake content AT ALL. A file that
+   * resolves through `getAttachedKnowledgeFiles` might have matched purely on ownership, so its
+   * success can't tell "personal" from "lake"; running LAKE-ONLY here is what can.
    *
    * Runs LAKE-ONLY: `restrictToDataLake` makes buildOwnershipConditions start from no ownership
    * arms at all (fabFileSearchQuery: `restrictToDataLake ? [] : [...baseAccess]`), so only the lake
@@ -994,8 +996,13 @@ export class ChatCompletionProcess {
           //   longer counts, since the arm now requires the lake creator's userId.
           //   WIDENS only where the attachment is readable by a route buildOwnershipConditions'
           //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
-          //   NOT in baseAccess. Every other caller fails resolvePersonalCorpusOnly's
-          //   full-resolution guard first, so this count is never reached at all.
+          //   NOT in baseAccess. `getAttachedKnowledgeFiles` now also carries a lake arm (see
+          //   `attachmentLakeAccess`), so a lake reader attaching lake files they do not own now
+          //   resolves fully there too - resolvePersonalCorpusOnly's full-resolution guard
+          //   (`resolvePersonalCorpusOnly.ts:62`) passes, and this count IS reached for exactly that
+          //   caller. It is what correctly classifies the corpus as non-personal: the residual
+          //   affected set is a lake reader attaching lake files in a session that is neither
+          //   lake-scoped nor in `retrieve` mode.
           lakeMemberships,
           restrictToDataLake: true,
           excludeContent: true,
@@ -1011,6 +1018,33 @@ export class ChatCompletionProcess {
   }
 
   /**
+   * The lake arms the attachment door adds to its CASL scope.
+   *
+   * Owner-wide and deliberately NOT narrowed to `session.retrievalTags`: unlike every retrieval
+   * surface (which narrows via `narrowLakeAccessToSession`), the caller here named the file ids
+   * explicitly, and narrowing would turn an explicit request into a silent refusal.
+   *
+   * `lakeMembershipsFrom` must stay the source for `lakeMemberships` - it allow-lists
+   * `kind === 'owned'`, and an unanchored registry prefix arm sitting beside other lakes' arms in
+   * one `$or` is the cross-tenant promotion the SCOPED/OPEN split forbids. Registry lakes are
+   * covered by `dataLakeTagPrefixes` instead. Never construct `lakeMemberships` any other way here.
+   *
+   * Fail direction is inherited from `getAccessibleDataLakeAccess`, which catches its own failures
+   * and returns an empty access set - so a lake-resolution outage degrades to today's
+   * ownership-only behaviour. Never widen on error.
+   */
+  private async attachmentLakeAccess(): Promise<AttachmentLakeAccess> {
+    const access = await this.getAccessibleDataLakeAccess();
+    const lakeMemberships = lakeMembershipsFrom(access.lakes);
+    warnIfManyLakeMemberships(lakeMemberships, this.logger, 'attachment-resolution');
+    return {
+      lakeMemberships,
+      dataLakeTags: access.dataLakeTags,
+      dataLakeTagPrefixes: access.dataLakeTagPrefixes,
+    };
+  }
+
+  /**
    * The session's attached-knowledge file docs (`session.knowledgeIds`), memoized per turn.
    * Returns `null` on a lookup failure rather than throwing - callers decide their own fail
    * direction (the tool-offer gate fails toward offering; `resolveCorpusInlinePlan` fails toward
@@ -1023,7 +1057,8 @@ export class ChatCompletionProcess {
     if (this.attachedKnowledgeFilesMemo === undefined) {
       try {
         const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope);
+        const lakeAccess = await this.attachmentLakeAccess();
+        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope, lakeAccess);
       } catch (err) {
         this.logger.warn(
           `[knowledge] attached-file lookup failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
@@ -5574,9 +5609,10 @@ export class ChatCompletionProcess {
     modelInfo: ModelInfo
   ) {
     const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+    const lakeAccess = await this.attachmentLakeAccess();
     const { files: convertedFabFiles, missingIds } = await fetchAndConvertFabFiles(
       fabFileIds,
-      { scope },
+      { scope, lakeAccess },
       { db: this.db, storage: this.storage, logger: this.logger }
     );
     const {

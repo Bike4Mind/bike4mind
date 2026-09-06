@@ -150,6 +150,16 @@ export async function resolveRetrievalLakeScopeForUser(
     entitlementKeys?: string[];
     /** Pre-memoized membership lookup; falls back to the repository when absent. */
     findMembershipOrgIds?: (uid: string) => Promise<string[]>;
+    /**
+     * Default `true` - today's behaviour for every existing caller, none of which passes this
+     * flag. Pass `false` to opt a caller OUT of the privileged static-registry widening below.
+     * The attachment door does this: that widening escalates registry reach from passages
+     * (semantic-search) to whole inlined documents, and the chat attachment door structurally
+     * cannot follow it (`b4m-core/services` cannot import `@server/*`), so inheriting it here
+     * would ship the two attachment doors disagreeing for exactly the caller class most likely
+     * to notice.
+     */
+    staticRegistryBypass?: boolean;
   } = {}
 ): Promise<RetrievalLakeScope> {
   // Resolved for every caller, including admins. The static-registry bypass below covers only STATIC
@@ -173,5 +183,5 @@ export async function resolveRetrievalLakeScopeForUser(
   });
 
   const isPrivileged = !!user.isAdmin || hasDeveloperUserTag(user.tags);
-  return isPrivileged ? withStaticRegistryBypass(scope) : scope;
+  return isPrivileged && (opts.staticRegistryBypass ?? true) ? withStaticRegistryBypass(scope) : scope;
 }

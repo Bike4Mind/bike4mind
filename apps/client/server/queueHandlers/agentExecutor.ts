@@ -71,7 +71,13 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
+import {
+  getTextModelCost,
+  CreditHolderType,
+  type AttachmentLakeAccess,
+  type IAgent,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -85,8 +91,9 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
-import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import { creditService, apiKeyService, estimateGeneratedMediaUsd, dataLakeService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
+import { resolveRetrievalLakeScopeForUser } from '@server/dataLakes/resolveRetrievalLakeScope';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -685,11 +692,12 @@ async function materializeAttachmentsForRun(args: {
   execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
   sessionKnowledgeIds: string[];
   scope: Record<string, unknown>;
+  lakeAccess: AttachmentLakeAccess;
   modelInfo?: ModelInfo;
   apiKeyTable: ApiKeyTable;
   logger: Logger;
 }) {
-  const { execution, sessionKnowledgeIds, scope, modelInfo, apiKeyTable, logger } = args;
+  const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
   const requestedIds = Array.from(
     new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
@@ -709,7 +717,7 @@ async function materializeAttachmentsForRun(args: {
     const storage = getFilesStorage();
     const { files, missingIds } = await fetchAndConvertFabFiles(
       requestedIds,
-      { scope },
+      { scope, lakeAccess },
       { db: { fabfiles: fabFileRepository, caches: cacheRepository }, storage, logger }
     );
 
@@ -2183,6 +2191,47 @@ async function processExecution(
     // rebuilding the ability set every iteration.
     const fabFileReadScope = accessibleBy(defineAbilitiesFor(user as IUserDocument), Permission.read).ofType(FabFile);
 
+    // The attachment door's lake arms (parity with the chat door's `attachmentLakeAccess`), resolved
+    // through `resolveRetrievalLakeScopeForUser` since this executor has no `req`. Opted OUT of the
+    // privileged static-registry bypass (`staticRegistryBypass: false`): that widening escalates
+    // registry reach from passages (semantic-search) to whole inlined documents, and the chat
+    // attachment door structurally cannot follow it, so inheriting it here would ship the two
+    // attachment doors disagreeing for exactly the caller class most likely to notice.
+    //
+    // A FUNCTION-LOCAL lazy memo, not module-scoped: a handoff is a FRESH invocation (published to
+    // Resource.agentContinuationQueue, not an in-process resume), so this memo neither spans nor
+    // needs to span wakes - laziness, not the memo, is what avoids resolving on a wake that will not
+    // use it. Hoisted to module scope it would survive Lambda warm-container reuse keyed on
+    // nothing, leaking one user's lake buckets into the next user's run.
+    //
+    // This resolver has no fail-safe of its own (unlike the chat door's `getAccessibleDataLakeAccess`),
+    // so the catch here is load-bearing: an unhandled throw would fail the whole run rather than
+    // degrading to today's ownership-only behaviour.
+    let lakeAccessMemo: Promise<AttachmentLakeAccess> | undefined;
+    const attachmentLakeAccess = () =>
+      (lakeAccessMemo ??= (async (): Promise<AttachmentLakeAccess> => {
+        try {
+          const scope = await resolveRetrievalLakeScopeForUser(user as IUserDocument, {
+            logger,
+            staticRegistryBypass: false,
+          });
+          const lakeMemberships = dataLakeService.lakeMembershipsFrom(scope.lakes);
+          dataLakeService.warnIfManyLakeMemberships(lakeMemberships, logger, 'attachment-resolution:agent');
+          return {
+            lakeMemberships,
+            dataLakeTags: scope.dataLakeTags,
+            dataLakeTagPrefixes: scope.dataLakeTagPrefixes,
+          };
+        } catch (err) {
+          // Degrade to today's ownership-only behaviour. Widening on error is never correct here,
+          // and neither is failing the run.
+          logger.warn('[AttachmentLakeAccess] Resolution failed; falling back to ownership-only', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return {};
+        }
+      })());
+
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
@@ -2318,6 +2367,7 @@ async function processExecution(
               execution,
               sessionKnowledgeIds: session.knowledgeIds ?? [],
               scope: fabFileReadScope,
+              lakeAccess: await attachmentLakeAccess(),
               modelInfo,
               apiKeyTable: apiKeyTable as ApiKeyTable,
               logger,
@@ -2339,6 +2389,7 @@ async function processExecution(
           execution,
           sessionKnowledgeIds: session.knowledgeIds ?? [],
           scope: fabFileReadScope,
+          lakeAccess: attachmentLakeAccess,
           availableToolNames: resolvedToolNames,
           inlinedFileIds: materialized?.inlinedFileIds ?? [],
         },

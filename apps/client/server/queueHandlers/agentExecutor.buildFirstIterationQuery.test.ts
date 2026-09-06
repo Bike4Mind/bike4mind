@@ -193,7 +193,8 @@ describe('buildFirstIterationQuery', () => {
     // Guards against regressing to an owner-only `{ userId }` scope - chat
     // completion passes the CASL `accessibleBy(...).ofType(FabFile)` filter
     // so org/group/shared files surface, and this helper must do the same.
-    expect(getAccessibleFiles).toHaveBeenCalledWith(['id1'], SCOPE);
+    // The trailing `undefined` is the omitted `lakeAccess` param, forwarded as-is.
+    expect(getAccessibleFiles).toHaveBeenCalledWith(['id1'], SCOPE, undefined);
   });
 
   it('dedupes across sessionFabFileIds, messageFileIds, and sessionKnowledgeIds before lookup', async () => {
@@ -634,5 +635,100 @@ describe('maybeBuildFirstIterationQuery (gate)', () => {
 
     // Proves the gate is not dropping the toolbelt on the floor and defaulting to "readable".
     expect(result).toContain('METADATA ONLY');
+  });
+
+  describe('lakeAccess (#1576 attachment door lake-membership arm)', () => {
+    const MEMBERSHIP = {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'creator-1',
+    };
+
+    it('is only resolved (the thunk is only called) when the gate actually builds a preamble', async () => {
+      const repo = makeRepo(vi.fn());
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockResolvedValue({ lakeMemberships: [MEMBERSHIP] });
+
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: false, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: true, iterationIndex: 1, lakeAccess },
+        logger,
+        repo
+      );
+
+      expect(lakeAccess).not.toHaveBeenCalled();
+    });
+
+    it('forwards the thunk-resolved lakeAccess to getAccessibleFiles as the fourth argument on the building iteration', async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([makeFile('id1', 'spec.pdf', 'application/pdf')]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const resolvedLakeAccess = { lakeMemberships: [MEMBERSHIP], dataLakeTags: ['datalake:acme'] };
+      const lakeAccess = vi.fn().mockResolvedValue(resolvedLakeAccess);
+
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: true, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+
+      expect(lakeAccess).toHaveBeenCalledTimes(1);
+      expect(getAccessibleFiles).toHaveBeenCalledWith(['id1'], SCOPE, resolvedLakeAccess);
+    });
+
+    it("propagates a rejecting thunk rather than swallowing it here - the fail-safe degrade lives in the thunk itself (agentExecutor's memo), not this gate", async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([makeFile('id1', 'spec.pdf', 'application/pdf')]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockRejectedValue(new Error('resolver down'));
+
+      await expect(
+        maybeBuildFirstIterationQuery(
+          { ...baseArgs, isNewExecution: true, iterationIndex: 0, lakeAccess },
+          logger,
+          repo
+        )
+      ).rejects.toThrow('resolver down');
+    });
+
+    it('a prefix-only creator-owned member resolves through the forwarded lakeAccess (catches an unconverted-scope silent failure)', async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([makeFile('id1', 'report.pdf', 'application/pdf')]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockResolvedValue({ lakeMemberships: [MEMBERSHIP] });
+
+      const result = await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: true, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+
+      expect(result).toContain('"report.pdf"');
+    });
+
+    it('agent-supplied execution input cannot substitute for the resolved lakeAccess - only the thunk result is forwarded', async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockResolvedValue({ lakeMemberships: [MEMBERSHIP] });
+      // A forged bucket smuggled into execution - the args type has no field for this, but a
+      // caller building `execution` from request-derived data could still attach one.
+      const forgedExecution = { ...baseArgs.execution, lakeMemberships: [{ ...MEMBERSHIP, creatorUserId: 'anyone' }] };
+
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, execution: forgedExecution, isNewExecution: true, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+
+      const forwardedLakeAccess = getAccessibleFiles.mock.calls[0][2];
+      expect(forwardedLakeAccess).toEqual({ lakeMemberships: [MEMBERSHIP] });
+      expect(JSON.stringify(forwardedLakeAccess)).not.toContain('anyone');
+    });
   });
 });
