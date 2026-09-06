@@ -53,7 +53,9 @@ const run = (batchId: string, body: unknown, res: unknown, user?: { id: string; 
 describe('POST /api/data-lakes/batches/[batchId]/apply-taxonomy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.applyTaxonomySuggestions.mockResolvedValue({ success: true, filesUpdated: 3 });
+    // Carries all four fields: the route is the only hop where nothing else pins that `unchanged`
+    // and `skipped` reach the client, and the toast arms downstream are built on both.
+    h.applyTaxonomySuggestions.mockResolvedValue({ success: true, filesUpdated: 3, unchanged: 1, skipped: 2 });
     h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
       Promise.resolve({ userId: req.user.id, isAdmin: req.user.isAdmin })
     );
@@ -87,7 +89,7 @@ describe('POST /api/data-lakes/batches/[batchId]/apply-taxonomy', () => {
       [tags[0]],
       expect.anything()
     );
-    expect(json).toHaveBeenCalledWith({ success: true, filesUpdated: 3 });
+    expect(json).toHaveBeenCalledWith({ success: true, filesUpdated: 3, unchanged: 1, skipped: 2 });
   });
 
   it('passes the caller identity through for the service to authorize', async () => {

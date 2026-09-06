@@ -49,32 +49,94 @@ const ChunkFabFilePayload = z.object({
 });
 
 /**
- * Failure accounting for a chunk message, shared by every throwing path in the handler.
- *
- * Persisting `error` is what makes the file terminal for the daily un-chunked rescue sweep
- * (see buildFabFileChunkScanFilter in chunkScan.ts); a path that throws without it leaves the
- * file permanently sweep-eligible, so it is re-enqueued and re-DLQ'd every day forever.
- * Callers always rethrow so SQS still retries and then routes to the DLQ. Mirrors
- * fabFileVectorize.ts's own failure handling - keep the two in sync.
+ * Prefix of the error this handler stores when the vectorize hand-off fails. Load-bearing: the
+ * resume path clears the file's `error` only when it owns it, so a real chunking/vectorizing
+ * error from elsewhere is never wiped by a successful re-enqueue.
  */
-async function accountChunkFailure(params: {
-  event: SQSEvent;
+const VECTORIZE_ENQUEUE_ERROR_PREFIX = 'Could not hand off for vector indexing';
+
+/**
+ * How many chunks per vectorize message is the operator's dataLakeVectorizeChunkBatchSize
+ * lever. Unlike the spend levers, this is not a money value, so a resolution failure falls
+ * back to the coded default instead of halting - chunking itself spends nothing, and the spend
+ * gate in fabFileVectorize.ts is where money is actually guarded.
+ */
+const resolveVectorizeBatchSize = (logger: Logger): Promise<number> =>
+  dataLakeService
+    .resolveSpendLevers({ adminSettings: adminSettingsRepository }, logger)
+    .then(levers => levers.vectorizeChunkBatchSize)
+    .catch((err: unknown) => {
+      logger.warn(`Could not resolve vectorize batch size; using default: ${err}`);
+      return DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT;
+    });
+
+/**
+ * Fan a file's chunks out to the vectorize queue. Only chunk IDS travel (full chunks would
+ * exceed SQS's 256KB message limit). Returns the number of messages sent.
+ */
+async function enqueueVectorizeBatches(params: {
   fabFileId: string;
   userId: string;
-  batchId: string | undefined;
-  errorMessage: string;
-  logger: Logger;
-}): Promise<void> {
-  const { event, fabFileId, userId, batchId, errorMessage, logger } = params;
+  embeddingModel: string;
+  chunkIds: string[];
+  batchSize: number;
+  origin?: string;
+  lakeId?: string;
+}): Promise<number> {
+  const { fabFileId, userId, embeddingModel, chunkIds, batchSize, origin, lakeId } = params;
+  const queueUrl = Resource.fabFileVectorizeQueue.url;
+  if (!queueUrl) throw new Error('Vectorize queue URL not found');
 
-  // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
-  // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
-  // 'failed' status untouched.
+  const batches: string[][] = [];
+  for (let i = 0; i < chunkIds.length; i += batchSize) {
+    batches.push(chunkIds.slice(i, i + batchSize));
+  }
+  await Promise.all(
+    batches.map(ids =>
+      sendToQueue(queueUrl, {
+        fabFileId,
+        chunkIds: ids,
+        userId,
+        embeddingModel,
+        batchSize: ids.length,
+        // Carry provenance downstream: the switch may flip while these vectorize messages sit
+        // in-flight, so the vectorize handler re-checks with the same origin/lakeId (#1676).
+        origin,
+        lakeId,
+      })
+    )
+  );
+  return batches.length;
+}
+
+/**
+ * Account a terminal failure of one step of this handler onto the file and its batch: persist a
+ * per-file error and count the file as failed so the batch still reaches a terminal state.
+ * Shared by the chunking and the vectorize-enqueue paths - both leave a file that is invisible
+ * (no error, no alert) if nothing records the failure. Persisting `error` is also what makes the
+ * file terminal for the daily un-chunked rescue sweep (see buildFabFileChunkScanFilter in
+ * chunkScan.ts); a path that throws without it leaves the file permanently sweep-eligible, so it
+ * is re-enqueued and re-DLQ'd every day forever. No-op on a non-final SQS delivery: see
+ * deferFailureIfRetryable for why an earlier attempt must leave 'failed' untouched. The caller
+ * always rethrows afterwards, so SQS retries and eventually routes to the DLQ. Mirrors
+ * fabFileVectorize.ts's own failure handling - keep the two in sync.
+ */
+async function accountFileFailure(params: {
+  event: SQSEvent;
+  logger: Logger;
+  fabFileId: string;
+  batchId: string | undefined;
+  userId: string;
+  action: string;
+  errorMessage: string;
+}): Promise<void> {
+  const { event, logger, fabFileId, batchId, userId, action, errorMessage } = params;
+
   if (
     await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
       fabFileId,
       batchId,
-      action: 'Chunking',
+      action,
       errorMessage,
       logger,
     })
@@ -94,6 +156,16 @@ async function accountChunkFailure(params: {
       failedFiles: 1,
       processingFailedFiles: 1,
     });
+    // The $inc above is guarded on a non-terminal batch while updateFileStatus is not, so whether
+    // this entry was actually charged has to be recorded ON the entry - revertFileFailure gives
+    // counters back per-entry and must not spend another file's failure. updateFileStatus already
+    // stamped failureCounted: false, so this raise is advisory and must not take the finalize and
+    // the progress push down with it: losing it only leaves the entry uncounted.
+    if (batch) {
+      await dataLakeBatchRepository
+        .markFailureCounted(batchId, fabFileId, true)
+        .catch(markErr => logger.error(`Failed to record the charged failure counters on ${fabFileId}: ${markErr}`));
+    }
     await finalizeBatchIfComplete(batch, logger);
     await sendToClient(userId, Resource.websocket.managementEndpoint, {
       action: 'data_lake_batch_progress',
@@ -103,7 +175,222 @@ async function accountChunkFailure(params: {
       status: isBatchComplete(batch) ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
     });
   } catch (innerErr) {
-    logger.error(`Error reporting batch chunk failure: ${innerErr}`);
+    logger.error(`Error reporting batch ${action.toLowerCase()} failure: ${innerErr}`);
+  }
+}
+
+/**
+ * Stamp the marker the stranded-vectorize rescue sweep selects on
+ * (buildStrandedVectorizeScanFilter) and account the failure so it is visible rather than silent.
+ * Re-stamped on every failed attempt: the sweep waits out its grace period from this timestamp,
+ * which keeps a queue that is down from being re-swept every cycle.
+ */
+async function recordVectorizeEnqueueFailure(params: {
+  event: SQSEvent;
+  logger: Logger;
+  fabFileId: string;
+  batchId: string | undefined;
+  userId: string;
+  err: unknown;
+}): Promise<void> {
+  const { event, logger, fabFileId, batchId, userId, err } = params;
+  await FabFile.updateOne({ _id: fabFileId }, { $set: { vectorizeEnqueueFailedAt: new Date() } }).catch(stampErr =>
+    logger.error(`Failed to stamp vectorize-enqueue failure on ${fabFileId}: ${stampErr}`)
+  );
+  await accountFileFailure({
+    event,
+    logger,
+    fabFileId,
+    batchId,
+    userId,
+    action: 'Vectorize enqueue',
+    errorMessage: `${VECTORIZE_ENQUEUE_ERROR_PREFIX}: ${err instanceof Error ? err.message : String(err)}`,
+  });
+}
+
+/**
+ * Drop the markers a failed hand-off left behind, so the file stops matching the rescue sweep and
+ * stops showing an error it has recovered from. `error` is cleared ONLY when this handler wrote it
+ * (see VECTORIZE_ENQUEUE_ERROR_PREFIX) - a chunking or vectorizing error from elsewhere is still
+ * true and must survive.
+ */
+async function clearStrandedMarkers(fabFileId: string, ownsError: boolean, logger: Logger): Promise<void> {
+  await FabFile.updateOne(
+    { _id: fabFileId },
+    { $unset: { vectorizeEnqueueFailedAt: 1 }, ...(ownsError ? { $set: { error: null } } : {}) }
+  ).catch(err => logger.error(`Failed to clear vectorize-enqueue markers on ${fabFileId}: ${err}`));
+}
+
+/**
+ * The batch-accounting half of the same undo. accountFileFailure wrote three things on the way
+ * down - the FabFile error, the manifest entry ('failed' + the error text), and
+ * failedFiles/processingFailedFiles - and clearStrandedMarkers above reverses only the first, so
+ * a recovered file still reports as a failure on its batch. Worse, 'failed' is not in the
+ * vectorize handler's success-path claim set, so the file could never reach 'complete' and its
+ * vectorizedFiles was lost with it.
+ *
+ * `to` is where the file actually is once the strand is undone: 'complete' when its chunks
+ * already hold every vector (nothing further is coming to claim the entry, so this call also owes
+ * the batch the vectorizedFiles), 'chunking' when a fresh fan-out is about to go out and the
+ * vectorize handler's own claim will finish the job.
+ *
+ * Reopen first, revert second: the counter writes are guarded on a non-terminal batch, and a
+ * strand on the last outstanding file may already have finalized this batch
+ * 'completed_with_errors'. In that order a crash in between leaves the batch merely non-terminal,
+ * which the stuck-batch reconciler re-settles; the reverse would leave it terminal with a tally
+ * that no longer adds up. When the revert then declines - another failure owns the entry, so
+ * there was nothing of ours to revoke - the verdict is put straight back rather than left for the
+ * reconciler: nothing else re-finalizes a reopened batch (finalizeBatchIfComplete only runs off
+ * counter increments, and the still-'failed' entry loses the resumed fan-out's claim too), and the
+ * reopen's own updatedAt bump pushes the reconciler's next look out by hours. The reopen carries
+ * the revert's own eligibility predicate so that round trip stays rare: a resume with no failure of
+ * ours on the entry - a non-final attempt stamps the stranded marker before any accounting is
+ * written - never reopens at all.
+ *
+ * Best-effort, like the marker write it accompanies: a reporting correction must never fail a
+ * delivery whose actual work (the file's vectors) succeeded.
+ */
+async function revertStrandBatchAccounting(params: {
+  batchId: string;
+  fabFileId: string;
+  userId: string;
+  to: 'complete' | 'chunking';
+  logger: Logger;
+}): Promise<void> {
+  const { batchId, fabFileId, userId, to, logger } = params;
+  try {
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batchId, {
+      fabFileId,
+      errorPrefix: VECTORIZE_ENQUEUE_ERROR_PREFIX,
+    });
+    const batch = await dataLakeBatchRepository.revertFileFailure(batchId, fabFileId, to, {
+      errorPrefix: VECTORIZE_ENQUEUE_ERROR_PREFIX,
+      ...(to === 'complete' ? { alsoIncrement: { vectorizedFiles: 1 } } : {}),
+    });
+    if (!batch) {
+      // Nothing of ours to revoke - another failure owns this entry. Re-settle what we reopened.
+      if (reopened) await finalizeBatchIfComplete(reopened, logger);
+      return;
+    }
+
+    await finalizeBatchIfComplete(batch, logger);
+    await sendToClient(userId, Resource.websocket.managementEndpoint, {
+      action: 'data_lake_batch_progress',
+      batchId,
+      failedFiles: batch.failedFiles,
+      processingFailedFiles: batch.processingFailedFiles,
+      vectorizedFiles: batch.vectorizedFiles,
+      status: isBatchComplete(batch) ? (batch.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+    });
+  } catch (err) {
+    logger.error(`Error reverting the vectorize-enqueue failure accounting for ${fabFileId}: ${err}`);
+  }
+}
+
+/**
+ * Both halves of the undo in one place: the FabFile markers and the batch accounting must move
+ * together, or a fan-out that fails again leaves one surface reporting a failure the other has
+ * already dropped (see the ordering note at the call site).
+ */
+async function undoStrand(params: {
+  fabFileId: string;
+  batchId: string | undefined;
+  userId: string;
+  to: 'complete' | 'chunking';
+  ownsError: boolean;
+  logger: Logger;
+}): Promise<void> {
+  const { fabFileId, batchId, userId, to, ownsError, logger } = params;
+  await clearStrandedMarkers(fabFileId, ownsError, logger);
+  if (batchId) await revertStrandBatchAccounting({ batchId, fabFileId, userId, to, logger });
+}
+
+/**
+ * Re-send the vectorize fan-out for the chunks of an already-chunked file that still hold no
+ * vector, undoing everything the strand recorded first. This is the recovery half of the
+ * committed-chunks-but-no-vectors state: a plain SQS redelivery reaches it, and so does the
+ * stranded-vectorize sweep (buildStrandedVectorizeScanFilter) by re-enqueueing a chunk message.
+ * Non-destructive - it sends messages only, and the vectorize handler dedupes.
+ *
+ * The chunks were sized against the model they were chunked under, so that model (not the current
+ * default, which may have changed since) is what their embeddings must be generated with.
+ *
+ * Deliberately NOT gated on `wasStranded`: any redelivery for an already-chunked file resumes, not
+ * only one carrying a marker. That is a chosen trade-off, not an accident of where `wasStranded` is
+ * read. Gating would be cheaper - an ordinary at-least-once duplicate arriving while the first
+ * fan-out is still in flight re-embeds the chunks that have not landed a vector yet, and the
+ * vectorize handler's idempotency guard is file-level, so a PARTIALLY vectorized file does not
+ * short-circuit it: that is metered spend, not just wasted work. It loses to the other side. Both
+ * marker writes are best-effort (see recordVectorizeEnqueueFailure and clearStrandedMarkers), so a
+ * file whose stamp AND error write both failed carries no marker at all, is invisible to the rescue
+ * sweep, and an ungated resume is the only thing that still recovers it - which is exactly the
+ * permanently-unreachable state this whole path exists to eliminate. Bounded duplicate spend on a
+ * healthy file is the cheaper failure.
+ */
+async function resumeVectorizeEnqueue(
+  event: SQSEvent,
+  logger: Logger,
+  fabFile: {
+    id: string;
+    batchId?: string;
+    embeddingModel?: string;
+    error?: string | null;
+    vectorizeEnqueueFailedAt?: Date | null;
+  },
+  userId: string,
+  defaultEmbeddingModel: string,
+  provenance: { origin?: string; lakeId?: string }
+): Promise<void> {
+  const fabFileId = fabFile.id;
+  const pendingChunkIds = await fabFileChunkRepository.findVectorlessChunkIds(fabFileId);
+  const ownsError = !!fabFile.error?.startsWith(VECTORIZE_ENQUEUE_ERROR_PREFIX);
+  const wasStranded = !!fabFile.vectorizeEnqueueFailedAt || ownsError;
+
+  if (pendingChunkIds.length === 0) {
+    if (wasStranded) {
+      await undoStrand({ fabFileId, batchId: fabFile.batchId, userId, to: 'complete', ownsError, logger });
+    }
+    return;
+  }
+
+  const embeddingModel =
+    fabFile.embeddingModel && isSupportedEmbeddingModel(fabFile.embeddingModel)
+      ? fabFile.embeddingModel
+      : defaultEmbeddingModel;
+
+  // Undo the strand BEFORE the fan-out, not after. The vectorize handler claims its manifest entry
+  // from ['chunking','uploaded','pending'], so a message that lands while the entry still reads
+  // 'failed' loses that claim and the file is never counted complete - and these messages can be
+  // picked up within milliseconds of the send. Clearing the FabFile markers in the same breath
+  // keeps the two surfaces in step: if the fan-out then fails again on its FINAL delivery attempt,
+  // markFailedIfNotAlready sees an unfailed file and re-records the failure on BOTH the file and
+  // the batch, where a half-undone state would have left the batch permanently short a failure it
+  // still has. On a non-final attempt deferFailureIfRetryable short-circuits that re-record, so
+  // the batch stays a failure short until the last attempt lands - bounded and self-healing.
+  //
+  // The window this opens - markers cleared, hand-off not yet re-recorded - is closed by the
+  // message itself: this path only ever runs on a delivery that is about to either succeed or
+  // throw and be redelivered, and the resume is ungated on `wasStranded` precisely so a
+  // marker-less file still recovers (see this function's doc comment).
+  if (wasStranded) {
+    await undoStrand({ fabFileId, batchId: fabFile.batchId, userId, to: 'chunking', ownsError, logger });
+  }
+
+  try {
+    const batchCount = await enqueueVectorizeBatches({
+      fabFileId,
+      userId,
+      embeddingModel,
+      chunkIds: pendingChunkIds,
+      batchSize: await resolveVectorizeBatchSize(logger),
+      ...provenance,
+    });
+    logger.log(
+      `Resumed vectorize fan-out for ${fabFileId}: ${pendingChunkIds.length} un-vectorized chunk(s) in ${batchCount} batch(es)`
+    );
+  } catch (err) {
+    await recordVectorizeEnqueueFailure({ event, logger, fabFileId, batchId: fabFile.batchId, userId, err });
+    throw err;
   }
 }
 
@@ -262,13 +549,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
       return { user, defaultEmbeddingModel, fabFile };
     })().catch(async (err: unknown) => {
-      await accountChunkFailure({
+      await accountFileFailure({
         event,
-        fabFileId,
-        userId,
-        batchId: claimDoc.batchId?.toString(),
-        errorMessage: err instanceof Error ? err.message : String(err),
         logger,
+        fabFileId,
+        batchId: claimDoc.batchId?.toString(),
+        userId,
+        action: 'Chunking',
+        errorMessage: err instanceof Error ? err.message : String(err),
       });
       throw err;
     });
@@ -278,14 +566,25 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       return;
     }
 
-    // Idempotency: skip a duplicate delivery once the file is already chunked. Without this,
-    // chunkFabfile's own deleteManyByFabFileId (called unconditionally on every run) would wipe out
-    // and replace chunks a prior successful delivery already created - possibly ones already
-    // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
-    // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
-    // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
+    // Idempotency: never re-chunk a file that is already chunked. Without this, chunkFabfile's own
+    // deleteManyByFabFileId (called unconditionally on every run) would wipe out and replace chunks
+    // a prior successful delivery already created - possibly ones already vectorized - the exact
+    // destructive case the rescue sweep can trigger (a deferred, non-final attempt clears
+    // isChunking/leaves error unset for the whole retry window, matching the sweep's filter; see
+    // chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
+    //
+    // 'Already chunked' does NOT mean 'already handed off', though: the vectorize fan-out at the
+    // end of this handler runs after the chunk rows and `chunked: true` are committed, so a failed
+    // (or half-finished) enqueue leaves a file with chunks and no vectors. Resume the fan-out for
+    // whatever chunks still lack a vector instead of returning - that is what makes the enqueue
+    // retryable, both on SQS redelivery and from the stranded-vectorize rescue sweep. The vectorize
+    // handler is itself idempotent, and a file that really did finish has nothing left to send.
+    // Runs under this run's claim, so two deliveries cannot resume the same file at once.
     if (fabFile.chunked || fabFile.noExtractableTextAt) {
-      logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
+      logger.log(`FabFile ${fabFileId} already chunked, skipping re-chunk`);
+      if (fabFile.chunked) {
+        await resumeVectorizeEnqueue(event, logger, fabFile, userId, defaultEmbeddingModel, { origin, lakeId });
+      }
       return;
     }
 
@@ -376,16 +675,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         return null;
       }
 
-      // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without accounting,
-      // the file would sit at chunkCount:0 with no error - visually identical to a
-      // silently-dropped record.
-      await accountChunkFailure({
+      // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without the
+      // accounting below, the file would sit at chunkCount:0 with no error - visually identical
+      // to a silently-dropped record.
+      await accountFileFailure({
         event,
-        fabFileId,
-        userId,
-        batchId: fabFile.batchId,
-        errorMessage: err instanceof Error ? err.message : String(err),
         logger,
+        fabFileId,
+        batchId: fabFile.batchId,
+        userId,
+        action: 'Chunking',
+        errorMessage: err instanceof Error ? err.message : String(err),
       });
       throw err;
     });
@@ -527,46 +827,36 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.error(`Error computing chunk-policy conflict for ${fabFileId}: ${err}`);
     }
 
-    const queueUrl = Resource.fabFileVectorizeQueue.url;
-    if (!queueUrl) throw new Error('Vectorize queue URL not found');
-
-    // How many chunks per vectorize message is the operator's dataLakeVectorizeChunkBatchSize
-    // lever. Unlike the spend levers, this is not a money value, so a resolution failure
-    // falls back to the coded default instead of halting - chunking itself spends nothing,
-    // and the spend gate in fabFileVectorize.ts is where money is actually guarded.
-    const batchSize = await dataLakeService
-      .resolveSpendLevers({ adminSettings: adminSettingsRepository }, logger)
-      .then(levers => levers.vectorizeChunkBatchSize)
-      .catch((err: unknown) => {
-        logger.warn(`Could not resolve vectorize batch size; using default: ${err}`);
-        return DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT;
+    // The chunk rows and `chunked: true` are committed by now, so a failure here is NOT just a
+    // lost message: the idempotency guard above will refuse to re-chunk on redelivery, and the
+    // un-chunked rescue sweep cannot see a file that has chunks (its filter is chunkCount: 0).
+    // Stamp the file so the stranded-vectorize sweep can find it, record the failure so it is
+    // visible instead of silent, then rethrow so SQS retries into the resume path above.
+    let batchCount: number;
+    try {
+      batchCount = await enqueueVectorizeBatches({
+        fabFileId,
+        userId,
+        embeddingModel: defaultEmbeddingModel,
+        chunkIds: fabFileChunks.map(c => c.id),
+        batchSize: await resolveVectorizeBatchSize(logger),
+        origin,
+        lakeId,
       });
-    const batches: (typeof fabFileChunks)[] = [];
-
-    for (let i = 0; i < fabFileChunks.length; i += batchSize) {
-      batches.push(fabFileChunks.slice(i, i + batchSize));
+    } catch (err) {
+      await recordVectorizeEnqueueFailure({
+        event,
+        logger,
+        fabFileId,
+        batchId: fabFile.batchId,
+        userId,
+        err,
+      });
+      throw err;
     }
 
-    logger.updateMetadata({ batchCount: batches.length });
-
-    // Only send chunk IDs (not full chunks) to avoid exceeding SQS 256KB message limit
-    await Promise.all(
-      batches.map(async batch => {
-        await sendToQueue(queueUrl, {
-          fabFileId,
-          chunkIds: batch.map(c => c.id),
-          userId,
-          embeddingModel: defaultEmbeddingModel,
-          batchSize: batch.length,
-          // Carry provenance downstream: the switch may flip while these vectorize messages sit
-          // in-flight, so the vectorize handler re-checks with the same origin/lakeId (#1676).
-          origin,
-          lakeId,
-        });
-      })
-    );
-
-    logger.log(`Sent ${batches.length} batches to vectorize queue`);
+    logger.updateMetadata({ batchCount });
+    logger.log(`Sent ${batchCount} batches to vectorize queue`);
     logger.log('====================================');
     logger.log('Completed chunk queue handler');
     logger.log('====================================');
