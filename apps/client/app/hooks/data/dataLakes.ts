@@ -650,16 +650,54 @@ export function useApplyTaxonomySuggestions(batchId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (tags: TaxonomyTag[]) => {
-      const res = await api.post<{ success: true; filesUpdated: number }>(
-        `/api/data-lakes/batches/${batchId}/apply-taxonomy`,
-        { tags }
-      );
+      const res = await api.post<{
+        success: true;
+        filesUpdated: number;
+        // `unchanged` and `skipped` shipped in the SAME service commit, so a server predating it
+        // omits both - a type marking only one optional describes a payload that never existed.
+        unchanged?: number;
+        // Files whose optimistic-concurrency check lost - something else changed their tags between
+        // the read and the write, or the file was deleted inside the window.
+        skipped?: number;
+      }>(`/api/data-lakes/batches/${batchId}/apply-taxonomy`, { tags });
       return res.data;
     },
     onSuccess: result => {
-      toast.success(
-        `Tags applied to ${result.filesUpdated.toLocaleString()} file${result.filesUpdated === 1 ? '' : 's'}`
-      );
+      // A re-apply that changes nothing reported "Tags applied to N files" - every file counted as
+      // updated, because the identical-value write still bumped `updatedAt`. Splitting `unchanged`
+      // out is what stops that over-report.
+      const plural = (n: number) => `${n.toLocaleString()} file${n === 1 ? '' : 's'}`;
+      // Defaulted once, so an old server's absent fields read as zero everywhere below rather than
+      // needing a `??` (or a `!`) at each use.
+      const unchanged = result.unchanged ?? 0;
+      const skipped = result.skipped ?? 0;
+      const applied =
+        result.filesUpdated === 0 && unchanged === 0
+          ? skipped === 0
+            ? // Reachable: a batch where no file matches any accepted tag emits no ops and counts no
+              // `unchanged`. "Tags applied to 0 files" was the last arm claiming something happened.
+              'No files matched these tags'
+            : // Every op the batch emitted lost its CAS race. Files DID match, so "no files matched"
+              // contradicts the skipped clause below, and falling through to the next arm would say
+              // "already up to date on 0 files" instead - worse. That clause is the whole story
+              // here, so contribute no prefix to it.
+              ''
+          : result.filesUpdated === 0
+            ? `Tags already up to date on ${plural(unchanged)}`
+            : unchanged > 0
+              ? `Tags applied to ${plural(result.filesUpdated)}, ${plural(unchanged)} already up to date`
+              : `Tags applied to ${plural(result.filesUpdated)}`;
+      // Read `skipped` FIRST: "already up to date on 7 files" is an affirmative claim of
+      // completeness, and it would otherwise fire unchanged on a batch where the other 3 files
+      // silently failed their CAS check. Warning rather than success, because nothing in the
+      // product lets the user retry a batch once it is 'applied'.
+      if (skipped > 0) {
+        const detail = `${plural(skipped)} could not be updated - changed while applying.`;
+        toast.warning(applied ? `${applied}. ${detail}` : detail);
+      } else {
+        // `applied` is only ever empty on the all-skipped arm above, which cannot reach here.
+        toast.success(applied);
+      }
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
@@ -13,6 +15,10 @@ const h = vi.hoisted(() => ({
   buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date, _opts?: unknown) => ({
     chunkCount: 0,
     createdAt: { $lt: cutoff },
+  })),
+  // Spied so a test can assert the sweep passes BOTH cutoffs, matching buildScanFilter above.
+  buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({
+    vectorizeEnqueueFailedAt: { $lt: cutoff },
   })),
 }));
 
@@ -63,15 +69,16 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-// Only the filter is stubbed; buildChunkRescueMessage stays real so the payload shape this sweep
-// sends is asserted against the shared producer, not a local copy of it. Spreading the actual
+// Only the filters are stubbed; buildChunkRescueMessage stays real so the payload shape this
+// sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
 // module also keeps the cutoff constants real, which the cutoff assertions below depend on.
 vi.mock('./chunkScan', async importActual => ({
   ...(await importActual<typeof import('./chunkScan')>()),
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
+  buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
 }));
 
-import { runChunkRescueSweep } from './chunkRescueSweep';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 
 type Candidate = { _id: string; userId: string; batchId?: string; tags?: { name: string; strength: number }[] };
 
@@ -231,6 +238,110 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+});
+
+describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () => {
+  const runRescue = () => runStrandedVectorizeRescue(logger as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.sendToQueue.mockResolvedValue(undefined);
+    withCandidates([]);
+  });
+
+  it('runs regardless of auto-chunk', async () => {
+    // These files are already chunked, so the setting has nothing left to gate - and no other
+    // sweep can see them, since this one selects on the vectorize failure stamp.
+    h.getSettingsValue.mockResolvedValue(false);
+    withCandidates([{ _id: 'ff9', userId: 'u9' }]);
+
+    await expect(runRescue()).resolves.toBe(1);
+
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff9',
+      userId: 'u9',
+    });
+  });
+
+  it('selects on the stranded cutoff with the per-pass cap', async () => {
+    await runRescue();
+
+    expect(h.buildStrandedFilter).toHaveBeenCalledTimes(1);
+    const [cutoff, staleClaimBefore] = h.buildStrandedFilter.mock.calls[0];
+    expect(cutoff).toBeInstanceOf(Date);
+    expect(staleClaimBefore).toBeInstanceOf(Date);
+    expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
+    expect(limitSpy).toHaveBeenCalledWith(50);
+  });
+
+  it('sends every file unstamped, batch or not', async () => {
+    // Unlike the un-chunked sweep, these files are already chunked: the handler's halt branch runs
+    // above the already-chunked resume, so a stamped message would route a healthy file into a
+    // paused-marker write over its own committed passages. Must match the hosted twin.
+    withCandidates([
+      { _id: 'ff1', userId: 'u1', batchId: 'b1' },
+      { _id: 'ff2', userId: 'u2' },
+    ]);
+
+    await expect(runRescue()).resolves.toBe(2);
+
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff1',
+      userId: 'u1',
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff2',
+      userId: 'u2',
+    });
+  });
+
+  it('a failed send costs only itself, and the reported count is what was sent', async () => {
+    // This is the last pass of the scheduled task, so a rejection escaping the loop would abandon
+    // every candidate behind it AND fail the whole tick.
+    withCandidates([
+      { _id: 'ff1', userId: 'u1' },
+      { _id: 'ff2', userId: 'u2' },
+      { _id: 'ff3', userId: 'u3' },
+    ]);
+    h.sendToQueue.mockImplementation(async (_url: unknown, msg: { fabFileId: string }) => {
+      if (msg.fabFileId === 'ff2') throw new Error('SQS throttled');
+    });
+
+    await expect(runRescue()).resolves.toBe(2);
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('stranded-vectorize re-enqueue failed for ff2'));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('re-enqueued 2 file(s)'));
+  });
+
+  it('stays quiet when there is nothing to rescue', async () => {
+    await expect(runRescue()).resolves.toBe(0);
+
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('the scheduled task isolates the two passes', () => {
+  // Source-shape guard: main.ts registers the task inside an unexported boot closure, so the
+  // chaining is unreachable from a behavioural test. The regression is silent - dropping either
+  // catch type-checks and only shows up as a stranded backlog that stops draining whenever the
+  // un-chunked pass's FabFile.find throws.
+  it('wraps both sweep calls in their own catch', async () => {
+    const src = await readFile(resolve(__dirname, 'main.ts'), 'utf8');
+    // runChunkRescueSweep now takes the options object (limit + logger), not a bare logger - only
+    // its own call site's shape differs from runStrandedVectorizeRescue's.
+    const calls: [string, RegExp][] = [
+      ['runChunkRescueSweep', /await runChunkRescueSweep\(\{[^}]*logger: bootLogger[^}]*\}\)(\.catch)?/],
+      ['runStrandedVectorizeRescue', /await runStrandedVectorizeRescue\(bootLogger\)(\.catch)?/],
+    ];
+    for (const [fn, pattern] of calls) {
+      const call = src.match(pattern);
+      expect(call, `${fn} call site vanished - move or delete this guard with it`).not.toBeNull();
+      expect(call![1], `${fn} must not reject out of the tick and skip the other pass`).toBe('.catch');
+    }
   });
 });
 
