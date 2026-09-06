@@ -660,13 +660,32 @@ export type DataLakeMembershipScope =
     };
 
 /**
+ * The lake arms an attachment resolution may add to its CASL scope. Server-supplied only - a
+ * `creatorUserId` inside a membership scope widens what the query matches, so a value reaching this
+ * from request input would let a caller name any user and read their files. Same contract as
+ * `IFabFileRepository.search`'s `lakeMemberships` (fabFileSearchQuery.ts).
+ *
+ * All three fields optional and an absent object means "no lake arms": the fail-safe direction for
+ * every door that cannot resolve its buckets is to omit them, never to widen.
+ */
+export interface AttachmentLakeAccess {
+  lakeMemberships?: DataLakeMembershipScope[];
+  dataLakeTags?: string[];
+  dataLakeTagPrefixes?: string[];
+}
+
+/**
  * The model interface for the FabFile model.
  *
  * Defines the database methods that are available on the FabFile model.
  */
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
-  getAccessibleFiles: (fabFileIds: string[], scope: Record<string, unknown>) => Promise<IFabFileDocument[]>;
+  getAccessibleFiles: (
+    fabFileIds: string[],
+    scope: Record<string, unknown>,
+    lakeAccess?: AttachmentLakeAccess
+  ) => Promise<IFabFileDocument[]>;
 
   /**
    * Persist the chunk-policy outcome for a file (#1662): the effective target its current chunks

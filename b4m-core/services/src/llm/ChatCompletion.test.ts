@@ -403,6 +403,7 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: opts.dataLakeTags,
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
+        lakes: [],
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
       (service as any).db = { fabfiles: { getAccessibleFiles: vi.fn().mockResolvedValue(opts.files) } };
@@ -647,6 +648,7 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: ['datalake:corpus'],
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
+        lakes: [],
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
       const getAccessibleFiles = vi.fn().mockResolvedValue(files);
@@ -669,6 +671,7 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: ['datalake:corpus'],
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
+        lakes: [],
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
       (service as any).db = { fabfiles: { getAccessibleFiles: vi.fn().mockRejectedValue(new Error('db down')) } };
@@ -728,6 +731,94 @@ describe('ChatCompletionProcess', () => {
 
       const count = await (service as any).countLakeReachableAttachments(['f1']);
       expect(count).toBe(1);
+    });
+  });
+
+  describe('attachmentLakeAccess (#1576 attachment door lake-membership arm)', () => {
+    const OWNED_LAKE = {
+      id: 'lake1',
+      name: 'Acme',
+      slug: 'acme',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      source: 'dynamic' as const,
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:acme',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      },
+    };
+    const REGISTRY_LAKE = {
+      id: 'lake2',
+      name: 'Registry',
+      slug: 'reg',
+      datalakeTag: 'datalake:reg',
+      fileTagPrefix: 'reg:',
+      source: 'registry' as const,
+      membership: { kind: 'registry' as const, datalakeTag: 'datalake:reg', fileTagPrefix: 'reg:' },
+    };
+
+    it('derives lakeMemberships via lakeMembershipsFrom (owned only) and forwards tags/prefixes verbatim', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: ['datalake:acme', 'datalake:reg'],
+        dataLakeTagPrefixes: ['reg:'],
+        lakes: [OWNED_LAKE, REGISTRY_LAKE],
+      };
+
+      const access = await (service as any).attachmentLakeAccess();
+
+      // Only the owned lake's membership crosses - the registry lake's unanchored prefix arm
+      // stays out of lakeMemberships and rides dataLakeTagPrefixes instead.
+      expect(access.lakeMemberships).toEqual([OWNED_LAKE.membership]);
+      expect(access.dataLakeTags).toEqual(['datalake:acme', 'datalake:reg']);
+      expect(access.dataLakeTagPrefixes).toEqual(['reg:']);
+    });
+
+    it('a lake-resolution failure degrades to ownership-only, never widens', async () => {
+      // The memo must stay undefined: pre-setting it to the fallback value skips the try/catch in
+      // getAccessibleDataLakeAccess entirely and asserts nothing about degradation. Reject inside
+      // the resolver instead - findMembershipOrgIds propagates by design (see the placement note in
+      // getDynamicDataLakeAccess), which is the outage this door's catch exists to absorb.
+      const findMembershipOrgIds = vi.fn().mockRejectedValue(new Error('org read failed'));
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn() },
+        organizations: { findMembershipOrgIds },
+      };
+
+      const access = await (service as any).attachmentLakeAccess();
+
+      // Proves the resolver was really entered and really rejected - without this the assertion
+      // below would also pass on a resolver that quietly returned no lakes.
+      expect(findMembershipOrgIds).toHaveBeenCalled();
+      // Remove the catch and this call rejects instead of returning the ownership-only shape.
+      expect(access).toEqual({ lakeMemberships: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
+    });
+
+    it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: ['datalake:acme'],
+        dataLakeTagPrefixes: [],
+        lakes: [OWNED_LAKE],
+      };
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({ userId: 'u1' });
+      const getAccessibleFiles = vi.fn().mockResolvedValue([]);
+      (service as any).db = { fabfiles: { getAccessibleFiles } };
+
+      await (service as any).getAttachedKnowledgeFiles(['f1']);
+
+      expect(getAccessibleFiles).toHaveBeenCalledWith(
+        ['f1'],
+        { userId: 'u1' },
+        {
+          lakeMemberships: [OWNED_LAKE.membership],
+          dataLakeTags: ['datalake:acme'],
+          dataLakeTagPrefixes: [],
+        }
+      );
     });
   });
 
@@ -2478,6 +2569,7 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: opts.dataLakeTags ?? [],
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
+        lakes: [],
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
@@ -2574,11 +2666,32 @@ describe('ChatCompletionProcess', () => {
         expect(saved[0]).toEqual(['"context.md" could not be read and was not sent.']);
       });
 
-      it('leaves the quest untouched when every attachment delivered', async () => {
+      it('writes no notice when every attachment delivered - there is nothing to warn about', async () => {
         await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabPromptMessages: [] });
 
         const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
         expect(saved).toEqual([]);
+      });
+
+      // #1576 ask 1. The turn above writes no notice, and before the delivery report that silence
+      // was the ONLY thing on the quest - indistinguishable from a turn that attached nothing at
+      // all, which is how a 600-answer eval ran in the wrong configuration unnoticed. The report is
+      // the affirmative half, so it must be written on exactly the path that produces no notices.
+      it('writes the delivery report on a turn with no notices - the API-only affirmative half', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabPromptMessages: [] });
+
+        const reports = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentDelivery).filter(Boolean);
+        expect(reports.length).toBeGreaterThan(0);
+        expect(reports[0]).toMatchObject({ requested: expect.any(Number), delivered: expect.any(Number) });
+      });
+
+      it('names the undelivered ids in the report, not just a count', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabFileNotices: [notice] });
+
+        const reports = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentDelivery).filter(Boolean);
+        expect(reports.length).toBeGreaterThan(0);
+        expect(reports[0].droppedIds).toContain('f1');
+        expect(reports[0].dropped).toBeGreaterThan(0);
       });
 
       // The no-regression half: surfacing failures must not cost a healthy attachment its delivery.
@@ -2763,6 +2876,64 @@ describe('ChatCompletionProcess', () => {
 
     beforeEach(() => {
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+    });
+
+    /**
+     * Agreement between the chat door's two attachment call sites (#1576): both
+     * `getAttachedKnowledgeFiles` (getAccessibleFiles) and `fabFilesToMessages`
+     * (fetchAndConvertFabFiles) must resolve `attachmentLakeAccess()` off the SAME
+     * memoized per-turn access, or an id reachable through one door could silently
+     * disagree with the other.
+     */
+    it('forwards the same attachmentLakeAccess to fetchAndConvertFabFiles as getAttachedKnowledgeFiles gets from getAccessibleFiles', async () => {
+      const membership = {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:acme',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      };
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: ['datalake:acme'],
+        dataLakeTagPrefixes: [],
+        lakes: [
+          {
+            id: 'lake1',
+            name: 'Acme',
+            slug: 'acme',
+            datalakeTag: 'datalake:acme',
+            fileTagPrefix: 'acme:',
+            source: 'dynamic' as const,
+            membership,
+          },
+        ],
+      };
+      mockedFetchAndConvertFabFiles.mockResolvedValue({
+        files: [{ id: 'f1', fileName: 'context.md', mimeType: 'text/markdown' } as any],
+        missingIds: [],
+      });
+      mockedProcessFabFilesServer.mockResolvedValue({
+        userMessages: [],
+        deliveredFileIds: ['f1'],
+        fullyDeliveredFileIds: ['f1'],
+        fileNotices: [],
+      });
+      const getAccessibleFiles = vi.fn().mockResolvedValue([]);
+      (service as any).db = { fabfiles: { getAccessibleFiles } };
+
+      await callReal(['f1']);
+      await (service as any).getAttachedKnowledgeFiles(['f1']);
+
+      const expectedLakeAccess = {
+        lakeMemberships: [membership],
+        dataLakeTags: ['datalake:acme'],
+        dataLakeTagPrefixes: [],
+      };
+      expect(mockedFetchAndConvertFabFiles).toHaveBeenCalledWith(
+        ['f1'],
+        { scope: {}, lakeAccess: expectedLakeAccess },
+        expect.anything()
+      );
+      expect(getAccessibleFiles).toHaveBeenCalledWith(['f1'], {}, expectedLakeAccess);
     });
 
     it('prepends a system message naming the file and the reason it was not delivered', async () => {

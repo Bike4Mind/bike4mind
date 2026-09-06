@@ -248,25 +248,64 @@ export function buildOwnershipConditions(
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
 
+  conditions.push(
+    ...buildLakeArms({
+      lakeMemberships: options?.lakeMemberships,
+      dataLakeTags: options?.dataLakeTags,
+      dataLakeTagPrefixes: options?.dataLakeTagPrefixes,
+    })
+  );
+
+  // Guard the footgun: in lake-scoped mode we drop the broad ownership arms, so if the
+  // caller set restrictToDataLake but supplied no lake tag/prefix arm, `conditions` is
+  // empty and downstream would build `{ $or: [] }` - which MongoDB rejects at query time
+  // ($or must be a non-empty array). Fail fast here with a descriptive error instead. Kept here
+  // rather than in `buildLakeArms`, which must stay total (a misconfigured prefix can normalize
+  // away to zero arms with no way to distinguish "absent" from "unusable" at that layer).
+  if (options?.restrictToDataLake && conditions.length === 0) {
+    throw new Error(
+      'buildOwnershipConditions: restrictToDataLake requires lakeMemberships, dataLakeTags or dataLakeTagPrefixes'
+    );
+  }
+
+  return conditions;
+}
+
+/**
+ * The lake-membership $or arms for a set of access buckets - one arm per `lakeMemberships` scope,
+ * one for `dataLakeTags` (exact meta-tag match), one for `dataLakeTagPrefixes` (open prefix match).
+ * Shared by `buildOwnershipConditions` (retrieval) and `FabFileModel.getAccessibleFiles`
+ * (attachment), so the two doors can never disagree about what this builder RETURNS. They may
+ * still post-process it: the attachment door ANDs `archivedAt: null` onto each arm it gets back
+ * (see the docblock on `getAccessibleFiles`), which retrieval gets from its top-level `baseFilter`
+ * instead. Shared construction, per-door post-processing - do not read this as identical queries.
+ *
+ * TOTAL: returns `[]` for absent, empty, or all-unusable buckets, and never throws. A prefix can
+ * normalize away to zero arms (see `normalizeTagPrefix`), and a caller that needs to distinguish
+ * "no arms because nothing was asked for" from "no arms because what was asked for was unusable"
+ * must guard at its own call site - see the `restrictToDataLake` throw in `buildOwnershipConditions`.
+ */
+export function buildLakeArms(options: {
+  lakeMemberships?: DataLakeMembershipScope[];
+  dataLakeTags?: string[];
+  dataLakeTagPrefixes?: string[];
+}): object[] {
+  const arms: object[] = [];
+
   // One arm per lake. An `owned` scope ANDs THAT lake's prefix with THAT lake's creator, never the
   // caller's, so a colliding prefix can't cross a tenant boundary; a `registry` scope's prefix arm
   // is unanchored by design and is only ever supplied on the access-gated single-lake browse (see
-  // the `lakeMemberships` docblock). Same predicate the browse, health, archive and permanent
-  // delete run on - drift between them is what #2243 was.
-  for (const scope of options?.lakeMemberships ?? []) {
-    conditions.push(buildDataLakeMembershipFilter(scope));
+  // the `lakeMemberships` docblock on `buildOwnershipConditions`). Same predicate the browse,
+  // health, archive and permanent delete run on - drift between them is what #2243 was.
+  for (const scope of options.lakeMemberships ?? []) {
+    arms.push(buildDataLakeMembershipFilter(scope));
   }
-
-  // Shared with the single-file removal write path (see normalizeTagPrefix): the prefixes
-  // matched here are exactly the ones a removal is allowed to clear.
-  const validPrefixes = (prefixes: string[] | undefined) =>
-    (prefixes ?? []).map(normalizeTagPrefix).filter((p): p is string => p !== null);
 
   // Include data lake files accessible to this user (by exact meta-tag). The meta-tag
   // (`datalake:<org>:<slug>`) is uniquely namespaced and the accessible set is resolved
   // upstream, so matching it is a SAFE ownership bypass (can't collide across tenants).
-  if (options?.dataLakeTags && options.dataLakeTags.length > 0) {
-    conditions.push({
+  if (options.dataLakeTags && options.dataLakeTags.length > 0) {
+    arms.push({
       tags: {
         $elemMatch: {
           name: { $in: options.dataLakeTags },
@@ -275,11 +314,15 @@ export function buildOwnershipConditions(
     });
   }
 
-  // OPEN prefix arm (static registry) - bypasses ownership, by design (shared KB).
-  const openPrefixes = validPrefixes(options?.dataLakeTagPrefixes);
+  // OPEN prefix arm (static registry) - bypasses ownership, by design (shared KB). Shared with the
+  // single-file removal write path (see normalizeTagPrefix): the prefixes matched here are exactly
+  // the ones a removal is allowed to clear.
+  const openPrefixes = (options.dataLakeTagPrefixes ?? [])
+    .map(normalizeTagPrefix)
+    .filter((p): p is string => p !== null);
   if (openPrefixes.length > 0) {
     const prefixPattern = openPrefixes.map(p => escapeRegex(p)).join('|');
-    conditions.push({
+    arms.push({
       tags: {
         $elemMatch: {
           name: { $regex: new RegExp(`^(${prefixPattern})`) },
@@ -288,17 +331,7 @@ export function buildOwnershipConditions(
     });
   }
 
-  // Guard the footgun: in lake-scoped mode we drop the broad ownership arms, so if the
-  // caller set restrictToDataLake but supplied no lake tag/prefix arm, `conditions` is
-  // empty and downstream would build `{ $or: [] }` - which MongoDB rejects at query time
-  // ($or must be a non-empty array). Fail fast here with a descriptive error instead.
-  if (options?.restrictToDataLake && conditions.length === 0) {
-    throw new Error(
-      'buildOwnershipConditions: restrictToDataLake requires lakeMemberships, dataLakeTags or dataLakeTagPrefixes'
-    );
-  }
-
-  return conditions;
+  return arms;
 }
 
 export type FabFileFilterType =

@@ -1,4 +1,5 @@
 import {
+  type AttachmentLakeAccess,
   CHUNK_STALL_REASONS,
   CHUNKLESS_STALL_REASONS,
   type ChunkStallReason,
@@ -23,7 +24,12 @@ import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
-import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
+import {
+  buildFabFileSearchQuery,
+  buildLakeArms,
+  buildOwnershipConditions,
+  escapeRegex,
+} from '../../queries/fabFileSearchQuery';
 import {
   buildDataLakeMembershipFilter,
   buildDataLakeMembershipQuery,
@@ -686,18 +692,44 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     await this.fabFileModel.deleteMany({ _id: { $in: ids } });
   }
 
-  async getAccessibleFiles(fabFileIds: string[], scope: Record<string, unknown>) {
+  /**
+   * Files matching `scope` (the caller's CASL read ability) OR any lake arm named by
+   * `lakeAccess` - so an attached file the caller can reach only through lake membership still
+   * resolves, not just files they own or were shared. Lake arms are built by `buildLakeArms`, the
+   * same builder retrieval uses, so the two doors can never disagree about what a lake arm matches.
+   *
+   * `archivedAt: null` is ANDed onto the LAKE ARMS ONLY, never at top level: `scope` already
+   * reflects the caller's real ability and has no `archivedAt` filter of its own (an owner's own
+   * archived file must stay reachable here, exactly as before), while an archived lake's members
+   * must stop resolving through the new arm the moment the lake is archived - otherwise archiving a
+   * lake would stop retrieval, browse and counting but not inline delivery of a file the caller does
+   * not own.
+   *
+   * Absent or empty `lakeAccess` reproduces the byte-identical legacy query.
+   */
+  async getAccessibleFiles(fabFileIds: string[], scope: Record<string, unknown>, lakeAccess?: AttachmentLakeAccess) {
     // Filter out invalid ObjectIds to prevent BSONError crashes
     const validIds = fabFileIds.filter(id => mongoose.Types.ObjectId.isValid(id));
 
-    // const accessible = accessibleBy(ability, Permission.update).ofType(FabFile);
-    const filter = {
-      _id: {
-        $in: convertIds(validIds),
-      },
-      ...scope,
-      // ...accessible,
-    };
+    const lakeArms = buildLakeArms({
+      lakeMemberships: lakeAccess?.lakeMemberships,
+      dataLakeTags: lakeAccess?.dataLakeTags,
+      dataLakeTagPrefixes: lakeAccess?.dataLakeTagPrefixes,
+    });
+
+    const filter = lakeArms.length
+      ? {
+          $and: [
+            { _id: { $in: convertIds(validIds) } },
+            { $or: [scope, ...lakeArms.map(arm => ({ $and: [arm, { archivedAt: null }] }))] },
+          ],
+        }
+      : {
+          _id: {
+            $in: convertIds(validIds),
+          },
+          ...scope,
+        };
     return await super.find(filter, { content: 0 });
   }
 

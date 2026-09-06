@@ -1,5 +1,6 @@
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
+  type AttachmentLakeAccess,
   dayjs,
   extractSnippetMeta,
   FORMAT_PROMPT_TEMPLATE,
@@ -800,7 +801,7 @@ export async function fetchAgentConversationHistory(
  */
 export async function fetchAndConvertFabFiles(
   fabFileIds: string[],
-  { scope }: { scope: Record<string, unknown> },
+  { scope, lakeAccess }: { scope: Record<string, unknown>; lakeAccess?: AttachmentLakeAccess },
   {
     db,
     storage,
@@ -814,7 +815,7 @@ export async function fetchAndConvertFabFiles(
     logger?: Logger;
   }
 ): Promise<{ files: IFabFileDocument[]; missingIds: string[] }> {
-  const fabFiles = await db.fabfiles.getAccessibleFiles(fabFileIds, scope);
+  const fabFiles = await db.fabfiles.getAccessibleFiles(fabFileIds, scope, lakeAccess);
 
   const files: IFabFileDocument[] = await Promise.all(
     fabFiles.map(async (file: any) => {

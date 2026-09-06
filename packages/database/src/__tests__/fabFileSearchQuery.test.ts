@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 import {
   buildFabFileSearchQuery,
+  buildLakeArms,
   buildOwnershipConditions,
   escapeRegex,
   getMimeTypeFilter,
@@ -451,6 +452,42 @@ describe('buildFabFileSearchQuery', () => {
         expect(conditions[2]).toEqual({ 'tags.name': 'datalake:org1:orphan' });
         expect(JSON.stringify(conditions[2])).not.toContain('$regex');
       });
+    });
+  });
+
+  // ── buildLakeArms (#1576) - total, never throws; restrictToDataLake's zero-arms guard ──
+  describe('buildLakeArms', () => {
+    it('returns [] for no options at all', () => {
+      expect(buildLakeArms({})).toEqual([]);
+    });
+
+    it('returns [] when every bucket is present but empty', () => {
+      expect(buildLakeArms({ lakeMemberships: [], dataLakeTags: [], dataLakeTagPrefixes: [] })).toEqual([]);
+    });
+
+    it('returns [] when dataLakeTagPrefixes normalizes every entry away, rather than throwing', () => {
+      expect(buildLakeArms({ dataLakeTagPrefixes: [''] })).toEqual([]);
+    });
+
+    it('emits arms in order: lakeMemberships, then dataLakeTags, then dataLakeTagPrefixes', () => {
+      const SCOPE_A = { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+      const arms = buildLakeArms({
+        lakeMemberships: [SCOPE_A],
+        dataLakeTags: ['datalake:org1:meta'],
+        dataLakeTagPrefixes: ['opti:'],
+      });
+      expect(arms).toHaveLength(3);
+      expect(arms[0]).toEqual(buildDataLakeMembershipFilter(SCOPE_A));
+      expect(arms[1]).toEqual({ tags: { $elemMatch: { name: { $in: ['datalake:org1:meta'] } } } });
+      expect(JSON.stringify(arms[2])).toContain('$regex');
+    });
+
+    it('buildOwnershipConditions still throws under restrictToDataLake when buildLakeArms produces zero arms', () => {
+      // buildLakeArms itself stays total (see above) - the throw belongs to buildOwnershipConditions,
+      // which needs at least one arm to avoid handing MongoDB an empty `$or`.
+      expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true, dataLakeTagPrefixes: [''] })).toThrow(
+        /requires lakeMemberships, dataLakeTags or dataLakeTagPrefixes/
+      );
     });
   });
 

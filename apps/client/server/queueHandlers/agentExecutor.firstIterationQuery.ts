@@ -1,4 +1,4 @@
-import { isImageAttachment, type IFabFileDocument } from '@bike4mind/common';
+import { isImageAttachment, type AttachmentLakeAccess, type IFabFileDocument } from '@bike4mind/common';
 
 /**
  * Minimal structural Logger contract - kept here so this module doesn't have
@@ -89,7 +89,11 @@ function escapePreambleFilename(name: string): string {
 }
 
 interface FabFileAccessibleRepo {
-  getAccessibleFiles: (fabFileIds: string[], scope: Record<string, unknown>) => Promise<IFabFileDocument[]>;
+  getAccessibleFiles: (
+    fabFileIds: string[],
+    scope: Record<string, unknown>,
+    lakeAccess?: AttachmentLakeAccess
+  ) => Promise<IFabFileDocument[]>;
 }
 
 /**
@@ -139,7 +143,9 @@ export async function buildFirstIterationQuery(
   scope: Record<string, unknown>,
   availableToolNames: readonly string[],
   /** Ids whose content was already inlined into this run's first message; never marked unreadable. */
-  inlinedFileIds: readonly string[] = []
+  inlinedFileIds: readonly string[] = [],
+  /** The attachment door's lake arms - see `maybeBuildFirstIterationQuery`'s `lakeAccess`. */
+  lakeAccess?: AttachmentLakeAccess
 ): Promise<string> {
   // `sessionFabFileIds` + `messageFileIds` are client-snapshotted at dispatch
   // (stable across Lambda handoffs), while `sessionKnowledgeIds` is re-read
@@ -160,7 +166,7 @@ export async function buildFirstIterationQuery(
 
   let files: PreambleFile[];
   try {
-    files = await repo.getAccessibleFiles(requestedIds, scope);
+    files = await repo.getAccessibleFiles(requestedIds, scope, lakeAccess);
   } catch (err) {
     // Don't fail the run if file lookup errors - the agent still has the
     // user's query and can ask the user for missing context. Log loud so
@@ -274,6 +280,12 @@ export async function maybeBuildFirstIterationQuery(
     availableToolNames: readonly string[];
     /** See `buildFirstIterationQuery`. */
     inlinedFileIds?: readonly string[];
+    /**
+     * A THUNK, not an awaited value: this call site is UNgated (the gate below lives inside this
+     * function), so an awaited value here would force the resolution on every iteration instead of
+     * only on the one that actually builds the preamble.
+     */
+    lakeAccess?: () => Promise<AttachmentLakeAccess>;
   },
   logger: MinimalLogger,
   repo: FabFileAccessibleRepo
@@ -287,6 +299,7 @@ export async function maybeBuildFirstIterationQuery(
     repo,
     args.scope,
     args.availableToolNames,
-    args.inlinedFileIds ?? []
+    args.inlinedFileIds ?? [],
+    await args.lakeAccess?.()
   );
 }

@@ -204,6 +204,74 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
   });
 
+  describe('attachment report (#1576 ask 1: a caller can tell whether the corpus contributed)', () => {
+    it('returns BOTH halves - the notices and the affirmative counts', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        attachmentNotices: ['"a.md" was not sent: it could not be read.'],
+        attachmentDelivery: { requested: 3, delivered: 2, fullyDelivered: 1, dropped: 1, droppedIds: ['f-a'] },
+      });
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      const body = res._getJSONData();
+      expect(body.attachmentNotices).toEqual(['"a.md" was not sent: it could not be read.']);
+      expect(body.attachmentDelivery).toEqual({
+        requested: 3,
+        delivered: 2,
+        fullyDelivered: 1,
+        dropped: 1,
+        droppedIds: ['f-a'],
+      });
+    });
+
+    // The case the whole ask turns on. Nothing failed, so there are no notices at all, and before
+    // `attachmentDelivery` this response was byte-identical to a turn that attached nothing - which
+    // is how a 600-answer eval ran in the wrong configuration without anyone noticing.
+    it('reports a fully successful turn, which produces no notices to infer from', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        attachmentDelivery: { requested: 4, delivered: 4, fullyDelivered: 4, dropped: 0, droppedIds: [] },
+      });
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      const body = res._getJSONData();
+      expect(body.attachmentNotices).toBeUndefined();
+      expect(body.attachmentDelivery).toMatchObject({ requested: 4, delivered: 4, dropped: 0 });
+    });
+
+    it('serves the report to a sharee - it describes the turn, not the owner\'s private corpus', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        attachmentDelivery: { requested: 1, delivered: 0, fullyDelivered: 0, dropped: 1, droppedIds: ['f-a'] },
+      });
+      // `userId: 'owner'` on the session and 'user-1' only in `users` - a share, not ownership.
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      expect(res._getJSONData().attachmentDelivery).toMatchObject({ requested: 1, dropped: 1 });
+    });
+  });
+
   describe('toolPayloads (structured tool output for programmatic callers)', () => {
     const PROBLEM = { name: 'shop', jobs: [], machines: [] };
 
