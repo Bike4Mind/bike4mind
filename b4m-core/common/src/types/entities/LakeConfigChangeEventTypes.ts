@@ -109,6 +109,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   organizationId: 'audited',
   isPublic: 'audited',
   auditQueryTextEnabled: 'audited',
+  lakeMemoryEnabled: 'audited',
   status: 'audited',
   // Immutable by design (it anchors the membership prefix arm), so this is a tripwire rather than
   // an expected row: if it ever moves, the audit says so instead of the change passing unseen.

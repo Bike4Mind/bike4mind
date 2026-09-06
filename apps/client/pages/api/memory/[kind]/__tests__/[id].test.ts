@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   shredPrincipalMemory: vi.fn(),
   shredBelief: vi.fn(),
   purgeUserMemory: vi.fn(),
+  setLakeMemoryCursor: vi.fn(),
+  logAuditEvent: vi.fn(),
 }));
 
 // baseApi mock: a callable chain routed by req.method (same shape as the lifecycle test). It does NOT
@@ -28,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
-  dataLakeRepository: {},
+  dataLakeRepository: { setLakeMemoryCursor: h.setLakeMemoryCursor },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -58,6 +60,11 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@server/utils/auditLog', () => ({
+  DataLakeAuditEvents: { LAKE_MEMORY_PURGED: 'LAKE_MEMORY_PURGED' },
+  logAuditEvent: h.logAuditEvent,
+}));
+vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: vi.fn(() => ({})) }));
 vi.mock('@server/memory/deepAgentMemoryStore', () => ({ createDeepAgentMemoryStore: vi.fn(() => ({})) }));
 vi.mock('@server/memory/personaAgentMemoryStore', () => ({ createPersonaAgentMemoryStore: vi.fn(() => ({})) }));
 vi.mock('@server/memory/userMementoMemoryStore', () => ({ createUserMementoMemoryStore: vi.fn(() => ({})) }));
@@ -96,6 +103,8 @@ const LAKE = { id: 'lake-1', datalakeTag: 'tag-abc', createdByUserId: 'creator-1
 beforeEach(() => {
   vi.clearAllMocks();
   h.toAccessContext.mockResolvedValue({ userId: 'caller-1', isAdmin: false });
+  h.setLakeMemoryCursor.mockResolvedValue(undefined);
+  h.logAuditEvent.mockResolvedValue(undefined);
 });
 
 describe('GET /api/memory/lake/:id - org-shared read', () => {
@@ -177,6 +186,17 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
       { kind: 'lake', id: 'tag-abc' },
       'creator-1'
     );
+    // Clears any in-flight/interrupted continuation cursor so a later rebuild scans from the
+    // start rather than silently resuming mid-lake.
+    expect(h.setLakeMemoryCursor).toHaveBeenCalledWith('lake-1', null);
+    expect(h.logAuditEvent).toHaveBeenCalledTimes(1);
+    expect(h.logAuditEvent.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        userId: 'creator-1',
+        action: 'LAKE_MEMORY_PURGED',
+        metadata: expect.objectContaining({ dataLakeId: 'lake-1', shredded: 5 }),
+      })
+    );
     expect(status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith({ ok: true, shredded: 5 });
   });
@@ -199,6 +219,9 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
       'belief-9'
     );
     expect(h.shredPrincipalMemory).not.toHaveBeenCalled();
+    // A single-subject shred is NOT a whole-lake purge: no cursor reset, no purge audit event.
+    expect(h.setLakeMemoryCursor).not.toHaveBeenCalled();
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith({ ok: true, shredded: 1, deleted: 1 });
   });

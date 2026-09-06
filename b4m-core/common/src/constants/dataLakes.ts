@@ -365,6 +365,12 @@ export interface DataLakeConfig {
    */
   isPublic?: boolean;
   /**
+   * Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Reader-visible, matching
+   * auditQueryTextEnabled's precedent - it answers "is the option on", not "is there a profile"
+   * (that is health's derived `lakeMemory.state`).
+   */
+  lakeMemoryEnabled?: boolean;
+  /**
    * Whether the requesting caller may WRITE/MANAGE this lake (add files, edit settings,
    * archive, remove files). Server-computed per request from the manage rule (admin or
    * creator; fallback lakes are read-only for everyone) - the SAME predicate the write
@@ -659,6 +665,7 @@ export function toDataLakeConfig(dl: {
   organizationId?: string;
   description?: string;
   isPublic?: boolean;
+  lakeMemoryEnabled?: boolean;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -671,6 +678,7 @@ export function toDataLakeConfig(dl: {
     organizationId: dl.organizationId,
     description: dl.description,
     isPublic: dl.isPublic,
+    lakeMemoryEnabled: dl.lakeMemoryEnabled,
   };
 }
 

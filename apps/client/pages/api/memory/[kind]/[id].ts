@@ -31,6 +31,8 @@ import { createKeyProvider } from '@server/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '@server/entitlements';
 
 // The kinds this endpoint reads/deletes. `lake` differs from the owner-scoped kinds: a lake is
@@ -51,13 +53,13 @@ const SUPPORTED_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'o
 async function resolveLakeMemoryTarget(
   req: EntitlementRequest,
   id: string
-): Promise<{ principal: Principal; ownerUserId: string } | null> {
+): Promise<{ principal: Principal; ownerUserId: string; dataLakeId: string } | null> {
   const ctx = await toAccessContext(req);
   const lake = await dataLakeService.assertLakeAccess(id, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
   if (!lake.createdByUserId) return null;
-  return { principal: { kind: 'lake', id: lake.datalakeTag }, ownerUserId: lake.createdByUserId };
+  return { principal: { kind: 'lake', id: lake.datalakeTag }, ownerUserId: lake.createdByUserId, dataLakeId: lake.id };
 }
 
 type ReadStore = { principal: Principal; store: MemoryStore } | { status: number; error: string };
@@ -192,6 +194,21 @@ handler.delete(async (req, res) => {
       target.principal,
       target.ownerUserId
     );
+
+    // Clears a continuation watermark left over from an in-flight (or interrupted) build - without
+    // this a purge followed by a fresh build could resume mid-lake instead of starting the scan
+    // over, silently skipping the documents the old cursor had already passed.
+    await dataLakeRepository.setLakeMemoryCursor(target.dataLakeId, null);
+
+    await logAuditEvent(
+      {
+        userId: ownerUserId,
+        action: DataLakeAuditEvents.LAKE_MEMORY_PURGED,
+        metadata: { dataLakeId: target.dataLakeId, shredded, ...resolveAuditPrincipal(req.user!, req.apiKeyInfo) },
+      },
+      req.logger
+    );
+
     return res.status(200).json({ ok: true, shredded });
   }
 

@@ -10,7 +10,7 @@ vi.mock('../settings/resolveScopedSetting', async orig => ({
   resolveScopedSetting,
 }));
 
-import { computeLakeHealth } from './computeLakeHealth';
+import { computeLakeHealth, computeLakeMemoryHealth } from './computeLakeHealth';
 
 // Mirrors IFabFileRepository.findDataLakeHealthMembers' row shape EXACTLY (incl. vectorizedChunkCount,
 // error, fileSize, serverTextHash) - if this drifts from the interface, the in-flight/errored gate or
@@ -82,8 +82,15 @@ const makeAdapters = (members: Member[], membershipRows: MembershipRow[] = []) =
       // so reusing one fixture for both would hide exactly that difference.
       findDataLakeMembershipMembers: vi.fn(async () => membershipRows),
     },
-    adminSettings: { findBySettingNames: vi.fn(), findAll: vi.fn() },
+    adminSettings: {
+      findBySettingNames: vi.fn(),
+      findAll: vi.fn(),
+      getSettingsValue: vi.fn(async () => false),
+    },
     scopedSettings: { findOverrides: vi.fn() },
+    memoryLedger: {
+      aggregateLakeMemoryCoverage: vi.fn(async () => ({ lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 })),
+    },
   },
   logger: { warn: vi.fn() },
 });
@@ -596,5 +603,141 @@ describe('computeLakeHealth inconsistency surface (#2242)', () => {
     await computeLakeHealth(withReport(), adapters as never);
 
     expect(adapters.db.fabFiles.findDataLakeMembershipMembers).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('computeLakeMemoryHealth', () => {
+  const memoryLake = {
+    datalakeTag: 'datalake:acme',
+    createdByUserId: 'u1',
+    lakeMemoryEnabled: true,
+    lakeMemoryExtractionAt: null as Date | null,
+    lakeMemoryCursor: null as string | null,
+    lastSyncAt: undefined as Date | undefined,
+  };
+
+  const memoryDb = (
+    coverage: { lastBuiltAt: string | null; factCount: number; sourceDocumentCount: number },
+    platformEnabled = true
+  ) => ({
+    adminSettings: { getSettingsValue: vi.fn(async () => platformEnabled) },
+    memoryLedger: { aggregateLakeMemoryCoverage: vi.fn(async () => coverage) },
+  });
+
+  const NO_COVERAGE = { lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 };
+
+  it('returns platform-off even when the lake is enabled and has a profile', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 }, false);
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.state).toBe('platform-off');
+  });
+
+  it('returns lake-off when the platform is enabled but the lake opted out', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryEnabled: false }, db as never);
+    expect(health.state).toBe('lake-off');
+  });
+
+  it('returns building when the extraction lease is currently held', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryExtractionAt: new Date() }, db as never);
+    expect(health.state).toBe('building');
+  });
+
+  it('returns building when a continuation cursor is set even though no lease is currently held', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryCursor: 'cursor-1' }, db as never);
+    expect(health.state).toBe('building');
+  });
+
+  it('returns never-built when nothing is building and the ledger has no surviving facts', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.state).toBe('never-built');
+  });
+
+  it('returns stale when the lake has synced since the ledger profile was last built', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth(
+      { ...memoryLake, lastSyncAt: new Date('2026-09-02T00:00:00.000Z') },
+      db as never
+    );
+    expect(health.state).toBe('stale');
+  });
+
+  it('returns current when a profile exists and the lake has not synced since', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-02T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth(
+      { ...memoryLake, lastSyncAt: new Date('2026-09-01T00:00:00.000Z') },
+      db as never
+    );
+    expect(health.state).toBe('current');
+  });
+
+  it('passes factCount, sourceDocumentCount and lastBuiltAt through from the ledger coverage unmodified', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T12:00:00.000Z', factCount: 42, sourceDocumentCount: 7 });
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.factCount).toBe(42);
+    expect(health.sourceDocumentCount).toBe(7);
+    expect(health.lastBuiltAt).toEqual(new Date('2026-09-01T12:00:00.000Z'));
+  });
+
+  it('never derives the profile from lakeMemoryExtractionAt: a null lease with ledger facts still reports built', async () => {
+    // The steady state of a successfully-built lake is lakeMemoryExtractionAt === null - this is the
+    // regression case for treating that field as a completion stamp instead of a concurrency lease.
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 3, sourceDocumentCount: 1 });
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryExtractionAt: null }, db as never);
+    expect(health.state).toBe('current');
+    expect(health.factCount).toBe(3);
+  });
+
+  it('short-circuits to empty coverage without calling the ledger when datalakeTag is empty', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth({ ...memoryLake, datalakeTag: '' }, db as never);
+    expect(db.memoryLedger.aggregateLakeMemoryCoverage).not.toHaveBeenCalled();
+    expect(health.factCount).toBe(0);
+    expect(health.sourceDocumentCount).toBe(0);
+    expect(health.lastBuiltAt).toBeNull();
+    expect(health.state).toBe('never-built');
+  });
+
+  it('short-circuits to empty coverage without calling the ledger when createdByUserId is empty', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth({ ...memoryLake, createdByUserId: '' }, db as never);
+    expect(db.memoryLedger.aggregateLakeMemoryCoverage).not.toHaveBeenCalled();
+    expect(health.factCount).toBe(0);
+  });
+
+  it('treats a rejected platform-settings read as platform-disabled rather than throwing', async () => {
+    const db = {
+      adminSettings: { getSettingsValue: vi.fn(async () => Promise.reject(new Error('settings unavailable'))) },
+      memoryLedger: { aggregateLakeMemoryCoverage: vi.fn(async () => NO_COVERAGE) },
+    };
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.state).toBe('platform-off');
+  });
+});
+
+describe('computeLakeHealth lakeMemory pass-through', () => {
+  it('carries the memory-service lakeMemory section and overwrites memberCount with the scanned member count', async () => {
+    const adapters = makeAdapters([healthyMember('a'), healthyMember('b')]);
+    adapters.db.memoryLedger.aggregateLakeMemoryCoverage = vi.fn(async () => ({
+      lastBuiltAt: '2026-09-01T00:00:00.000Z',
+      factCount: 10,
+      sourceDocumentCount: 2,
+    }));
+
+    const health = await computeLakeHealth({ ...lake, lakeMemoryEnabled: true }, adapters as never);
+
+    expect(health.lakeMemory.factCount).toBe(10);
+    expect(health.lakeMemory.sourceDocumentCount).toBe(2);
+    expect(health.lakeMemory.memberCount).toBe(2);
+  });
+
+  it('reports lakeMemory with memberCount 0 on the null-datalakeTag empty-lake guard', async () => {
+    const adapters = makeAdapters([]);
+    const health = await computeLakeHealth({ ...lake, datalakeTag: '', lakeMemoryEnabled: true }, adapters as never);
+
+    expect(health.lakeMemory.memberCount).toBe(0);
   });
 });

@@ -5,7 +5,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { MEMENTO_EMBEDDING_MODEL, toMementoVector } from '@bike4mind/common';
+import { LAKE_MEMORY_EXTRACTION_LEASE_MS, MEMENTO_EMBEDDING_MODEL, toMementoVector } from '@bike4mind/common';
 import { apiKeyService, dataLakeService, LakeMemoryExtractionService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -76,14 +76,6 @@ const LAKE_EXTRACTION_DEADLINE_BUFFER_MS = 90_000;
  * would mean the guard exists only where someone remembered to wire it.
  */
 const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
-/**
- * How long a per-lake extraction lease is honored before another run may reclaim it. Longer than the
- * Lambda's own 10-minute timeout (infra/queues.ts), so a healthy in-flight run is never stolen; short
- * enough that a crashed run (which never released its lease) is reclaimable on the next finalize without
- * a reconciler. A continuation chain runs as separate invocations that each claim + release their own
- * lease, so this only has to cover ONE slice, not the whole chain.
- */
-const LAKE_MEMORY_EXTRACTION_LEASE_MS = 15 * 60_000;
 /** Chunk page size when reconstructing a document's text. */
 const CHUNK_PAGE_LIMIT = 1_000;
 

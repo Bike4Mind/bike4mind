@@ -1,4 +1,9 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+} from '@bike4mind/common';
 import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
@@ -20,6 +25,7 @@ interface UpdateDataLakeAdapters extends LakeConfigAuditAdapters {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    adminSettings: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
   };
 }
 
@@ -71,6 +77,20 @@ export const updateDataLake = async (
     ...params,
     ...(params.requiredEntitlement ? { requiredEntitlement: normalizeEntitlementKey(params.requiredEntitlement) } : {}),
   };
+
+  // The platform kill-switch is retain-but-inert, never destructive: turning `EnableLakeMemory` off
+  // must not flip any lake's own per-lake flag to false (that would be a write this route never
+  // asked for, and would silently re-enable itself the moment the platform flag comes back on with
+  // no memory of who had opted in). So a request to turn a lake's memory OFF always goes through;
+  // only a request to turn it ON is refused while the platform is off - dropped from `writes`
+  // entirely (rather than throwing) so an otherwise-valid PUT that merely tried to flip this one
+  // field alongside others still applies the rest.
+  if (writes.lakeMemoryEnabled === true) {
+    const platformEnabled = await db.adminSettings.getSettingsValue('EnableLakeMemory').catch(() => false);
+    if (!platformEnabled) {
+      delete writes.lakeMemoryEnabled;
+    }
+  }
 
   // NO-OP EARLY-OUT, deliberately mirroring setLakeVisibility, which has always had one. A PUT
   // whose every supplied field already holds exactly the value it is setting changed nothing, so

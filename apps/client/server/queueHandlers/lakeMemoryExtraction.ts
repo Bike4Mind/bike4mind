@@ -1,7 +1,7 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { extractLakeMemoryForBatch } from '@server/dataLakes/extractLakeMemory';
 import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
-import { adminSettingsRepository } from '@bike4mind/database';
+import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import { z, ZodError } from 'zod';
@@ -41,6 +41,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory');
     if (!enabled) {
       logger.info('[lakeMemory] EnableLakeMemory is off; dropping queued extraction', {
+        dataLakeId: payload.dataLakeId,
+      });
+      return;
+    }
+
+    // Per-lake re-check, same shape and the same reason as the platform-flag check above: a manager
+    // can disable a lake's memory mid-chain (up to 20 further slices), and without this the chain keeps
+    // billing LLM work for a lake that no longer wants it. Deliberately NOT `.catch(() => false)` for
+    // the same reason as the flag check - a failed lookup is not a resolved false; let it throw so SQS
+    // retries this attempt instead of silently dropping real work over a transient Mongo blip.
+    const lake = await dataLakeRepository.findById(payload.dataLakeId);
+    if (!lake?.lakeMemoryEnabled) {
+      logger.info('[lakeMemory] lake memory disabled for this lake; dropping queued extraction', {
         dataLakeId: payload.dataLakeId,
       });
       return;

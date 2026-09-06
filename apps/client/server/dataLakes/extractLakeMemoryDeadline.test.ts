@@ -47,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/common', () => ({
   MEMENTO_EMBEDDING_MODEL: 'text-embedding-3-small',
   toMementoVector: (v: number[]) => v,
+  LAKE_MEMORY_EXTRACTION_LEASE_MS: 15 * 60_000,
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },

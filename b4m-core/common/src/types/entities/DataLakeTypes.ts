@@ -315,6 +315,14 @@ export interface IDataLake {
    */
   filesArchivedAt?: Date | null;
   /**
+   * Per-lake opt-in to lake memory: gates BOTH extraction-on-ingest and recall injection for
+   * this lake specifically. `EnableLakeMemory` (the platform setting) gates whether the option is
+   * available at all; this field is the per-lake choice underneath it. Default false, so a lake opts in
+   * only when both a platform admin and a lake manager agree. Disabling retains the built profile
+   * (recall simply stops); it does not purge - purge is a separate, explicit action.
+   */
+  lakeMemoryEnabled?: boolean;
+  /**
    * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
    *
    * A concurrency LEASE, not a status: a run stamps it to claim the lake and clears it when done, so a

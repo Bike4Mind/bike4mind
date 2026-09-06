@@ -12,6 +12,7 @@ import type { Context, SQSEvent } from 'aws-lambda';
 import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
 
 const getSettingsValueMock = vi.fn();
+const findByIdMock = vi.fn();
 const extractMock = vi.fn();
 const sendToQueueMock = vi.fn();
 
@@ -24,6 +25,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: (...a: unknown[]) => getSettingsValueMock(...a) },
+  dataLakeRepository: { findById: (...a: unknown[]) => findByIdMock(...a) },
 }));
 vi.mock('@server/dataLakes/extractLakeMemory', () => ({
   extractLakeMemoryForBatch: (...a: unknown[]) => extractMock(...a),
@@ -41,6 +43,7 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     extractMock.mockResolvedValue({ docsProcessed: 1, factsWritten: 1, hasMore: false });
+    findByIdMock.mockResolvedValue({ lakeMemoryEnabled: true });
   });
 
   it('extracts when EnableLakeMemory is on', async () => {

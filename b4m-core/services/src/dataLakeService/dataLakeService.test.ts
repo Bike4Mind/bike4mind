@@ -1001,6 +1001,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'fileTagPrefix',
         'id',
         'isPublic',
+        'lakeMemoryEnabled',
         'lastSyncAt',
         'name',
         'organizationId',
@@ -1440,6 +1441,73 @@ describe('updateDataLake — clearing an access gate', () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('updateDataLake - lake memory platform kill-switch is retain-but-inert', () => {
+  const makeDb = (l: IDataLakeDocument, platformEnabled: boolean) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const getSettingsValue = vi.fn().mockResolvedValue(platformEnabled);
+    return {
+      db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update }, adminSettings: { getSettingsValue } },
+      update,
+      getSettingsValue,
+    };
+  };
+
+  it('drops a request to turn lakeMemoryEnabled ON while the platform flag is off, applying the rest of the write', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false, name: 'Old Name' });
+    const { db, update, getSettingsValue } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'New Name', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    expect(getSettingsValue).toHaveBeenCalledWith('EnableLakeMemory');
+    const written = update.mock.calls[0][0];
+    expect(written).toMatchObject({ name: 'New Name' });
+    expect(written).not.toHaveProperty('lakeMemoryEnabled');
+  });
+
+  it('never flips a lake own lakeMemoryEnabled to false as a side effect of the platform check', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'Renamed', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    const written = update.mock.calls[0][0];
+    expect(written).not.toHaveProperty('lakeMemoryEnabled');
+    // The stored value is untouched (retain-but-inert): this request never wrote `false`.
+    expect(l.lakeMemoryEnabled).toBe(true);
+  });
+
+  it('allows turning lakeMemoryEnabled OFF regardless of the platform flag', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update, getSettingsValue } = makeDb(l, false);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: false }, { db });
+
+    // Only an ON request checks the platform flag; an OFF request needs no permission from it.
+    expect(getSettingsValue).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: false }));
+  });
+
+  it('applies a request to turn lakeMemoryEnabled ON when the platform flag is on', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false });
+    const { db, update, getSettingsValue } = makeDb(l, true);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: true }, { db });
+
+    expect(getSettingsValue).toHaveBeenCalledWith('EnableLakeMemory');
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: true }));
   });
 });
 

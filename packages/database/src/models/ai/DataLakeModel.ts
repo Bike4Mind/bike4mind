@@ -124,6 +124,10 @@ const DataLakeSchema = new mongoose.Schema(
     // Archive batch key (see IDataLake.filesArchivedAt): mirrors filesDeletedAt but on the
     // archive axis. Set only through claimFilesArchivedAt; cleared by unarchive and by restore.
     filesArchivedAt: { type: Date },
+    // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Gates both extraction-on-ingest
+    // and recall injection for this lake; `EnableLakeMemory` gates availability of the option at all. No
+    // dedicated index - same rationale as isPublic/auditQueryTextEnabled (tiny collection).
+    lakeMemoryEnabled: { type: Boolean, default: false },
     // Lake-memory producer (#1440) bookkeeping - server-managed, never client-writable. No index
     // (tiny collection, only read from a lake already in hand, same rationale as filesDeletedAt).
     // lakeMemoryExtractionAt is a concurrency lease; lakeMemoryCursor is the bounded-continuation
