@@ -31,6 +31,19 @@ export async function prependRetrievedLakePrompts(
     for (const tag of fresh) injectedLakeTags.add(tag);
 
     const prompts = await getAccessibleDataLakePrompts(context, { restrictToDatalakeTags: fresh });
+    // Recorded whenever this injection site ran, even if nothing qualified - see the field's own
+    // comment in promptMeta.ts. Merges onto whatever the tool's own retrieval outcome write already
+    // set (applyQuestStatusChanges / mergeRetrievalSummary), not a replacement.
+    await context.statusUpdate({
+      promptMeta: {
+        retrieval: {
+          attempted: true,
+          surfaces: [],
+          dataLakeTags: [],
+          injectedLakePromptIds: prompts.map(p => p.id),
+        },
+      },
+    } as any);
     const section = renderDataLakePromptSection(prompts);
     if (!section) return resultText;
 
