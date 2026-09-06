@@ -200,6 +200,8 @@ describe('FileBrowserContent bulk selection', () => {
 
     expect(confirmRun).not.toHaveBeenCalled();
     expect(h.bulkDelete).not.toHaveBeenCalled();
-    expect(h.toastError).toHaveBeenCalled();
+    // The exact key, not merely "a toast": a guard added ahead of this bail would otherwise keep
+    // the test green while the branch it names goes dead.
+    expect(h.toastError).toHaveBeenCalledWith('file_browser.selection_stale');
   });
 });

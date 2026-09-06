@@ -163,9 +163,9 @@ const FileBrowserContent = () => {
   //
   // Page and sort are part of that boundary for the same reason: `allFiles` is ONE page of the
   // query, so paging or re-sorting replaces the visible set while the id set survives. Every bulk
-  // action resolves ids through `filesById`, which holds only what is on screen, so a selection
-  // outliving its page shrinks without the count that drives the UI shrinking with it.
-  // `handleFilterChange` clears for exactly this reason; page and sort are the same boundary.
+  // action but the tag menu resolves ids through `filesById`, which holds only what is on screen,
+  // so a selection outliving its page shrinks without the count that drives the UI shrinking with
+  // it. `handleFilterChange` clears for exactly this reason; page and sort are the same boundary.
   const selectionScope =
     viewAction.viewMode === 'home' ? 'recent' : `paginated:${currentPage}:${sortField}:${sortDirection}`;
   const selectionScopeRef = useRef(selectionScope);
@@ -185,7 +185,7 @@ const FileBrowserContent = () => {
   // observer stays mounted, so it is not garbage-collected either). Merging it second would let
   // those stale objects WIN the id collision, and a membership decision read off them sees no
   // lake tag on a file that already has one - which inverts a second add into a silent bulk
-  // remove. Selection cannot span the two lists anyway; `selectionScope` below clears it on
+  // remove. Selection cannot span the two lists anyway; `selectionScope` above clears it on
   // switch.
   const filesById = useMemo(() => {
     const m = new Map<string, IFabFileDocument>();
@@ -351,8 +351,10 @@ const FileBrowserContent = () => {
     }
 
     // Every selected id went stale under us, so the counts below would all be zero and there is no
-    // honest confirmation to put in front of the user.
+    // honest confirmation to put in front of the user. Drop the ids as well as bailing: the toast
+    // asks the user to reselect, and a chip still showing the stale count contradicts it.
     if (selectedFiles.length === 0) {
+      setSelectedIds(new Set<string>());
       toast.error(t('file_browser.selection_stale'));
       return;
     }
@@ -877,6 +879,11 @@ const FileBrowserContent = () => {
           <FileBrowserActions
             tags={fileTags || []}
             onTag={async tag => {
+              // The one bulk action that posts raw ids rather than resolving through `filesById`.
+              // Bounded, not an oversight: this menu is fed by FileTag documents, and tagService
+              // refuses both membership tag names and registered lake prefixes at create time, so
+              // no lake tag can reach it - the worst case is toggling an ordinary tag on a file
+              // that has dropped off the page, undone in one click.
               await toggleTagToFiles({
                 ids: Array.from(selectedIds),
                 tags: [tag],
