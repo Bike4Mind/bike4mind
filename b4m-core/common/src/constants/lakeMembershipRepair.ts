@@ -1,5 +1,5 @@
 /**
- * Planning the repair of duplicated lake membership (#2245).
+ * Planning the repair of duplicated lake membership.
  *
  * `summarizeLakeMembership` describes what is there; this decides what to propose about it. Split
  * the way `converge` splits `planLakeConvergenceRun` from its execution, and pure for the same
@@ -46,7 +46,8 @@ export interface MembershipDecisionRecord {
   /**
    * Set only for `keep-specific`; the member the owner chose to keep. Required-and-nullable rather
    * than optional, matching the persisted row: a decision that came back from the collection always
-   * carries the field, and `lakeMembershipRepair.test.ts` pins the two declarations to each other.
+   * carries the field, and the parity assertion at the foot of this file pins the two declarations
+   * to each other.
    */
   keptFabFileId: string | null;
   /** `groupIdentity` at the time the decision was made. A mismatch re-opens the question. */
@@ -60,9 +61,10 @@ export interface MembershipDecisionRecord {
  * `ILakeMembershipDecision` is what persists. A field added to one and not the other surfaces at the
  * boundary that erases the difference, on live data.
  *
- * This lives in the SOURCE file, not beside the tests that motivated it: every tsconfig in the repo
- * excludes test files from the typecheck, so an assertion of this shape in a `.test.ts` is compiled
- * by nothing and silently guarantees nothing. Costs nothing at runtime, fails the build both ways.
+ * This lives in the SOURCE file, not beside the tests that motivated it: every tsconfig that covers
+ * the packages this type crosses excludes test files from the typecheck, so an assertion of this
+ * shape in a `.test.ts` is compiled by nothing and silently guarantees nothing. Costs nothing at
+ * runtime, fails the build both ways.
  *
  * `source` is deliberately omitted: the planner does not branch on where a ruling came from.
  */

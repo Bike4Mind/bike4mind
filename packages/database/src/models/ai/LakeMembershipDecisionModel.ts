@@ -6,9 +6,10 @@ import type {
   ILakeMembershipDecisionRepository,
 } from '@bike4mind/common';
 import { LAKE_MEMBERSHIP_DECISION_SOURCES, LAKE_MEMBERSHIP_DECISION_VALUES } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 
 // See ILakeMembershipDecision (in @bike4mind/common) for the record's contract: the durable tombstone
-// that stops a membership repair re-asking a question its owner already answered (#2245).
+// that stops a membership repair re-asking a question its owner already answered.
 //
 // Deliberately NOT a TTL collection, unlike its LakeMembershipRemoval neighbour. Staleness here is
 // semantic, not temporal: a row stops applying when `groupIdentity` no longer matches the group it
@@ -38,7 +39,7 @@ const LakeMembershipDecisionSchema = new mongoose.Schema(
 
 // One ruling per (lake, name) - the natural key, and the same index that serves `listByLake` on its
 // leading field. `unique` is a data constraint rather than a hint: it is what makes `upsertDecision`
-// atomic on the key, so an owner double-submitting a decision, or the admission door (#2238) writing
+// atomic on the key, so an owner double-submitting a decision, or the admission door writing
 // one while a repair run writes another, cannot leave two contradictory rulings for one name with
 // the plan free to pick either.
 LakeMembershipDecisionSchema.index({ dataLakeId: 1, fileName: 1 }, { unique: true });
@@ -54,10 +55,10 @@ LakeMembershipDecisionSchema.index({ dataLakeId: 1, fileName: 1 }, { unique: tru
 // findOneAndUpdate path - which is the path every write in this repository actually takes.
 const assertKeptPairing = (decision: unknown, keptFabFileId: unknown) => {
   if (decision === 'keep-specific' && !keptFabFileId) {
-    throw new Error('keptFabFileId is required for a keep-specific decision');
+    throw new BadRequestError('keptFabFileId is required for a keep-specific decision');
   }
   if (decision !== undefined && decision !== 'keep-specific' && keptFabFileId) {
-    throw new Error(`keptFabFileId is only meaningful for keep-specific, not ${String(decision)}`);
+    throw new BadRequestError(`keptFabFileId is only meaningful for keep-specific, not ${String(decision)}`);
   }
 };
 
@@ -65,29 +66,42 @@ LakeMembershipDecisionSchema.pre('validate', function () {
   assertKeptPairing(this.decision, this.keptFabFileId);
 });
 
-// `updateOne`/`updateMany` are included even though nothing calls them on this collection today:
-// leaving a door unguarded because it is currently unused is how the service-only check became
-// bypassable in the first place.
-LakeMembershipDecisionSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], function () {
-  const update = (this.getUpdate() ?? {}) as Record<string, unknown> & { $set?: Record<string, unknown> };
-  // A write can name the fields at the top level or under $set.
-  const fields = { ...update, ...(update.$set ?? {}) };
-  const namesDecision = 'decision' in fields;
-  const namesKept = 'keptFabFileId' in fields;
+// Every write verb that reaches Mongo through a Query is listed, including the four nothing calls
+// today: leaving a door unguarded because it is currently unused is how the service-only check
+// became bypassable in the first place. The replace verbs need no special handling here - a
+// replacement names every field, so it satisfies the both-halves test by construction.
+//
+// `bulkWrite` is the one door this cannot close: it goes straight to the driver collection without
+// building a Query, so only a model-level `pre('bulkWrite')` would see it.
+LakeMembershipDecisionSchema.pre(
+  ['findOneAndUpdate', 'findOneAndReplace', 'updateOne', 'updateMany', 'replaceOne'],
+  function () {
+    const update = (this.getUpdate() ?? {}) as Record<string, unknown> & { $set?: Record<string, unknown> };
+    // A write can name the fields at the top level or under $set.
+    const fields = { ...update, ...(update.$set ?? {}) };
+    // Presence of a VALUE, not of a key. `{ decision: undefined }` is ordinary well-typed TypeScript
+    // - `update` takes a Partial - and mongoose deletes undefined keys while casting, which happens
+    // AFTER this hook runs. So `'decision' in fields` would see a half that Mongo never receives and
+    // wave through the exact single-half write below refuses. `null` stays distinguishable, which is
+    // what `keptFabFileId: null` on a non-keep-specific ruling depends on.
+    const namesDecision = fields.decision !== undefined;
+    const namesKept = fields.keptFabFileId !== undefined;
 
-  // BOTH HALVES OR NEITHER, rather than validating whichever half the write happened to name. An
-  // update sees only its own payload, never the stored row, so a write naming one half is checked
-  // against an unknown other half and passes by default - `{ keptFabFileId: 'f1' }` onto a stored
-  // `keep-newest`, or `{ decision: 'keep-newest' }` onto a row already holding a kept id, each
-  // produce exactly the pairing below refuses to create. Requiring both makes the resulting pair a
-  // property of the write, which is the most an update hook can actually know.
-  if (namesDecision !== namesKept) {
-    throw new Error('decision and keptFabFileId must be written together, or neither');
+    // BOTH HALVES OR NEITHER, rather than validating whichever half the write happened to name. An
+    // update sees only its own payload, never the stored row, so a write naming one half is checked
+    // against an unknown other half and passes by default - `{ keptFabFileId: 'f1' }` onto a stored
+    // `keep-newest`, or `{ decision: 'keep-newest' }` onto a row already holding a kept id, each
+    // produce exactly the pairing below refuses to create. Requiring both makes the resulting pair a
+    // property of the write, which is the most an update hook can actually know.
+    if (namesDecision !== namesKept) {
+      // Same class as the service's own rejection of this pairing, so both doors answer 400.
+      throw new BadRequestError('decision and keptFabFileId must be written together, or neither');
+    }
+    // Neither named: a partial update touching other fields, which changes no pairing. Correct to pass.
+    if (!namesDecision) return;
+    assertKeptPairing(fields.decision, fields.keptFabFileId);
   }
-  // Neither named: a partial update touching other fields, which changes no pairing. Correct to pass.
-  if (!namesDecision) return;
-  assertKeptPairing(fields.decision, fields.keptFabFileId);
-});
+);
 
 export const LakeMembershipDecisionModel =
   (mongoose.models['LakeMembershipDecision'] as unknown as mongoose.Model<ILakeMembershipDecisionDocument>) ||

@@ -102,9 +102,9 @@ describe('LakeMembershipDecisionRepository', () => {
   });
 
   // The pairing guard lives on the SCHEMA, not in `recordMembershipDecision`, because that service
-  // is one writer of several. These three go through the doors that bypass it: BaseRepository's
-  // inherited `create` and `update`, and a raw findOneAndUpdate. Delete either schema hook and one
-  // of them starts passing.
+  // is one writer of several. These go through the two doors that bypass it: BaseRepository's
+  // inherited `create` (the validate hook) and its inherited `update` (the query hook). Delete
+  // either schema hook and one of them starts passing.
   describe('keptFabFileId/decision pairing', () => {
     it('refuses a keep-specific that names nobody, through BaseRepository.create', async () => {
       await expect(repo.create(decision({ decision: 'keep-specific', keptFabFileId: null }) as never)).rejects.toThrow(
@@ -121,9 +121,9 @@ describe('LakeMembershipDecisionRepository', () => {
     it('refuses the same mismatch on the update path, where a required validator cannot see it', async () => {
       const created = await repo.upsertDecision(decision({ decision: 'keep-specific', keptFabFileId: 'f1' }));
 
-      await expect(repo.update({ id: created.id, keptFabFileId: null, decision: 'keep-specific' } as never)).rejects.toThrow(
-        /keptFabFileId is required/
-      );
+      await expect(
+        repo.update({ id: created.id, keptFabFileId: null, decision: 'keep-specific' } as never)
+      ).rejects.toThrow(/keptFabFileId is required/);
     });
 
     // The two holes a per-half check leaves open. An update sees only its own payload, so naming
@@ -141,6 +141,18 @@ describe('LakeMembershipDecisionRepository', () => {
       const created = await repo.upsertDecision(decision({ decision: 'keep-specific', keptFabFileId: 'f1' }));
 
       await expect(repo.update({ id: created.id, decision: 'keep-newest' } as never)).rejects.toThrow(
+        /must be written together/
+      );
+    });
+
+    it('refuses an explicitly-undefined half, which mongoose strips before Mongo ever sees it', async () => {
+      // `{ decision: undefined }` is ordinary well-typed TypeScript - `update` takes a Partial, and a
+      // spread of an absent value produces exactly this. A presence test that asks whether the KEY is
+      // there says both halves were named, then mongoose deletes the undefined key while casting, and
+      // what lands is the single-half write the guard exists to refuse.
+      const created = await repo.upsertDecision(decision({ decision: 'keep-newest', keptFabFileId: null }));
+
+      await expect(repo.update({ id: created.id, decision: undefined, keptFabFileId: 'f1' } as never)).rejects.toThrow(
         /must be written together/
       );
     });
