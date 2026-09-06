@@ -71,8 +71,8 @@ export function EmbeddingProviderLimits() {
       </Stack>
 
       <Typography level="body-sm" textColor="inherit" sx={{ mb: 1.5 }}>
-        Ask the configured embedding provider what it currently allows, and compare it to the levers
-        above. Costs one small embedding call.
+        Ask the configured embedding provider what it currently allows, and compare it to the levers above. Costs one
+        small embedding call.
       </Typography>
 
       <Button
@@ -99,8 +99,7 @@ export function EmbeddingProviderLimits() {
       {!isFetching && error && (
         <Alert color="danger" variant="soft" size="sm" sx={{ mt: 1.5 }} data-testid="embedding-limits-error">
           <Typography level="body-sm">
-            Could not read the provider limits. This is unknown, not unlimited - leave the levers as
-            they are and retry.
+            Could not read the provider limits. This is unknown, not unlimited - leave the levers as they are and retry.
           </Typography>
         </Alert>
       )}
@@ -135,8 +134,8 @@ export function EmbeddingProviderLimits() {
             <Typography level="body-sm" textColor="inherit" data-testid="embedding-limits-comparison">
               Embedding Max Tokens Per Minute is set to {formatNumber(configuredTokens)} -{' '}
               {sharePercent(configuredTokens, tokenCeiling)}% of measured capacity. Suggested:{' '}
-              <strong>{formatNumber(suggestedTokens)}</strong>, leaving the rest for
-              query-side embedding, which shares this pool.
+              <strong>{formatNumber(suggestedTokens)}</strong>, leaving the rest for query-side embedding, which shares
+              this pool.
             </Typography>
           )}
 
@@ -148,8 +147,8 @@ export function EmbeddingProviderLimits() {
           )}
 
           <Typography level="body-xs" textColor="inherit">
-            Measured {new Date(data.measuredAt).toLocaleTimeString()}. Limits belong to the provider
-            organization behind the configured key, so they can differ per environment.
+            Measured {new Date(data.measuredAt).toLocaleTimeString()}. Limits belong to the provider organization behind
+            the configured key, so they can differ per environment.
           </Typography>
         </Stack>
       )}

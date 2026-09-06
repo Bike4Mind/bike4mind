@@ -109,6 +109,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   markConvergencePaused: vi.fn(),
   countFailedFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
+  countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
   countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),

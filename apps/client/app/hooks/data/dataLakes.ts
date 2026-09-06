@@ -2,6 +2,7 @@ import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
   DataLakeDocumentPurgeReceipt,
+  DataLakeMembershipArm,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
   IDataLakeBatchDocument,
@@ -16,6 +17,7 @@ import type {
   TaxonomyTag,
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
+import { useTranslation } from 'react-i18next';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
@@ -751,6 +753,13 @@ export function useDismissTaxonomy(batchId: string) {
 // ── Per-lake files ──────────────────────────────────────────────────────────
 
 /**
+ * A lake member as this browse returns it: the file plus which membership arm made it one -
+ * `meta` (the lake's `datalake:*` tag), `prefix` (a `fileTagPrefix` content tag on a file the
+ * creator owns, no meta-tag), or `both`. Undefined only if the server predates this field.
+ */
+export type DataLakeMemberFile = IFabFileDocument & { membershipArm?: DataLakeMembershipArm };
+
+/**
  * Hook: Fetch files belonging to a specific data lake by ID.
  * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
  * query; see useGetDataLakeArticles.
@@ -759,7 +768,7 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
   return useQuery({
     queryKey: dataLakeKeys.files(dataLakeId, params),
     queryFn: async () => {
-      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
+      const response = await api.get<{ data: DataLakeMemberFile[]; total: number; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/articles`,
         { params: { limit: params?.limit ?? 100 } }
       );
@@ -1280,6 +1289,73 @@ export function useConvergeDataLake(dataLakeId: string | null) {
   });
 }
 
+/**
+ * Hook: Attach existing files to a data lake by toggling on its `datalake:*` meta-tag, through
+ * the same `/api/files/tags/toggle` write every other manual membership join uses (see
+ * toggleTags). Lets an owner add a file they already uploaded without re-uploading it through
+ * the wizard.
+ *
+ * A dedicated add-only door DOES exist (`POST /api/data-lakes/:id/files/:fabFileId`, see
+ * addFileToDataLake) - it mints a restore record and an audit row and is per-file, not batched.
+ * This hook deliberately uses the shared toggle door instead, for the batch. Both doors now apply
+ * the same ownership conjunct, so their access decisions agree - but each applies it in its own
+ * pre-write pass, NOT in the `addFileToLake` write they both call. `addFileToLake` cannot carry it:
+ * `addFileToDataLake`'s restore path calls it deliberately WITHOUT one. So a new caller of
+ * `addFileToLake` inherits no ownership check and has to grade the file's owner itself - see the
+ * conjunct in `toggleTags` and `addFileToDataLake`'s own docblock. What this door does not get is
+ * the restore record or the per-write audit row.
+ *
+ * IMPORTANT: the toggle endpoint TOGGLES the tag, so this must only ever be called with ids that
+ * are NOT already members - reposting the tag for an existing member would remove it (and its
+ * content-prefix tags with it, unrecoverably). The caller (Files browser) filters the selection
+ * down first; `skippedCount` is purely for the success toast's wording.
+ */
+export function useAddFilesToLake() {
+  const queryClient = useQueryClient();
+  const { t } = useTranslation();
+  return useMutation({
+    mutationFn: async ({
+      fileIds,
+      lake,
+      skippedCount = 0,
+    }: {
+      fileIds: string[];
+      lake: { id: string; datalakeTag: string };
+      skippedCount?: number;
+    }) => {
+      const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
+        ids: fileIds,
+        tags: [lake.datalakeTag],
+      });
+      return { files: res.data, lake, skippedCount };
+    },
+    onSuccess: ({ files, skippedCount }) => {
+      toast.success(
+        skippedCount > 0
+          ? t('file_browser.added_to_lake_with_skipped', { count: files.length, skippedCount })
+          : t('file_browser.added_to_lake', { count: files.length })
+      );
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      if (refusal) {
+        toast.error(refusal);
+        return;
+      }
+      toast.error(error.message || 'Failed to add files to the data lake');
+    },
+    // A mid-batch failure can still leave some of the batch's files written (toggleTags is not
+    // transactional across files - see its docblock), so invalidation must run on every outcome,
+    // not only success: an onSuccess-only invalidation left the cache reporting the pre-add state
+    // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
+    // that same cache before the next attempt.
+    onSettled: (_data, _error, { lake }) => {
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      invalidateLakeFileMembershipQueries(queryClient, lake.id);
+    },
+  });
+}
+
 // ── Browse surfaces (tag tree / articles / tickers) ──────────────────────────
 
 export interface DataLakeArticlesParams {
@@ -1311,6 +1387,13 @@ export interface DataLakeTagCountsResponse {
    * tree's branches.
    */
   lakeFileCounts: Record<string, number>;
+  /**
+   * Same lakes as `lakeFileCounts`, split into the two membership arms so the manager can say
+   * whose signal made a file a member: `metaCount` carries the lake's `datalake:*` tag,
+   * `prefixOnlyCount` is a member solely via a `fileTagPrefix` content tag (no meta-tag). The two
+   * are disjoint and sum to `lakeFileCounts[datalakeTag]`.
+   */
+  lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
   /**
    * The slice of `lakeFileCounts` a prefix-keyed tag tree has no branch for: members carrying
    * the lake's meta-tag but no tag under its `fileTagPrefix`. Same key, same predicate, so a

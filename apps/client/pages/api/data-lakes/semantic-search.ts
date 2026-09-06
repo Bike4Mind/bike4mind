@@ -205,7 +205,6 @@ const SemanticSearchInput = z.object({
     .optional(),
 });
 
-
 const handler = baseApi()
   .use(
     // Rate limit: prevents a caller from spamming the platform's embedding
@@ -228,7 +227,8 @@ const handler = baseApi()
         });
       }
       const { query, top_k, min_score, tags } = parsed.data;
-      const embedding_model = parsed.data.embedding_model ?? (await resolveDefaultEmbeddingModel(req.logger, 'semantic-search'));
+      const embedding_model =
+        parsed.data.embedding_model ?? (await resolveDefaultEmbeddingModel(req.logger, 'semantic-search'));
 
       // --- Request cancellation: bail out early if the client disconnects ---
       // Keeps the Lambda from continuing to embed + scan after the caller is

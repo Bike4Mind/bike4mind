@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box } from '@mui/joy';
 import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
-import { useActiveDataLakeBatches, useGetDataLakes, useGetDataLakeTagCounts } from '@client/app/hooks/data/dataLakes';
+import {
+  useActiveDataLakeBatches,
+  useGetDataLakes,
+  useGetDataLakeTagCounts,
+  type DataLakeMemberFile,
+} from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
@@ -14,7 +19,7 @@ import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
 import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import { DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
-import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
+import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import type { ManagerLake } from './manager/shared';
 import { prefixSegments } from './manager/shared';
 import ManagerNav from './manager/ManagerNav';
@@ -67,10 +72,17 @@ export default function DataLakeManagerPanel() {
     (lake: ManagerLake): number | undefined => tagCountsData?.lakeFileCounts?.[lake.datalakeTag],
     [tagCountsData]
   );
+  // The two DISJOINT membership arms: a file is a member via the lake's `datalake:*`
+  // meta-tag, or via a `fileTagPrefix` content tag on a file the lake's CREATOR owns - and the
+  // two arms are invisible from a single combined count. See buildDataLakeMembershipFilter.
+  const lakeArmCounts = useCallback(
+    (lake: ManagerLake) => tagCountsData?.lakeArmCounts?.[lake.datalakeTag],
+    [tagCountsData]
+  );
 
   const [lakeId, setLakeId] = useState<string | null>(null);
   const [path, setPath] = useState<string[]>([]);
-  const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
+  const [selectedFile, setSelectedFile] = useState<DataLakeMemberFile | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
   const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
   const [editingFallbackLakeId, setEditingFallbackLakeId] = useState<string | null>(null);
@@ -221,6 +233,7 @@ export default function DataLakeManagerPanel() {
           <LakeInfoPanel
             lake={activeLake}
             fileCount={lakeCount(activeLake)}
+            armCounts={lakeArmCounts(activeLake)}
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
             onOpenAccess={() => setAccessLakeId(activeLake.id)}

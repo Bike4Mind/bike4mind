@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  hasUsableLimits,
-  parseDurationMs,
-  parseEmbeddingRateLimitHeaders,
-} from './embeddingRateLimitHeaders';
+import { hasUsableLimits, parseDurationMs, parseEmbeddingRateLimitHeaders } from './embeddingRateLimitHeaders';
 
 /** Verbatim from a real text-embedding-ada-002 response. */
 const LIVE_HEADERS = {

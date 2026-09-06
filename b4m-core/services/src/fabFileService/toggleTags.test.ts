@@ -15,18 +15,36 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ...overrides,
   }) as IDataLakeDocument;
 
-const file = (id: string, tags: { name: string; strength: number }[] = []) => ({ id, userId: 'owner', tags });
+// `toJSON` is non-enumerable, matching a real Mongoose document: it must not show up in a
+// structural `toEqual` diff, and the production code's `Object.assign`-onto-a-live-document bug
+// (an own-property assignment invisible to `toJSON`, dropped by `res.json`) can only be caught by
+// a mock document that actually behaves like one - a bare plain object masks it. See
+// SharableDocumentModel.findAccessibleById for the real repository's own `.toJSON()` call.
+const file = (id: string, tags: { name: string; strength: number }[] = []) => {
+  const doc = { id, userId: 'owner', tags };
+  Object.defineProperty(doc, 'toJSON', { value: () => ({ ...doc }), enumerable: false });
+  return doc;
+};
+
+/** Attaches the same non-enumerable `toJSON` to a raw file literal that doesn't already have one. */
+const withToJSON = <T extends { id: string }>(f: T): T => {
+  if (typeof (f as unknown as { toJSON?: unknown }).toJSON === 'function') return f;
+  const copy = { ...f };
+  Object.defineProperty(copy, 'toJSON', { value: () => ({ ...copy }), enumerable: false });
+  return copy;
+};
 
 const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocument | null = lake()) => {
+  const filesWithToJSON = files.map(withToJSON);
   // A mutable store so pushTagsByFabFileId/pullTagsByFabFileId mutate what findById returns next,
   // exactly as the real atomic repository methods would - the backfill step re-reads after the
   // per-tag loop, so its correctness depends on that read seeing the loop's own writes.
-  const store = new Map(files.map(f => [f.id, { ...f, tags: [...f.tags] }]));
+  const store = new Map(filesWithToJSON.map(f => [f.id, { ...f, tags: [...f.tags] }]));
 
   return {
     db: {
       fabFiles: {
-        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(files) },
+        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(filesWithToJSON) },
         findById: vi.fn(async (id: string) => store.get(id) ?? null),
         pullTagsByFabFileId: vi.fn(async (id: string, names: string[]) => {
           const doc = store.get(id);
@@ -316,6 +334,49 @@ describe('toggleTags - data lake meta-tags', () => {
   });
 });
 
+// Membership IS read access - the meta-tag arm of buildDataLakeMembershipFilter carries no
+// ownership conjunct - so stamping the tag on a file the actor does not own publishes that owner's
+// private, merely read-shared file to every reader of the lake. Every other meta-tag test in this
+// file builds files with `userId: 'owner'` and calls as 'owner', so `file.userId === actor.userId`
+// is true throughout and the rest of the check is dead under test: delete it and they all still
+// pass. These three are the cases that fail when it is deleted.
+describe('toggleTags - meta-tag join file-ownership conjunct', () => {
+  const runAs = (userId: string, adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
+    toggleTags(userId, params, adapters as any);
+  const refusal = 'You do not have permission to add files to this data lake';
+
+  it('refuses a lake manager joining a file it does not own', async () => {
+    // 'owner' created lake1, so canManageLake passes and this conjunct is the only thing between a
+    // legitimate manager and a third party's file.
+    const adapters = makeAdapters([{ id: 'f1', userId: 'someone-else', tags: [] }]);
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(refusal);
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets a platform admin join a file the lake effective owner owns', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+  });
+
+  it('refuses a platform admin joining an unrelated third party file', async () => {
+    // isAdmin only satisfies the FIRST half of the second disjunct; the file's owner must still be
+    // an effective owner of the lake. Admin is not a licence to publish anyone's file anywhere.
+    const adapters = makeAdapters([{ id: 'f1', userId: 'third-party', tags: [] }]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await expect(runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(refusal);
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+});
+
+
 // A join above stamps only the meta-tag (addFileToLake never touches content tags), and a leave
 // clears every prefixed tag under that lake's own prefix - the fallback tagger's own reconciler
 // logic (additions, retractions, nested/shared prefixes, reserved namespace, collisions) is
@@ -455,6 +516,21 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
 
     expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
     expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual(['lk:b']);
+  });
+
+  it('surfaces the prefix-arm join count on the returned file, and it survives a JSON round-trip', async () => {
+    // Regression test for a real bug: the count used to be assigned onto the live Mongoose
+    // document via Object.assign, which `res.json` (via the schema's toJSON) silently dropped -
+    // the caller-facing trap-defusal toast could never fire. `file()`'s mock toJSON mirrors that
+    // real serialization boundary, so this fails the same way the production code did before the
+    // fix if the count is attached the wrong way.
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
+
+    const result = await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
+
+    const serialized = JSON.parse(JSON.stringify(result));
+    expect(serialized[0].prefixArmJoinedLakeCount).toBe(1);
   });
 
   it('toggling a prefix tag ON is never a leave, and recomputes when the actor manages the lake', async () => {

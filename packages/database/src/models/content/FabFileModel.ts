@@ -27,6 +27,7 @@ import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '
 import {
   buildDataLakeMembershipFilter,
   buildDataLakeMembershipQuery,
+  buildDataLakePrefixOnlyMembershipFilter,
   buildLacksContentPrefixTagFilter,
   buildNoOtherLakeMetaTagFilter,
 } from '../../queries/dataLakeLifecycleScope';
@@ -129,6 +130,25 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
 
   async findByFabFileId(fabFileId: string) {
     return this.fabFileChunkModel.find({ fabFileId });
+  }
+
+  /**
+   * The first `limit` chunks of one file as TEXT ONLY, ascending by `_id` (insertion order, which
+   * bulkInsert preserves - there is no chunkIndex on the schema).
+   *
+   * Exists because `findByFabFileId` is unbounded and returns whole documents INCLUDING `vector`,
+   * which is the overwhelming bulk of a chunk row. The inconsistency detector (#2242) needs prose and
+   * nothing else, over a bounded sample, so it gets a read that cannot accidentally pull embeddings
+   * into app memory. Deliberately per-file rather than batched: one `$in` across a lake with a `$push`
+   * would accumulate every chunk before any cap applied, which is the opposite of bounded.
+   */
+  async findChunkTextSample(fabFileId: string, limit: number): Promise<string[]> {
+    const rows = await this.fabFileChunkModel
+      .find({ fabFileId }, { text: 1, _id: 0 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return rows.map(row => (row as { text?: string }).text ?? '').filter(Boolean);
   }
 
   /**
@@ -2051,6 +2071,64 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         counts[scope.datalakeTag] = {
           total: row?.[`s${j}`]?.[0]?.n ?? 0,
           uncategorized: row?.[`u${j}`]?.[0]?.n ?? 0,
+        };
+      });
+    });
+    return counts;
+  }
+
+  /**
+   * Per-lake membership split into its two disjoint arms. `metaCount` reuses the plain meta-tag
+   * arm; `prefixOnlyCount` reuses `buildDataLakePrefixOnlyMembershipFilter`, which already
+   * excludes files also carrying the meta-tag, so the two never double-count a file. A lake with
+   * no usable prefix arm (fallback/registry lakes, or one with no creator to anchor to) reports
+   * `prefixOnlyCount: 0` rather than running a query with nothing to match.
+   *
+   * Batched the same way `countDataLakeFilesByMembership` is (chunked `$facet`s at
+   * LAKE_COUNT_CONCURRENCY): this is handed the identical `membershipScopes` array in the same
+   * `Promise.all`, so an unchunked fan-out here would compete for the same bounded connection pool
+   * that method was chunked to protect.
+   */
+  async countDataLakeFilesByMembershipArm(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, { metaCount: number; prefixOnlyCount: number }>> {
+    if (scopes.length === 0) return {};
+    const counts: Record<string, { metaCount: number; prefixOnlyCount: number }> = {};
+    const chunkStarts = Array.from(
+      { length: Math.ceil(scopes.length / LAKE_COUNT_CHUNK) },
+      (_, i) => i * LAKE_COUNT_CHUNK
+    );
+    await mapBounded(chunkStarts, LAKE_COUNT_CONCURRENCY, async i => {
+      const chunk = scopes.slice(i, i + LAKE_COUNT_CHUNK);
+      const exclusions = { deletedAt: null, archivedAt: null, status: { $ne: 'pending' } as const };
+      const branches = chunk.map(scope => {
+        const prefixOnlyFilter = buildDataLakePrefixOnlyMembershipFilter(scope);
+        return {
+          scope,
+          metaFilter: { 'tags.name': scope.datalakeTag, ...exclusions },
+          prefixOnlyFilter: prefixOnlyFilter ? { ...prefixOnlyFilter, ...exclusions } : null,
+        };
+      });
+      // Synthetic branch keys, same reason as countDataLakeFilesByMembership: a facet field name
+      // may not contain '.' or start with '$', and datalakeTag is a user-derived string.
+      const orFilters = branches.flatMap(branch =>
+        branch.prefixOnlyFilter ? [branch.metaFilter, branch.prefixOnlyFilter] : [branch.metaFilter]
+      );
+      const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
+        { $match: { $or: orFilters } },
+        {
+          $facet: Object.fromEntries(
+            branches.flatMap((branch, j) => [
+              [`m${j}`, [{ $match: branch.metaFilter }, { $count: 'n' }]],
+              ...(branch.prefixOnlyFilter ? [[`p${j}`, [{ $match: branch.prefixOnlyFilter }, { $count: 'n' }]]] : []),
+            ])
+          ),
+        },
+      ]);
+      branches.forEach((branch, j) => {
+        counts[branch.scope.datalakeTag] = {
+          metaCount: row?.[`m${j}`]?.[0]?.n ?? 0,
+          prefixOnlyCount: branch.prefixOnlyFilter ? (row?.[`p${j}`]?.[0]?.n ?? 0) : 0,
         };
       });
     });
