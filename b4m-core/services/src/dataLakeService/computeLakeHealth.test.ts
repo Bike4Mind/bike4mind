@@ -451,3 +451,150 @@ describe('computeLakeHealth membership dimension (#2245)', () => {
     expect(result.membership.bucketCounts['proven-identical']).toBe(0);
   });
 });
+
+describe('computeLakeHealth inconsistency surface (#2242)', () => {
+  const storedReport = {
+    findings: [
+      {
+        kind: 'relationship-conflict',
+        // Lifted verbatim from a member document - an organization name, not a system value.
+        subject: 'northwind logistics',
+        evidence: [
+          { fabFileId: 'f1', fileName: 'deck.pdf', excerpt: 'Northwind Logistics is a customer in production.' },
+          { fabFileId: 'f2', fileName: 'crm.pdf', excerpt: 'Northwind Logistics is a prospect evaluating us.' },
+        ],
+      },
+    ],
+    countsByKind: {
+      'superlative-conflict': 0,
+      'metric-disagreement': 0,
+      'relationship-conflict': 1,
+      'expired-claim': 0,
+    },
+    sampled: true,
+    truncated: false,
+    memberSampled: false,
+    memberCount: 2,
+    documentCount: 2,
+  } as never;
+
+  const withReport = (over: Record<string, unknown> = {}) =>
+    ({
+      ...lake,
+      inconsistencyReport: storedReport,
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+      ...over,
+    }) as never;
+
+  it('carries NO document prose onto the read-gated health response', async () => {
+    // The P0 this fixes. GET /health is read-gated (org and public-lake readers reach it) and applies
+    // no redaction, while the report is manage-only - redactLakeForActor withholds the stored fields
+    // and POST /inconsistencies is write-gated for that reason. Serializing the whole response and
+    // searching it is the assertion that survives someone adding a new prose-bearing field later; a
+    // per-field check would pass while the new field leaked.
+    const result = await computeLakeHealth(withReport(), makeAdapters([], []) as never);
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('Northwind Logistics');
+    expect(serialized).not.toContain('northwind logistics');
+    expect(serialized).not.toContain('deck.pdf');
+    expect(serialized).not.toContain('excerpt');
+    expect(serialized).not.toContain('findings');
+  });
+
+  it('still reports the counts, so the surface can say something happened', async () => {
+    const result = await computeLakeHealth(withReport(), makeAdapters([], []) as never);
+
+    expect(result.inconsistency).toEqual({
+      computedAt: new Date('2026-06-01T00:00:00Z'),
+      sampled: true,
+      memberSampled: false,
+      memberCount: 2,
+      findingCount: 1,
+      truncated: false,
+      countsByKind: {
+        'superlative-conflict': 0,
+        'metric-disagreement': 0,
+        'relationship-conflict': 1,
+        'expired-claim': 0,
+      },
+    });
+  });
+
+  it('reports findingCount from the EXACT counts, not the length of a capped list', async () => {
+    // The stored list is capped and the counts are not, so reading the array's length put a saturated
+    // number beside exact per-kind figures that summed higher. A surface rendering both showed
+    // arithmetic that did not add up, and one trusting findingCount under-reported.
+    const truncatedReport = {
+      findings: [{ kind: 'metric-disagreement', subject: 'uptime', evidence: [], documentCount: 2 }],
+      countsByKind: {
+        'superlative-conflict': 3,
+        'metric-disagreement': 40,
+        'relationship-conflict': 7,
+        'expired-claim': 200,
+      },
+      sampled: true,
+      truncated: true,
+      memberSampled: true,
+      memberCount: 200,
+    } as never;
+
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyReport: truncatedReport }),
+      makeAdapters([], []) as never
+    );
+
+    expect(result.inconsistency?.findingCount).toBe(250);
+    expect(result.inconsistency?.truncated).toBe(true);
+  });
+
+  it('carries memberCount so a pass that scanned nothing does not read as a clean lake', async () => {
+    const neverScanned = {
+      findings: [],
+      countsByKind: {
+        'superlative-conflict': 0,
+        'metric-disagreement': 0,
+        'relationship-conflict': 0,
+        'expired-claim': 0,
+      },
+      sampled: true,
+      truncated: false,
+      memberSampled: false,
+      memberCount: 0,
+    } as never;
+
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyReport: neverScanned }),
+      makeAdapters([], []) as never
+    );
+
+    // findingCount 0 AND memberCount 0: nothing was read, which is not the same answer as "clean".
+    expect(result.inconsistency?.findingCount).toBe(0);
+    expect(result.inconsistency?.memberCount).toBe(0);
+  });
+
+  it('reports null when detection has never run, which is NOT the same as clean', async () => {
+    const result = await computeLakeHealth(lake, makeAdapters([], []) as never);
+
+    expect(result.inconsistency).toBeNull();
+  });
+
+  it('carries a stored report with no timestamp as computedAt null rather than dropping it', async () => {
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyComputedAt: undefined }),
+      makeAdapters([], []) as never
+    );
+
+    expect(result.inconsistency?.computedAt).toBeNull();
+    expect(result.inconsistency?.findingCount).toBe(1);
+  });
+
+  it('reads the STORED report rather than computing one', async () => {
+    // Detection reads chunk text and this function may not (#1665), so health is a reader here.
+    const adapters = makeAdapters([], []);
+
+    await computeLakeHealth(withReport(), adapters as never);
+
+    expect(adapters.db.fabFiles.findDataLakeMembershipMembers).toHaveBeenCalledTimes(1);
+  });
+});

@@ -133,6 +133,25 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
+   * The first `limit` chunks of one file as TEXT ONLY, ascending by `_id` (insertion order, which
+   * bulkInsert preserves - there is no chunkIndex on the schema).
+   *
+   * Exists because `findByFabFileId` is unbounded and returns whole documents INCLUDING `vector`,
+   * which is the overwhelming bulk of a chunk row. The inconsistency detector (#2242) needs prose and
+   * nothing else, over a bounded sample, so it gets a read that cannot accidentally pull embeddings
+   * into app memory. Deliberately per-file rather than batched: one `$in` across a lake with a `$push`
+   * would accumulate every chunk before any cap applied, which is the opposite of bounded.
+   */
+  async findChunkTextSample(fabFileId: string, limit: number): Promise<string[]> {
+    const rows = await this.fabFileChunkModel
+      .find({ fabFileId }, { text: 1, _id: 0 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return rows.map(row => (row as { text?: string }).text ?? '').filter(Boolean);
+  }
+
+  /**
    * One deterministic page of vector-bearing chunks for the given files, ascending by `_id`.
    * Vectorless chunks are filtered at the DB layer and only the fields semantic search needs
    * are projected; `.lean()` skips Mongoose hydration.

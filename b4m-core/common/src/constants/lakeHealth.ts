@@ -1,3 +1,4 @@
+import type { InconsistencyKind } from './corpusInconsistency';
 import type { WireLakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
@@ -544,6 +545,42 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    * See the note on `membership` above: these two are redundant and expected to disagree.
    */
   duplicateMembers: LakeHealthDuplicatesReport;
+  /**
+   * SUMMARY of the last cross-document inconsistency report (#2242), or null when detection has never
+   * run. Null is NOT "clean" and a surface must not render it as such - detection is an
+   * owner-triggered pass, because it reads chunk text and health may not (#1665).
+   *
+   * Counts only. No excerpts, and no `subject`, because both are lifted verbatim from member
+   * documents - a `relationship-conflict` subject IS an organization name taken out of the prose.
+   * GET /health is READ-gated (org and public-lake readers reach it) and applies no redaction, while
+   * the report itself is manage-only: `redactLakeForActor` withholds the stored fields from readers,
+   * and POST /inconsistencies is write-gated for exactly that reason.
+   *
+   * So the shape here carries nothing to redact rather than relying on a caller to redact it. An
+   * actor-conditional payload would put the burden on every future reader of this response; a
+   * structurally prose-free one cannot leak even if someone forgets. The full findings come from
+   * POST /inconsistencies, which is already gated.
+   */
+  inconsistency: {
+    computedAt: Date | null;
+    /**
+     * True when detection did not read every chunk of every member, so counts are a LOWER BOUND.
+     * Unconditionally true today: the pass reads a bounded number of chunks per member.
+     */
+    sampled: boolean;
+    /** True when the lake has more members than the pass sampled. The actionable half of `sampled`. */
+    memberSampled: boolean;
+    /**
+     * Members whose text was actually read. Zero with a non-null `computedAt` means the pass ran and
+     * scanned nothing, which is NOT a clean lake - the same distinction `null` carries one level up.
+     */
+    memberCount: number;
+    /** EXACT: summed from `countsByKind`, so it never implies fewer findings than were detected. */
+    findingCount: number;
+    /** True when the stored finding list was capped. `findingCount` above is unaffected. */
+    truncated: boolean;
+    countsByKind: Record<InconsistencyKind, number>;
+  } | null;
 };
 
 function emptyTally(): PredicateTally {

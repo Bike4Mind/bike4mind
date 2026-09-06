@@ -86,7 +86,14 @@ export interface ComputeLakeHealthAdapters {
 export async function computeLakeHealth(
   lake: Pick<
     IDataLakeDocument,
-    'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
+    | 'id'
+    | 'datalakeTag'
+    | 'fileTagPrefix'
+    | 'createdByUserId'
+    | 'organizationId'
+    | 'requiredPassageTokenTarget'
+    | 'inconsistencyReport'
+    | 'inconsistencyComputedAt'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
@@ -123,6 +130,7 @@ export async function computeLakeHealth(
       scanTruncated: false,
       membership: toWireMembershipReport(summarizeLakeMembership([], { scope: membershipScopeDisclosure(scope) })),
       duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
+      inconsistency: storedInconsistency(lake),
     };
   }
 
@@ -162,6 +170,40 @@ export async function computeLakeHealth(
         members: g.members.slice(0, DUPLICATE_MEMBERS_PER_GROUP),
       })),
     },
+    // READ, never computed here: detection needs chunk text and this function may not touch the chunk
+    // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
+    inconsistency: storedInconsistency(lake),
+  };
+}
+
+/**
+ * Project the stored report down to COUNTS for the health response. Null means "never run", which a
+ * surface must not render as "clean".
+ *
+ * Deliberately drops `findings` entirely - both the excerpts and the `subject`, which for a
+ * relationship conflict is an organization name lifted straight out of a member document. GET /health
+ * is read-gated and redacts nothing, so anything prose-shaped attached here reaches every reader of
+ * the lake, including public ones. Projecting rather than redacting means there is nothing for a
+ * future caller to forget to strip.
+ */
+function storedInconsistency(
+  lake: Pick<IDataLakeDocument, 'inconsistencyReport' | 'inconsistencyComputedAt'>
+): LakeHealthApiResponse['inconsistency'] {
+  const report = lake.inconsistencyReport;
+  if (!report) return null;
+  return {
+    computedAt: lake.inconsistencyComputedAt ?? null,
+    sampled: report.sampled,
+    memberSampled: report.memberSampled ?? false,
+    memberCount: report.memberCount ?? 0,
+    // Summed from the EXACT counts, never `findings.length`. The stored array is capped and the
+    // counts are not, so reading the array's length put a saturated number beside exact per-kind
+    // figures that summed higher - the surface's own arithmetic then contradicted itself, and a
+    // consumer trusting `findingCount` under-reported. `affectedMemberCount` next door exists for
+    // precisely this reason, "so the UI never implies fewer".
+    findingCount: Object.values(report.countsByKind).reduce((sum, count) => sum + count, 0),
+    truncated: report.truncated ?? false,
+    countsByKind: report.countsByKind,
   };
 }
 
