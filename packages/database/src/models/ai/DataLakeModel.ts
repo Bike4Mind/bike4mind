@@ -76,7 +76,9 @@ const DataLakeSchema = new mongoose.Schema(
     // LIST_PROJECTION, and the inherited `find` via an override that injects the same exclusion.
     // Both are needed: the exclusion has to live on the class that owns the field, so naming it in a
     // DataLakeBatchRepository projection is a silent no-op, and naming it only on the named methods
-    // misses the door every service outside this file actually uses.
+    // misses the door every service outside this file actually uses. The override yields to a caller
+    // that names ANY projection of its own, including an exclusion-only one that could safely have
+    // been merged - see its docblock for why it does not try to tell the two apart.
     inconsistencyReport: { type: mongoose.Schema.Types.Mixed, default: null },
     inconsistencyComputedAt: { type: Date, default: null },
     fileTagPrefix: { type: String, required: true },
@@ -291,7 +293,8 @@ const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): 
 //
 // Two forms because there are two ways out of this class. The named methods below use the string on
 // `.select()`; the `find` OVERRIDE covers the inherited one, which is published on
-// IDataLakeRepository and is how every service outside this file reads lakes.
+// IDataLakeRepository and is how every service outside this file reads lakes - except when that
+// caller names a projection itself, in which case the override steps aside entirely.
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
 
