@@ -53,7 +53,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         setLoading(true);
         setError(null);
 
-        const loadingTask = pdfjsLib.getDocument(file);
+        const loadingTask = pdfjsLib.getDocument({ url: file });
         const pdf = await loadingTask.promise;
 
         if (cancelled) return;
@@ -97,7 +97,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
 
             canvasContainerRef.current?.appendChild(canvas);
 
-            // pdf.js v5's RenderParameters requires the canvas element itself, not just
+            // pdf.js's RenderParameters requires the canvas element itself, not just
             // the 2D context, so pass both.
             const renderContext = {
               canvas,
@@ -129,7 +129,8 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         renderTaskRef.current.cancel?.();
       }
       if (pdfDocRef.current) {
-        pdfDocRef.current.destroy();
+        // pdf.js v6 removed PDFDocumentProxy.destroy(); the loading task owns teardown.
+        pdfDocRef.current.loadingTask.destroy();
         pdfDocRef.current = null;
       }
     };
