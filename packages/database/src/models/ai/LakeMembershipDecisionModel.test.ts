@@ -126,6 +126,25 @@ describe('LakeMembershipDecisionRepository', () => {
       );
     });
 
+    // The two holes a per-half check leaves open. An update sees only its own payload, so naming
+    // ONE half means the other is whatever the stored row holds - unknown to the hook, and passed by
+    // default. Both of these produced exactly the row `create` is rejected for above.
+    it('refuses a write that names only the kept member, leaving the stored decision unknown', async () => {
+      const created = await repo.upsertDecision(decision({ decision: 'keep-newest', keptFabFileId: null }));
+
+      await expect(repo.update({ id: created.id, keptFabFileId: 'f1' } as never)).rejects.toThrow(
+        /must be written together/
+      );
+    });
+
+    it('refuses a write that names only the decision, leaving the stored kept member unknown', async () => {
+      const created = await repo.upsertDecision(decision({ decision: 'keep-specific', keptFabFileId: 'f1' }));
+
+      await expect(repo.update({ id: created.id, decision: 'keep-newest' } as never)).rejects.toThrow(
+        /must be written together/
+      );
+    });
+
     it('lets a partial update that names neither field through', async () => {
       // The guard reads what the write NAMES, so an update touching only groupIdentity changed
       // neither half of the pair and must not be rejected for the row's existing shape.

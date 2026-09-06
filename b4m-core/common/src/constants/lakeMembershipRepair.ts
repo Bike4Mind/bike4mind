@@ -10,6 +10,7 @@
  */
 
 import { byNewestFirst, type DuplicateBucket, type DuplicateGroup } from './lakeMembershipHealth';
+import type { ILakeMembershipDecision } from '../types/entities/LakeMembershipDecisionTypes';
 
 /**
  * What the plan proposes for one duplicate group.
@@ -53,6 +54,24 @@ export interface MembershipDecisionRecord {
   decidedByUserId: string;
   decidedAt: Date;
 }
+
+/**
+ * One row, two declarations: `MembershipDecisionRecord` above is what the planner reads and
+ * `ILakeMembershipDecision` is what persists. A field added to one and not the other surfaces at the
+ * boundary that erases the difference, on live data.
+ *
+ * This lives in the SOURCE file, not beside the tests that motivated it: every tsconfig in the repo
+ * excludes test files from the typecheck, so an assertion of this shape in a `.test.ts` is compiled
+ * by nothing and silently guarantees nothing. Costs nothing at runtime, fails the build both ways.
+ *
+ * `source` is deliberately omitted: the planner does not branch on where a ruling came from.
+ */
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _decisionRecordParity: MutuallyAssignable<
+  MembershipDecisionRecord,
+  Omit<ILakeMembershipDecision, 'source'>
+> = true;
+void _decisionRecordParity;
 
 export interface PlannedRepairGroup {
   fileName: string;

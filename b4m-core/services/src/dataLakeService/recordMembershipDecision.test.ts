@@ -9,6 +9,7 @@ const member = (fabFileId: string, serverTextHash: string | null = null): Duplic
   fileSize: 100,
   createdAt: new Date('2026-08-01T00:00:00Z'),
   arm: 'meta-tag',
+  userId: null,
 });
 
 const group: Pick<DuplicateGroup, 'fileName' | 'members'> = {
@@ -87,6 +88,9 @@ describe('recordMembershipDecision', () => {
     const { db, upsertDecision } = adapters();
 
     await expect(
+      // @ts-expect-error - deliberately the shape MembershipDecisionInput makes unrepresentable.
+      // The union is an assertion about what SHOULD arrive off the wire; this proves the runtime
+      // guard still fires when it does not.
       recordMembershipDecision('owner-1', 'lake-1', group, { decision: 'keep-specific', source: 'repair' }, { db })
     ).rejects.toThrow(/requires the member to keep/);
     expect(upsertDecision).not.toHaveBeenCalled();
@@ -101,6 +105,7 @@ describe('recordMembershipDecision', () => {
         'owner-1',
         'lake-1',
         group,
+        // @ts-expect-error - the mirror unrepresentable shape; same reason as above.
         { decision: 'keep-newest', keptFabFileId: 'f-old', source: 'repair' },
         { db }
       )

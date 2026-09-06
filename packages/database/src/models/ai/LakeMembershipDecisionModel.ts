@@ -70,9 +70,22 @@ LakeMembershipDecisionSchema.pre('validate', function () {
 // bypassable in the first place.
 LakeMembershipDecisionSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], function () {
   const update = (this.getUpdate() ?? {}) as Record<string, unknown> & { $set?: Record<string, unknown> };
-  // A write can name the fields at the top level or under $set; a partial update that names neither
-  // leaves both undefined and the guard passes, which is correct - it changed neither.
+  // A write can name the fields at the top level or under $set.
   const fields = { ...update, ...(update.$set ?? {}) };
+  const namesDecision = 'decision' in fields;
+  const namesKept = 'keptFabFileId' in fields;
+
+  // BOTH HALVES OR NEITHER, rather than validating whichever half the write happened to name. An
+  // update sees only its own payload, never the stored row, so a write naming one half is checked
+  // against an unknown other half and passes by default - `{ keptFabFileId: 'f1' }` onto a stored
+  // `keep-newest`, or `{ decision: 'keep-newest' }` onto a row already holding a kept id, each
+  // produce exactly the pairing below refuses to create. Requiring both makes the resulting pair a
+  // property of the write, which is the most an update hook can actually know.
+  if (namesDecision !== namesKept) {
+    throw new Error('decision and keptFabFileId must be written together, or neither');
+  }
+  // Neither named: a partial update touching other fields, which changes no pairing. Correct to pass.
+  if (!namesDecision) return;
   assertKeptPairing(fields.decision, fields.keptFabFileId);
 });
 

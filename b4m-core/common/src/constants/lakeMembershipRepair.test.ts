@@ -6,7 +6,6 @@ import {
   type MembershipDecisionRecord,
 } from './lakeMembershipRepair';
 import type { DuplicateBucket, DuplicateGroup } from './lakeMembershipHealth';
-import type { ILakeMembershipDecision } from '../types/entities/LakeMembershipDecisionTypes';
 
 /**
  * Distinct timestamps for the three stock ids, so "newest first" is a real ordering rather than
@@ -29,6 +28,7 @@ const member = (fabFileId: string, serverTextHash: string | null = null) => ({
   fileSize: 100,
   createdAt: new Date(CREATED_AT[fabFileId] ?? '2026-01-01T00:00:00Z'),
   arm: 'meta-tag' as const,
+  userId: null,
 });
 
 /** Two members that really do agree on hash and size - what `classifyGroup` needs to say proven. */
@@ -57,20 +57,6 @@ const decision = (g: DuplicateGroup, overrides: Partial<MembershipDecisionRecord
   ...overrides,
 });
 
-/**
- * One row, two declarations: `MembershipDecisionRecord` is what the planner reads and
- * `ILakeMembershipDecision` is what persists, and nothing tied them together. A field added to one
- * and not the other used to surface at the boundary that erases the difference, on live data.
- * Compile-time only - it costs nothing at runtime and fails the build in both directions.
- *
- * `source` is deliberately omitted: the planner does not branch on where a ruling came from.
- */
-type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
-const _decisionRecordParity: MutuallyAssignable<
-  MembershipDecisionRecord,
-  Omit<ILakeMembershipDecision, 'source'>
-> = true;
-void _decisionRecordParity;
 
 describe('groupIdentity', () => {
   it('is stable regardless of member order', () => {
