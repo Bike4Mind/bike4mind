@@ -46,9 +46,18 @@ function outcomeSeverity(outcome: RetrievalSummary['outcome']): number {
  *   'optional' must not downgrade a turn the forced arm already claimed. Order-independent.
  * - forcedSkipReason: first defined survives. The forced arm takes exactly one skip per turn, so
  *   a second value would mean two arms disagreeing about the same fact; keeping the earlier one
- *   makes the merge order-independent rather than last-writer-wins.
+ *   makes this first-writer-wins under the accumulator convention (`existing` is the earlier
+ *   write), not last-writer-wins. Unlike the fields above it is NOT commutative when both sides
+ *   carry a different reason.
  * - surfaces / dataLakeTags / injectedLakePromptIds: union, deduped. injectedLakePromptCount is
- *   derived from the merged ids, not merged independently, so the two can never disagree.
+ *   derived from the merged ids, not merged independently, so a two-sided merge can never leave
+ *   the two disagreeing.
+ *
+ * The one-sided returns below are a verbatim passthrough, and both injection sites emit a PARTIAL
+ * summary (ids with no count; `attempted` with no `outcome`) meant only as a merge delta. So a
+ * delta survives as-written if it is ever a turn's FIRST retrieval write - reachable only if
+ * nothing seeded `retrieval` first, which every caller of both doors already does. Readers should
+ * still derive the count from the ids rather than assume it is present.
  */
 export function mergeRetrievalSummary(
   existing: RetrievalSummary | undefined,
