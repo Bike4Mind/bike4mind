@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UploadTooLargeError } from '@server/utils/spoolRequestToFile';
 import type { Request, Response } from 'express';
 
 type RouteHandler = (req: Request, res: Response) => Promise<unknown>;
 
-const { uploadMock, getSignedUrlMock, captured } = vi.hoisted(() => ({
+const { uploadMock, getSignedUrlMock, spoolMock, captured } = vi.hoisted(() => ({
   uploadMock: vi.fn(),
   getSignedUrlMock: vi.fn(),
+  spoolMock: vi.fn(),
   captured: {} as {
     get?: (req: unknown, res: unknown) => Promise<unknown>;
     put?: (req: unknown, res: unknown) => Promise<unknown>;
@@ -40,8 +42,16 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   },
 }));
 vi.mock('sst', () => ({ Resource: { historyImportBucket: { name: 'history-bucket' } } }));
+// Real spooler by default, so the cases below still exercise the disk path. Only the 413 case
+// swaps in a rejection: crossing the 1 GB cap for real would write a gibibyte to the runner's
+// temp disk on every shard, and spoolRequestToFile.test.ts already proves the cap with 6 bytes.
+vi.mock('@server/utils/spoolRequestToFile', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/utils/spoolRequestToFile')>();
+  spoolMock.mockImplementation(actual.spoolRequestToFile);
+  return { ...actual, spoolRequestToFile: spoolMock };
+});
 
-await import('../upload');
+const { MAX_HISTORY_UPLOAD_BYTES } = await import('../upload');
 
 const makeRes = () => {
   const res = {} as Response & { statusCode: number; body: unknown };
@@ -115,11 +125,14 @@ describe('PUT /api/import-history/upload (self-host proxy)', () => {
   });
 
   it('413s a body over the cap without uploading anything', async () => {
-    const huge = 'x'.repeat(1024 * 1024);
-    const chunks = Array.from({ length: 1100 }, () => huge); // ~1.07 GB, past the 1 GB ceiling
+    spoolMock.mockRejectedValueOnce(new UploadTooLargeError(MAX_HISTORY_UPLOAD_BYTES));
     const res = makeRes();
-    await captured.put!(makeReq({ chunks }), res);
+    const req = makeReq();
+    await captured.put!(req, res);
+    // The cap the route hands the spooler is part of what breaks if this constant drifts.
+    expect(spoolMock).toHaveBeenCalledWith(req, MAX_HISTORY_UPLOAD_BYTES, { filename: 'history.zip' });
     expect(res.status).toHaveBeenCalledWith(413);
+    expect(res.body).toEqual(expect.objectContaining({ maxBytes: MAX_HISTORY_UPLOAD_BYTES }));
     expect(uploadMock).not.toHaveBeenCalled();
   });
 
@@ -146,6 +159,8 @@ describe('GET /api/import-history/upload', () => {
     const res = makeRes();
     await captured.get!(makeReq(), res);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ url: '/api/import-history/upload?source=OpenAI' }));
+    // The presign would only be discarded, so it is never minted - no MinIO round trip per import.
+    expect(getSignedUrlMock).not.toHaveBeenCalled();
   });
 
   it('hands back the presigned URL when hosted', async () => {

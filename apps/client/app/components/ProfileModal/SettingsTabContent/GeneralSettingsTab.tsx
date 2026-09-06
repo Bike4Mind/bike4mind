@@ -152,9 +152,9 @@ const GeneralSettingsTab = () => {
     // proxy path on self-host, where MinIO is neither browser-reachable nor CSP-allowed.
     // uploadFileToUrl is what knows to send the app's Bearer to the latter and withhold it from
     // the former, so this must not PUT directly (see browserUploadCallSites.test.ts).
-    const uploadUrl = await api.get(`/api/import-history/upload?source=${source}`).then(res => res.data.url);
 
     try {
+      const uploadUrl = await api.get(`/api/import-history/upload?source=${source}`).then(res => res.data.url);
       // The File streams straight through; reading it into an ArrayBuffer first would hold an
       // entire history export in browser memory.
       await uploadFileToUrl(uploadUrl, file, file.type, {

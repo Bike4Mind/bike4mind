@@ -10,9 +10,10 @@ import { join } from 'path';
  * server hands back a same-origin proxy path instead, and only uploadFileToUrl knows to send the
  * app's Bearer to a same-origin path while withholding it from a presign.
  *
- * A raw `axios.put` / `fetch(..., {method:'PUT'})` bypasses that decision, which is why the same
- * bug has now shipped three times: fab-file uploads (#855), the data-lake batch path (#1062), and
- * the LLM history import (#1365). Each looked fine hosted and failed identically on self-host.
+ * A raw `axios.put` / `fetch(..., {method:'PUT'})` / `xhr.open('PUT', ...)` bypasses that
+ * decision, which is why the same bug has now shipped three times: fab-file uploads (#855), the
+ * data-lake batch path (#1062), and the LLM history import (#1365). Each looked fine hosted and
+ * failed identically on self-host.
  *
  * Exemptions are per-file and must say why. "It is not an upload" is a fine reason; "not got
  * round to it" is the bug this test exists to catch.
@@ -20,6 +21,9 @@ import { join } from 'path';
 
 const REPO_ROOT = join(__dirname, '../../../..');
 const SCAN_ROOTS = ['apps/client/app'];
+
+/** Every shape a browser PUT takes here: axios, a fetch init, and XMLHttpRequest.open. */
+const RAW_PUT_PATTERN = 'axios\\.put\\(|method:\\s*[\'"`]PUT|\\.open\\(\\s*[\'"`]PUT';
 
 /**
  * Files allowed to issue a raw PUT, each with the reason it is not a bypass.
@@ -32,12 +36,14 @@ const ALLOWED_RAW_PUT: Record<string, string> = {
     'draft bundle upload; the server already returns a same-origin proxy URL on self-host (mintDraftUploadUrl) and that route authorizes by signed capability token, not by Bearer, so the raw PUT is correct',
   'apps/client/app/utils/blogImageUpload.ts':
     'PUTs to a third-party blog host presign, not B4M storage - no B4M proxy to route through (#1365 decision: out of scope, a CSP/blog-integration concern)',
+  'apps/client/app/components/ProfileModal/NotebookImportModal.tsx':
+    'NOT a sanctioned exemption - a known live bypass. It XHR-PUTs at the notebook-import presign, which pages/api/notebooks/import.ts does not rewrite, so the notebook data object never lands on self-host (#1365 criterion 5). Listed so the scan records the hole instead of missing it; delete this entry when the call site routes through uploadFileToUrl',
 };
 
 const rawPutCallSites = (): string[] => {
   let out = '';
   try {
-    out = execFileSync('grep', ['-rlE', "axios\\.put\\(|method:\\s*'PUT'", ...SCAN_ROOTS], {
+    out = execFileSync('grep', ['-rlE', RAW_PUT_PATTERN, ...SCAN_ROOTS], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
     });

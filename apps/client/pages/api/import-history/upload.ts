@@ -20,7 +20,7 @@ interface IParams {
  * feature on self-host. The hosted presigned path has no cap at all, so this is a self-host-only
  * limit whose job is bounding disk use, not policing content.
  */
-const MAX_HISTORY_UPLOAD_BYTES = 1024 * 1024 * 1024; // 1 GB
+export const MAX_HISTORY_UPLOAD_BYTES = 1024 * 1024 * 1024; // 1 GB
 
 const isKnownSource = (source: string): boolean =>
   source === importHistoryService.ImportSource.OPENAI || source === importHistoryService.ImportSource.CLAUDE;
@@ -43,12 +43,15 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
 
       if (!req.ability?.can(Permission.create, Session)) throw new Error('Cannot create session');
 
-      const bucket = Resource.historyImportBucket.name;
-      const s3 = new S3Storage(bucket);
-      const key = historyImportKey(String(req.user?.id), source);
-      const url = await s3.getSignedUrl(key, 'put', { expiresIn: 600 });
+      // Self-host gets the same-origin proxy below; hosted keeps the presign untouched. Minting
+      // one on self-host would be a wasted MinIO round trip: the resolver discards it, and the
+      // key it burns is not the key the PUT handler lands the bytes under.
+      let url = '';
+      if (process.env.B4M_SELF_HOST !== 'true') {
+        const s3 = new S3Storage(Resource.historyImportBucket.name);
+        url = await s3.getSignedUrl(historyImportKey(String(req.user?.id), source), 'put', { expiresIn: 600 });
+      }
 
-      // Self-host gets the same-origin proxy below; hosted keeps the presign untouched.
       return res.json({ success: true, url: resolveBrowserHistoryImportUploadUrl(source, url) });
     })
   )
