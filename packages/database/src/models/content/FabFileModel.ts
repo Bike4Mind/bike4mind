@@ -249,6 +249,14 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return agg ?? { terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 };
   }
 
+  async findVectorlessChunkIds(fabFileId: string): Promise<string[]> {
+    const docs = await this.fabFileChunkModel
+      .find({ fabFileId, 'vector.0': { $exists: false } })
+      .select({ _id: 1 })
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
   async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
     await this.fabFileChunkModel.updateMany({ fabFileId }, { $set: { embeddingModel } });
   }
@@ -1910,6 +1918,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 vectorized: false,
                 vectorizedChunkCount: 0,
                 error: null,
+                // Same rule as `error` above, for the marker the stranded-vectorize sweep selects
+                // on (buildStrandedVectorizeScanFilter). A file that stranded and is now being
+                // re-chunked has no chunks left for that sweep to rescue, and the only other place
+                // the marker is cleared is the resume path - which is reachable only for an
+                // already-chunked file. Leaving it set would have the sweep re-enqueue this file on
+                // every pass until it finishes chunking again, duplicating the wave's own send and
+                // spending a CHUNK_RESCUE_MAX_PER_RUN slot each time.
+                vectorizeEnqueueFailedAt: null,
                 // The two machine-written pipeline markers, and NOT `notes` (#2016). `notes` is the
                 // owner's own text: blanking it here silently deleted whatever they had typed on
                 // every "Rebuild passages" wave and every per-file reprocess. Clearing these two is
@@ -2461,6 +2477,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     vectorized: { type: Boolean, default: false },
     embeddingModel: { type: String, required: false },
     chunkEmbeddingModelStampedAt: { type: Date, required: false },
+    vectorizeEnqueueFailedAt: { type: Date, required: false, default: null },
 
     system: { type: Boolean, default: false },
     systemPriority: { type: Number, default: 999 },
@@ -2599,6 +2616,14 @@ FabFileSchema.index({ driveConnectionId: 1, deletedAt: 1, status: 1 });
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
 // sweep is a collection scan, since almost every file has chunkCount > 0.
 FabFileSchema.index({ status: 1, chunkCount: 1, deletedAt: 1, createdAt: 1 });
+
+// Stranded-vectorize rescue sweep (buildStrandedVectorizeScanFilter). Partial, because the stamp
+// is set only by a failed vectorize enqueue: the index then holds the handful of broken files
+// rather than an entry per file, and the sweep never scans the collection to find nothing.
+FabFileSchema.index(
+  { vectorizeEnqueueFailedAt: 1 },
+  { partialFilterExpression: { vectorizeEnqueueFailedAt: { $type: 'date' } } }
+);
 
 // Batch file queries
 FabFileSchema.index({ batchId: 1 });

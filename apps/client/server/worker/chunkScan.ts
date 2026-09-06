@@ -233,3 +233,60 @@ export const buildFabFileChunkScanFilter = (
     ],
   };
 };
+
+/** Grace period before the stranded-vectorize sweep touches a file, so it cannot race the chunk
+ * handler's own SQS retries of the same failed enqueue. */
+export const VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS = 15 * 60_000;
+
+/**
+ * Mongo filter selecting files whose chunks were committed but whose vectorize fan-out failed -
+ * fabFileChunk.ts stamps `vectorizeEnqueueFailedAt` when its enqueue throws.
+ *
+ * These files are invisible to buildFabFileChunkScanFilter above: that one requires
+ * chunkCount: 0, and these files HAVE chunks. Without this sweep the state is terminal by
+ * construction - the chunk handler's idempotency guard skips a redelivery and no other filter
+ * selects it - leaving a file with chunks, no vectors and nothing looking at it.
+ *
+ * Rescue is a chunk-queue re-enqueue, like the un-chunked sweep, and is non-destructive: the
+ * chunk handler refuses to re-chunk an already-chunked file and only re-sends the fan-out for
+ * chunks that still lack a vector, clearing the stamp when it succeeds. Deliberately NOT gated on
+ * enableAutoChunk (unlike the un-chunked sweep): that setting governs whether new uploads get
+ * chunked, and this only finishes handing off work that was already chunked.
+ *
+ * `staleClaimBefore` carries the same three-arm stale-claim semantics as
+ * buildFabFileChunkScanFilter, and for the same reason: resumeVectorizeEnqueue does real work under
+ * the claim (a vectorless-chunk read plus N sends), so a worker hard-killed inside that window never
+ * runs the finally that clears isChunking. Without the arm every automatic door is shut on that file
+ * - the un-chunked sweep needs chunkCount: 0, findConvergencePausedFilesByScope excludes in-flight,
+ * and the reprocess endpoint refuses a file being chunked - leaving only SQS redelivery and, past
+ * the retry ladder, a manual DLQ replay.
+ */
+export const buildStrandedVectorizeScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
+  // $type is load-bearing, not decoration, but not for narrowing: `$lt` is type-bracketed, so a bare
+  // `$lt: cutoff` already excludes the null default and a missing field. $type is here because it
+  // matches the partial index's own predicate (FabFileModel.ts) and is therefore what lets the
+  // planner use that index - drop it and this sweep becomes a full scan of the largest collection in
+  // the system. The IXSCAN assertion in fabFileVectorizeStranded.test.ts is what holds that.
+  vectorizeEnqueueFailedAt: { $type: 'date', $lt: cutoff },
+  // Redundant against the marker in practice, but it makes this sweep's domain disjoint from
+  // buildFabFileChunkScanFilter's (which requires chunkCount: 0) by construction rather than by
+  // whichever writer happens to have cleared the marker: an un-chunked file is the other sweep's
+  // business whatever stamps it carries.
+  chunked: true,
+  deletedAt: null,
+  // Normally exclude in-flight files. When a stale-claim cutoff is supplied, ALSO rescue a claim
+  // older than it, including the `chunkClaimedAt: null` backfill arm for files stuck claimed from
+  // before that stamp existed - see buildFabFileChunkScanFilter, whose arms these mirror exactly.
+  // Kept as a residual `$or` beside the stamp predicate rather than folded into it, so the partial
+  // vectorizeEnqueueFailedAt index still leads the plan (fabFileVectorizeStranded.test.ts asserts
+  // the IXSCAN).
+  ...(staleClaimBefore
+    ? {
+        $or: [
+          { isChunking: { $ne: true } },
+          { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+          { isChunking: true, chunkClaimedAt: null },
+        ],
+      }
+    : { isChunking: { $ne: true } }),
+});

@@ -301,6 +301,14 @@ export interface IFabFile {
    * ~60s as not-yet-queryable (mongot indexing lag), so this is read-time readiness, not a cache.
    */
   chunkEmbeddingModelStampedAt?: Date | null;
+  /**
+   * Set when this file's chunks were committed but handing them off to the vectorize queue
+   * failed (see fabFileChunk.ts). The chunks exist and `chunked` is true, so the un-chunked
+   * rescue sweep (chunkCount: 0) cannot see the file at all - this stamp is what makes the
+   * state findable, and buildStrandedVectorizeScanFilter selects on it. Cleared once the
+   * fan-out is resumed successfully.
+   */
+  vectorizeEnqueueFailedAt?: Date | null;
 
   system?: boolean;
 
@@ -497,6 +505,11 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
+  /**
+   * Ids of this file's chunks that still hold no vector - the resume set for a vectorize
+   * fan-out that never happened or only half happened (see fabFileChunk.ts).
+   */
+  findVectorlessChunkIds(fabFileId: string): Promise<string[]>;
   /**
    * The file's vectorize rollup in ONE pass over its chunks (the `vector` fetch is unavoidable and
    * must not be paid twice per batch):
