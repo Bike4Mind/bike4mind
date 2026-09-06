@@ -375,8 +375,9 @@ describe('unmaterializedAttachments (the agent door skip paths)', () => {
   });
 
   it('carries no content, so composing it into the first iteration leaves the query untouched', () => {
-    // This is what makes the two skip paths safe to turn from `undefined` into a value: the run
-    // still gets exactly the query it got before, and gains only the record.
+    // What makes the two skip paths safe to turn from `undefined` into a value: the fold adds no
+    // content of its own. The prompt does still change on those paths - the caller appends the
+    // notice block before it gets here - but this step contributes nothing to it.
     const out = unmaterializedAttachments(['a']);
 
     expect(composeFirstIterationMessage('the query', out)).toBe('the query');
@@ -384,7 +385,18 @@ describe('unmaterializedAttachments (the agent door skip paths)', () => {
     expect(out.fullyInlinedFileIds).toEqual([]);
   });
 
-  it('reports nothing for a turn that requested nothing', () => {
-    expect(unmaterializedAttachments([]).delivery.requested).toBe(0);
+  // The caller guards against an empty request, so this pins the helper's own contract rather
+  // than a live path: no notices invented, and a well-formed zeroed report rather than a partial.
+  it('is total: an empty request yields an empty report, not a malformed one', () => {
+    const out = unmaterializedAttachments([]);
+
+    expect(out.notices).toEqual([]);
+    expect(out.delivery).toEqual({
+      requested: 0,
+      delivered: 0,
+      fullyDelivered: 0,
+      dropped: 0,
+      droppedIds: [],
+    });
   });
 });
