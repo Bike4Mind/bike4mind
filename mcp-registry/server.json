@@ -3,7 +3,7 @@
   "name": "io.github.bike4mind/bike4mind",
   "title": "Bike4Mind",
   "description": "Notebooks, agents, files and RAG from your Bike4Mind workspace, as MCP tools.",
-  "version": "0.20.2",
+  "version": "0.20.3",
   "websiteUrl": "https://github.com/Bike4Mind/bike4mind",
   "repository": {
     "url": "https://github.com/Bike4Mind/bike4mind",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "@bike4mind/cli",
-      "version": "0.20.2",
+      "version": "0.20.3",
       "transport": {
         "type": "stdio"
       },
