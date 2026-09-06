@@ -185,4 +185,27 @@ describe('GET /api/admin/model-logs', () => {
     expect(serialized).not.toContain('private tool output');
     expect(serialized).toContain('web_search');
   });
+  // A bare z.string() let an unparseable value become an Invalid Date and cast against the
+  // Date-typed `timestamp` filter, which surfaces as a 500 rather than answering the caller.
+  it.each(['startDate', 'endDate'])('rejects an unparseable %s before any query runs', async param => {
+    const findSpy = vi.spyOn(Quest, 'find');
+    const { req, res } = run({ [param]: 'not-a-date' });
+    // Pin that it failed at schema parse (errorHandler maps a ZodError to 422). A bare
+    // Error would still fail the request but would come back as a 500.
+    await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+    expect(findSpy).not.toHaveBeenCalled();
+    findSpy.mockRestore();
+  });
+
+  it('still accepts an empty date param, which the handler skips', async () => {
+    const { req, res } = run({ startDate: '' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('still accepts a parseable startDate', async () => {
+    const { req, res } = run({ startDate: '2000-01-01T00:00:00.000Z' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
 });

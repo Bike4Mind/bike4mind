@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { Types } from 'mongoose';
 
 /**
  * Handler-layer regression coverage for the regex-injection / ReDoS hardening.
@@ -51,10 +52,10 @@ import '@pages/api/business-links';
 
 const REDOS_PAYLOAD = '(a+)+$';
 
-function invokeGet(searchTerm: string) {
+function invokeGet(query: Record<string, string>) {
   const { req, res } = createMocks({
     method: 'GET',
-    query: { searchTerm },
+    query,
     url: '/api/business-links',
   });
   return { req, res };
@@ -69,7 +70,7 @@ describe('GET /api/business-links — regex-injection hardening', () => {
   it('escapes the searchTerm before it reaches $regex', async () => {
     expect(mockRefs.getHandler).toBeTypeOf('function');
 
-    const { req, res } = invokeGet(REDOS_PAYLOAD);
+    const { req, res } = invokeGet({ searchTerm: REDOS_PAYLOAD });
     await mockRefs.getHandler!(req, res);
 
     const orConditions = (mockRefs.findQuery as { $or?: Array<Record<string, { $regex: string }>> })?.$or;
@@ -88,9 +89,36 @@ describe('GET /api/business-links — regex-injection hardening', () => {
   });
 
   it('builds an empty query (no $regex) when no searchTerm is provided', async () => {
-    const { req, res } = invokeGet('');
+    const { req, res } = invokeGet({ searchTerm: '' });
     await mockRefs.getHandler!(req, res);
 
     expect((mockRefs.findQuery as { $or?: unknown })?.$or).toBeUndefined();
+  });
+});
+
+describe('GET /api/business-links - categoryId validation', () => {
+  beforeEach(() => {
+    mockRefs.findQuery = undefined;
+    mockRefs.countQuery = undefined;
+  });
+
+  it('rejects a malformed categoryId with 400 instead of letting it cast', async () => {
+    const { req, res } = invokeGet({ categoryId: 'not-an-object-id' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({ error: 'Invalid category ID format' });
+    // Nothing reached the database, so no CastError could be thrown.
+    expect(mockRefs.findQuery).toBeUndefined();
+    expect(mockRefs.countQuery).toBeUndefined();
+  });
+
+  it('passes a well-formed categoryId through to the query', async () => {
+    const categoryId = new Types.ObjectId().toString();
+    const { req, res } = invokeGet({ categoryId });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.findQuery).toMatchObject({ categoryId });
   });
 });
