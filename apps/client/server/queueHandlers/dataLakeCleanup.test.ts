@@ -18,6 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: {},
+  lakeMembershipDecisionRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
@@ -52,6 +53,10 @@ describe('dataLakeCleanup consumer', () => {
           // The acquisition queue is swept alongside the grants (#1671) - a proposal outliving its
           // lake is unreviewable, so an unwired repo here would leave orphans behind every purge.
           dataLakeProposals: expect.anything(),
+          // Same reason, and asserted for a sharper one: the service reaches this port through `?.`,
+          // so an unwired repo is a silent no-op that typechecks forever. This is the only place
+          // that can tell "swept" from "never ran".
+          lakeMembershipDecisions: expect.anything(),
         }),
         logger,
       })

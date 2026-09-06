@@ -23,6 +23,7 @@
     "datalake:check-prefix-only-members": "tsx migrate/check-datalake-prefix-only-members.ts",
     "datalake:ingest-pdfs": "tsx datalake/ingest-pdf-datalake.ts",
     "datalake:check-stranded-drive-connections": "tsx datalake/check-stranded-drive-connections.ts",
+    "datalake:seed-stranded-member": "tsx datalake/seed-stranded-lake-member.ts",
     "db:create-user": "tsx createUser.ts",
     "db:list-users": "tsx listUsers.ts",
     "db:setup-email-user": "tsx setupTestEmailUser.ts",

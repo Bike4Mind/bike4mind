@@ -42,6 +42,7 @@ export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
 export * from './admissionContract';
 export * from './lakeAdmissionGate';
+export * from './recordMembershipDecision';
 export * from './removeFileFromDataLake';
 export * from './addFileToDataLake';
 export * from './setDataLakeFileTags';

@@ -137,8 +137,15 @@ export function isFingerprint(hash: string | null | undefined): hash is string {
   return typeof hash === 'string' && hash.length > 0;
 }
 
-/** Newest first; a member with no `createdAt` sorts last, since it cannot be shown to be newer. */
-function byNewestFirst(a: DuplicateGroupMember, b: DuplicateGroupMember): number {
+/**
+ * Newest first; a member with no `createdAt` sorts last, since it cannot be shown to be newer.
+ *
+ * Exported because `members` order is load-bearing downstream: `lakeMembershipRepair` removes by
+ * position ("everything after the first"), so an executor that re-reads members from Mongo in natural
+ * order has to restore THIS order - including the no-`createdAt` rule and the id tie-break - or it
+ * deletes the wrong copy. Re-implementing it is the failure mode; sharing it is the fix.
+ */
+export function byNewestFirst(a: DuplicateGroupMember, b: DuplicateGroupMember): number {
   const at = a.createdAt?.getTime();
   const bt = b.createdAt?.getTime();
   if (at === undefined && bt === undefined) return a.fabFileId.localeCompare(b.fabFileId);
