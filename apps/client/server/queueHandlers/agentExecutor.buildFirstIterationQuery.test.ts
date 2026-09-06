@@ -696,7 +696,10 @@ describe('maybeBuildFirstIterationQuery (gate)', () => {
       ).rejects.toThrow('resolver down');
     });
 
-    it('a prefix-only creator-owned member resolves through the forwarded lakeAccess (catches an unconverted-scope silent failure)', async () => {
+    // Deliberately NOT titled as catching an unconverted scope: the repo is a mock that returns the
+    // file whatever `lakeAccess` holds, so the query-level predicate is out of its reach. That is
+    // pinned against a real Mongo in FabFileModel.dataLakeLifecycle.test.ts.
+    it('names a prefix-only creator-owned member in the preamble when lakeAccess is forwarded', async () => {
       const getAccessibleFiles = vi.fn().mockResolvedValue([makeFile('id1', 'report.pdf', 'application/pdf')]);
       const repo = makeRepo(getAccessibleFiles);
       const logger = makeLogger();

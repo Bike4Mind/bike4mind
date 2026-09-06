@@ -1,6 +1,6 @@
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { connectDB } from '../utils/mongo';
-import { createMongoServer } from './createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from './createMongoServer';
 import mongoose from 'mongoose';
 import { beforeAll, afterAll, beforeEach } from 'vitest';
 // Import models to ensure they're registered
@@ -31,6 +31,13 @@ export const cleanupTestDB = async () => {
   }
 };
 
+// This hook does strictly more than boot mongod: it also builds four models' index sets on a cold
+// connection, and both costs scale with how contended the runner is. A bare literal here would also
+// override any per-file `vi.setConfig` budget, so it is derived from the shared lever rather than
+// pinned beside it. Doubled because the shared budget covers booting mongod alone; raising the
+// shared constant instead would hand the same slack to every suite that only boots.
+const SETUP_HOOK_TIMEOUT_MS = MONGO_TEST_TIMEOUT_MS * 2;
+
 export async function setupMongoTest() {
   let mongoServer: MongoMemoryServer;
 
@@ -49,10 +56,7 @@ export async function setupMongoTest() {
 
     // Force the models to be registered by accessing them
     await Promise.resolve([researchTaskRepository, taskScheduleRepository, researchAgentRepository]);
-    // 60s (not 30s): under parallel shards a cold mongodb-memory-server start - binary
-    // resolution plus the port-collision retry loop in createMongoServer - can exceed
-    // 30s and time the hook out (a transient red, not a real failure).
-  }, 60000);
+  }, SETUP_HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     if (mongoServer) {

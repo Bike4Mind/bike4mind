@@ -450,6 +450,44 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(result.map(f => f.fileName)).toEqual(['own-archived.txt']);
     });
 
+    it('forwards the dataLakeTags bucket: a non-owner reaches a meta-tagged member by tag alone', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { dataLakeTags: [DATALAKE_TAG] }
+      );
+
+      // The exact meta-tag arm only: prefix-owned.txt carries no datalake: tag, so this bucket
+      // alone must not reach it, and no stranger carries the tag either.
+      expect(result.map(f => f.fileName)).toEqual(['meta.txt']);
+    });
+
+    it('forwards the dataLakeTagPrefixes bucket, which is UNANCHORED - it reaches prefix matches the caller does not own', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { dataLakeTagPrefixes: ['acme:'] }
+      );
+
+      // Pinning the widest arm this door can be handed. Unlike a `lakeMemberships` scope, the
+      // prefix bucket carries NO creator conjunct, so every acme:-tagged file matches regardless
+      // of owner - which is why it is only ever supplied for a registry lake on an access-gated
+      // path, and why lakeMembershipsFrom's `owned` allow-list must keep registry scopes out of
+      // lakeMemberships. A regression that widened this bucket's source would show up here.
+      expect(result.map(f => f.fileName).sort()).toEqual([
+        'prefix-group.txt',
+        'prefix-owned.txt',
+        'prefix-shared.txt',
+        'unrelated.txt',
+      ]);
+    });
+
     it('an absent lakeAccess, or one with empty buckets, reproduces the byte-identical legacy result set', async () => {
       const rows = await seedLakeRows();
       const creatorCaslScope = { userId: CREATOR };

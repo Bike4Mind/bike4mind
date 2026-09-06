@@ -275,7 +275,10 @@ export function buildOwnershipConditions(
  * The lake-membership $or arms for a set of access buckets - one arm per `lakeMemberships` scope,
  * one for `dataLakeTags` (exact meta-tag match), one for `dataLakeTagPrefixes` (open prefix match).
  * Shared by `buildOwnershipConditions` (retrieval) and `FabFileModel.getAccessibleFiles`
- * (attachment), so the two doors can never disagree about what a lake arm matches.
+ * (attachment), so the two doors can never disagree about what this builder RETURNS. They may
+ * still post-process it: the attachment door ANDs `archivedAt: null` onto each arm it gets back
+ * (see the docblock on `getAccessibleFiles`), which retrieval gets from its top-level `baseFilter`
+ * instead. Shared construction, per-door post-processing - do not read this as identical queries.
  *
  * TOTAL: returns `[]` for absent, empty, or all-unusable buckets, and never throws. A prefix can
  * normalize away to zero arms (see `normalizeTagPrefix`), and a caller that needs to distinguish
