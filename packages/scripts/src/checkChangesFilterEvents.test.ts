@@ -112,14 +112,12 @@ function readEnvRefs(body: string): string[] {
 }
 
 /**
- * Names assigned inside the dispatch itself (BASE, HEAD). Subtracted from the env-plumbing check
- * so an arm reading a value another arm set is not mistaken for a missing env var.
+ * The only names the dispatch sets for itself; everything else an arm reads must come from the
+ * step's `env:` block. Spelled out rather than derived from the assignments in the block: that
+ * inference let one self-defaulting line exempt a name from the plumbing check for good, which is
+ * the failure this file exists to catch. A genuine third local fails loudly here and gets added.
  */
-function readAssignedNames(contents: string): string[] {
-  const block = /case\s+"\$EVENT_NAME"\s+in\n([\s\S]*?)\n\s*esac/.exec(contents);
-  if (!block) return [];
-  return [...block[1].matchAll(/(?:^|;)\s*([A-Z_][A-Z0-9_]*)=/gm)].map(match => match[1]);
-}
+const DISPATCH_LOCALS = new Set(['BASE', 'HEAD']);
 
 describe('changes-filter event dispatch vs ci.yml triggers', () => {
   const ci = fs.readFileSync(CI_WORKFLOW, 'utf8');
@@ -155,10 +153,9 @@ describe('changes-filter event dispatch vs ci.yml triggers', () => {
 
   it('plumbs every env var the arms read through the step env block', () => {
     const declared = new Set(readStepEnvKeys(action));
-    const assigned = new Set(readAssignedNames(action));
     const missing = arms
       .flatMap(arm => readEnvRefs(arm.body))
-      .filter(name => !declared.has(name) && !assigned.has(name));
+      .filter(name => !declared.has(name) && !DISPATCH_LOCALS.has(name));
     expect(
       [...new Set(missing)],
       "vars read by a case arm but absent from the step's `env:` block; they expand empty and fail open"
