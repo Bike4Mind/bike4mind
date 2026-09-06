@@ -4,7 +4,15 @@ name: pr-bot-review
 # from the private b4m-devtools repo; internal dev tooling is not committed here).
 #
 # Fires ONLY on:
-#   - labeled with `bot-review` → an explicitly requested review
+#   - labeled with `bot-review` → review only, never writes to the branch
+#   - labeled with `bot-fold`   → review AND apply the findings that meet the
+#     skill's fold bar, as one fixup commit pushed to the PR head
+#
+# Fold mode is opt-in per PR by label and is never inferred from PR content. It
+# pushes with a GitHub App token rather than GITHUB_TOKEN, because a push made
+# with GITHUB_TOKEN does not trigger workflows - a fold commit would otherwise
+# land untested. Pushes are non-force: a rejected push means the author moved
+# while the review ran, and the skill yields rather than retrying.
 #
 # Auto-review on open/ready_for_review/reopened was REMOVED deliberately. Reviewing
 # every PR by default was the single largest driver of our Anthropic spend, and most
@@ -68,15 +76,31 @@ jobs:
       github.event.pull_request.base.ref != 'prod' &&
       github.event.pull_request.head.ref != 'prod' &&
       !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
-      github.event.label.name == 'bot-review'
+      (github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 30
     steps:
+      # Fold mode only. Scoped to this repo with contents:write and nothing else.
+      # In review mode this step is skipped, the outputs are empty, and the
+      # checkout below falls back to the default read-only GITHUB_TOKEN - so a
+      # `bot-review` run has no way to write to the branch at all.
+      - name: Mint push token (fold mode only)
+        id: push_token
+        if: github.event.label.name == 'bot-fold'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.PREMIUM_OVERLAY_CLIENT_ID }}
+          private-key: ${{ secrets.PREMIUM_OVERLAY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       - name: Checkout PR head
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          token: ${{ steps.push_token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Size guard — skip oversize PRs, pick review model
         id: size_check
@@ -218,6 +242,12 @@ jobs:
           echo "skill_file=$DEST" >> "$GITHUB_OUTPUT"
           echo "bot-review skill fetched ($(wc -l < "$DEST") lines) from b4m-devtools@main"
 
+      - name: Configure git identity for fold commits
+        if: github.event.label.name == 'bot-fold'
+        run: |
+          git config user.name 'bike4mind-bot'
+          git config user.email 'bot@bike4mind.com'
+
       - name: Record review start time
         id: review_start
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
@@ -230,6 +260,13 @@ jobs:
         id: bot_review
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
         uses: anthropics/claude-code-action@v1
+        env:
+          # The skill reads FOLD_MODE and refuses to push unless it is exactly
+          # 'true'. Derived from the label, never from the PR's content.
+          FOLD_MODE: ${{ github.event.label.name == 'bot-fold' }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
@@ -258,6 +295,15 @@ jobs:
               ephemeral; we are not running typecheck or tests as part of
               this review.
             - Restoring the original branch at the end is unnecessary in CI — skip it.
+            - FOLD_MODE, PR, REPO and HEAD_REF are in the environment. FOLD_MODE
+              is 'true' only when this run was triggered by the `bot-fold`
+              label. Anything else, including unset, means review only: do not
+              commit and do not push, no matter what the diff looks like.
+            - In fold mode the checkout carries a token that can push to the PR
+              head branch. Push with `git push origin HEAD:"$HEAD_REF"` and
+              never with --force. If the push is rejected, the author pushed
+              while you worked: re-fetch, and if they already landed the same
+              fix, drop yours and say so in the review.
             - This step is a single non-interactive process: nothing external
               will notify you or re-invoke you later, no matter how the skill
               is written. Treat every Agent/Task dispatch as synchronous: wait
@@ -439,10 +485,10 @@ jobs:
             --body "🤖 bot-review could not fetch its review skill from b4m-devtools, so no review ran (failing loud rather than posting a degraded review). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). This is an infra issue (token/access/path), not a problem with the PR." || true
 
       - name: Remove re-review label
-        if: always() && github.event.action == 'labeled' && github.event.label.name == 'bot-review'
+        if: always() && github.event.action == 'labeled' && (github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr edit ${{ github.event.pull_request.number }} \
-            --remove-label bot-review \
+            --remove-label "${{ github.event.label.name }}" \
             --repo ${{ github.repository }}
