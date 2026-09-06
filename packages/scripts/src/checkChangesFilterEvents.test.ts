@@ -228,8 +228,9 @@ describe('readCaseArms', () => {
     expect(arms.map(arm => arm.labels)).toEqual([['push']]);
   });
 
-  // The pre-fix shape: push and pull_request handled, merge_group left to the default arm. This is
-  // the exact state the cross-check above exists to fail on.
+  // The pre-fix shape: push and pull_request handled, merge_group left to the default arm. This
+  // pins how readCaseArms reports that shape - it rebuilds the comparison rather than calling it,
+  // so the guard itself is asserted only by the live cross-check above, against the real files.
   it('reports merge_group as unhandled when only push and pull_request have arms', () => {
     const arms = readCaseArms(
       dispatch(
