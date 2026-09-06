@@ -37,12 +37,22 @@ export const assertDateInRange = (name: string, value: Date): Date => {
 
 /**
  * Parses an hours/days-style integer query param and clamps it into `[min, max]`, so the
- * arithmetic built on it cannot overflow a Date. Returns undefined for a missing value and
- * throws for a present-but-non-numeric one, which is the split every caller wanted: a bad
- * value is the caller's error, an absent one is a default.
+ * arithmetic built on it cannot overflow a Date. An absent or empty value takes `fallback`;
+ * a present but non-numeric one throws. That is the split every caller wanted: a bad value
+ * is the caller's error, an absent one is a default.
+ *
+ * `||` rather than `??` is deliberate, and matches the empty-value rule stated at the top of
+ * this module: `?hours=` arrives as '' and has always meant "unset", so `??` would forward it
+ * to parseInt and 400 a request that used to succeed.
  */
-export const clampedIntParam = (name: string, value: string | undefined, fallback: number, min: number, max: number): number => {
-  const parsed = parseInt(value ?? String(fallback), 10);
+export const clampedIntParam = (
+  name: string,
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number => {
+  const parsed = parseInt(value || String(fallback), 10);
   if (Number.isNaN(parsed)) {
     throw new BadRequestError(`Invalid ${name}: must be a number`);
   }

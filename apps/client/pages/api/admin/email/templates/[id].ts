@@ -7,8 +7,15 @@ import { z } from 'zod';
 // The spread below reaches `BaseRepository.update`, which builds a `$set` -- so these cast
 // before validators run. `isActive` is Boolean-typed (throws `CastError kind='Boolean'` on 2,
 // {} or []), `variables` is `[String]` (throws on an object element), and the six String paths
-// throw on an array or object. Types only: `category` stays a plain string here because an
-// out-of-enum value is a mongoose validator failure, not a cast, and so is 500 either way.
+// throw on an array or object.
+//
+// `category` is validated against the enum rather than left as a plain string. The schema
+// declares `enum: Object.values(EmailCategory)`, but `BaseModel.update` calls
+// `findOneAndUpdate` without `runValidators`, and mongoose does not run validators on update
+// queries by default -- so an out-of-enum value is not a 500, it is a 200 that writes a
+// category nothing recognises. `admin/email/jobs/index.ts` then copies it onto every job, and
+// the unsubscribe-suppression check in `jobs/[id]/recipients.ts` compares `job.category`
+// against the recipient's `unsubscribedCategories`, which silently stops matching for it.
 const updateBodySchema = z.object({
   name: z.string().optional(),
   slug: z.string().optional(),
@@ -16,7 +23,7 @@ const updateBodySchema = z.object({
   subject: z.string().optional(),
   htmlContent: z.string().optional(),
   textContent: z.string().optional(),
-  category: z.string().optional(),
+  category: z.enum(EmailCategory).optional(),
   variables: z.array(z.string()).optional(),
   isActive: z.boolean().optional(),
 });
@@ -52,8 +59,8 @@ const handler = baseApi()
     if (!parsedBody.success) {
       throw new BadRequestError('Invalid request body');
     }
-    const { name, slug, description, subject, htmlContent, textContent, variables, isActive } = parsedBody.data;
-    const category = parsedBody.data.category as EmailCategory | undefined;
+    const { name, slug, description, subject, htmlContent, textContent, variables, isActive, category } =
+      parsedBody.data;
 
     // If slug is being changed, check for conflicts
     if (slug && slug !== existing.slug) {

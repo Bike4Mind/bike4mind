@@ -1,14 +1,18 @@
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
+import { RapidReplyResponseStylesCommon } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
 
 // Every field is copied into an update payload, which casts before validators run. `enabled` is
 // Boolean-typed and `priority`/`maxTokens`/`maxLatency` are Number-typed, so 2, {} or [] on the
-// first and a non-numeric string or object on the others throw a CastError. Types only:
-// `responseStyle` stays a plain string because an out-of-enum value is a mongoose validator
-// failure rather than a cast, and so answers 500 before and after the narrowing.
+// first and a non-numeric string or object on the others throw a CastError.
+//
+// `responseStyle` is validated against the shared tuple rather than left as a plain string:
+// `updateMapping` reaches `findOneAndUpdate` without `runValidators`, and mongoose skips
+// validators on update queries by default, so the schema's `enum` never fires and an unknown
+// style is written back with a 200.
 const updateBodySchema = z.object({
   mainModelId: z.string().optional(),
   rapidModelId: z.string().optional(),
@@ -16,7 +20,7 @@ const updateBodySchema = z.object({
   priority: z.number().optional(),
   systemPrompt: z.string().optional(),
   maxTokens: z.number().optional(),
-  responseStyle: z.string().optional(),
+  responseStyle: z.enum(RapidReplyResponseStylesCommon).optional(),
   maxLatency: z.number().optional(),
 });
 
@@ -55,8 +59,8 @@ const handler = baseApi()
     if (!parsedBody.success) {
       throw new BadRequestError('Invalid request body');
     }
-    const { mainModelId, rapidModelId, enabled, priority, systemPrompt, maxTokens, maxLatency } = parsedBody.data;
-    const responseStyle = parsedBody.data.responseStyle as 'auto' | 'creative' | 'balanced' | 'precise' | undefined;
+    const { mainModelId, rapidModelId, enabled, priority, systemPrompt, maxTokens, maxLatency, responseStyle } =
+      parsedBody.data;
 
     // Get current mapping for audit log
     const currentMapping = await rapidReplyMappingRepository.findById(id);

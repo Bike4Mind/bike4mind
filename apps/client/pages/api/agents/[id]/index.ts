@@ -26,6 +26,35 @@ import {
   validateDefaultVariables,
   validateTriggerWords,
 } from '@server/utils/agentValidation';
+import { z } from 'zod';
+
+// The whole body is spread into `agentRepository.update`, i.e. a `$set`, and update payloads cast
+// before validators run -- so a wrong-typed scalar throws a `CastError` on a path that is not
+// `_id`, which is a 500 logged at `error` rather than the 404 it answered before. This route is
+// not admin-gated (the only check is the ownership test below), so the body is caller-controlled.
+//
+// looseObject, not object: the handler forwards fields this schema does not name (`capabilities`,
+// `preferredModel`, the orchestration lists validated by the helpers above), and a strict
+// z.object would silently strip them and turn a working edit into a no-op. Only the scalar paths
+// are typed here; the complex ones keep the imperative validators they already had.
+//
+// The range checks further down stay as they are, and are only sound because of this: they read
+// `agentData.temperature < 0 || agentData.temperature > 2`, and both comparisons are false for a
+// string, so 'abc' passed straight through to mongoose before this guard existed.
+const updateBodySchema = z.looseObject({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  systemPrompt: z.string().optional(),
+  firstMessage: z.string().optional(),
+  projectId: z.string().optional(),
+  isPublic: z.boolean().optional(),
+  isSystem: z.boolean().optional(),
+  useOwnCredits: z.boolean().optional(),
+  isDefaultVoiceAgent: z.boolean().optional(),
+  temperature: z.number().optional(),
+  maxTokens: z.number().optional(),
+  currentCredits: z.number().optional(),
+});
 
 // Helper function to refresh avatar URL for a single agent
 const refreshAgentAvatarUrl = async (agent: IAgent): Promise<IAgent> => {
@@ -111,7 +140,12 @@ const handler = baseApi()
   })
   .put(async (req, res) => {
     const { id } = req.query;
-    const agentData = req.body as Partial<IAgent>;
+
+    const parsedBody = updateBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      throw new BadRequestError('Invalid request body');
+    }
+    const agentData = parsedBody.data as Partial<IAgent>;
 
     // Find the agent
     const agent = await agentRepository.findById(id as string);
