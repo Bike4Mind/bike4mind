@@ -63,6 +63,9 @@ const RetrievalSummarySchema = subSchema({
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // default: undefined for the same auto-vivification reason as dataLakeTags above.
+  injectedLakePromptIds: { type: [String], required: false, default: undefined },
+  injectedLakePromptCount: { type: Number, required: false },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as

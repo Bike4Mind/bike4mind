@@ -131,4 +131,33 @@ describe('mergeRetrievalSummary', () => {
     expect(merged?.surfaces).toEqual(['forced-retrieval', 'knowledgeBaseSearch']);
     expect(merged?.dataLakeTags).toEqual(['a', 'b']);
   });
+
+  describe('injectedLakePromptIds', () => {
+    it('unions ids without duplicates and derives the count from the union', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['lake1'] }),
+        base({ injectedLakePromptIds: ['lake1', 'lake2'] })
+      );
+      expect(merged?.injectedLakePromptIds).toEqual(['lake1', 'lake2']);
+      expect(merged?.injectedLakePromptCount).toBe(2);
+    });
+
+    it('stays absent when neither side injected a lake prompt', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged?.injectedLakePromptIds).toBeUndefined();
+      expect(merged && 'injectedLakePromptIds' in merged).toBe(false);
+    });
+
+    it('is present-and-empty when an injection site ran but nothing qualified', () => {
+      const merged = mergeRetrievalSummary(base(), base({ injectedLakePromptIds: [] }));
+      expect(merged?.injectedLakePromptIds).toEqual([]);
+      expect(merged?.injectedLakePromptCount).toBe(0);
+    });
+
+    it('survives a side that never asserted the field', () => {
+      const merged = mergeRetrievalSummary(base({ injectedLakePromptIds: ['lake1'] }), base());
+      expect(merged?.injectedLakePromptIds).toEqual(['lake1']);
+      expect(merged?.injectedLakePromptCount).toBe(1);
+    });
+  });
 });

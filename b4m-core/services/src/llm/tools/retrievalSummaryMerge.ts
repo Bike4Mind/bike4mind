@@ -47,7 +47,8 @@ function outcomeSeverity(outcome: RetrievalSummary['outcome']): number {
  * - forcedSkipReason: first defined survives. The forced arm takes exactly one skip per turn, so
  *   a second value would mean two arms disagreeing about the same fact; keeping the earlier one
  *   makes the merge order-independent rather than last-writer-wins.
- * - surfaces / dataLakeTags: union, deduped.
+ * - surfaces / dataLakeTags / injectedLakePromptIds: union, deduped. injectedLakePromptCount is
+ *   derived from the merged ids, not merged independently, so the two can never disagree.
  */
 export function mergeRetrievalSummary(
   existing: RetrievalSummary | undefined,
@@ -60,6 +61,10 @@ export function mergeRetrievalSummary(
     outcomeSeverity(incoming.outcome) > outcomeSeverity(existing.outcome) ? incoming.outcome : existing.outcome;
   const mode = existing.mode === 'forced' || incoming.mode === 'forced' ? 'forced' : (existing.mode ?? incoming.mode);
   const forcedSkipReason = existing.forcedSkipReason ?? incoming.forcedSkipReason;
+  const injectedLakePromptIds =
+    existing.injectedLakePromptIds || incoming.injectedLakePromptIds
+      ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
+      : undefined;
 
   // Keys are spread in only when defined: the shape is absent-or-fully-present on the Mongoose
   // side, and an explicit `undefined` would persist as a set-but-empty path.
@@ -70,5 +75,6 @@ export function mergeRetrievalSummary(
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
+    ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),
   };
 }
