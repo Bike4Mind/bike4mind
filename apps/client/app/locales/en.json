@@ -531,6 +531,7 @@
     "added_to_lake_with_skipped_other": "Added {{count}} files to the lake ({{skippedCount}} already a member, left unchanged).",
     "already_lake_members": "The selected file(s) are already members of this lake.",
     "selection_not_resolved": "Some selected files could not be verified against this lake's membership. Reselect them and try again.",
+    "selection_stale": "The selected files are no longer on screen. Reselect them and try again.",
     "select_all": "Select All",
     "unselect_all": "Unselect All",
     "add_files": "Add Files",

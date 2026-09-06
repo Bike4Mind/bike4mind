@@ -160,7 +160,14 @@ const FileBrowserContent = () => {
   // selection across that boundary produces a count/checkmarks that don't match what's
   // visible. Clear on crossing that boundary, but not when merely toggling List<->Grid,
   // which show the same underlying list and where a persisted selection is useful.
-  const selectionScope = viewAction.viewMode === 'home' ? 'recent' : 'paginated';
+  //
+  // Page and sort are part of that boundary for the same reason: `allFiles` is ONE page of the
+  // query, so paging or re-sorting replaces the visible set while the id set survives. Every bulk
+  // action resolves ids through `filesById`, which holds only what is on screen, so a selection
+  // outliving its page shrinks without the count that drives the UI shrinking with it.
+  // `handleFilterChange` clears for exactly this reason; page and sort are the same boundary.
+  const selectionScope =
+    viewAction.viewMode === 'home' ? 'recent' : `paginated:${currentPage}:${sortField}:${sortDirection}`;
   const selectionScopeRef = useRef(selectionScope);
   useEffect(() => {
     if (selectionScopeRef.current !== selectionScope) {
@@ -343,6 +350,13 @@ const FileBrowserContent = () => {
       return;
     }
 
+    // Every selected id went stale under us, so the counts below would all be zero and there is no
+    // honest confirmation to put in front of the user.
+    if (selectedFiles.length === 0) {
+      toast.error(t('file_browser.selection_stale'));
+      return;
+    }
+
     // Partition selected files into owned vs shared
     const ownedCount = selectedFiles.filter(f => f.userId === currentUser?.id).length;
     const sharedCount = selectedFiles.filter(f => f.userId !== currentUser?.id).length;
@@ -369,7 +383,11 @@ const FileBrowserContent = () => {
       description,
       type,
       onOk: async () => {
-        await deleteFiles(Array.from(selectedIds));
+        // Destroy exactly what the counts above were built from, never the raw id set: an id that
+        // did not resolve is one this dialog never described. The scope key clears a selection when
+        // its page or sort changes, but a refetch can still drop a file from the current page while
+        // it stays selected. Under-deleting is recoverable; deleting an unnamed file is not.
+        await deleteFiles(selectedFiles.map(f => f.id));
         setSelectedIds(new Set<string>());
       },
     });
