@@ -59,9 +59,11 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
   };
 
   // Resolved against the fetched list, not the id set: an empty `retrievalTags` means NO scoping
-  // (the session sees the caller's full entitled set), so confirming before the lakes load - or
-  // after the fetch failed - would silently invert the very narrowing this dialog exists to apply.
-  // The confirm button gates on this, not on `selected.size`.
+  // (the session sees the caller's full entitled set), so confirming before the lakes load would
+  // silently invert the very narrowing this dialog exists to apply. The confirm button gates on
+  // this rather than on `selected.size` - and additionally on `isError`, because a failed REFETCH
+  // keeps the cached list populated, leaving tags non-empty while the list is hidden behind the
+  // error branch.
   const selectedTags = useMemo(
     () => (lakes ?? []).filter(l => selected.has(l.id)).map(l => l.datalakeTag),
     [lakes, selected]
@@ -76,7 +78,8 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
           <Typography level="body-sm" sx={{ color: 'text.tertiary', mb: 1.5 }}>
             Starts a chat narrowed to only the lakes checked below, on both the retrieval and injection doors - the same
             scope an API key gets by sending these lakes&apos; tags as <code>retrievalTags</code>. Lake scope only: this
-            does not simulate a different entitlement, organization membership, or file-level access for the caller.
+            does not simulate a different entitlement, organization membership, or file-level access for the caller, and
+            the test session uses the default grounding mode rather than each lake&apos;s configured one.
           </Typography>
           {(lakes?.length ?? 0) >= SEARCH_THRESHOLD && (
             <Input
@@ -138,7 +141,7 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
         <DialogActions>
           <Button
             loading={confirming}
-            disabled={selectedTags.length === 0}
+            disabled={selectedTags.length === 0 || isError}
             onClick={() => onConfirm(selectedTags)}
             data-testid="test-lake-scope-confirm-btn"
           >

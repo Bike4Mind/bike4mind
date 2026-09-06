@@ -86,6 +86,20 @@ describe('TestLakeScopeDialog', () => {
     expect(screen.getByTestId('test-lake-scope-confirm-btn')).toBeDisabled();
   });
 
+  // A failed REFETCH keeps `data` from cache while flipping isError, so the error branch renders
+  // over a populated list. Tags alone stay non-empty there, which is why the gate needs isError.
+  it('disables confirm on a failed refetch that still has cached lakes', () => {
+    useGetDataLakesMock.mockReturnValue({ data: LAKES, isLoading: false, isError: true, refetch: vi.fn() });
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-a" onClose={vi.fn()} onConfirm={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('test-lake-scope-error')).toBeInTheDocument();
+    expect(screen.getByTestId('test-lake-scope-confirm-btn')).toBeDisabled();
+  });
+
   it('disables confirm while the lakes are still loading', () => {
     useGetDataLakesMock.mockReturnValue({ data: undefined, isLoading: true, isError: false, refetch: vi.fn() });
     render(
