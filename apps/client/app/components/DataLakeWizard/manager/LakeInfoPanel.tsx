@@ -46,6 +46,7 @@ import type { ManagerLake } from './shared';
 export function LakeInfoPanel({
   lake,
   fileCount,
+  armCounts,
   taxonomyBatch,
   onOpenSettings,
   onOpenAccess,
@@ -56,6 +57,8 @@ export function LakeInfoPanel({
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
+  /** Membership split by arm - meta-tagged vs prefix-only. See lakeArmCounts. */
+  armCounts: { metaCount: number; prefixOnlyCount: number } | undefined;
   /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
@@ -387,8 +390,28 @@ export function LakeInfoPanel({
             {visibility}
           </Chip>
           {typeof fileCount === 'number' && (
-            <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
-              {fileCount} {fileCount === 1 ? 'file' : 'files'}
+            <Tooltip
+              title={
+                armCounts
+                  ? `${armCounts.metaCount} by lake tag, ${armCounts.prefixOnlyCount} by content prefix only - counted in this lake's own membership scope`
+                  : "Counted in this lake's own membership scope"
+              }
+              size="sm"
+            >
+              <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
+                {fileCount} {fileCount === 1 ? 'file' : 'files'} (as creator)
+              </Chip>
+            </Tooltip>
+          )}
+          {armCounts && armCounts.prefixOnlyCount > 0 && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-armcounts-chip-${lake.id}`}
+            >
+              {armCounts.metaCount} by lake tag, {armCounts.prefixOnlyCount} by content prefix
             </Chip>
           )}
           {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,

@@ -1,3 +1,5 @@
+import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
  * `datalake:<org>:<slug>`). This meta-tag is what makes a file a MEMBER of a lake, so it is
@@ -148,6 +150,39 @@ export const effectiveTagPrefixArm = (scope: {
   if (scope.kind !== 'registry' && !scope.creatorUserId) return null;
   return prefix;
 };
+
+/**
+ * Which membership signal(s) a file carries for a lake: the `datalake:*` meta-tag ('meta'),
+ * a `fileTagPrefix` content tag ('prefix'), both, or neither (null - not a member). Exact JS
+ * mirror of `buildDataLakeMembershipFilter` (`@bike4mind/database`) so a UI badge and the
+ * read/lifecycle predicate can never disagree about why a file is a member.
+ *
+ * This closes a visibility gap: the two arms behave differently (an OWNED lake's prefix arm
+ * requires creator ownership; a REGISTRY lake's does not, and the meta-tag never does) but
+ * neither Files nor the lake manager UI previously surfaced which one applied.
+ */
+export type DataLakeMembershipArm = 'meta' | 'prefix' | 'both';
+
+export function getFileMembershipArm(
+  file: { userId: string; tags?: readonly { name?: unknown }[] },
+  scope: DataLakeMembershipScope
+): DataLakeMembershipArm | null {
+  const tagNames = (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
+  const hasMeta = tagNames.includes(scope.datalakeTag);
+  // Whether the prefix arm survives at all is `effectiveTagPrefixArm`'s decision, not a second copy
+  // of it - re-deriving it here is the exact disagreement this function exists to rule out. All that
+  // is left is the ownership conjunct buildDataLakeMembershipFilter pairs with the arm on an OWNED
+  // scope; a REGISTRY lake's prefix is compile-time config and carries no such conjunct.
+  const prefixArm = effectiveTagPrefixArm(scope);
+  const hasPrefix =
+    !!prefixArm &&
+    (scope.kind === 'registry' || file.userId === scope.creatorUserId) &&
+    matchesTagPrefixArm(tagNames, prefixArm);
+  if (hasMeta && hasPrefix) return 'both';
+  if (hasMeta) return 'meta';
+  if (hasPrefix) return 'prefix';
+  return null;
+}
 
 /**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them

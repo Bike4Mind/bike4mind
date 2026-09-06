@@ -27,9 +27,7 @@ const renderPanel = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSettingValue.mockImplementation((key: string) =>
-    key === 'dataLakeEmbeddingMaxTokensPerMinute' ? 600000 : 120
-  );
+  mockSettingValue.mockImplementation((key: string) => (key === 'dataLakeEmbeddingMaxTokensPerMinute' ? 600000 : 120));
 });
 
 describe('EmbeddingProviderLimits', () => {

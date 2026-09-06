@@ -13,6 +13,7 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import { useGetFileTags, useToggleTagToFiles, useCreateFileTag } from '@client/app/hooks/data/tag';
+import { useAddFilesToLake, useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { MobileTopBar } from '@client/app/components/MobileTopBar';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -128,6 +129,18 @@ const FileBrowserContent = () => {
 
   const { mutateAsync: toggleTagToFiles } = useToggleTagToFiles();
   const { data: fileTags } = useGetFileTags();
+  // "Add to lake" targets are narrowed to `l.canManage` AND what the write door itself will
+  // accept. `l.canManage` also passes on the org-admin/org-grant rungs (a broader `AccessContext`),
+  // but `/api/files/tags/toggle` resolves manage through a narrower, file-owner-centric actor
+  // ({ userId, isAdmin } - see toggleTags.ts) that does not resolve those rungs. Without this
+  // second filter, an org admin who is not the lake's creator would see the lake in the menu and
+  // get a bare "Request failed" toast on click.
+  const { data: dataLakes } = useGetDataLakes(isAdminFeatureEnabled('EnableDataLakes'));
+  const manageableLakes = useMemo(
+    () => dataLakes?.filter(l => l.canManage && (currentUser?.isAdmin || l.isOwn)) ?? [],
+    [dataLakes, currentUser?.isAdmin]
+  );
+  const { mutateAsync: addFilesToLake } = useAddFilesToLake();
   const { mutateAsync: deleteFiles } = useBulkDeleteFiles();
 
   const availableOptions = fileTags?.filter(tag => !filter.filters?.tags?.includes(tag.name)) || [];
@@ -147,7 +160,14 @@ const FileBrowserContent = () => {
   // selection across that boundary produces a count/checkmarks that don't match what's
   // visible. Clear on crossing that boundary, but not when merely toggling List<->Grid,
   // which show the same underlying list and where a persisted selection is useful.
-  const selectionScope = viewAction.viewMode === 'home' ? 'recent' : 'paginated';
+  //
+  // Page and sort are part of that boundary for the same reason: `allFiles` is ONE page of the
+  // query, so paging or re-sorting replaces the visible set while the id set survives. Every bulk
+  // action but the tag menu resolves ids through `filesById`, which holds only what is on screen,
+  // so a selection outliving its page shrinks without the count that drives the UI shrinking with
+  // it. `handleFilterChange` clears for exactly this reason; page and sort are the same boundary.
+  const selectionScope =
+    viewAction.viewMode === 'home' ? 'recent' : `paginated:${currentPage}:${sortField}:${sortDirection}`;
   const selectionScopeRef = useRef(selectionScope);
   useEffect(() => {
     if (selectionScopeRef.current !== selectionScope) {
@@ -158,12 +178,21 @@ const FileBrowserContent = () => {
 
   // Files can be selected from either list (Overview's recentFiles or the paginated
   // allFiles), so bulk actions must resolve selections against both, not just allFiles.
+  //
+  // recentFiles is merged ONLY on Overview, because that is the only view where its query is
+  // enabled. Elsewhere it is disabled, and invalidateQueries refetches active observers only - so
+  // its cache keeps whatever tags the files had when Overview was last open, indefinitely (the
+  // observer stays mounted, so it is not garbage-collected either). Merging it second would let
+  // those stale objects WIN the id collision, and a membership decision read off them sees no
+  // lake tag on a file that already has one - which inverts a second add into a silent bulk
+  // remove. Selection cannot span the two lists anyway; `selectionScope` above clears it on
+  // switch.
   const filesById = useMemo(() => {
     const m = new Map<string, IFabFileDocument>();
     for (const f of allFiles) m.set(f.id, f);
-    for (const f of recentFiles) m.set(f.id, f);
+    if (viewAction.viewMode === 'home') for (const f of recentFiles) m.set(f.id, f);
     return m;
-  }, [allFiles, recentFiles]);
+  }, [allFiles, recentFiles, viewAction.viewMode]);
   const selectedFiles = Array.from(selectedIds)
     .map(id => filesById.get(id))
     .filter((f): f is IFabFileDocument => Boolean(f));
@@ -321,6 +350,15 @@ const FileBrowserContent = () => {
       return;
     }
 
+    // Every selected id went stale under us, so the counts below would all be zero and there is no
+    // honest confirmation to put in front of the user. Drop the ids as well as bailing: the toast
+    // asks the user to reselect, and a chip still showing the stale count contradicts it.
+    if (selectedFiles.length === 0) {
+      setSelectedIds(new Set<string>());
+      toast.error(t('file_browser.selection_stale'));
+      return;
+    }
+
     // Partition selected files into owned vs shared
     const ownedCount = selectedFiles.filter(f => f.userId === currentUser?.id).length;
     const sharedCount = selectedFiles.filter(f => f.userId !== currentUser?.id).length;
@@ -347,7 +385,11 @@ const FileBrowserContent = () => {
       description,
       type,
       onOk: async () => {
-        await deleteFiles(Array.from(selectedIds));
+        // Destroy exactly what the counts above were built from, never the raw id set: an id that
+        // did not resolve is one this dialog never described. The scope key clears a selection when
+        // its page or sort changes, but a refetch can still drop a file from the current page while
+        // it stays selected. Under-deleting is recoverable; deleting an unnamed file is not.
+        await deleteFiles(selectedFiles.map(f => f.id));
         setSelectedIds(new Set<string>());
       },
     });
@@ -837,10 +879,37 @@ const FileBrowserContent = () => {
           <FileBrowserActions
             tags={fileTags || []}
             onTag={async tag => {
+              // The one bulk action that posts raw ids rather than resolving through `filesById`.
+              // Bounded, not an oversight: this menu is fed by FileTag documents, and tagService
+              // refuses both membership tag names and registered lake prefixes at create time, so
+              // no lake tag can reach it - the worst case is toggling an ordinary tag on a file
+              // that has dropped off the page, undone in one click.
               await toggleTagToFiles({
                 ids: Array.from(selectedIds),
                 tags: [tag],
               });
+            }}
+            lakes={manageableLakes}
+            onAddToLake={async lake => {
+              // /api/files/tags/toggle TOGGLES the meta-tag - reposting it for a file already a
+              // member would REMOVE that file (and its content-prefix tags with it, unrecoverably;
+              // see addFileToLake's docblock). Filter to non-members here so this door can only add.
+              // Built from selectedFiles (files this component actually resolved and inspected),
+              // never from the raw selectedIds set - a selection can outlive filesById's current
+              // page, and an unresolved id must never reach the toggle door unchecked.
+              if (selectedFiles.length !== selectedIds.size) {
+                toast.error(t('file_browser.selection_not_resolved'));
+                return;
+              }
+              const alreadyMemberIds = new Set(
+                selectedFiles.filter(f => (f.tags ?? []).some(t => t.name === lake.datalakeTag)).map(f => f.id)
+              );
+              const idsToAdd = selectedFiles.filter(f => !alreadyMemberIds.has(f.id)).map(f => f.id);
+              if (idsToAdd.length === 0) {
+                toast.info(t('file_browser.already_lake_members'));
+                return;
+              }
+              await addFilesToLake({ fileIds: idsToAdd, lake, skippedCount: alreadyMemberIds.size });
             }}
             hasSelectedAll={selectedIds.size === selectableFiles.length}
             selectedCount={selectedIds.size}

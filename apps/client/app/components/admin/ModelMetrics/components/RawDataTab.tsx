@@ -333,7 +333,9 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                           </Typography>
                           <Typography
                             level="body-xs"
-                            sx={{ color: ttfvtColor(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime) }}
+                            sx={{
+                              color: ttfvtColor(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime),
+                            }}
                           >
                             TTFVT: {formatTtfvt(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)}
                           </Typography>
