@@ -39,6 +39,24 @@ function readShardLegs(contents: string): Array<{ index: number; count: number }
   }));
 }
 
+/**
+ * Every leg's matrix `filter:` value, in file order, as YAML hands it to the runner - so the
+ * outer quote pair, which belongs to the YAML parser, is stripped here too.
+ *
+ * The step passes this value to pnpm by splitting it on whitespace into argv. Nothing in that
+ * path processes quotes, so a quote character left INSIDE the value is a character in the
+ * argument pnpm receives: it looks for a package literally named `'!@bike4mind/client'`, finds
+ * none, prints "No projects matched the filters" and exits 0. Zero tests run and the leg is
+ * green, which is why the assertion below pins bare tokens.
+ */
+function readShardFilters(contents: string): string[] {
+  return [...contents.matchAll(/^\s*filter:\s*(\S.*?)\s*$/gm)].map(match => {
+    const raw = match[1];
+    const unquoted = /^'(.*)'$/.exec(raw) ?? /^"(.*)"$/.exec(raw);
+    return unquoted ? unquoted[1] : raw;
+  });
+}
+
 describe('apps/client test-shard legs in ci.yml', () => {
   const contents = fs.readFileSync(CI_WORKFLOW, 'utf8');
   const legs = readShardLegs(contents);
@@ -66,12 +84,42 @@ describe('apps/client test-shard legs in ci.yml', () => {
   // `pnpm ... test -- --shard=1/3` forwards the literal `--` to vitest, which then reads the
   // rest as positional path filters: the shard is ignored and the leg runs the WHOLE suite, at
   // 3x the total cost, without erroring. Measured, not hypothetical. Pin the bare form.
+  //
+  // The matrix value no longer reaches the command by `${{ }}` interpolation; it goes through
+  // an `env:` entry and a bash array. So walk that chain rather than assuming any link in it:
+  // matrix.shard.args -> SHARD_ARGS -> the array the step splits it into -> the pnpm argv. A
+  // guard that only matched a fixed name would pass vacuously the next time the shape moves,
+  // which is exactly how this assertion went stale before.
   it('appends the shard args with no `--` separator', () => {
-    const runLine = contents
-      .split('\n')
-      .find(line => line.includes('matrix.shard.script') && line.includes('matrix.shard.args'));
-    expect(runLine, 'the sharded test command should reference matrix.shard.args').toBeDefined();
+    expect(contents, 'SHARD_ARGS should carry matrix.shard.args into the step').toMatch(
+      /^\s*SHARD_ARGS:\s*\$\{\{\s*matrix\.shard\.args\s*\}\}\s*$/m
+    );
+    const binding = /read\s+-ra\s+(\w+)\s*<<<\s*"\$SHARD_ARGS"/.exec(contents);
+    expect(binding, 'the step should split SHARD_ARGS into an argv array').not.toBeNull();
+    const argsArray = binding![1];
+    const runLine = contents.split('\n').find(line => /\bpnpm\b/.test(line) && line.includes(`\${${argsArray}[@]}`));
+    expect(runLine, `the sharded test command should pass ${argsArray} to pnpm`).toBeDefined();
     expect(runLine).not.toMatch(/\s--\s/);
+  });
+
+  // The other half of the same env hop. Word splitting is what turns one env var back into
+  // several arguments, and it does not strip quotes - so a quoted token here silently matches
+  // no package rather than erroring. Pin bare `--filter <pattern>` pairs.
+  it('declares every leg filter as bare `--filter <pattern>` pairs', () => {
+    const filters = readShardFilters(contents);
+    expect(filters, 'no shard filters declared in ci.yml').not.toHaveLength(0);
+    for (const filter of filters) {
+      expect(filter, `quote character inside a shard filter: ${filter}`).not.toMatch(/['"]/);
+      const tokens = filter.split(/\s+/);
+      expect(tokens.length % 2, `unpaired --filter in: ${filter}`).toBe(0);
+      for (let i = 0; i < tokens.length; i += 2) {
+        expect(tokens[i], `expected --filter at token ${i} of: ${filter}`).toBe('--filter');
+        // `!` prefix is pnpm's exclusion form; the catch-all leg is built entirely from those.
+        expect(tokens[i + 1], `not a workspace package pattern: ${tokens[i + 1]}`).toMatch(
+          /^!?@bike4mind\/[a-z0-9-]+$/
+        );
+      }
+    }
   });
 });
 
@@ -106,5 +154,44 @@ describe('readShardLegs', () => {
       ['          # `pnpm ... test -- --shard=1/3` silently ignores it.', "            args: '--shard=1/3'"].join('\n')
     );
     expect(legs).toEqual([{ index: 1, count: 3 }]);
+  });
+});
+
+describe('readShardFilters', () => {
+  it('strips the YAML quote pair, which belongs to the parser and not to bash', () => {
+    expect(readShardFilters("            filter: '--filter @bike4mind/client'\n")).toEqual([
+      '--filter @bike4mind/client',
+    ]);
+    expect(readShardFilters('            filter: "--filter @bike4mind/client"\n')).toEqual([
+      '--filter @bike4mind/client',
+    ]);
+  });
+
+  it('keeps quotes that are inside the value', () => {
+    // The exact shape that made a leg match nothing: YAML strips only the outer double quotes,
+    // so pnpm is handed `'!@bike4mind/client'` with the single quotes still attached.
+    expect(readShardFilters('            filter: "--filter \'!@bike4mind/client\'"\n')).toEqual([
+      "--filter '!@bike4mind/client'",
+    ]);
+  });
+
+  it('reads an unquoted value as-is', () => {
+    expect(readShardFilters('            filter: --filter @bike4mind/client\n')).toEqual([
+      '--filter @bike4mind/client',
+    ]);
+  });
+
+  it('finds every leg, in file order', () => {
+    const contents = [
+      '          - name: services',
+      "            filter: '--filter @bike4mind/services'",
+      '          - name: misc',
+      "            filter: '--filter !@bike4mind/services'",
+    ].join('\n');
+    expect(readShardFilters(contents)).toEqual(['--filter @bike4mind/services', '--filter !@bike4mind/services']);
+  });
+
+  it('finds nothing when no filters are declared', () => {
+    expect(readShardFilters("name: client\nargs: '--shard=1/3'\n")).toEqual([]);
   });
 });
