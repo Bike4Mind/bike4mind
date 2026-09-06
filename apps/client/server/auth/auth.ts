@@ -11,7 +11,12 @@ import { Request, RequestHandler, Response } from 'express';
 import { Strategy as GitHubStrategy } from 'passport-github';
 import GoogleStrategy from 'passport-google-oauth20';
 import { ExtractJwt, Strategy as JwtStrategy } from 'passport-jwt';
-import { PassportSamlConfig, Profile as SamlProfile, Strategy as SamlStrategy } from '@node-saml/passport-saml';
+import {
+  PassportSamlConfig,
+  Profile as SamlProfile,
+  Strategy as SamlStrategy,
+  ValidateInResponseTo,
+} from '@node-saml/passport-saml';
 import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
 import { secretRotationRepository } from '@bike4mind/database/infra';
@@ -20,6 +25,8 @@ import { isRotatedSecretWithinGraceWindow } from './secretRotationGrace';
 import { verifyJwtPayload } from './verifyJwtPayload';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { isPolicyConsentRequired, type ConsentGateUser } from './consentGate';
+import { samlRequestCache } from './samlRequestCache';
+import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 
 passport.use(
   new JwtStrategy(
@@ -219,6 +226,8 @@ interface SamlAuthProvider {
 // Dynamic SAML strategy setup - will be configured per request
 export const setupSamlStrategy = (idp: {
   _id: string;
+  /** The domain this IdP is registered for; the only addresses it may assert. */
+  emailDomain: string;
   samlConfig?: {
     entryPoint: string;
     issuer: string;
@@ -288,8 +297,14 @@ export const setupSamlStrategy = (idp: {
     acceptedClockSkewMs: idp.samlConfig.acceptedClockSkewMs,
     attributeConsumingServiceIndex: idp.samlConfig.attributeConsumingServiceIndex?.toString(),
     disableRequestedAuthnContext: idp.samlConfig.disableRequestedAuthnContext || false,
-    wantAuthnResponseSigned: false,
-    wantAssertionsSigned: false,
+    // wantAuthnResponseSigned / wantAssertionsSigned are deliberately left at node-saml's
+    // defaults (both true) so each layer is required independently.
+    //
+    // Redeem each AuthnRequest id exactly once so an assertion cannot be replayed inside
+    // its NotOnOrAfter window. `ifPresent` rather than `always`: an IdP-initiated response
+    // legitimately carries no InResponseTo and must not be rejected outright.
+    validateInResponseTo: ValidateInResponseTo.ifPresent,
+    cacheProvider: samlRequestCache,
   };
 
   console.log('Creating SAML strategy with options for IDP:', idp._id);
@@ -308,7 +323,7 @@ export const setupSamlStrategy = (idp: {
               Logger.error('SAML profile is null');
               return done(new Error('SAML profile is null'));
             }
-            Logger.log('SAML profile received:', profile);
+            // The profile is the decoded assertion: never logged, at any level.
 
             // Extract user info from SAML assertion
             const attributeMappings = idp.samlConfig?.attributeMappings || {};
@@ -326,6 +341,20 @@ export const setupSamlStrategy = (idp: {
               (profile['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'] as string) ||
               `${firstName} ${lastName}`.trim() ||
               email;
+
+            // Trust anchor: a signed assertion only proves the IdP said it, not that the
+            // IdP is entitled to say it. Bind the asserted address to the domain this IdP
+            // is registered for BEFORE any account lookup, link or session - otherwise any
+            // registered IdP can name a victim in another tenant. Covers nameID too, since
+            // it is the fallback source of `email` above.
+            if (!emailMatchesIdpDomain(email, idp.emailDomain)) {
+              Logger.warn('[SAML] Rejecting assertion: asserted email is outside the IDP registered domain', {
+                idpId: idp._id,
+              });
+              // done(null, undefined, info) -> passport `fail(info)`, so the callback
+              // handler records the refusal (with the targeted email) on AuthFailLog.
+              return done(null, undefined, { email, reason: IDP_EMAIL_DOMAIN_MISMATCH });
+            }
 
             // Create a standardized profile object.
             // SAML assertions are signed by the configured IdP and the IdP
@@ -364,7 +393,8 @@ export const setupSamlStrategy = (idp: {
           profile: SamlProfile | null,
           done: (err: Error | null, user?: Record<string, unknown>, info?: Record<string, unknown>) => void
         ) => {
-          Logger.error('SAML strategy profile:', profile);
+          // Logout verify: the profile is assertion content, so it is never logged.
+          Logger.error('SAML logout request received; no session teardown is wired up');
           done(null);
         }
       )

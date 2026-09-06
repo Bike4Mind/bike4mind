@@ -21,6 +21,13 @@ vi.mock('@server/auth/requireNonSystemUser', () => ({
   requireNonSystemUser: (u: unknown) => u,
 }));
 
+// The invite gate reads admin settings; drive it directly instead of stubbing the
+// settings repository (the @bike4mind/database mock above deliberately carries only User).
+const mockIsOpenRegistrationAllowed = vi.fn();
+vi.mock('./openRegistration', () => ({
+  isOpenRegistrationAllowed: () => mockIsOpenRegistrationAllowed(),
+}));
+
 import { verifyCallback } from './verifyCallback';
 
 const runStandard = (
@@ -38,6 +45,9 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockRevokeAllByUserId.mockReset();
   mockRevokeAllByUserId.mockResolvedValue(0);
+  // Open by default so the pre-existing create-path tests keep exercising creation.
+  mockIsOpenRegistrationAllowed.mockReset();
+  mockIsOpenRegistrationAllowed.mockResolvedValue(true);
 });
 
 // Failure-safe restore of any vi.spyOn() (e.g. console.error) so a throwing
@@ -691,5 +701,60 @@ describe('verifyCallback - Google "with params" callback signature', () => {
     });
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('verifyCallback - invite gate on federated first login', () => {
+  const freshProfile = {
+    id: 'sub-new',
+    displayName: 'New Person',
+    emails: [{ value: 'new@example.com', verified: true }],
+  };
+
+  // No existing account: both lookup stages miss, so this is the create path.
+  const noExistingUser = () => mockFindOne.mockResolvedValue(null);
+
+  it('refuses a Google first login on an invite-only instance', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+
+    const { user, info } = await runStandard(AuthStrategy.Google, freshProfile);
+
+    expect(user).toBeFalsy();
+    expect(info).toMatchObject({ code: 'registration_closed' });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a GitHub first login on an invite-only instance', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+
+    const { user } = await runStandard(AuthStrategy.Github, freshProfile);
+
+    expect(user).toBeFalsy();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('exempts enterprise SSO: a SAML first login still creates the account', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+    mockCreate.mockResolvedValue({ _id: 'u-saml', email: 'new@example.com' });
+
+    const { user } = await runStandard(AuthStrategy.SAML, freshProfile);
+
+    expect(user).toBeTruthy();
+    expect(mockCreate).toHaveBeenCalled();
+    // The gate is never even consulted for SSO.
+    expect(mockIsOpenRegistrationAllowed).not.toHaveBeenCalled();
+  });
+
+  it('allows a Google first login when open registration is on', async () => {
+    noExistingUser();
+    mockCreate.mockResolvedValue({ _id: 'u-google', email: 'new@example.com' });
+
+    const { user } = await runStandard(AuthStrategy.Google, freshProfile);
+
+    expect(user).toBeTruthy();
+    expect(mockCreate).toHaveBeenCalled();
   });
 });

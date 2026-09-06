@@ -8,6 +8,16 @@ import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ForbiddenError } from '@server/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { OAuthFailureReason } from './oauthFailureReason';
+import { isOpenRegistrationAllowed } from './openRegistration';
+
+/**
+ * Strategies where anyone on the internet can present an identity, so a first login
+ * is a self-serve signup and must obey the invite-only switch. SAML and Okta are
+ * absent on purpose: an admin had to register that IdP for the domain first, which is
+ * the authorization - gating them would break enterprise onboarding on instances that
+ * are invite-only for the public.
+ */
+const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([AuthStrategy.Google, AuthStrategy.Github]);
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
 // six total create attempts (base + 5 retries) is already generous for a
@@ -245,6 +255,17 @@ const authenticateUser = async (
       linkedUser.isNewOAuthLink = isNewProvider;
       done(null, linkedUser);
     } else {
+      // Invite gate. `registerUser` refuses a code-less signup on an invite-only
+      // instance, but this path creates accounts with User.create and never reaches it,
+      // so a closed instance still accepted any Google/GitHub first login.
+      //
+      // Enterprise SSO is deliberately exempt (see SELF_SERVE_STRATEGIES): registering
+      // the IdP is itself the admin's authorization for that domain's users.
+      if (SELF_SERVE_STRATEGIES.has(strategy) && !(await isOpenRegistrationAllowed())) {
+        done(null, undefined, { code: 'registration_closed' });
+        return;
+      }
+
       const name = profile?.displayName ?? profile?.name ?? username ?? '';
       const baseUsername = deriveOAuthUsername(username, name, email);
       user = await createUniqueOAuthUser({ name, baseUsername, email, oauthCredentials });

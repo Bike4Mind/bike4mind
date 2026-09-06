@@ -13,6 +13,7 @@ export * from './OAuthClientModel';
 export * from './PartnerSignupRuleModel';
 export * from './PendingOtcTokenModel';
 export * from './RegistrationInviteModel';
+export * from './SamlRequestIdModel';
 export * from './SessionModel';
 export * from './SubscriberModel';
 export * from './TrustedDeviceModel';

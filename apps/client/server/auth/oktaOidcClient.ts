@@ -508,7 +508,7 @@ export async function getOktaConfigWithFallback(idpId?: string): Promise<OktaCon
   // Try database first if specific IDP ID provided
   if (idpId && idpId !== 'sst-fallback') {
     try {
-      const idp = await identityProviderRepository.findById(idpId);
+      const idp = await identityProviderRepository.findByIdWithSecrets(idpId);
       const config = extractOktaConfigFromIdp(idp);
       if (config) {
         Logger.debug('[OktaOidc] Using database config for IDP:', idpId);
@@ -527,7 +527,7 @@ export async function getOktaConfigWithFallback(idpId?: string): Promise<OktaCon
   // This allows "Login with Okta" button to work without requiring email domain lookup
   if (!idpId) {
     try {
-      const allIdps = await identityProviderRepository.findAll();
+      const allIdps = await identityProviderRepository.findAllWithSecrets();
       const activeOktaIdp = allIdps.find(idp => idp.type === 'okta' && idp.isActive);
       const config = extractOktaConfigFromIdp(activeOktaIdp);
       if (config && activeOktaIdp) {
@@ -640,7 +640,7 @@ export async function getOktaConfigStatus(): Promise<OktaConfigStatusResult> {
   let databaseConfigured = false;
   let databaseConfig: OktaConfig | undefined;
   try {
-    const allIdps = await identityProviderRepository.findAll();
+    const allIdps = await identityProviderRepository.findAllWithSecrets();
     const activeOktaIdp = allIdps.find(idp => idp.type === 'okta' && idp.isActive);
     const config = extractOktaConfigFromIdp(activeOktaIdp);
     if (config) {
