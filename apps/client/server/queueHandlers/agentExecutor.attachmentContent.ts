@@ -82,6 +82,26 @@ function allDropped(requestedIds: string[]): IAttachmentDelivery {
   };
 }
 
+/**
+ * The report a caller owes when materialization never ran at all - no model to size a budget
+ * against, or the attempt threw before it could produce one. Content-free, so composing it into
+ * the first iteration is a no-op; what it carries is the record that these ids were asked for and
+ * none of them reached the prompt.
+ */
+export function unmaterializedAttachments(requestedIds: string[]): MaterializedAttachments {
+  return {
+    ...EMPTY,
+    notices: requestedIds.map(id => ({
+      fabFileId: id,
+      fileName: id,
+      band: 'read_failed' as const,
+      message: `An attached file (id ${id}) was not inlined: its content could not be prepared for this run.`,
+      delivered: false,
+    })),
+    delivery: allDropped(requestedIds),
+  };
+}
+
 interface MinimalLogger {
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
@@ -135,7 +155,21 @@ export async function materializeAttachmentContent(
       fileCount: files.length,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { ...EMPTY, notices: unresolvedNotices, delivery: allDropped(requestedIds) };
+    // `allDropped` counts these files as drops too, and the delivery contract requires every drop
+    // to carry a notice - so state the wholesale failure per file rather than only for the ids
+    // that were already unresolvable.
+    const failedNotices: FabFileNotice[] = files.map(file => ({
+      fabFileId: file.id,
+      fileName: file.fileName,
+      band: 'read_failed' as const,
+      message: `"${file.fileName}" was not sent: its content could not be extracted.`,
+      delivered: false,
+    }));
+    return {
+      ...EMPTY,
+      notices: [...unresolvedNotices, ...failedNotices],
+      delivery: allDropped(requestedIds),
+    };
   }
 
   const textParts: string[] = [];

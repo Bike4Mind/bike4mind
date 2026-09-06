@@ -831,12 +831,6 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Append generated-file names to a Quest's `images` array, keyed by the agent execution
-   * that produced them. Uses `$addToSet` so concurrent writers - the parent run and any
-   * subagents, each in its own Lambda - accumulate into the same array instead of clobbering
-   * each other. No-op if no Quest matches (best-effort; the files also persist as FabFiles).
-   */
-  /**
    * Record one agent run's attachment outcome on the quest it is linked to.
    *
    * The agent path builds the same notices the chat path does but had nowhere to put them, so an
@@ -863,6 +857,12 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     );
   }
 
+  /**
+   * Append generated-file names to a Quest's `images` array, keyed by the agent execution
+   * that produced them. Uses `$addToSet` so concurrent writers - the parent run and any
+   * subagents, each in its own Lambda - accumulate into the same array instead of clobbering
+   * each other. No-op if no Quest matches (best-effort; the files also persist as FabFiles).
+   */
   async addImagesByAgentExecutionId(agentExecutionId: string, images: string[]) {
     if (!images.length) return;
     await this.model.updateOne({ agentExecutionId }, { $addToSet: { images: { $each: images } } });

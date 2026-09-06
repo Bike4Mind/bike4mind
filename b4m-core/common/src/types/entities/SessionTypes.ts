@@ -106,7 +106,14 @@ export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
  * message and system files into one count alongside the turn's own attachments.
  */
 export interface IAttachmentDelivery {
-  /** Ids submitted with the turn, after dedup. */
+  /**
+   * Ids the turn tried to inline, after dedup - NOT just what the caller attached. The chat door
+   * counts session and message fab files plus the user's enabled and the admin's global system
+   * files plus the inline knowledge subset; the agent door counts message and session fab files
+   * plus every session knowledge id, and no system files. So `requested` is a denominator for
+   * "what this turn tried to put in the prompt", and the two doors do not compute it the same way.
+   * `droppedIds` is what answers "did MY file arrive" exactly, and is per-id exact on both.
+   */
   requested: number;
   /** Of `requested`, how many placed any content into the prompt. */
   delivered: number;

@@ -2677,12 +2677,10 @@ describe('ChatCompletionProcess', () => {
       // was the ONLY thing on the quest - indistinguishable from a turn that attached nothing at
       // all, which is how a 600-answer eval ran in the wrong configuration unnoticed. The report is
       // the affirmative half, so it must be written on exactly the path that produces no notices.
-      it('still records the delivery report on a turn where nothing failed', async () => {
+      it('writes the delivery report on a turn with no notices - the API-only affirmative half', async () => {
         await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabPromptMessages: [] });
 
-        const reports = mockDb.quests.update.mock.calls
-          .map((c: any[]) => c[0]?.attachmentDelivery)
-          .filter(Boolean);
+        const reports = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentDelivery).filter(Boolean);
         expect(reports.length).toBeGreaterThan(0);
         expect(reports[0]).toMatchObject({ requested: expect.any(Number), delivered: expect.any(Number) });
       });
@@ -2690,9 +2688,7 @@ describe('ChatCompletionProcess', () => {
       it('names the undelivered ids in the report, not just a count', async () => {
         await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabFileNotices: [notice] });
 
-        const reports = mockDb.quests.update.mock.calls
-          .map((c: any[]) => c[0]?.attachmentDelivery)
-          .filter(Boolean);
+        const reports = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentDelivery).filter(Boolean);
         expect(reports.length).toBeGreaterThan(0);
         expect(reports[0].droppedIds).toContain('f1');
         expect(reports[0].dropped).toBeGreaterThan(0);

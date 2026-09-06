@@ -7,6 +7,7 @@ import {
   attachmentNoticeBlock,
   attachmentNoticeStrings,
   MAX_INLINED_IMAGE_BYTES,
+  unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
 
 function makeLogger() {
@@ -181,13 +182,22 @@ describe('materializeAttachmentContent', () => {
     );
   });
 
-  it('still reports unresolved ids when extraction of the rest throws', async () => {
+  it('notices every dropped id when extraction throws, not just the unresolved ones', async () => {
     const logger = makeLogger();
     const extract = vi.fn().mockRejectedValue(new Error('storage down'));
 
     const result = await materializeAttachmentContent([file('a')], ['ghost'], extract, logger);
 
-    expect(result.notices).toEqual([expect.objectContaining({ fabFileId: 'ghost', band: 'unresolved' })]);
+    // The delivery contract says every id in `droppedIds` has a line in the notices. The catch
+    // path drops both the unresolvable id AND the file it never got to read, so both are owed one.
+    expect(result.delivery.droppedIds.sort()).toEqual(['a', 'ghost']);
+    expect(result.notices.map(n => n.fabFileId).sort()).toEqual(['a', 'ghost']);
+    expect(result.notices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fabFileId: 'ghost', band: 'unresolved' }),
+        expect.objectContaining({ fabFileId: 'a', band: 'read_failed' }),
+      ])
+    );
   });
 });
 
@@ -346,5 +356,35 @@ describe('attachmentNoticeBlock', () => {
     expect(out).toContain('"f19.md"');
     expect(out).not.toContain('"f20.md"');
     expect(out).toContain('5 more attachment(s) not listed here');
+  });
+});
+
+describe('unmaterializedAttachments (the agent door skip paths)', () => {
+  it('reports every requested id as dropped, with a notice each', () => {
+    const out = unmaterializedAttachments(['a', 'b']);
+
+    expect(out.delivery).toEqual({
+      requested: 2,
+      delivered: 0,
+      fullyDelivered: 0,
+      dropped: 2,
+      droppedIds: ['a', 'b'],
+    });
+    expect(out.notices.map(n => n.fabFileId)).toEqual(['a', 'b']);
+    expect(out.notices.every(n => n.delivered === false)).toBe(true);
+  });
+
+  it('carries no content, so composing it into the first iteration leaves the query untouched', () => {
+    // This is what makes the two skip paths safe to turn from `undefined` into a value: the run
+    // still gets exactly the query it got before, and gains only the record.
+    const out = unmaterializedAttachments(['a']);
+
+    expect(composeFirstIterationMessage('the query', out)).toBe('the query');
+    expect(out.inlinedFileIds).toEqual([]);
+    expect(out.fullyInlinedFileIds).toEqual([]);
+  });
+
+  it('reports nothing for a turn that requested nothing', () => {
+    expect(unmaterializedAttachments([]).delivery.requested).toBe(0);
   });
 });

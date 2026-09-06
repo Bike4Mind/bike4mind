@@ -135,6 +135,7 @@ import {
   composeFirstIterationMessage,
   attachmentNoticeBlock,
   attachmentNoticeStrings,
+  unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
 import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
@@ -711,7 +712,9 @@ async function materializeAttachmentsForRun(args: {
     logger.warn('[AttachmentContent] No resolved modelInfo; skipping content materialization', {
       requested: requestedIds.length,
     });
-    return undefined;
+    // Report-only: the turn still owes a record that these ids were asked for and none arrived,
+    // or the quest is indistinguishable from one with no attachments at all.
+    return unmaterializedAttachments(requestedIds);
   }
 
   try {
@@ -769,7 +772,7 @@ async function materializeAttachmentsForRun(args: {
       requested: requestedIds.length,
       error: err instanceof Error ? err.message : String(err),
     });
-    return undefined;
+    return unmaterializedAttachments(requestedIds);
   }
 }
 

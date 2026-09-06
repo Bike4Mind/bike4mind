@@ -106,8 +106,11 @@ const handler = baseApi({
     // The attachment report, both halves. `attachmentNotices` explains what did not arrive;
     // `attachmentDelivery` is the affirmative count, and is the only field that separates "the
     // caller attached nothing" from "the caller attached files and none arrived" - the exact
-    // ambiguity #1576 was filed about. Neither is viewer-redacted: both describe the caller's own
-    // submission and already reach every participant's client off the loaded quest.
+    // ambiguity #1576 was filed about. Neither is viewer-redacted, and that is a parity decision
+    // rather than an omission: GET /api/sessions/[id]/chat (getMessagesFromSession) already spreads
+    // the whole quest document to everyone `findAccessibleById` admits, share holders included, and
+    // it redacts only promptMeta. Redacting here alone would hide these two fields from a sharee who
+    // reads them off the very next call the SPA makes.
     // `promptMeta.context.tokensBySource.fabFiles` is NOT a substitute; it folds the turn's own
     // attachments in with message and system files under one token count, so it cannot tell those
     // two states apart.

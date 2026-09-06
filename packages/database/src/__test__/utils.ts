@@ -58,11 +58,14 @@ export async function setupMongoTest() {
     await Promise.resolve([researchTaskRepository, taskScheduleRepository, researchAgentRepository]);
   }, SETUP_HOOK_TIMEOUT_MS);
 
+  // No timeout literal: this hook inherits the package's hookTimeout, which is larger than any
+  // number that would fit here. The literal this replaces HALVED it under a comment claiming the
+  // opposite.
   afterAll(async () => {
     if (mongoServer) {
       await disconnectTestDB(mongoServer);
     }
-  }, 30000); // Increase timeout for cleanup
+  });
 
   beforeEach(async () => {
     await cleanupTestDB();
