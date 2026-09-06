@@ -49,6 +49,12 @@ jobs:
     # Only run if Deploy workflow succeeded OR manually triggered
     if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # The deploy role's OIDC trust policy matches on the Environment, so this
+    # has to resolve to the same account the `config` step picks the role ARN
+    # for. `environment:` cannot read the `steps` context, hence the duplicated
+    # condition rather than reusing that step's output.
+    environment:
+      name: ${{ (github.event_name == 'workflow_run' || github.ref == 'refs/heads/prod') && 'production' || 'dev' }}
     env:
       NODE_OPTIONS: --max-old-space-size=14336
     permissions:
