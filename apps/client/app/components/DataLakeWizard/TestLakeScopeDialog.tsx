@@ -58,10 +58,14 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
     });
   };
 
-  const handleConfirm = () => {
-    const tags = (lakes ?? []).filter(l => selected.has(l.id)).map(l => l.datalakeTag);
-    onConfirm(tags);
-  };
+  // Resolved against the fetched list, not the id set: an empty `retrievalTags` means NO scoping
+  // (the session sees the caller's full entitled set), so confirming before the lakes load - or
+  // after the fetch failed - would silently invert the very narrowing this dialog exists to apply.
+  // The confirm button gates on this, not on `selected.size`.
+  const selectedTags = useMemo(
+    () => (lakes ?? []).filter(l => selected.has(l.id)).map(l => l.datalakeTag),
+    [lakes, selected]
+  );
 
   return (
     <Modal open onClose={onClose}>
@@ -134,8 +138,8 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
         <DialogActions>
           <Button
             loading={confirming}
-            disabled={selected.size === 0}
-            onClick={handleConfirm}
+            disabled={selectedTags.length === 0}
+            onClick={() => onConfirm(selectedTags)}
             data-testid="test-lake-scope-confirm-btn"
           >
             Start test chat

@@ -22,8 +22,8 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
 );
 
 const LAKES: MockLake[] = [
-  { id: 'lake-a', name: 'Alpha Lake', datalakeTag: 'alpha' },
-  { id: 'lake-b', name: 'Beta Lake', datalakeTag: 'beta', isOwn: false },
+  { id: 'lake-a', name: 'Alpha Lake', datalakeTag: 'datalake:alpha' },
+  { id: 'lake-b', name: 'Beta Lake', datalakeTag: 'datalake:beta', isOwn: false },
 ];
 
 beforeEach(() => {
@@ -45,7 +45,7 @@ describe('TestLakeScopeDialog', () => {
     expect(screen.getByTestId('test-lake-scope-checkbox-lake-b').querySelector('input')).not.toBeChecked();
 
     await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
-    expect(onConfirm).toHaveBeenCalledWith(['alpha']);
+    expect(onConfirm).toHaveBeenCalledWith(['datalake:alpha']);
   });
 
   it('marks a not-owned lake with the owner icon', () => {
@@ -81,6 +81,21 @@ describe('TestLakeScopeDialog', () => {
     );
 
     expect(screen.getByTestId('test-lake-scope-error')).toBeInTheDocument();
+    // An empty retrievalTags list is NOT "no lakes" - it is no scoping at all, so confirming here
+    // would start an unnarrowed session while the anchor still reads as checked.
+    expect(screen.getByTestId('test-lake-scope-confirm-btn')).toBeDisabled();
+  });
+
+  it('disables confirm while the lakes are still loading', () => {
+    useGetDataLakesMock.mockReturnValue({ data: undefined, isLoading: true, isError: false, refetch: vi.fn() });
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-a" onClose={vi.fn()} onConfirm={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('test-lake-scope-loading')).toBeInTheDocument();
+    expect(screen.getByTestId('test-lake-scope-confirm-btn')).toBeDisabled();
   });
 
   it('calls onClose from the cancel action', async () => {
