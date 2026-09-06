@@ -47,8 +47,8 @@ const reviewProposalMutate = vi.fn();
 type MockPickerLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean };
 const useGetDataLakesMock = vi.fn(() => ({
   data: [
-    { id: 'lake-1', name: 'Test Lake', datalakeTag: 'lake-1' },
-    { id: 'lake-2', name: 'Open Lake', datalakeTag: 'lake-2' },
+    { id: 'lake-1', name: 'Test Lake', datalakeTag: 'datalake:test-lake' },
+    { id: 'lake-2', name: 'Open Lake', datalakeTag: 'datalake:open-lake' },
   ] as MockPickerLake[],
   isLoading: false,
   isError: false,
@@ -115,8 +115,8 @@ beforeEach(() => {
   useGetDataLakesMock.mockClear();
   useGetDataLakesMock.mockReturnValue({
     data: [
-      { id: 'lake-1', name: 'Test Lake', datalakeTag: 'lake-1' },
-      { id: 'lake-2', name: 'Open Lake', datalakeTag: 'lake-2' },
+      { id: 'lake-1', name: 'Test Lake', datalakeTag: 'datalake:test-lake' },
+      { id: 'lake-2', name: 'Open Lake', datalakeTag: 'datalake:open-lake' },
     ],
     isLoading: false,
     isError: false,
@@ -1122,10 +1122,14 @@ describe('DataLakeSettingsModal - Test this lake', () => {
     await user.click(screen.getByTestId('test-lake-scope-checkbox-lake-1').querySelector('input')!);
     await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
 
-    // Tags come back in the fetched-lakes list order (lake-1, lake-2), not selection order. The
-    // exact-object match also pins that no `corpusGroundingMode` rides along: /api/sessions/create
-    // strips it off any request without a `dataLakeId`, so sending one would be a silent no-op.
-    expect(startChatWithLakesMock).toHaveBeenCalledWith({ retrievalTags: ['lake-1', 'lake-2'] });
+    // Tags come back in the fetched-lakes list order, not selection order. The fixture tags are
+    // deliberately unequal to the lake ids and carry the `datalake:` prefix, so this discriminates
+    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that no
+    // `corpusGroundingMode` rides along: /api/sessions/create strips it off any request without a
+    // `dataLakeId`, so sending one would be a silent no-op.
+    expect(startChatWithLakesMock).toHaveBeenCalledWith({
+      retrievalTags: ['datalake:test-lake', 'datalake:open-lake'],
+    });
     // The scope dialog is a separate flow from the settings form - confirming it must not also
     // close the settings modal out from under the caller.
     expect(onClose).not.toHaveBeenCalled();
