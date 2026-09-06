@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildConvergencePauseExclusion, buildFabFileChunkScanFilter } from './chunkScan';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import {
+  buildConvergencePauseExclusion,
+  buildFabFileChunkScanFilter,
+  buildStrandedVectorizeScanFilter,
+} from './chunkScan';
 import { CHUNK_STALL_NOTICES, CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
 type Doc = Record<string, unknown>;
-const MODELLED_OPERATORS = new Set(['$ne', '$lt', '$not', '$in', '$nin']);
+const MODELLED_OPERATORS = new Set(['$ne', '$lt', '$type', '$not', '$in', '$nin']);
 const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
   Object.entries(filter).every(([key, cond]) => {
     if (key === '$or') return (cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
@@ -34,6 +40,15 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
       // would coerce instead, agreeing with Mongo by luck on the fixtures here and diverging on any
       // fixture that ever carries a non-Date.
       if ('$lt' in ops) checks.push(value instanceof Date && ops.$lt instanceof Date && value < ops.$lt);
+      // `$type` is what pins buildStrandedVectorizeScanFilter to its partial index (chunkScan.ts),
+      // so it has to be modelled or the throw below fires on that filter's own tests. Only the
+      // 'date' alias is used; another alias would quietly pass, so name it instead.
+      if ('$type' in ops) {
+        if (ops.$type !== 'date') {
+          throw new Error(`chunkScan.test matches(): unmodelled $type alias '${String(ops.$type)}' on '${key}'`);
+        }
+        checks.push(value instanceof Date);
+      }
       if ('$not' in ops) checks.push(!matches({ [key]: value }, { [key]: ops.$not }));
       // Mongo $in with null also matches a missing field.
       if ('$in' in ops)
@@ -346,6 +361,147 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
     expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
     expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
   });
+});
+
+describe('buildStrandedVectorizeScanFilter', () => {
+  // The state this rescues: chunks committed, `chunked: true`, zero vectors and a failed
+  // vectorize hand-off. buildFabFileChunkScanFilter cannot see it (it requires chunkCount: 0).
+  const cutoff = new Date('2026-01-01T00:00:00Z');
+  const stale = new Date('2025-12-31T00:00:00Z');
+  const fresh = new Date('2026-01-01T00:00:01Z');
+  const filter = buildStrandedVectorizeScanFilter(cutoff);
+
+  it('selects a chunked file whose vectorize enqueue failed past the grace period', () => {
+    const doc = { chunked: true, chunkCount: 12, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(true);
+  });
+
+  it('skips a file with no stamp - the ordinary case, so the sweep costs nothing', () => {
+    const doc = { chunked: true, chunkCount: 12, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file whose stamp is the schema default null ($lt is type-bracketed)', () => {
+    const doc = { chunked: true, chunkCount: 12, vectorizeEnqueueFailedAt: null, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a stamp inside the grace period, so it cannot race the handler own SQS retries', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: fresh, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file that is actively chunking', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: true, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  describe('stale-claim arm', () => {
+    // resumeVectorizeEnqueue holds the claim across real work (a vectorless-chunk read plus N
+    // sends), so a hard-killed worker leaves isChunking:true with no finally to clear it. Every
+    // other automatic door is shut on that file - hence the same three arms the un-chunked sweep
+    // carries, with the same chunkClaimedAt cutoff.
+    const claimCutoff = new Date('2026-01-01T00:00:00Z');
+    const withStale = buildStrandedVectorizeScanFilter(cutoff, claimCutoff);
+    const base = { chunked: true, vectorizeEnqueueFailedAt: stale, deletedAt: null };
+
+    it('still selects a file that is not claimed at all', () => {
+      expect(matches({ ...base, isChunking: false }, withStale)).toBe(true);
+    });
+
+    it('selects a claim older than the stale cutoff', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: stale }, withStale)).toBe(true);
+    });
+
+    it('selects an in-flight file with no claim stamp - the pre-chunkClaimedAt backfill', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, withStale)).toBe(true);
+      expect(matches({ ...base, isChunking: true }, withStale)).toBe(true);
+    });
+
+    it('leaves a genuinely in-flight claim alone', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: fresh }, withStale)).toBe(false);
+    });
+
+    it('uses the same claim cutoff the un-chunked sweep does', () => {
+      const claimed = { isChunking: true, chunkClaimedAt: fresh };
+      expect(matches({ ...base, ...claimed }, withStale)).toBe(
+        matches(
+          {
+            status: 'complete',
+            chunkCount: 0,
+            createdAt: stale,
+            deletedAt: null,
+            mimeType: 'application/pdf',
+            ...claimed,
+          },
+          buildFabFileChunkScanFilter(cutoff, claimCutoff, {
+            convergencePause: { platformPaused: false, paused: [], running: [] },
+          })
+        )
+      );
+    });
+  });
+
+  it('skips a deleted file', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: new Date() };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file that was re-chunked, whose reset cleared chunked and the stamp with it', () => {
+    // resetChunkStateByIds clears vectorizeEnqueueFailedAt, so this shape should not occur - the
+    // `chunked: true` clause is what makes the two sweeps' domains disjoint by construction rather
+    // than by whichever writer cleared the marker. An un-chunked file is the other sweep's business.
+    const doc = { chunked: false, chunkCount: 0, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('is disjoint from the un-chunked sweep: a stranded file matches only this filter', () => {
+    const doc = {
+      status: 'complete',
+      chunked: true,
+      chunkCount: 12,
+      vectorizeEnqueueFailedAt: stale,
+      isChunking: false,
+      createdAt: stale,
+      deletedAt: null,
+      mimeType: 'application/pdf',
+    };
+    expect(
+      matches(
+        doc,
+        buildFabFileChunkScanFilter(cutoff, undefined, {
+          convergencePause: { platformPaused: false, paused: [], running: [] },
+        })
+      )
+    ).toBe(false);
+    expect(matches(doc, filter)).toBe(true);
+  });
+});
+
+describe('production call sites pass the stale-claim cutoff', () => {
+  // Source-shape guard, because the regression is silent: staleClaimBefore is optional (the arm is
+  // opt-in), so dropping it type-checks, passes every other test, and just quietly turns the
+  // recovery arm back off. The cron's call is covered behaviourally in dataLakeBatchReconcile.test.ts;
+  // the self-host worker's call lives in chunkRescueSweep.ts (exported so it's independently
+  // testable - see chunkRescueSweep.test.ts), so this is what watches its source shape.
+  const sources = {
+    'server/worker/chunkRescueSweep.ts': 'chunkRescueSweep.ts',
+    'server/cron/dataLakeBatchReconcile.ts': '../cron/dataLakeBatchReconcile.ts',
+  } as const;
+
+  for (const [label, rel] of Object.entries(sources)) {
+    it(`${label} calls buildStrandedVectorizeScanFilter with both cutoffs`, async () => {
+      const src = await readFile(resolve(__dirname, rel), 'utf8');
+      const call = src.match(/buildStrandedVectorizeScanFilter\(([^)]*)\)/);
+      expect(call, 'call site vanished - move or delete this guard with it').not.toBeNull();
+      expect(
+        call![1]
+          .split(',')
+          .map(a => a.trim())
+          .filter(Boolean)
+      ).toHaveLength(2);
+    });
+  }
 });
 
 describe('buildConvergencePauseExclusion (the four platform x override shapes)', () => {

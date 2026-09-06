@@ -17,7 +17,7 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { runChunkRescueSweep } from './chunkRescueSweep';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 import { CHUNK_SCAN_BATCH } from './chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
@@ -170,11 +170,20 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. Selection, pause scoping and
-  // enqueue accounting all live in chunkRescueSweep.ts, which the hosted daily cron also calls -
-  // the per-tick budget below is the only thing that differs.
+  // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose
+  // vectorize hand-off was stranded. Selection, pause scoping and enqueue accounting for both
+  // passes live in chunkRescueSweep.ts, shared in shape with the hosted daily cron - the per-tick
+  // budget below is the only thing that differs.
+  // Each pass is isolated, as in the hosted twin: neither guards its own FabFile.find, so a Mongo
+  // blip in the first would otherwise reject out of the tick and leave the stranded-vectorize
+  // backlog growing untouched until the error cleared.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger });
+    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger }).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] un-chunked rescue sweep failed: ${err}`);
+    });
+    await runStrandedVectorizeRescue(bootLogger).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] stranded-vectorize rescue sweep failed: ${err}`);
+    });
   });
 
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
