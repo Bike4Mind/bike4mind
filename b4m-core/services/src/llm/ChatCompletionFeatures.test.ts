@@ -2683,6 +2683,8 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
  * retrievalConflictNote.ts (unit-tested there); this locks the WIRING and the column-0 placement.
  */
 describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
   const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
 
   const makeCtx = (chunks: Array<{ fabFileId: string; text: string }>) => {
@@ -2731,15 +2733,16 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
       { fabFileId: 'fileB', text: 'Uptime is 95%.' },
     ]);
 
-    const note = content.indexOf('NOTE: the retrieved documents below disagree');
+    const note = content.indexOf(CONFLICT_NOTE);
     expect(note).toBeGreaterThanOrEqual(0);
     expect(note).toBeLessThan(content.indexOf(BEGIN));
-    // Sliced to the note itself: the ids also appear in the passage headings, so asserting over the
-    // whole message would pass whether or not the note named a document.
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the section
+    // headings, so a looser assertion would pass on a note naming the wrong field entirely.
     const noteText = content.slice(note, content.indexOf('\n\n', note));
     expect(noteText).toContain('metric-disagreement: 1');
-    expect(noteText).toContain('fileA');
-    expect(noteText).toContain('fileB');
+    expect(noteText).toContain('across documents fileA, fileB.');
+    // The id the note names is the id the heading renders, so the model can resolve it.
+    expect(content).toContain('(ID: fileA)');
   });
 
   it('says nothing when the injected documents agree', async () => {
@@ -2748,6 +2751,16 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
       { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
     ]);
 
-    expect(content).not.toContain('disagree with each other');
+    expect(content).not.toContain(CONFLICT_NOTE);
+  });
+
+  it('renders after the capability and coverage notes, nearest the content it describes', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    expect(content.indexOf('About this library:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
   });
 });

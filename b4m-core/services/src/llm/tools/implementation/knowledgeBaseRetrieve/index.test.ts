@@ -1296,6 +1296,7 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
  */
 describe('retrieve_knowledge_content cross-document conflict note', () => {
   const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
 
   /** Per-file chunk text, unlike pagedTextChunkRepo above, which serves one document. */
   function multiFileChunkRepo(byFileId: Record<string, string>) {
@@ -1325,19 +1326,21 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
   it('keeps the note at column 0, outside the untrusted block', async () => {
     const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });
 
-    const note = out.indexOf('NOTE: the retrieved documents below disagree');
+    const note = out.indexOf(CONFLICT_NOTE);
     expect(note).toBeGreaterThanOrEqual(0);
     expect(note).toBeLessThan(out.indexOf(BEGIN));
-    // Sliced to the note itself: the ids also appear in the `### ... (ID: ...)` headings.
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the
+    // `### ... (ID: ...)` headings, so a looser assertion would pass on a note naming the wrong
+    // field entirely - this channel's chunk ids are `${file.id}-c1`.
     const noteText = out.slice(note, out.indexOf('\n\n', note));
     expect(noteText).toContain('metric-disagreement: 1');
-    expect(noteText).toContain('file-a');
-    expect(noteText).toContain('file-b');
+    expect(noteText).toContain('across documents file-a, file-b.');
+    expect(out).toContain('(ID: file-a)');
   });
 
   it('says nothing when the documents agree', async () => {
     const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 99.9%.' });
 
-    expect(out).not.toContain('disagree with each other');
+    expect(out).not.toContain(CONFLICT_NOTE);
   });
 });

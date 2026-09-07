@@ -117,10 +117,15 @@ function formatSemanticResults(
     if (clipped) clippedCount++;
     conflictPassages.push({ fabFileId: r.fileId, text });
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
-    // crafted name carries a newline plus a forged marker into the label line. The date needs no
-    // such wrap - documentDateClause emits digits and separators only.
+    // crafted name carries a newline plus a forged marker into the label line. Neither the id nor
+    // the date needs that wrap - the id is MongoDB-generated and documentDateClause emits digits and
+    // separators only.
+    //
+    // The id is here so this channel attributes a passage the same way the other two do
+    // (`### Name (ID: ...)`): the conflict note above names documents by `fabFileId` alone, and
+    // without it on the heading the model has no way to map a named id back to a passage it can read.
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (relevance ${r.score.toFixed(2)})` +
+      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})` +
       `${documentDateClause(r.fileCreatedAt)}\n` +
       text
     );

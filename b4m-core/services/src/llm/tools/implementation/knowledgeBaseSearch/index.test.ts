@@ -1148,9 +1148,9 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
       scan: { ...scan, filesMatching: 2, filesScoped: 2, filesScanned: 2, chunksScanned: 2 },
     });
     const out = await run(delimiterCtx());
-    expect(out).toContain('1. **Handbook** (relevance 0.81) - dated 2026-08-14');
+    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81) - dated 2026-08-14');
     // No createdAt: the clause is absent entirely, not empty and not stringified.
-    expect(out).toContain('2. **Undated** (relevance 0.81)\n');
+    expect(out).toContain('2. **Undated** (ID: f2, relevance 0.81)\n');
     expect(out).not.toContain('dated undefined');
     expect(out).not.toContain('dated null');
     // Still exactly two real headers: the added suffix must not create or defang one.
@@ -3102,6 +3102,8 @@ describe('search_knowledge_base narrows lake access to the session lake', () => 
 });
 
 describe('search_knowledge_base flags passages that contradict each other', () => {
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
   const scan = {
     truncated: false,
     fileBudgetHit: false,
@@ -3123,6 +3125,15 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     fileTags: [],
     chunkText,
     score: 0.81,
+  });
+
+  /** Spread over emptySemanticResult so the untyped mock keeps the fields the real service returns. */
+  const searchReturning = (results: ReturnType<typeof hitOf>[], scanOverride = scan) => ({
+    ...emptySemanticResult(),
+    results,
+    totalChunksSearched: results.length,
+    filesInScope: results.length,
+    scan: scanOverride,
   });
 
   function conflictContext(): ToolContext {
@@ -3148,37 +3159,74 @@ describe('search_knowledge_base flags passages that contradict each other', () =
   });
 
   it('keeps the conflict note at column 0, outside the untrusted block', async () => {
-    semanticDataLakeSearchMock.mockResolvedValue({
-      results: [hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')],
-      totalChunksSearched: 2,
-      filesInScope: 2,
-      scan,
-    });
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')])
+    );
 
     const out = await run(conflictContext());
 
-    const note = out.indexOf('NOTE: the retrieved documents below disagree');
+    const note = out.indexOf(CONFLICT_NOTE);
     expect(note).toBeGreaterThanOrEqual(0);
     // Inside the block the defang pass would indent it, and it would read as document text.
     expect(note).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
-    // Sliced to the note itself: the ids also appear in the passage headings, so asserting over the
-    // whole output would pass whether or not the note named a document.
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the passage
+    // headings, so a looser assertion would pass on a note naming the wrong field entirely.
     const noteText = out.slice(note, out.indexOf('\n\n', note));
     expect(noteText).toContain('metric-disagreement: 1');
-    expect(noteText).toContain('file-a');
-    expect(noteText).toContain('file-b');
+    expect(noteText).toContain('across documents file-a, file-b.');
   });
 
-  it('emits nothing when the passages agree, so the note cannot ship always-on', async () => {
-    semanticDataLakeSearchMock.mockResolvedValue({
-      results: [hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 99.9%.')],
-      totalChunksSearched: 2,
-      filesInScope: 2,
-      scan,
-    });
+  it('heads each passage with the id the note names, so the model can find it', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')])
+    );
 
     const out = await run(conflictContext());
 
-    expect(out).not.toContain('disagree with each other');
+    // The other two channels head a section `### Name (ID: ...)`; without the same here, an id in the
+    // note is unresolvable on this channel.
+    // prettyFileName is what renders the label, so it is the id and not the name that is stable.
+    expect(out).toContain('(ID: file-a, relevance 0.81)');
+    expect(out).toContain('(ID: file-b, relevance 0.81)');
+  });
+
+  it('emits nothing when the passages agree, so the note cannot ship always-on', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 99.9%.')])
+    );
+
+    expect(await run(conflictContext())).not.toContain(CONFLICT_NOTE);
+  });
+
+  // The note must describe the SERVED text. A conflict whose evidence was clipped out of the block is
+  // a claim about content the model cannot check - so the figure below sits past the serve budget.
+  it('says nothing about a conflicting figure that the serve budget clipped away', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([
+        hitOf('file-a', 'Uptime is 99.9%.'),
+        hitOf('file-b', `${'padding text. '.repeat(1000)} Uptime is 95%.`),
+      ])
+    );
+
+    const out = await run(conflictContext());
+
+    expect(out).not.toContain('Uptime is 95%.');
+    expect(out).not.toContain(CONFLICT_NOTE);
+  });
+
+  it('renders last of the column-0 notes, nearest the content it describes', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')], {
+        ...scan,
+        truncated: true,
+        filesScanned: 1,
+      })
+    );
+
+    const out = await run(conflictContext());
+
+    expect(out.indexOf('covered only 1 of 2 documents')).toBeGreaterThanOrEqual(0);
+    expect(out.indexOf('covered only 1 of 2 documents')).toBeLessThan(out.indexOf(CONFLICT_NOTE));
+    expect(out.indexOf(CONFLICT_NOTE)).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
   });
 });
