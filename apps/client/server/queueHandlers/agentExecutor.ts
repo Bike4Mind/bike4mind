@@ -72,7 +72,13 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
+import {
+  getTextModelCost,
+  CreditHolderType,
+  type AttachmentLakeAccess,
+  type IAgent,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -88,6 +94,7 @@ import {
 } from '@bike4mind/services';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
+import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -128,6 +135,8 @@ import {
   materializeAttachmentContent,
   composeFirstIterationMessage,
   attachmentNoticeBlock,
+  attachmentNoticeStrings,
+  unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
 import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
@@ -686,11 +695,12 @@ async function materializeAttachmentsForRun(args: {
   execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
   sessionKnowledgeIds: string[];
   scope: Record<string, unknown>;
+  lakeAccess: AttachmentLakeAccess;
   modelInfo?: ModelInfo;
   apiKeyTable: ApiKeyTable;
   logger: Logger;
 }) {
-  const { execution, sessionKnowledgeIds, scope, modelInfo, apiKeyTable, logger } = args;
+  const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
   const requestedIds = Array.from(
     new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
@@ -703,14 +713,16 @@ async function materializeAttachmentsForRun(args: {
     logger.warn('[AttachmentContent] No resolved modelInfo; skipping content materialization', {
       requested: requestedIds.length,
     });
-    return undefined;
+    // Report-only: the turn still owes a record that these ids were asked for and none arrived,
+    // or the quest is indistinguishable from one with no attachments at all.
+    return unmaterializedAttachments(requestedIds);
   }
 
   try {
     const storage = getFilesStorage();
     const { files, missingIds } = await fetchAndConvertFabFiles(
       requestedIds,
-      { scope },
+      { scope, lakeAccess },
       { db: { fabfiles: fabFileRepository, caches: cacheRepository }, storage, logger }
     );
 
@@ -761,7 +773,7 @@ async function materializeAttachmentsForRun(args: {
       requested: requestedIds.length,
       error: err instanceof Error ? err.message : String(err),
     });
-    return undefined;
+    return unmaterializedAttachments(requestedIds);
   }
 }
 
@@ -2185,6 +2197,11 @@ async function processExecution(
     // rebuilding the ability set every iteration.
     const fabFileReadScope = accessibleBy(defineAbilitiesFor(user as IUserDocument), Permission.read).ofType(FabFile);
 
+    // The attachment door's lake arms, parity with the chat door's `attachmentLakeAccess`. Built
+    // per invocation and kept a thunk on purpose - see `createAttachmentLakeAccess` for why the
+    // memo must not be hoisted and why its catch is load-bearing.
+    const attachmentLakeAccess = createAttachmentLakeAccess(user as IUserDocument, logger);
+
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
@@ -2320,6 +2337,7 @@ async function processExecution(
               execution,
               sessionKnowledgeIds: session.knowledgeIds ?? [],
               scope: fabFileReadScope,
+              lakeAccess: await attachmentLakeAccess(),
               modelInfo,
               apiKeyTable: apiKeyTable as ApiKeyTable,
               logger,
@@ -2331,6 +2349,21 @@ async function processExecution(
         // the empty array.
         inlinedAttachmentIds.push(...materialized.inlinedFileIds);
         fullyInlinedAttachmentIds.push(...materialized.fullyInlinedFileIds);
+
+        // Parity with the chat door, which persists the same two values on its quest before the
+        // completion runs. Best-effort on purpose: content materialization is an enhancement over
+        // the metadata preamble, so failing to RECORD its outcome must not take the run down.
+        await questRepository
+          .recordAttachmentOutcomeByAgentExecutionId(executionId, {
+            notices: attachmentNoticeStrings(materialized.notices),
+            delivery: materialized.delivery,
+          })
+          .catch(err =>
+            logger.warn('[AttachmentContent] Could not record the attachment outcome on the quest', {
+              executionId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
       }
 
       let firstIterationQuery = await maybeBuildFirstIterationQuery(
@@ -2341,6 +2374,7 @@ async function processExecution(
           execution,
           sessionKnowledgeIds: session.knowledgeIds ?? [],
           scope: fabFileReadScope,
+          lakeAccess: attachmentLakeAccess,
           availableToolNames: resolvedToolNames,
           inlinedFileIds: materialized?.inlinedFileIds ?? [],
         },

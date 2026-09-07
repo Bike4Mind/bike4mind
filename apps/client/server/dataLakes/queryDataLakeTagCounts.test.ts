@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   countDataLakeTagsByPrefix: vi.fn(),
   countDataLakeUniqueFilesByPrefix: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
+  countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
   countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
 }));
@@ -45,6 +46,7 @@ vi.mock('@bike4mind/database', async () => {
       countDataLakeTagsByPrefix: h.countDataLakeTagsByPrefix,
       countDataLakeUniqueFilesByPrefix: h.countDataLakeUniqueFilesByPrefix,
       countDataLakeFilesByMembership: h.countDataLakeFilesByMembership,
+      countDataLakeFilesByMembershipArm: h.countDataLakeFilesByMembershipArm,
       countDistinctDataLakeFilesByMembership: h.countDistinctDataLakeFilesByMembership,
       countDistinctUncategorizedDataLakeFilesByMembership: h.countDistinctUncategorizedDataLakeFilesByMembership,
     },
@@ -68,6 +70,7 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     h.countDataLakeTagsByPrefix.mockReset().mockResolvedValue([]);
     h.countDataLakeUniqueFilesByPrefix.mockReset().mockResolvedValue({ total: 0, byPrefix: {} });
     h.countDataLakeFilesByMembership.mockReset().mockResolvedValue({});
+    h.countDataLakeFilesByMembershipArm.mockReset().mockResolvedValue({});
     h.countDistinctDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
     h.countDistinctUncategorizedDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
   });
@@ -134,6 +137,7 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
       tagCounts: [],
       uniqueArticleCounts: { total: 0, byPrefix: {} },
       lakeFileCounts: {},
+      lakeArmCounts: {},
       uncategorizedFileCounts: {},
       totalLakeFileCount: 0,
       totalUncategorizedFileCount: 0,
@@ -154,6 +158,25 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
 
     expect(result.lakeFileCounts).toEqual({ 'datalake:lake-0': 13, 'datalake:lake-1': 2 });
     expect(result.uncategorizedFileCounts).toEqual({ 'datalake:lake-0': 1, 'datalake:lake-1': 0 });
+  });
+
+  it('passes the arm counts through untouched, keyed by datalakeTag', async () => {
+    // The early-return case (no lakes) pins `lakeArmCounts: {}` above, which holds whether or not
+    // the field is actually wired to the repository call. This pins the field to a non-empty,
+    // non-symmetric result so a dropped wire-up (or a `{}` fallback swallowing the real value)
+    // fails here instead of shipping a badge/chip that always renders zero.
+    h.countDataLakeFilesByMembershipArm.mockResolvedValue({
+      'datalake:lake-0': { metaCount: 5, prefixOnlyCount: 2 },
+      'datalake:lake-1': { metaCount: 0, prefixOnlyCount: 3 },
+    });
+
+    const result = await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
+
+    expect(result.lakeArmCounts).toEqual({
+      'datalake:lake-0': { metaCount: 5, prefixOnlyCount: 2 },
+      'datalake:lake-1': { metaCount: 0, prefixOnlyCount: 3 },
+    });
+    expect(h.countDataLakeFilesByMembershipArm.mock.calls[0][0]).toEqual(scopes());
   });
 
   it('sources the all-lakes total from membership, NOT the prefix-based unique count', async () => {

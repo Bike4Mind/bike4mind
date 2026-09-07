@@ -242,6 +242,20 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
     expect(after?.chunkRebuildRequestedAt).toBeNull();
   });
 
+  it('clears vectorizeEnqueueFailedAt, so a re-chunked file leaves the stranded sweep', async () => {
+    // Same class of bug as `error` above, for the marker the stranded-vectorize sweep selects on.
+    // The only other writer that clears it is the chunk handler's resume path, which is reachable
+    // only for an already-chunked file - so a stamp surviving this reset would have the sweep
+    // re-enqueue the file on every pass until it finishes chunking again.
+    const [f] = await FabFile.create([
+      makeFile({ chunked: true, chunkCount: 1, vectorizeEnqueueFailedAt: new Date('2026-01-01') }),
+    ]);
+
+    await fabFileRepository.resetChunkStateByIds([f._id.toString()]);
+
+    expect((await FabFile.findById(f._id).lean())?.vectorizeEnqueueFailedAt).toBeNull();
+  });
+
   // #2016. `notes` is the owner's own text, and this reset used to blank it - so every "Rebuild
   // passages" wave, every convergence wave and every per-file reprocess silently deleted whatever the
   // owner had typed. The two machine-written markers DO go, which is what keeps reprocess the

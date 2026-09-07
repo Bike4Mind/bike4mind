@@ -1,5 +1,6 @@
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { settingsMap, SETTING_TABS, API_SERVICE_GROUPS, Category, CATEGORY_ICONS } from '@bike4mind/common';
+import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import {
   Checkbox,
   FormControl,
@@ -532,6 +533,10 @@ const AdminSettingsTab: React.FC = () => {
               );
             })}
           </Stack>
+
+          {/* The measured counterpart to this group's throughput levers. Scoped to this group
+              rather than the AI category: it only makes sense next to the numbers it advises on. */}
+          {groupId === API_SERVICE_GROUPS.DATA_LAKE_COST.id && <EmbeddingProviderLimits />}
         </CardContent>
       </Card>
     );

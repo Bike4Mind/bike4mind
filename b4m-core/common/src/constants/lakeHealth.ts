@@ -1,3 +1,5 @@
+import type { InconsistencyKind } from './corpusInconsistency';
+import type { WireLakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -22,6 +24,7 @@ import {
   deriveServeCharBudget,
   isChunkRebuildPending,
   isChunkStalled,
+  isChunklessStall,
 } from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
@@ -212,7 +215,11 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset), so keying on
   // the reason alone would fail a repaired file forever.
   // Same guard, same reason, as `decideMemberConvergence`'s own arm.
-  const passagesRemoved = member.chunkCount === 0 && member.chunkStallReason === 'rechunkPaused';
+  //
+  // `isChunklessStall`, not the bare `rechunkPaused`: `unchunkedPaused` is the same halted state on a
+  // file that arrived empty rather than one a wave emptied, and it grades identically here. NOT the
+  // full CHUNK_STALL_REASONS - a vectorize-paused file still has its passages.
+  const passagesRemoved = member.chunkCount === 0 && isChunklessStall(member.chunkStallReason);
   // A rebuild that was REQUESTED and has not committed (#1939). Deliberately NOT folded into
   // `passagesRemoved`: the passages are equally gone, but this one is expected back, so forcing P3
   // to `fail` here would make every ordinary "Rebuild passages" wave and every per-file reprocess
@@ -339,12 +346,13 @@ export type LakeHealthReport = {
  * to drop the lake off `healthy` regardless of the percentage beside it.
  */
 /**
- * The members `summarizeLakeHealth` grades: chunked, or chunkless via one of the two markers that
- * mean "expected back", not "never had any". Exported so a sibling report over the same scan - e.g.
+ * The members `summarizeLakeHealth` grades: chunked, or chunkless via a marker that says so. A
+ * chunkless member with no marker at all is the one thing left out - nothing distinguishes it from an
+ * image or a pending upload. Exported so a sibling report over the same scan - e.g.
  * `findDuplicateMembers` in `computeLakeHealth` - agrees by construction about which members are "in"
  * the lake, rather than by a comment promising the two filters stay in sync.
  *
- * The CHUNK arm only, matching `findDataLakeHealthMembers`'s own `$match` and
+ * The CHUNK arm only (`isChunklessStall`), matching `findDataLakeHealthMembers`'s own `$match` and
  * `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
  * already admitted by `chunkCount > 0` and needs no exception here.
  *
@@ -358,7 +366,7 @@ export function selectLakeHealthMembers<
   T extends Pick<LakeHealthMemberInput, 'chunkCount' | 'chunkStallReason' | 'chunkRebuildRequestedAt'>,
 >(members: T[]): T[] {
   return members.filter(
-    m => m.chunkCount > 0 || m.chunkStallReason === 'rechunkPaused' || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+    m => m.chunkCount > 0 || isChunklessStall(m.chunkStallReason) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
   );
 }
 
@@ -517,11 +525,62 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
   /** True when the lake exceeded the member scan bound, so every ratio here is partial. */
   scanTruncated: boolean;
   /**
+   * The MEMBERSHIP dimension (#2245): who is in this lake and whether any document is here twice.
+   * Separate from the predicates above because every one of them can pass on a lake carrying two
+   * upload generations of the same files - each generation genuinely is chunked and vectorized.
+   *
+   * OVERLAPS `duplicateMembers` below, which #2317 added independently while this was in review, and
+   * the two DISAGREE by construction: this grades over the membership population (which keeps
+   * chunkless members on purpose), `duplicateMembers` grades over the health population (which drops
+   * them). Two duplicate counts for one lake is not a shape to ship - one of them should go, and
+   * which one is a product decision (#2245 says it supersedes the report-only half of #2239). Kept
+   * side by side only so a merge did not silently delete either.
+   */
+  membership: WireLakeMembershipReport;
+  /**
    * Duplicate-fileName members (#2239). Report-only - see `findDuplicateMembers`. `groups` (and each
    * group's `members`) are capped for payload size by the caller; `memberCount`/`groupCount` on the
    * report and `memberCount` on each group stay exact.
+   *
+   * See the note on `membership` above: these two are redundant and expected to disagree.
    */
   duplicateMembers: LakeHealthDuplicatesReport;
+  /**
+   * SUMMARY of the last cross-document inconsistency report (#2242), or null when detection has never
+   * run. Null is NOT "clean" and a surface must not render it as such - detection is an
+   * owner-triggered pass, because it reads chunk text and health may not (#1665).
+   *
+   * Counts only. No excerpts, and no `subject`, because both are lifted verbatim from member
+   * documents - a `relationship-conflict` subject IS an organization name taken out of the prose.
+   * GET /health is READ-gated (org and public-lake readers reach it) and applies no redaction, while
+   * the report itself is manage-only: `redactLakeForActor` withholds the stored fields from readers,
+   * and POST /inconsistencies is write-gated for exactly that reason.
+   *
+   * So the shape here carries nothing to redact rather than relying on a caller to redact it. An
+   * actor-conditional payload would put the burden on every future reader of this response; a
+   * structurally prose-free one cannot leak even if someone forgets. The full findings come from
+   * POST /inconsistencies, which is already gated.
+   */
+  inconsistency: {
+    computedAt: Date | null;
+    /**
+     * True when detection did not read every chunk of every member, so counts are a LOWER BOUND.
+     * Unconditionally true today: the pass reads a bounded number of chunks per member.
+     */
+    sampled: boolean;
+    /** True when the lake has more members than the pass sampled. The actionable half of `sampled`. */
+    memberSampled: boolean;
+    /**
+     * Members whose text was actually read. Zero with a non-null `computedAt` means the pass ran and
+     * scanned nothing, which is NOT a clean lake - the same distinction `null` carries one level up.
+     */
+    memberCount: number;
+    /** EXACT: summed from `countsByKind`, so it never implies fewer findings than were detected. */
+    findingCount: number;
+    /** True when the stored finding list was capped. `findingCount` above is unaffected. */
+    truncated: boolean;
+    countsByKind: Record<InconsistencyKind, number>;
+  } | null;
 };
 
 function emptyTally(): PredicateTally {

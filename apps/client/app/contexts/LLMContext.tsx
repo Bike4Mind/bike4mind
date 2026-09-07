@@ -558,11 +558,16 @@ export const LLMProvider: React.FC = () => {
     // their identity is stable and they don't need to be in deps. accessibleModels
     // IS in deps so we re-run when models arrive after isAdminSettingsLoading has
     // already flipped false (see comment above).
+    // activeModel IS in deps because a model can go unresolvable AFTER this effect has settled -
+    // session hydration (useHydrateModelFromSession) applies `lastUsedModel` unvalidated, and the
+    // persisted store rehydrates a pin whose model has since left the catalog. Keyed only on the
+    // inputs it resolves FROM, the repair below could never see that. The body is idempotent, so
+    // re-running on a model the user picked themselves is a no-op.
     // modelInfoRepo is read (via modelInfoRepoRef) but deliberately NOT in deps: it and accessibleModels
     // derive from the same cached catalog query, so accessibleModels already covers its arrival. Adding
     // it would re-run this effect on every catalog refetch for no new decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels]);
+  }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels, activeModel]);
 
   // Re-fit max_tokens whenever the active text/chat model changes (see refitMaxTokensForModel -
   // it corrects both a too-high carry-over and a too-low one). Skip image models: their catalog
@@ -582,7 +587,15 @@ export const LLMProvider: React.FC = () => {
     if (!activeModel || !modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
-    if (!info) return;
+    if (!info) {
+      // A model absent from a LOADED catalog is a dead pin, and the effect above is about to replace
+      // it. Record it anyway: that effect stamps the dead id as the `from` of the transition, so the
+      // handshake below only matches if this ref names it too. Bailing without recording leaves the
+      // last GOOD model here, the landing then reads as a switch the user asked for, and a ceiling
+      // they lowered is raised to the replacement's default.
+      refitModelRef.current = activeModel;
+      return;
+    }
     const previousModel = refitModelRef.current;
     const modelChanged = previousModel !== null && previousModel !== activeModel;
     refitModelRef.current = activeModel;

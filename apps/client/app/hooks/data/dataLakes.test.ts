@@ -61,6 +61,7 @@ import {
   useGetDeletedDataLakes,
   useAddFileToDataLake,
   useRemoveFileFromDataLake,
+  useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
   useArchiveDataLake,
@@ -875,6 +876,51 @@ describe('useRechunkDataLake cache invalidation', () => {
   });
 });
 
+describe('useRechunkDataLake paused refusal (#2223)', () => {
+  // The toast spies are module-level and shared across this file, so both assertions below
+  // ("the other toast was NOT called") need a clean slate.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+  };
+
+  it('warns that nothing was rebuilt, instead of a green success claiming the opposite', async () => {
+    // The paused arm also returns enqueued: 0, so on the counts alone it is indistinguishable from
+    // "nothing to do" - and it fell through to toast.success('All files are already chunked into
+    // passages.'). That claim is not merely uninformative but FALSE: the server-side gate only runs
+    // when at least one file was detected, so `detected` is always >= 1 here.
+    apiPost.mockResolvedValueOnce({ data: { detected: 12, enqueued: 0, remaining: 12, outcome: 'paused' } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('paused'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('still reports a genuine nothing-to-do as a success', async () => {
+    // The arm the paused case used to be confused with must keep its own wording.
+    apiPost.mockResolvedValueOnce({ data: { detected: 0, enqueued: 0, remaining: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('All files are already chunked into passages.');
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+});
+
 describe('useTransferLakeOwnership cache invalidation', () => {
   it('refreshes the access view, the picker and the lake LIST - ownership decides canManage', async () => {
     // The list matters as much as the view: once the actor is no longer the owner, controls that
@@ -918,6 +964,130 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
+  });
+});
+
+describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
+  // These branches produce the only sentence the user ever sees about an apply, and the batch is
+  // 'applied' afterwards - apply requires 'ready' and re-analyze requires 'ready'|'failed', so
+  // there is no in-product route back. A wrong message here is the user's last word on the batch.
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useApplyTaxonomySuggestions('b1'), { wrapper });
+  };
+
+  // toast.* are module-level spies shared across this file, so calls accumulate without this.
+  // apiPost is reset too, matching the sibling describes: every case here queues a
+  // mockResolvedValueOnce, and one left unconsumed would shift the queue into an unrelated test.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+    apiPost.mockReset();
+  });
+
+  it('does not claim "already up to date" when files silently lost their CAS check', async () => {
+    // The review defect: 7 files already carried the tags and 3 needed them, but a concurrent tag
+    // edit made all 3 miss. Reading only filesUpdated/unchanged renders a green "Tags already up to
+    // date on 7 files" - an affirmative claim of completeness on a batch where 3 files were never
+    // tagged, and the user cannot retry.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 7, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.warning).mock.calls[0][0]).toBe(
+      'Tags already up to date on 7 files. 3 files could not be updated - changed while applying.'
+    );
+  });
+
+  it('still reports a clean idempotent re-apply as a plain success', async () => {
+    // The guard on the fix above: suppressing the false completeness claim must not turn the
+    // genuine "nothing needed changing" case into a warning.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 3, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags already up to date on 3 files');
+  });
+
+  it('reports the split when some files were tagged and others already had them', async () => {
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 2, unchanged: 1, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 2 files, 1 file already up to date');
+  });
+
+  it('falls through to the plain success arm when the server omits skipped (rolling deploy)', async () => {
+    // A client on this build against a server that has not shipped these fields yet. BOTH are
+    // absent, because `unchanged` and `skipped` shipped in the same service commit - a fixture
+    // keeping `unchanged: 0` models a payload no server ever sends, which is what made this case
+    // pass for the wrong reason.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 4 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 4 files');
+  });
+
+  it('survives an old server that omits the fields and matched nothing', async () => {
+    // `filesUpdated: 0` is the one old-server shape where the `?? 0` defaulting is observable at
+    // all: without it, `unchanged === 0` is false against undefined, the first arm is skipped, and
+    // the next one formats undefined. The fixture above uses `filesUpdated: 4`, which takes the
+    // last arm and never touches either field.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
+  });
+
+  it('does not claim nothing matched when every emitted op lost its race', async () => {
+    // Files matched - all of them lost the CAS check. Gating only the first arm on `skipped` moves
+    // the false claim to the second one ("already up to date on 0 files"), so this pins the message
+    // rather than the arm.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith('3 files could not be updated - changed while applying.');
+  });
+
+  it('says nothing matched rather than "applied to 0 files" when the batch produced no ops', async () => {
+    // A batch where no file matches any accepted tag emits no ops and counts no `unchanged`, so the
+    // old plain arm claimed an application that did not happen.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
   });
 });
 

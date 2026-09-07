@@ -34,7 +34,7 @@ export async function emitMetric(
     // module-level clients to capture expired credentials. This pattern prevents
     // production failures: "InvalidSignatureException: Signature expired"
     const client = new CloudWatchClient({
-      region: process.env.AWS_REGION || 'us-east-1',
+      region: process.env.AWS_REGION || 'us-east-2',
     });
 
     const command = new PutMetricDataCommand({
@@ -86,7 +86,7 @@ export async function emitMetrics(
     // module-level clients to capture expired credentials. This pattern prevents
     // production failures: "InvalidSignatureException: Signature expired"
     const client = new CloudWatchClient({
-      region: process.env.AWS_REGION || 'us-east-1',
+      region: process.env.AWS_REGION || 'us-east-2',
     });
 
     const command = new PutMetricDataCommand({
