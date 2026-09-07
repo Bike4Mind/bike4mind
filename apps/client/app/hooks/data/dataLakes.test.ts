@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
+import { RESEARCH_RUN_STALE_AFTER_MS } from '@bike4mind/common';
 // Mocked below (vi.mock is hoisted); imported so the refusal-toast assertion can read the spy.
 import { toast } from 'sonner';
 
@@ -877,14 +878,19 @@ describe('config-history invalidation on the non-update config writes', () => {
 });
 
 describe('useDataLakeResearchRuns settle -> proposals invalidation', () => {
-  const runs = (status: string) => [{ id: 'run-1', status, totals: { searchHits: 0, proposed: 0 } }];
+  // `startedAt` is not decoration: in-flight is age-bounded, and a `running` row without one reads as
+  // abandoned - deliberately, since the server's query cannot match a missing field either. The real
+  // API cannot produce that shape, because `claimForExecution` writes status and startedAt together.
+  const runs = (status: string, startedAt: string = new Date().toISOString()) => [
+    { id: 'run-1', status, startedAt, totals: { searchHits: 0, proposed: 0 } },
+  ];
 
-  const mount = (initialStatus: string) => {
+  const mount = (initialStatus: string, startedAt?: string) => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
-    apiGet.mockResolvedValue({ data: { data: runs(initialStatus) } });
+    apiGet.mockResolvedValue({ data: { data: runs(initialStatus, startedAt) } });
     return { queryClient, invalidate, wrapper };
   };
 
@@ -934,6 +940,25 @@ describe('useDataLakeResearchRuns settle -> proposals invalidation', () => {
     const { invalidate, wrapper } = mount('completed');
     const { result } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
     await waitFor(() => expect(result.current.data?.[0].status).toBe('completed'));
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
+  });
+
+  // A hard-killed run keeps `running` forever, because its catch never executed. Past the stale bound
+  // it is not a run in progress, so there is no in-flight edge to fall off: this is the same
+  // transition as the first case in this block, and it must NOT invalidate. That difference is the
+  // whole point of the bound - otherwise the tab polls every 5s for the life of the session.
+  it('does not settle off a running row that was already past the stale bound', async () => {
+    const stale = new Date(Date.now() - (RESEARCH_RUN_STALE_AFTER_MS + 60_000)).toISOString();
+    const { invalidate, wrapper } = mount('running', stale);
+    const { result, rerender } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('running'));
+
+    apiGet.mockResolvedValue({ data: { data: runs('completed') } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+    rerender();
 
     expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
   });

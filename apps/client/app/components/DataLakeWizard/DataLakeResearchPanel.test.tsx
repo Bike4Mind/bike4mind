@@ -8,6 +8,7 @@ import {
   emptyResearchRunTotals,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
+  RESEARCH_RUN_STALE_AFTER_MS,
 } from '@bike4mind/common';
 import { DataLakeResearchPanel } from './DataLakeResearchPanel';
 
@@ -143,8 +144,9 @@ describe('DataLakeResearchPanel', () => {
   });
 
   // A lake runs one at a time; the server refuses a second. Saying so beats earning a refusal toast.
+  // `startedAt` has to be recent: in-flight is age-bounded, so a fixture's fixed date would age out.
   it('disables Run while a run is still in flight', () => {
-    renderPanel({ configs: [config()], runs: [run({ status: 'running' })] });
+    renderPanel({ configs: [config()], runs: [run({ status: 'running', startedAt: new Date() })] });
 
     const button = screen.getByTestId('datalake-research-run-btn') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
@@ -154,6 +156,22 @@ describe('DataLakeResearchPanel', () => {
   it('re-enables Run once every run has settled', () => {
     renderPanel({ configs: [config()], runs: [run({ status: 'completed' })] });
     expect((screen.getByTestId('datalake-research-run-btn') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // The lockout this closes: a hard-killed run keeps `running` forever because its catch never ran.
+  // The server already ignores such a row when it counts active runs, so a status-only button would
+  // refuse a run the server would accept - for every config in the lake, not just that one.
+  it('re-enables Run once a running row has aged past the stale bound', () => {
+    const abandoned = run({
+      status: 'running',
+      startedAt: new Date(Date.now() - (RESEARCH_RUN_STALE_AFTER_MS + 60_000)),
+      completedAt: null,
+    });
+    renderPanel({ configs: [config()], runs: [abandoned] });
+
+    const button = screen.getByTestId('datalake-research-run-btn') as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toMatch(/run now/i);
   });
 
   describe('the configuration form', () => {
@@ -328,6 +346,26 @@ describe('DataLakeResearchPanel', () => {
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {
       renderPanel({ runs: [run({ spentMicroUsd: 300 })] });
       expect(screen.getByTestId('datalake-research-run-row').textContent).toMatch(/\$0\.0003/);
+    });
+
+    it('still says running for a run that started moments ago', () => {
+      renderPanel({ runs: [run({ status: 'running', startedAt: new Date(), completedAt: null })] });
+      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('running');
+    });
+
+    // Nothing will ever settle this row, so reporting it as `running` promises work that is not
+    // happening - and it is the same row the server has already stopped counting as active.
+    it('calls a non-terminal run past the stale bound abandoned, not running', () => {
+      renderPanel({
+        runs: [
+          run({
+            status: 'running',
+            startedAt: new Date(Date.now() - (RESEARCH_RUN_STALE_AFTER_MS + 60_000)),
+            completedAt: null,
+          }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('abandoned');
     });
   });
 });

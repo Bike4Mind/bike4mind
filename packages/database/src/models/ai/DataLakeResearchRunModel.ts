@@ -172,6 +172,10 @@ class DataLakeResearchRunRepository
    * its handler leaves `queued`. An unbounded count would turn any of those into a permanent
    * lockout: no cancel endpoint, no reaper cron, no admin surface back. Past the bound SQS has
    * already redelivered and given up, so a row still in either state is abandoned, not in flight.
+   *
+   * MUST STAY IN SYNC with `isResearchRunInFlight` (`DataLakeResearchTypes.ts`), the in-memory
+   * spelling of this query that the run history and the "Run now" button read. If the two drift,
+   * the UI locks out a lake this count would let start a run.
    */
   async countActiveByLake(dataLakeId: string): Promise<number> {
     const activeSince = new Date(Date.now() - RESEARCH_RUN_STALE_AFTER_MS);

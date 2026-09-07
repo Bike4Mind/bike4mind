@@ -109,6 +109,33 @@ export const RESEARCH_DOMAIN_LIST_MAX = 50;
 export const RESEARCH_RUN_STALE_AFTER_MS = 25 * 60 * 1000;
 
 /**
+ * Whether a run still holds the one-at-a-time guard shut, as of `now`.
+ *
+ * MUST STAY IN SYNC with `DataLakeResearchRunRepository.countActiveByLake`, which refuses a second
+ * run on exactly this rule. That parity is the whole point of this living in `common`: a status-only
+ * client predicate disagrees with the server precisely when a run was killed hard - its catch never
+ * ran, so the row keeps a non-terminal status forever - and the disagreement disables "Run now" for
+ * a lake the server would accept a run for, while the run history polls a row nothing will settle.
+ *
+ * A `running` row with no `startedAt` is NOT in flight, matching the server's query, which cannot
+ * match a missing field.
+ *
+ * `now` is an OPTIONS BAG rather than a positional second argument on purpose: as a positional it
+ * would accept the index `Array.prototype.some` passes, so `runs.some(isResearchRunInFlight)` would
+ * typecheck and evaluate the bound against `now = 0` - reporting every run in flight forever. In
+ * this shape that call is a compile error, so the bug cannot be written.
+ */
+export const isResearchRunInFlight = (
+  run: { status: ResearchRunStatus; startedAt?: Date | string | null; createdAt?: Date | string | null },
+  opts: { now?: number } = {}
+): boolean => {
+  const heldSince = run.status === 'running' ? run.startedAt : run.status === 'queued' ? run.createdAt : null;
+  if (!heldSince) return false;
+  const at = heldSince instanceof Date ? heldSince.getTime() : new Date(heldSince).getTime();
+  return !Number.isNaN(at) && at >= (opts.now ?? Date.now()) - RESEARCH_RUN_STALE_AFTER_MS;
+};
+
+/**
  * The relevance floor a candidate must clear to be fetched and proposed. This is a PRODUCER-side
  * filter on what is worth a human's attention, not an admission decision: everything that clears it
  * still lands as `pending` and still needs an explicit approval. It is emphatically not the

@@ -22,6 +22,7 @@ import type {
   ResearchRunTotals,
 } from '@bike4mind/common';
 import {
+  isResearchRunInFlight,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
@@ -157,6 +158,8 @@ const RUN_STATUS_COLOR = {
   running: 'primary',
   completed: 'success',
   failed: 'danger',
+  /** Not a stored status - see `runStateLabel`. Warning, not danger: nothing was lost, it stopped. */
+  abandoned: 'warning',
 } as const;
 
 /**
@@ -176,9 +179,13 @@ const formatWhen = (value: Date | string | null | undefined): string => {
   return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleString();
 };
 
-/** A run the executor has not settled yet - what closes the one-at-a-time guard. */
-const isRunInFlight = (run: IDataLakeResearchRunDocument): boolean =>
-  run.status === 'queued' || run.status === 'running';
+/**
+ * How a run's state reads on its card. `abandoned` is not a stored status: it is a non-terminal row
+ * past the stale bound, which nothing will ever settle, so reporting it as `running` would promise
+ * work that is not happening. The server already ignores these rows when it counts active runs.
+ */
+const runStateLabel = (run: IDataLakeResearchRunDocument): keyof typeof RUN_STATUS_COLOR =>
+  run.status !== 'completed' && run.status !== 'failed' && !isResearchRunInFlight(run) ? 'abandoned' : run.status;
 
 /**
  * Why every hit that was NOT proposed was dropped, in the order a reader asks about them: cheapest
@@ -252,7 +259,9 @@ export function DataLakeResearchPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
 
-  const runInFlight = useMemo(() => (runs ?? []).some(isRunInFlight), [runs]);
+  // Age-bounded on purpose: this mirrors the server's own active-run count, so the button unlocks
+  // for exactly the lakes a POST would be accepted for rather than staying dead on an abandoned row.
+  const runInFlight = useMemo(() => (runs ?? []).some(run => isResearchRunInFlight(run)), [runs]);
   const configById = useMemo(() => new Map((configs ?? []).map(config => [config.id, config])), [configs]);
   const setField = (field: keyof ConfigDraft) => (value: string) => setDraft(prev => ({ ...prev, [field]: value }));
 
@@ -601,8 +610,12 @@ export function DataLakeResearchPanel({
             <Box key={run.id} data-testid="datalake-research-run-row">
               <Stack spacing={0.5}>
                 <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Chip size="sm" color={RUN_STATUS_COLOR[run.status]} data-testid="datalake-research-run-status">
-                    {run.status}
+                  <Chip
+                    size="sm"
+                    color={RUN_STATUS_COLOR[runStateLabel(run)]}
+                    data-testid="datalake-research-run-status"
+                  >
+                    {runStateLabel(run)}
                   </Chip>
                   <Typography level="body-xs" data-testid="datalake-research-run-config">
                     {runConfigLabel(run, configById)}

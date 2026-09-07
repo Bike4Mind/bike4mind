@@ -22,7 +22,7 @@ import type {
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
+import { DATA_LAKES, isResearchRunInFlight, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
   UpdateDataLakeRequestInputType,
@@ -1781,10 +1781,6 @@ export type ResearchConfigInput = {
 /** How often the run list re-reads while a run is queued or running. */
 const RESEARCH_RUN_POLL_MS = 1000 * 5;
 
-/** A run the executor has not settled yet - the reason the history keeps polling. */
-const isRunInFlight = (run: IDataLakeResearchRunDocument): boolean =>
-  run.status === 'queued' || run.status === 'running';
-
 /**
  * One lake's saved research configurations. Manage-gated server-side, so a mere reader gets a 4xx -
  * surfaced as `isForbidden` and never retried, matching `useDataLakeSpend` and `useDataLakeProposals`.
@@ -1868,6 +1864,10 @@ export function useDeleteDataLakeResearchConfig(dataLakeId: string) {
  * One lake's research run history. Polls only while a run is unsettled: a run is executed by a
  * worker off a queue, so the row a user just started changes underneath them with no client event
  * to hang a refetch on. Once every run is settled the interval stops, so an idle panel is free.
+ *
+ * "Unsettled" is `isResearchRunInFlight`, which is age-bounded, so a run killed hard - whose row
+ * keeps `running` forever because its catch never ran - stops the poll at the stale bound instead
+ * of leaving the panel refetching every 5s for the life of the tab.
  */
 export function useDataLakeResearchRuns(dataLakeId: string | null, opts?: { enabled?: boolean; limit?: number }) {
   const queryClient = useQueryClient();
@@ -1883,7 +1883,8 @@ export function useDataLakeResearchRuns(dataLakeId: string | null, opts?: { enab
     enabled: !!dataLakeId && (opts?.enabled ?? true),
     retry: false,
     staleTime: 1000 * 10,
-    refetchInterval: query => (query.state.data?.some(isRunInFlight) ? RESEARCH_RUN_POLL_MS : false),
+    refetchInterval: query =>
+      query.state.data?.some(run => isResearchRunInFlight(run)) ? RESEARCH_RUN_POLL_MS : false,
   });
 
   // A run settling is the moment proposals appear, and the review queue is a SEPARATE surface
@@ -1891,7 +1892,7 @@ export function useDataLakeResearchRuns(dataLakeId: string | null, opts?: { enab
   // report "3 proposed" and then finds Proposals still reading (0) until the window loses and
   // regains focus. Edge-triggered on the in-flight -> settled transition, so a poll that returns an
   // unchanged history does not invalidate anything.
-  const anyInFlight = query.data?.some(isRunInFlight) ?? false;
+  const anyInFlight = query.data?.some(run => isResearchRunInFlight(run)) ?? false;
   const wasInFlight = useRef(anyInFlight);
   useEffect(() => {
     const settled = wasInFlight.current && !anyInFlight;
