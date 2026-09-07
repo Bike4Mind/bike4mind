@@ -2,6 +2,7 @@ import {
   ApiKeyBillingOwnerType,
   ApiKeyScope,
   ApiKeyStatus,
+  CONFINED_API_KEY_SCOPES,
   CreditHolderType,
   EmbedBrandingSchema,
   EmbedOriginsSchema,
@@ -127,18 +128,23 @@ export const createUserApiKey = async (
     throw new BadRequestError('productId is required for overwatch-ingest:write scope');
   }
 
+  // A confined scope authorizes exactly one dedicated flow (embed widget, Overwatch
+  // ingest, bridge pairing), so a key carrying one must carry nothing else: the runtime
+  // gate (decideScopeGate) confines such a key anyway, so any extra scope buys nothing
+  // but risk. Checked before the embed-specific rules below so a mixed request like
+  // ['embed:chat','notebooks:read'] reports this real reason, not a downstream missing
+  // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
+  if (params.scopes.length > 1 && params.scopes.some(scope => CONFINED_API_KEY_SCOPES.includes(scope))) {
+    throw new BadRequestError(
+      'A confined scope (embed:chat, overwatch-ingest:write, cc-bridge:connect) must be the only scope on a key'
+    );
+  }
+
   // Embed key invariants: an embed:chat key is always bound to one agent, and the
   // embed-only fields are meaningless without the scope (mirrors the OVERWATCH check).
   const isEmbedKey = params.scopes.includes(ApiKeyScope.EMBED_CHAT);
   if (isEmbedKey && !params.agentId) {
     throw new BadRequestError('agentId is required for embed:chat scope');
-  }
-  // An embed key is published in page HTML, so it must authorize the widget and
-  // nothing else. Pairing embed:chat with any other scope would hand every widget
-  // visitor whatever else the minter attached - and the runtime gate confines such a
-  // key anyway, so the extra scope buys nothing but risk.
-  if (isEmbedKey && params.scopes.length > 1) {
-    throw new BadRequestError('embed:chat must be the only scope on an embed key');
   }
   // Embed keys bill a bounded Organization pool, never a user's. Enforce the org
   // pairing at mint so an incoherent key is never created (e.g. a forged/scripted

@@ -81,3 +81,53 @@ describe('userApiKeyService - createUserApiKey org billing', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 });
+
+describe('userApiKeyService - createUserApiKey confined-scope mint guard', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo();
+  });
+
+  it('rejects a confined scope (overwatch-ingest:write) minted alongside an ordinary scope', async () => {
+    // The runtime gate confines such a key anyway, so the ordinary scope is reach the
+    // key would immediately lose - refuse it at mint instead of persisting the hole.
+    await expect(
+      createUserApiKey(
+        'user1',
+        {
+          ...baseParams,
+          scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE, ApiKeyScope.READ_NOTEBOOKS],
+          productId: 'prod-1',
+        },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/confined scope/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a confined scope minted on its own', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...baseParams, scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'prod-1' },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.id).toBe('key1');
+    expect(repo.create).toHaveBeenCalled();
+  });
+
+  it('reports the confined-scope reason before the embed agentId requirement', async () => {
+    // embed:chat + an ordinary scope with no agentId: the actionable error is the
+    // single-scope rule, not the downstream missing agentId.
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...baseParams, scopes: [ApiKeyScope.EMBED_CHAT, ApiKeyScope.READ_NOTEBOOKS] },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/confined scope/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});

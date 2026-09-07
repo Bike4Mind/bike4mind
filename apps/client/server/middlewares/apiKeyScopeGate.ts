@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
 
 /**
  * Env var naming the scopes whose route gates are still being rolled out, e.g.
@@ -22,23 +22,13 @@ import { ApiKeyScope } from '@bike4mind/common';
 export const SCOPE_STAGING_ENV_VAR = 'API_KEY_SCOPE_STAGING';
 
 /**
- * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest. A key holding nothing but these is *confined* - it authorizes
- * only the routes that explicitly name one of them, and never rides the
- * scope-less default in {@link decideScopeGate}.
- *
- * Without that, a credential minted for exactly one purpose authenticates as its
- * full owner on every route declaring no `requiredScopes`, which is most of them.
- * Embed keys make this concrete: they ship in public page HTML.
- *
- * `admin:*` is deliberately not confined. It is broad by design, and confining it
- * would reject admin keys on every route outside the admin surface.
+ * The runtime view of {@link CONFINED_API_KEY_SCOPES} (the shared source of truth in
+ * @bike4mind/common). A key holding nothing but these is *confined* - it authorizes
+ * only the routes that explicitly name one of them, and never rides the scope-less
+ * default in {@link decideScopeGate}. `createUserApiKey` enforces the mint half of the
+ * same rule from the same constant.
  */
-const CONFINED_SCOPES: ReadonlySet<string> = new Set<string>([
-  ApiKeyScope.CC_BRIDGE,
-  ApiKeyScope.EMBED_CHAT,
-  ApiKeyScope.OVERWATCH_INGEST_WRITE,
-]);
+const CONFINED_SCOPES: ReadonlySet<string> = new Set<string>(CONFINED_API_KEY_SCOPES);
 
 /**
  * Scopes that may never be staged. Staging `admin:*` would silently open every
