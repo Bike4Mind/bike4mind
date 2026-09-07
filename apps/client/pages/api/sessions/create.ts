@@ -14,6 +14,7 @@ import {
   activityRepository,
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
+import { isValidObjectId } from '@server/utils/objectId';
 import {
   SessionEvents,
   ProjectEvents,
@@ -81,6 +82,12 @@ const handler = baseApi().post(
         administeredOrgIds: await organizationRepository.findIdsWithAdminRights(req.user.id),
       };
       for (const lakeId of requestedPreauthorizedLakeIds) {
+        // A malformed id would reach Mongoose as a CastError and surface as a 500. It is the same
+        // "no such lake" answer as the miss below, so give it the same 404 - this route parses no
+        // zod schema, so nothing upstream has checked the shape.
+        if (!isValidObjectId(lakeId)) {
+          throw new NotFoundError(`Data lake ${lakeId} not found`);
+        }
         const lake = await dataLakeRepository.findById(lakeId);
         if (!lake || lake.status !== 'active') {
           throw new NotFoundError(`Data lake ${lakeId} not found`);
