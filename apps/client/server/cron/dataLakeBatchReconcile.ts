@@ -16,13 +16,25 @@
  * Schedule: daily. Enabled: production + dev.
  */
 
-import { connectDB, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  connectDB,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  fabFileRepository,
+  FabFile,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@server/worker/chunkRescueSweep';
+import {
+  buildStrandedVectorizeScanFilter,
+  CHUNK_CLAIM_STALE_MS,
+  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
+} from '@server/worker/chunkScan';
+import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
@@ -31,6 +43,52 @@ const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 const MAX_PER_RUN = 500;
 /** Cap per daily run for the un-chunked rescue sweep; a large backlog drains gradually. */
 const CHUNK_RESCUE_MAX_PER_RUN = 500;
+
+/**
+ * Hosted counterpart of the same second pass in the self-host worker's fabFileChunkScan: files
+ * whose chunks were committed but whose vectorize hand-off failed. Re-enqueueing a chunk message
+ * resumes only the fan-out (see buildStrandedVectorizeScanFilter and fabFileChunk.ts) - it never
+ * re-chunks. Not gated on enableAutoChunk: these files were already chunked.
+ */
+async function rescueStrandedVectorizeFiles(): Promise<number> {
+  const now = Date.now();
+  const cutoff = new Date(now - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
+  const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
+  const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff, staleClaimBefore))
+    .select('_id userId')
+    .limit(CHUNK_RESCUE_MAX_PER_RUN)
+    .lean();
+
+  // Per-send catch, not a bare sequential loop: one throttled or unroutable send must cost only
+  // itself, not abandon every candidate behind it (the same lesson driveLakeResyncPoll learned). A
+  // recovery sweep is the worst place for that, since it runs precisely when the queue is under the
+  // stress that makes a transient send failure likely. Returns the SENT count so a partially-failing
+  // tick is distinguishable from a clean one in the log.
+  let sent = 0;
+  for (const file of candidates) {
+    try {
+      // Deliberately UNSTAMPED, unlike the un-chunked sweep above (#2309): these files are already
+      // chunked, and the handler's halt branch (fabFileChunk.ts, isConvergenceHalted) runs ABOVE the
+      // already-chunked resume. Stamping `origin: convergence` would therefore route a healthy
+      // chunked file into that branch with the switch on, writing `chunkStallReason: 'rechunkPaused'`
+      // and nulling `chunkRebuildRequestedAt` over committed passages, then throwing - so the resume
+      // never runs, `vectorizeEnqueueFailedAt` is never cleared, and this sweep re-sends the file
+      // every tick until each message has burned its retry ladder into the DLQ. The un-chunked sweep
+      // is safe to stamp because its filter carries a convergence-pause exclusion and its files have
+      // no chunks to damage; this filter has no paused-file exclusion, which is what would make the
+      // re-fire unbounded rather than one-shot. Finishing an already-committed hand-off is not the
+      // background work the kill switch exists to stop.
+      await sendToQueue(Resource.fabFileChunkQueue.url, {
+        fabFileId: String(file._id),
+        userId: String(file.userId),
+      });
+      sent += 1;
+    } catch (err) {
+      logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue send failed for ${file._id}: ${err}`);
+    }
+  }
+  return sent;
+}
 
 /**
  * Find + reconcile stuck data-lake batches. The hosted daily cron (handler(), below) and the
@@ -94,6 +152,10 @@ export async function handler() {
     logger.error(`[DataLakeBatchReconcile] un-chunked rescue sweep failed: ${err}`);
     return { enqueued: 0, failed: 0 };
   });
+  const rescuedVectorizeFiles = await rescueStrandedVectorizeFiles().catch(err => {
+    logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue sweep failed: ${err}`);
+    return 0;
+  });
 
   // Heartbeat every run (even zero-work) so a stopped/broken cron alarms on absence of data.
   await recordReconcileRun().catch(() => {});
@@ -104,6 +166,7 @@ export async function handler() {
     taxonomyCandidates: stuckTaxonomy.length,
     taxonomyForced: forcedTaxonomy.length,
     rescuedChunkFiles,
+    rescuedVectorizeFiles,
     rescueFailures,
   });
   return {
@@ -114,6 +177,7 @@ export async function handler() {
       taxonomyCandidates: stuckTaxonomy.length,
       taxonomyForced: forcedTaxonomy.length,
       rescuedChunkFiles,
+      rescuedVectorizeFiles,
       rescueFailures,
     }),
   };

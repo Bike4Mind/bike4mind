@@ -1,5 +1,11 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IChatHistoryItem, IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
+import {
+  IChatHistoryItem,
+  IChatHistoryItemRepository,
+  IChatHistoryItemDocument,
+  PromptMeta,
+  IAttachmentDelivery,
+} from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -57,6 +63,9 @@ const RetrievalSummarySchema = subSchema({
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // default: undefined for the same auto-vivification reason as dataLakeTags above.
+  injectedLakePromptIds: { type: [String], required: false, default: undefined },
+  injectedLakePromptCount: { type: Number, required: false },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
@@ -313,7 +322,9 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
       modelInferenceTime: { type: Number, required: false },
+      // Unset means nothing visible ever streamed - see PromptMetaPerformanceSchema.
       firstTokenTime: { type: Number, required: false },
+      firstChunkTime: { type: Number, required: false },
       // Posted back by the client after it renders the first token (quests/[id]/client-timing).
       clientFirstTokenTime: { type: Number, required: false },
       streamingPerformance: {
@@ -570,6 +581,20 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // Per-file attachment delivery problems, shown under the reply. Must stay in the
     // findPageBySessionId projection below or the banner vanishes on reload.
     attachmentNotices: { type: [String], required: false },
+    // The affirmative half of the same report: written even when every attachment succeeded and
+    // there are no notices, which is the case nothing else on the quest records. Same projection
+    // requirement as attachmentNotices.
+    attachmentDelivery: {
+      type: {
+        requested: { type: Number, required: true },
+        delivered: { type: Number, required: true },
+        fullyDelivered: { type: Number, required: true },
+        dropped: { type: Number, required: true },
+        droppedIds: { type: [String], required: true },
+      },
+      required: false,
+      _id: false,
+    },
     // Generalized UI side-effects extracted from tool __uiSideEffect sentinels
     uiSideEffects: {
       type: [
@@ -673,7 +698,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
@@ -806,6 +831,33 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   ): Promise<boolean> {
     const result = await this.model.updateOne({ _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } }, { $set: patch });
     return result.matchedCount > 0;
+  }
+
+  /**
+   * Record one agent run's attachment outcome on the quest it is linked to.
+   *
+   * The agent path builds the same notices the chat path does but had nowhere to put them, so an
+   * agent run's attachment failures left no durable record at all. Keyed on `agentExecutionId`
+   * because the executor knows its execution, not its quest; a run with no linked quest matches
+   * nothing and is a no-op, which is the correct outcome rather than an error.
+   *
+   * `notices` is only written when non-empty so a clean run cannot blank a value another writer
+   * set; `delivery` is written unconditionally, since the all-succeeded case is the one it exists
+   * to record.
+   */
+  async recordAttachmentOutcomeByAgentExecutionId(
+    agentExecutionId: string,
+    outcome: { notices: string[]; delivery: IAttachmentDelivery }
+  ) {
+    await this.model.updateOne(
+      { agentExecutionId },
+      {
+        $set: {
+          ...(outcome.notices.length > 0 ? { attachmentNotices: outcome.notices } : {}),
+          attachmentDelivery: outcome.delivery,
+        },
+      }
+    );
   }
 
   /**

@@ -228,7 +228,15 @@ const PromptMetaPerformanceSchema = z.object({
   totalResponseTime: z.number().optional(),
   contextRetrievalTime: z.number().optional(),
   modelInferenceTime: z.number().optional(),
+  /**
+   * Time to First Visible Token: elapsed ms until the first chunk the user can actually
+   * see. Left unset when a turn streamed nothing visible (thinking-only, or a turn that
+   * errored before answering), so absence reads as "never rendered" rather than as fast.
+   * Pair with firstChunkTime to tell a slow model from a long hidden-reasoning window.
+   */
   firstTokenTime: z.number().optional(),
+  /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
+  firstChunkTime: z.number().optional(),
   clientFirstTokenTime: z.number().optional(), // Time from client sending prompt to client rendering first token
   streamingPerformance: z
     .object({
@@ -415,6 +423,16 @@ export const RetrievalSummarySchema = z.object({
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
+  /**
+   * Ids of the lakes whose `systemPrompt` was injected this turn (getAccessibleDataLakePrompts),
+   * across every injection site (forced retrieval and the model-driven knowledge tools). NOT the
+   * prompt text itself - that already reaches the model in the completion, and copying it here
+   * widens exposure for nothing. Absent means no injection site ran; present-and-empty means one
+   * ran but nothing qualified (untrusted, or an empty systemPrompt).
+   */
+  injectedLakePromptIds: z.array(z.string()).optional(),
+  /** mementoCount/mementoIds precedent: mirrors injectedLakePromptIds.length. */
+  injectedLakePromptCount: z.number().optional(),
 });
 
 /**

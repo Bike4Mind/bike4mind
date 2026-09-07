@@ -2,6 +2,7 @@ import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
   DataLakeDocumentPurgeReceipt,
+  DataLakeMembershipArm,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
   IDataLakeBatchDocument,
@@ -16,6 +17,7 @@ import type {
   TaxonomyTag,
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
+import { useTranslation } from 'react-i18next';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
@@ -650,16 +652,54 @@ export function useApplyTaxonomySuggestions(batchId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (tags: TaxonomyTag[]) => {
-      const res = await api.post<{ success: true; filesUpdated: number }>(
-        `/api/data-lakes/batches/${batchId}/apply-taxonomy`,
-        { tags }
-      );
+      const res = await api.post<{
+        success: true;
+        filesUpdated: number;
+        // `unchanged` and `skipped` shipped in the SAME service commit, so a server predating it
+        // omits both - a type marking only one optional describes a payload that never existed.
+        unchanged?: number;
+        // Files whose optimistic-concurrency check lost - something else changed their tags between
+        // the read and the write, or the file was deleted inside the window.
+        skipped?: number;
+      }>(`/api/data-lakes/batches/${batchId}/apply-taxonomy`, { tags });
       return res.data;
     },
     onSuccess: result => {
-      toast.success(
-        `Tags applied to ${result.filesUpdated.toLocaleString()} file${result.filesUpdated === 1 ? '' : 's'}`
-      );
+      // A re-apply that changes nothing reported "Tags applied to N files" - every file counted as
+      // updated, because the identical-value write still bumped `updatedAt`. Splitting `unchanged`
+      // out is what stops that over-report.
+      const plural = (n: number) => `${n.toLocaleString()} file${n === 1 ? '' : 's'}`;
+      // Defaulted once, so an old server's absent fields read as zero everywhere below rather than
+      // needing a `??` (or a `!`) at each use.
+      const unchanged = result.unchanged ?? 0;
+      const skipped = result.skipped ?? 0;
+      const applied =
+        result.filesUpdated === 0 && unchanged === 0
+          ? skipped === 0
+            ? // Reachable: a batch where no file matches any accepted tag emits no ops and counts no
+              // `unchanged`. "Tags applied to 0 files" was the last arm claiming something happened.
+              'No files matched these tags'
+            : // Every op the batch emitted lost its CAS race. Files DID match, so "no files matched"
+              // contradicts the skipped clause below, and falling through to the next arm would say
+              // "already up to date on 0 files" instead - worse. That clause is the whole story
+              // here, so contribute no prefix to it.
+              ''
+          : result.filesUpdated === 0
+            ? `Tags already up to date on ${plural(unchanged)}`
+            : unchanged > 0
+              ? `Tags applied to ${plural(result.filesUpdated)}, ${plural(unchanged)} already up to date`
+              : `Tags applied to ${plural(result.filesUpdated)}`;
+      // Read `skipped` FIRST: "already up to date on 7 files" is an affirmative claim of
+      // completeness, and it would otherwise fire unchanged on a batch where the other 3 files
+      // silently failed their CAS check. Warning rather than success, because nothing in the
+      // product lets the user retry a batch once it is 'applied'.
+      if (skipped > 0) {
+        const detail = `${plural(skipped)} could not be updated - changed while applying.`;
+        toast.warning(applied ? `${applied}. ${detail}` : detail);
+      } else {
+        // `applied` is only ever empty on the all-skipped arm above, which cannot reach here.
+        toast.success(applied);
+      }
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
@@ -713,6 +753,13 @@ export function useDismissTaxonomy(batchId: string) {
 // ── Per-lake files ──────────────────────────────────────────────────────────
 
 /**
+ * A lake member as this browse returns it: the file plus which membership arm made it one -
+ * `meta` (the lake's `datalake:*` tag), `prefix` (a `fileTagPrefix` content tag on a file the
+ * creator owns, no meta-tag), or `both`. Undefined only if the server predates this field.
+ */
+export type DataLakeMemberFile = IFabFileDocument & { membershipArm?: DataLakeMembershipArm };
+
+/**
  * Hook: Fetch files belonging to a specific data lake by ID.
  * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
  * query; see useGetDataLakeArticles.
@@ -721,7 +768,7 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
   return useQuery({
     queryKey: dataLakeKeys.files(dataLakeId, params),
     queryFn: async () => {
-      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
+      const response = await api.get<{ data: DataLakeMemberFile[]; total: number; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/articles`,
         { params: { limit: params?.limit ?? 100 } }
       );
@@ -1050,18 +1097,34 @@ export function useRechunkDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (limit?: number) => {
-      const res = await api.post<{ detected: number; enqueued: number; remaining: number }>(
-        `/api/data-lakes/${dataLakeId}/rechunk`,
-        limit ? { limit } : {}
-      );
+      const res = await api.post<{
+        detected: number;
+        enqueued: number;
+        remaining: number;
+        // Present only on the refusal arm. Typed optional because the success arm omits it entirely,
+        // and read FIRST below: a paused run also returns `enqueued: 0`, which is indistinguishable
+        // from "nothing to do" on the counts alone.
+        outcome?: 'paused';
+      }>(`/api/data-lakes/${dataLakeId}/rechunk`, limit ? { limit } : {});
       return res.data;
     },
     onSuccess: data => {
-      toast.success(
-        data.enqueued > 0
-          ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
-          : 'All files are already chunked into passages.'
-      );
+      if (data.outcome === 'paused') {
+        // A warning, not a success: the server refused and changed nothing. Without this arm the
+        // refusal fell through to "All files are already chunked into passages" as a GREEN success -
+        // which is not merely uninformative but false, since the gate only runs when at least one
+        // file was detected. Wording mirrors useConvergeDataLake's paused arm below.
+        toast.warning(
+          'Background lake work is paused, so nothing was rebuilt. No files were changed - re-run this ' +
+            'once an administrator turns convergence back on.'
+        );
+      } else {
+        toast.success(
+          data.enqueued > 0
+            ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
+            : 'All files are already chunked into passages.'
+        );
+      }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
@@ -1226,6 +1289,73 @@ export function useConvergeDataLake(dataLakeId: string | null) {
   });
 }
 
+/**
+ * Hook: Attach existing files to a data lake by toggling on its `datalake:*` meta-tag, through
+ * the same `/api/files/tags/toggle` write every other manual membership join uses (see
+ * toggleTags). Lets an owner add a file they already uploaded without re-uploading it through
+ * the wizard.
+ *
+ * A dedicated add-only door DOES exist (`POST /api/data-lakes/:id/files/:fabFileId`, see
+ * addFileToDataLake) - it mints a restore record and an audit row and is per-file, not batched.
+ * This hook deliberately uses the shared toggle door instead, for the batch. Both doors now apply
+ * the same ownership conjunct, so their access decisions agree - but each applies it in its own
+ * pre-write pass, NOT in the `addFileToLake` write they both call. `addFileToLake` cannot carry it:
+ * `addFileToDataLake`'s restore path calls it deliberately WITHOUT one. So a new caller of
+ * `addFileToLake` inherits no ownership check and has to grade the file's owner itself - see the
+ * conjunct in `toggleTags` and `addFileToDataLake`'s own docblock. What this door does not get is
+ * the restore record or the per-write audit row.
+ *
+ * IMPORTANT: the toggle endpoint TOGGLES the tag, so this must only ever be called with ids that
+ * are NOT already members - reposting the tag for an existing member would remove it (and its
+ * content-prefix tags with it, unrecoverably). The caller (Files browser) filters the selection
+ * down first; `skippedCount` is purely for the success toast's wording.
+ */
+export function useAddFilesToLake() {
+  const queryClient = useQueryClient();
+  const { t } = useTranslation();
+  return useMutation({
+    mutationFn: async ({
+      fileIds,
+      lake,
+      skippedCount = 0,
+    }: {
+      fileIds: string[];
+      lake: { id: string; datalakeTag: string };
+      skippedCount?: number;
+    }) => {
+      const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
+        ids: fileIds,
+        tags: [lake.datalakeTag],
+      });
+      return { files: res.data, lake, skippedCount };
+    },
+    onSuccess: ({ files, skippedCount }) => {
+      toast.success(
+        skippedCount > 0
+          ? t('file_browser.added_to_lake_with_skipped', { count: files.length, skippedCount })
+          : t('file_browser.added_to_lake', { count: files.length })
+      );
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      if (refusal) {
+        toast.error(refusal);
+        return;
+      }
+      toast.error(error.message || 'Failed to add files to the data lake');
+    },
+    // A mid-batch failure can still leave some of the batch's files written (toggleTags is not
+    // transactional across files - see its docblock), so invalidation must run on every outcome,
+    // not only success: an onSuccess-only invalidation left the cache reporting the pre-add state
+    // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
+    // that same cache before the next attempt.
+    onSettled: (_data, _error, { lake }) => {
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      invalidateLakeFileMembershipQueries(queryClient, lake.id);
+    },
+  });
+}
+
 // ── Browse surfaces (tag tree / articles / tickers) ──────────────────────────
 
 export interface DataLakeArticlesParams {
@@ -1257,6 +1387,13 @@ export interface DataLakeTagCountsResponse {
    * tree's branches.
    */
   lakeFileCounts: Record<string, number>;
+  /**
+   * Same lakes as `lakeFileCounts`, split into the two membership arms so the manager can say
+   * whose signal made a file a member: `metaCount` carries the lake's `datalake:*` tag,
+   * `prefixOnlyCount` is a member solely via a `fileTagPrefix` content tag (no meta-tag). The two
+   * are disjoint and sum to `lakeFileCounts[datalakeTag]`.
+   */
+  lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
   /**
    * The slice of `lakeFileCounts` a prefix-keyed tag tree has no branch for: members carrying
    * the lake's meta-tag but no tag under its `fileTagPrefix`. Same key, same predicate, so a

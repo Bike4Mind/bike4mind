@@ -47,6 +47,8 @@ let downloadFile: ReturnType<typeof vi.fn>;
 let findByContentHashesInDataLake: ReturnType<typeof vi.fn>;
 let resolveEntitlementKeys: ReturnType<typeof vi.fn>;
 let resolveMembershipOrgIds: ReturnType<typeof vi.fn>;
+let resolveAdministeredOrgIds: ReturnType<typeof vi.fn>;
+let listByLake: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,6 +58,8 @@ beforeEach(() => {
   findByContentHashesInDataLake = vi.fn().mockResolvedValue([]);
   resolveEntitlementKeys = vi.fn().mockResolvedValue(['ent-a']);
   resolveMembershipOrgIds = vi.fn().mockResolvedValue(['org-1']);
+  resolveAdministeredOrgIds = vi.fn().mockResolvedValue(['org-2']);
+  listByLake = vi.fn().mockResolvedValue([]);
 
   assertLakeWriteAccess.mockResolvedValue(lake);
   assertCanWriteDataLakeTags.mockResolvedValue(undefined);
@@ -68,11 +72,12 @@ beforeEach(() => {
     dataLakes: {} as never,
     // See the same adapter in dataLakeLinkIngest.test.ts: required by the write gate so a curator or
     // transferred owner can ingest, and unguarded by typecheck because test files are excluded.
-    dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) } as never,
+    dataLakeAccessGrants: { listByLake } as never,
     fabFiles: { findByContentHashesInDataLake },
     createLakeFile,
     resolveEntitlementKeys,
     resolveMembershipOrgIds,
+    resolveAdministeredOrgIds,
     downloadFile,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -162,10 +167,16 @@ describe('authorization comes before any side effect', () => {
   it('also gates the meta-tag it is about to apply (defense in depth)', async () => {
     await run();
 
+    // Pins the FULL context and the grant repo, not just that the gate ran. This assertion
+    // previously named `{ userId, isAdmin }` exactly - which codified the bug it was meant to guard:
+    // gate 2 decided on less than gate 1, so an org admin or curator was authorized to write and
+    // then refused here. Narrowing either argument is the regression, so both are asserted.
     expect(assertCanWriteDataLakeTags).toHaveBeenCalledWith(
-      { userId: 'user-1', isAdmin: false },
+      expect.objectContaining({ userId: 'user-1', isAdmin: false, administeredOrgIds: ['org-2'] }),
       ['datalake:sales'],
-      expect.anything()
+      expect.objectContaining({
+        db: expect.objectContaining({ dataLakeAccessGrants: expect.objectContaining({ listByLake }) }),
+      })
     );
   });
 
@@ -197,6 +208,7 @@ describe('AccessContext is built server-side', () => {
 
     expect(resolveEntitlementKeys).toHaveBeenCalledWith(actor);
     expect(resolveMembershipOrgIds).toHaveBeenCalledWith('user-1');
+    expect(resolveAdministeredOrgIds).toHaveBeenCalledWith('user-1');
     expect(assertLakeWriteAccess).toHaveBeenCalledWith(
       'sales',
       expect.objectContaining({
@@ -205,6 +217,10 @@ describe('AccessContext is built server-side', () => {
         userTags: ['beta'],
         organizationIds: ['org-1'],
         entitlementKeys: ['ent-a'],
+        // Distinct from organizationIds on purpose: membership grants read, org-ADMIN rights are
+        // what fire canManageLake's org rungs, and a fake that reused one set for both would pass
+        // even if the gate received the wrong one.
+        administeredOrgIds: ['org-2'],
       }),
       expect.anything()
     );
@@ -250,6 +266,12 @@ describe('ingest', () => {
       sourceType: FabFileSourceType.SLACK,
       sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001' },
     });
+    // Carried from the AUTHORIZED context. `createFabFile` runs a THIRD manage gate that cannot
+    // derive this from the user document (`create.ts:132-137`), so an omitted value zeroes
+    // canManageLake's org rungs and refuses an org admin the prologue already authorized - the live
+    // failure was "You do not have permission to change this data lake's files" AFTER both prologue
+    // gates passed.
+    expect(params.administeredOrgIds).toEqual(['org-2']);
   });
 
   it('skips a file whose content is already in THIS lake, without replacing it', async () => {

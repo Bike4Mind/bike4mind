@@ -1,3 +1,4 @@
+import type { LakeInconsistencyReport } from '../../constants/corpusInconsistency';
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
@@ -166,6 +167,17 @@ export interface IDataLake {
    * `null` is the explicit clear sentinel written by updateDataLake, undefined is never-set.
    */
   requiredPassageTokenTarget?: number | null;
+  /**
+   * Last computed cross-document inconsistency report (#2242), and when.
+   *
+   * STORED rather than computed on read, because detection needs chunk TEXT and lake health is
+   * forbidden from scanning the chunk collection (#1665 measured that as ruinous at connector scale).
+   * So an owner-triggered pass writes it here and health renders what it finds, the same separation
+   * `converge` uses between planning and executing. A null report means "never run", which the
+   * surface must distinguish from "run and found nothing".
+   */
+  inconsistencyReport?: LakeInconsistencyReport | null;
+  inconsistencyComputedAt?: Date | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -567,6 +579,12 @@ export interface IDataLakeBatchFile {
   contentHash?: string;
   status: BatchFileStatus;
   error?: string;
+  /**
+   * Whether the failure counters (failedFiles/processingFailedFiles) were actually charged for
+   * THIS entry. Absent on an entry that predates the flag. Read by revertFileFailure, which must
+   * not hand back counters that belong to a different file's failure.
+   */
+  failureCounted?: boolean;
 }
 
 /**
@@ -684,6 +702,11 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Served by the `{ status: 1, updatedAt: 1 }` index.
    */
   findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
+  /**
+   * Set one manifest entry's status (and error text, when given). A 'failed' status also stamps
+   * failureCounted: false in the same write - see markFailureCounted for why the pessimistic
+   * default is the safe one.
+   */
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
@@ -697,6 +720,43 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * caller skips the counter increment.
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
+  /**
+   * Exact inverse of a per-file failure accounting: move ONE manifest entry out of 'failed' into
+   * `to`, drop its error text and give back the failedFiles/processingFailedFiles it took, in a
+   * single write. `alsoIncrement` carries what the new status itself owes (landing straight on
+   * 'complete' owes a vectorizedFiles). `errorPrefix` is the ownership guard - only the caller
+   * whose own failure text is on the entry may revoke it - and the entry's own `failureCounted`
+   * decides whether the counters are actually given back: `false` (written with the 'failed'
+   * status) hands nothing back, `true` does, and an absent flag pre-dates the flag entirely and is
+   * trusted as counted. Needed because claimFileStatus can never move an entry back OUT of
+   * 'failed', so a file that recovers stays counted failed forever without this. Refuses a
+   * 'cancelled'/'failed' batch. Returns the post-update batch, or null if nothing matched.
+   */
+  revertFileFailure(
+    batchId: string,
+    fabFileId: string,
+    to: Extract<BatchFileStatus, 'complete' | 'chunking'>,
+    opts: {
+      errorPrefix: string;
+      alsoIncrement?: Partial<Record<Exclude<BatchCounterField, 'failedFiles' | 'processingFailedFiles'>, number>>;
+    }
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Reopen a batch settled as 'completed_with_errors' back to 'processing', so a recovered file
+   * can still be counted (every counter write is guarded on a non-terminal batch). Narrow by
+   * design: 'cancelled'/'failed' are decisions rather than tallies and stay settled. `owner` is
+   * revertFileFailure's eligibility predicate, so the reopen never fires for a resume that has no
+   * failure of its own to revoke.
+   */
+  reopenFinalizedWithErrors(
+    batchId: string,
+    owner: { fabFileId: string; errorPrefix: string }
+  ): Promise<IDataLakeBatchDocument | null>;
+  /** Raise the manifest entry's failureCounted flag once the failure counters have actually been
+   * charged for it - the per-entry fact revertFileFailure needs to attribute a decrement.
+   * Advisory: updateFileStatus already stamped `false` with the status, so a lost write here only
+   * leaves the entry uncounted. Call after a guarded incrementCounters that returned a batch. */
+  markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
   /**
    * Drive-ingest-only: atomically record a skipped driveFileId (into `skippedDriveFileIds`) and
@@ -939,7 +999,11 @@ export interface DataLakeDocumentPurgeReceipt {
   storageObjectDeleted: boolean;
   /** How many stored objects the document had (current revision plus every prior version). */
   storageObjectsTotal: number;
-  /** How many of them the object store refused. 0 whenever `storageObjectDeleted` is true. */
+  /**
+   * How many of them are still stored. 0 whenever `storageObjectDeleted` is true. Unreached rather
+   * than strictly refused: once any prior version's key fails, the sweep stops before the current
+   * `filePath` so the row it keeps stays addressable, and counts that un-attempted key here too.
+   */
   storageObjectsRemaining: number;
   /**
    * What happened to the separate retrieval index. NOT read back - the port has no read operation.

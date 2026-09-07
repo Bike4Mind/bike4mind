@@ -75,6 +75,18 @@ export const DEFAULT_MANIFEST = {
   agentProactiveMessageQueue: { kind: 'queue' },
   dataLakeTaxonomyQueue: { kind: 'queue', optional: true },
   deepAgentWakeQueue: { kind: 'queue' },
+  // Read by the drive-sync route, the resync poll cron and the ingest handler's own redrive.
+  // drive-sync takes the GLOBALLY unique driveFolderId claim before it enqueues, so an
+  // unregistered key here left a folder reading "Connected" that could never sync, with the
+  // claim released only by hand.
+  //
+  // Registered even though nothing consumes it on self-host yet, which is the opposite of the
+  // call made for webhookDeliveryQueue (see manifestCoverage.test.ts). The distinction is the
+  // call site, not the queue: this one has NO degrade path and throws AFTER taking a global,
+  // cross-org claim, so leaving it unregistered trades a silent no-op for a data-integrity
+  // failure that needs a manual row deletion. webhookDeliveryQueue's two sites catch and return
+  // a clean 503, so there the silent no-op really is the worse of the two.
+  driveLakeIngestQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },
@@ -85,10 +97,18 @@ export const DEFAULT_MANIFEST = {
   // worker (it warns and skips the consumer) instead of taking every other queue down with it.
   imageEditQueue: { kind: 'queue', optional: true },
   imageGenerationQueue: { kind: 'queue', optional: true },
+  // Reached from the data-lake batch finalize path and from lakeMemoryExtraction. Both enqueue
+  // sites sit inside a try/catch, so an unregistered key degraded to a logged error and a
+  // feature that silently did nothing.
+  //
+  // `optional` like its feature-gated siblings above, and for the same reason: it sits behind an
+  // off-by-default admin flag, so a basic install never sets it. That also keeps the diagnostic
+  // an operator needs - with no URL configured the enqueue still fails into those catches and
+  // says so, rather than accepting a message into a queue nothing is consuming yet.
+  lakeMemoryQueue: { kind: 'queue', optional: true },
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
-  sreAnalysisQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
   // Linkable to the frontend Lambda instead of the individual queues; the shim computes it
   // from the same per-queue env vars so enqueue sites resolve identically in self-host.

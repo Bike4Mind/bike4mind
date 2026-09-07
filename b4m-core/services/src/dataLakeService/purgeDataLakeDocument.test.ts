@@ -438,6 +438,57 @@ describe('purgeDataLakeDocument', () => {
     expect(receipt.storageObjectDeleted).toBe(true);
   });
 
+  it('attempts the current filePath LAST, after every prior version key', async () => {
+    // Ordering is what makes the guard below possible: the kept row is addressed by the current
+    // key, so it must not be gone before the sweep knows every other key cleared.
+    const db = makeDb({
+      filePath: 'uploads/q3-v3.pdf',
+      versions: [
+        { version: 1, filePath: 'uploads/q3.pdf' },
+        { version: 2, filePath: 'uploads/q3-v2.pdf' },
+      ],
+    });
+    const storage = makeStorage();
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(storage.delete.mock.calls.map(c => c[0])).toEqual([
+      'uploads/q3.pdf',
+      'uploads/q3-v2.pdf',
+      'uploads/q3-v3.pdf',
+    ]);
+  });
+
+  it('leaves the current object alone when a version key fails, so the kept row stays addressable', async () => {
+    // The partial outcome this exists to prevent: current key deleted, an older version refused.
+    // The sweep deliberately keeps the row for a retry, but a row naming an object that no longer
+    // exists presigns a dead key on download and cannot refetch its bytes to re-chunk.
+    const db = makeDb({
+      filePath: 'uploads/q3-v2.pdf',
+      fileSize: 27707,
+      versions: [{ version: 1, filePath: 'uploads/q3.pdf' }],
+    });
+    const storage = {
+      delete: vi.fn(async (path: string) =>
+        path === 'uploads/q3.pdf' ? Promise.reject(new Error('s3 down')) : ({} as never)
+      ),
+    };
+    const logger = { info: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage, logger });
+
+    // Never attempted, rather than attempted and failed.
+    expect(storage.delete.mock.calls.map(c => c[0])).toEqual(['uploads/q3.pdf']);
+    expect(receipt.storageObjectDeleted).toBe(false);
+    // Counted as unreached, so the number keeps meaning "objects still stored": both remain.
+    expect(receipt.storageObjectsRemaining).toBe(2);
+    expect(receipt.storageObjectsTotal).toBe(2);
+    // And the row survives, still naming a key that resolves.
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(receipt.documentDeleted).toBe(false);
+    expect(receipt.verified).toBe(false);
+  });
+
   it('withholds the refund when a concurrent purge removed the row first', async () => {
     // Deleting an already-absent object key succeeds, so without the atomic claim both callers
     // would refund the same bytes and halve the owner's recorded storage.

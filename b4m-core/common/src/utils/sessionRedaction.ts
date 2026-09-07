@@ -4,8 +4,9 @@ import type { ISession } from '../types/entities/SessionTypes';
  * Session fields that are SERVER-OWNED and must never be serialized to a client.
  *
  * `systemPromptText` holds proprietary, server-authored prompts (the optimizer,
- * medical-reference, and pathway-generator product surfaces). It is written server-side at
- * session creation and consumed server-side by the completion engine - no client
+ * medical-reference, and pathway-generator product surfaces). It is set at session creation
+ * - by the server, or by a caller supplying it in the `sessions/create` body, which that
+ * route's schema accepts - and consumed server-side by the completion engine; no client
  * consumer reads it. Returning it on a session read leaks the prompt to anyone who can
  * access the session, including a non-entitled user it was deliberately shared with.
  *

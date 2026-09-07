@@ -129,10 +129,15 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
  *  - `rechunkPaused`: the OTHER half of the same switch dropped a re-chunk before it ran
  *    (#1676/#1681). The damage is worse - the producer resets a wave's chunk state BEFORE the
  *    messages are handled, so a file halted here has NO chunks at all.
+ *  - `unchunkedPaused`: the same chunk half, on a file that never had passages to lose. The rescue
+ *    sweep selects on `chunkCount: 0` and enqueues without resetting anything, so a file it routes
+ *    into the halt branch arrives already empty. The halted STATE is identical to `rechunkPaused`
+ *    and every reader keys on both (CHUNKLESS_STALL_REASONS) - the split exists so the owner is not
+ *    told that passages were removed which never existed.
  *
- * Neither auto-resumes; both need a reprocess or a lifted switch.
+ * None auto-resumes; each needs a reprocess or a lifted switch.
  *
- * Without a marker either state is misread by every surface at once, which is the failure the field
+ * Without a marker the state is misread by every surface at once, which is the failure the field
  * exists to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so
  * health drops it from the denominator, convergence grades it `conformant` (its stale stamp still
  * matches), and search does not withhold it because it is not "in flight". The file's passages are
@@ -151,13 +156,13 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
  * read it to tell a permanently-stalled file from one still in flight. b4m-core cannot import from
  * apps/client, so a copy there would have to drift silently.
  */
-export const CHUNK_STALL_REASONS = ['vectorizePaused', 'rechunkPaused'] as const;
+export const CHUNK_STALL_REASONS = ['vectorizePaused', 'rechunkPaused', 'unchunkedPaused'] as const;
 export type ChunkStallReason = (typeof CHUNK_STALL_REASONS)[number];
 
 /**
- * Whether a file is stalled by the convergence kill switch, by either arm. THE predicate every
- * reader uses, so adding a third stall reason reaches health, convergence and retrieval without
- * three separate comparisons drifting apart. Also the in-memory mirror of a Mongo
+ * Whether a file is stalled by the convergence kill switch, by any arm. THE predicate every
+ * reader uses, so adding a stall reason reaches health, convergence and retrieval without separate
+ * comparisons drifting apart. Also the in-memory mirror of a Mongo
  * `chunkStallReason: { $in: [...CHUNK_STALL_REASONS] }`.
  */
 export function isChunkStalled(reason?: string | null): boolean {
@@ -165,15 +170,53 @@ export function isChunkStalled(reason?: string | null): boolean {
 }
 
 /**
- * Owner-facing prose for a stall reason, and the ONLY place it is worded. These are the exact
- * strings the markers used while they lived in `notes`, which is also what the #2016 migration
- * matches on to derive the field for existing rows - do not reword either without updating it.
+ * Which reasons leave the file with NO passages, as opposed to passages with no vectors. A `Record`
+ * over every reason rather than a hand-written subset array: a new stall reason then cannot compile
+ * until it is classified, where a member missing from a literal array would just make a health count
+ * silently wrong.
+ */
+const STALL_LEAVES_NO_PASSAGES: Record<ChunkStallReason, boolean> = {
+  vectorizePaused: false,
+  rechunkPaused: true,
+  unchunkedPaused: true,
+};
+
+/**
+ * The CHUNK arm's reasons, as distinct from the vectorize arm's, and the datastore mirror for a
+ * Mongo `chunkStallReason: { $in: [...] }`.
+ *
+ * Pick between this and CHUNK_STALL_REASONS/`isChunkStalled` by the question you are asking. The
+ * full set: "is this file stalled by the switch at all?" This subset: "is this file WITHOUT PASSAGES
+ * because the switch stopped the work that would have built them?" A vectorize-paused file answers
+ * yes to the first and no to the second - it still has its chunks - so folding the arms together
+ * would grade it as chunkless. Choosing wrong in a Mongo `$in` fails SILENTLY, it just selects the
+ * wrong set, which is why this is a shared constant rather than an inline array.
+ */
+export const CHUNKLESS_STALL_REASONS: readonly ChunkStallReason[] = CHUNK_STALL_REASONS.filter(
+  reason => STALL_LEAVES_NO_PASSAGES[reason]
+);
+
+/** In-memory mirror of CHUNKLESS_STALL_REASONS, for a reader holding a file rather than a query. */
+export function isChunklessStall(reason?: string | null): boolean {
+  return CHUNKLESS_STALL_REASONS.includes(reason as ChunkStallReason);
+}
+
+/**
+ * Owner-facing prose for a stall reason, and the ONLY place it is worded.
+ *
+ * `vectorizePaused` and `rechunkPaused` are the exact strings those markers used while they lived in
+ * `notes`, which is also what the #2016 migration matches on to derive the field for existing rows -
+ * do not reword either without updating it. `unchunkedPaused` postdates that migration and was never
+ * written to `notes`, so its wording is free to change: nothing matches on it.
  */
 export const CHUNK_STALL_NOTICES: Record<ChunkStallReason, string> = {
   vectorizePaused: 'Indexing paused by the data-lake convergence kill switch - reprocess to complete.',
   rechunkPaused:
     'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
     'rebuilt when convergence resumes.',
+  unchunkedPaused:
+    'Chunking paused by the data-lake convergence kill switch - this file has no passages yet and they ' +
+    'are built when convergence resumes.',
 };
 
 /**
@@ -226,8 +269,15 @@ export function isConvergencePausedNote(notes?: string | null): boolean {
  *
  * Mirrored in Mongo by `buildFabFileSearchQuery`'s `vectorizedOnly` exemption. Delete the legacy arm
  * from both together, one release after the migration has landed everywhere.
+ *
+ * Pinned to the two reasons the migration backfilled rather than every notice: `unchunkedPaused`
+ * postdates it, so no row carries its prose, and including it would read an owner who happens to type
+ * that sentence into `notes` as stalled.
  */
-export const LEGACY_CHUNK_STALL_NOTES: readonly string[] = Object.values(CHUNK_STALL_NOTICES);
+export const LEGACY_CHUNK_STALL_NOTES: readonly string[] = [
+  CHUNK_STALL_NOTICES.vectorizePaused,
+  CHUNK_STALL_NOTICES.rechunkPaused,
+];
 
 export function isChunkStalledFile(file: { chunkStallReason?: string | null; notes?: string | null }): boolean {
   return isChunkStalled(file.chunkStallReason) || LEGACY_CHUNK_STALL_NOTES.includes(file.notes ?? '');

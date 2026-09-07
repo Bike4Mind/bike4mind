@@ -1,3 +1,5 @@
+import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
  * `datalake:<org>:<slug>`). This meta-tag is what makes a file a MEMBER of a lake, so it is
@@ -116,6 +118,71 @@ export const prefixArmTagNames = (tagNames: readonly unknown[], fileTagPrefix: s
 /** True when any tag names a file under a lake's prefix arm. See `prefixArmTagNames`. */
 export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix: string | undefined | null): boolean =>
   prefixArmTagNames(tagNames, fileTagPrefix).length > 0;
+
+/**
+ * The prefix arm a membership scope RESOLVES TO, or null when the membership predicate drops it.
+ *
+ * The single decision behind two things that must never disagree: `buildDataLakeMembershipFilter`
+ * (`@bike4mind/database`) builds its prefix arm from this, and any caller that DISCLOSES the scope it
+ * queried reports it. Deriving a disclosure from the lake document instead is the bug this exists to
+ * prevent - it claims an arm the filter dropped, so a number computed over the meta-tag alone is
+ * presented as though the prefix arm had run (#2243). A registry lake is the reachable case: it has no
+ * backing document, so `createdByUserId` is `''` and an `owned` scope fails closed to meta-tag-only
+ * while the document still carries a real `fileTagPrefix`.
+ *
+ * Three reasons the arm is dropped, and the caller cannot tell them apart from the scope alone:
+ * an unusable prefix, a reserved-namespace one, and an `owned` scope with no creator to anchor to.
+ */
+export const effectiveTagPrefixArm = (scope: {
+  kind: 'owned' | 'registry';
+  fileTagPrefix?: string | null;
+  creatorUserId?: string | null;
+}): string | null => {
+  const prefix = normalizeTagPrefix(scope.fileTagPrefix);
+  if (!prefix || isReservedTagPrefix(prefix)) return null;
+  // An owned lake's prefix is user-chosen and unique only per creator, so with no creator there is
+  // nothing safe to match on. A registry prefix is compile-time config and needs no anchor.
+  //
+  // Tested as "not registry" rather than "is owned" so a scope that names NO kind fails closed. The
+  // type requires one, but callers build these by hand and an unrecognised kind must never be the
+  // thing that keeps an unanchored prefix arm alive - that arm widens the predicate to every file
+  // carrying the prefix, whoever owns it, on a path that also drives permanent deletion.
+  if (scope.kind !== 'registry' && !scope.creatorUserId) return null;
+  return prefix;
+};
+
+/**
+ * Which membership signal(s) a file carries for a lake: the `datalake:*` meta-tag ('meta'),
+ * a `fileTagPrefix` content tag ('prefix'), both, or neither (null - not a member). Exact JS
+ * mirror of `buildDataLakeMembershipFilter` (`@bike4mind/database`) so a UI badge and the
+ * read/lifecycle predicate can never disagree about why a file is a member.
+ *
+ * This closes a visibility gap: the two arms behave differently (an OWNED lake's prefix arm
+ * requires creator ownership; a REGISTRY lake's does not, and the meta-tag never does) but
+ * neither Files nor the lake manager UI previously surfaced which one applied.
+ */
+export type DataLakeMembershipArm = 'meta' | 'prefix' | 'both';
+
+export function getFileMembershipArm(
+  file: { userId: string; tags?: readonly { name?: unknown }[] },
+  scope: DataLakeMembershipScope
+): DataLakeMembershipArm | null {
+  const tagNames = (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
+  const hasMeta = tagNames.includes(scope.datalakeTag);
+  // Whether the prefix arm survives at all is `effectiveTagPrefixArm`'s decision, not a second copy
+  // of it - re-deriving it here is the exact disagreement this function exists to rule out. All that
+  // is left is the ownership conjunct buildDataLakeMembershipFilter pairs with the arm on an OWNED
+  // scope; a REGISTRY lake's prefix is compile-time config and carries no such conjunct.
+  const prefixArm = effectiveTagPrefixArm(scope);
+  const hasPrefix =
+    !!prefixArm &&
+    (scope.kind === 'registry' || file.userId === scope.creatorUserId) &&
+    matchesTagPrefixArm(tagNames, prefixArm);
+  if (hasMeta && hasPrefix) return 'both';
+  if (hasMeta) return 'meta';
+  if (hasPrefix) return 'prefix';
+  return null;
+}
 
 /**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them

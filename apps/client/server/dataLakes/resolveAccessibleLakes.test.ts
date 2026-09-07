@@ -18,7 +18,8 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { search: vi.fn() },
 }));
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: { settings: true },
+  dataLakeAccessGrantRepository: { grants: true },
   dataLakeRepository: {},
   fabFileRepository: {},
   projectRepository: {},
@@ -78,5 +79,52 @@ describe('resolveAccessibleLakes', () => {
     expect(mockListAllDataLakes).toHaveBeenCalledTimes(1);
     expect(mockListDataLakes).not.toHaveBeenCalled();
     expect(mockGetRequestEntitlements).not.toHaveBeenCalled();
+  });
+
+  // listDataLakes degrades both grant reads to empty when the repo is absent, so a lake held by
+  // an owner or curator grant was missing from every browse surface - articles, tag-counts, the
+  // rlm-answer gate, and the file-access check in pages/api/files/[id] - while the read gate
+  // admitted it. Non-admin only: listAllDataLakes never calls resolveEnforceReadGrants or
+  // grantedLakeIdsFor, so an admin already sees every draft/active lake with or without either
+  // adapter - passing them would just discard a wasted grant read (see the admin case below).
+  it('threads the grants and settings adapters on the non-admin path', async () => {
+    await resolveAccessibleLakes(asReq({ id: 'u1', tags: [] }));
+
+    expect(mockListDataLakes).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          dataLakeAccessGrants: { grants: true },
+          // Settings too, unlike the Slack `list` reply which omits it on purpose: browse is a READ
+          // surface, so it must follow the EnforceLakeReadGrants cutover instead of freezing at
+          // owner/curator and hiding a reader-granted lake the gate would admit.
+          settings: { settings: true },
+        }),
+      })
+    );
+  });
+
+  // The admin branch gets neither adapter: listAllDataLakes can't be "silently degraded" by their
+  // absence because it never narrows by grant or settings in the first place (find() over every
+  // draft/active lake). Pinned so a well-meant "add them for consistency" doesn't reintroduce a
+  // wide indexed grants read whose result is never used on this branch.
+  it('passes no grants or settings adapter on the admin path', async () => {
+    await resolveAccessibleLakes(asReq({ id: 'admin', tags: [], isAdmin: true }));
+
+    expect(mockListAllDataLakes).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        db: { dataLakes: expect.anything() },
+      })
+    );
+  });
+
+  it('still passes no `users` adapter, which browse must not pay for', async () => {
+    // The owner-name lookup exists for the manager list, which renders an owner; browse never does.
+    // Pinned because the grants/settings addition edits exactly this adapter object.
+    await resolveAccessibleLakes(asReq({ id: 'u1', tags: [] }));
+
+    const [, adapters] = mockListDataLakes.mock.calls[0] as [unknown, { db: Record<string, unknown> }];
+    expect(adapters.db).not.toHaveProperty('users');
   });
 });
