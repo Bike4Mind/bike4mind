@@ -24,6 +24,14 @@ const NO_LAKES: ResolvedLakeAccessSet = {
 export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   if (context.suppressLakeArms) return NO_LAKES;
   const resolved = await getDynamicDataLakeAccess(context);
-  const unioned = await unionPreauthorizedLakeAccess(resolved, context.sessionPreauthorizedLakeIds, context.db);
+  // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds - the field
+  // is only populated after vetPreauthorizedLakeIds matches the session owner to the request's
+  // authenticated principal, and is left unset where there is no principal to vet against.
+  const unioned = await unionPreauthorizedLakeAccess(
+    resolved,
+    context.sessionPreauthorizedLakeIds,
+    context.userId,
+    context.db
+  );
   return narrowLakeAccessToSession(unioned, context.sessionRetrievalTags);
 }

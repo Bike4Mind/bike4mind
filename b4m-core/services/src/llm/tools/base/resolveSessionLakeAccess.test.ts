@@ -26,6 +26,33 @@ const RESOLVED: ResolvedLakeAccessSet = {
   ] as ResolvedLakeAccessSet['lakes'],
 };
 
+const MANAGED_LAKE = {
+  id: 'managed',
+  name: 'Managed Lake',
+  slug: 'managed-lake',
+  datalakeTag: 'datalake:managed',
+  fileTagPrefix: 'managed:',
+  status: 'active',
+  createdByUserId: 'other-user',
+};
+
+/**
+ * A db that resolves the managed lake and holds a curator grant for `grantee`. Defaults to the
+ * context's own `userId`, so a test that wants the admission gets it and a test that wants it
+ * revoked names someone else - which is also what pins that this function passes `context.userId`
+ * as the re-check actor rather than some other id.
+ */
+const preauthDb = (grantee: string = 'u1') =>
+  ({
+    dataLakes: { findById: vi.fn().mockResolvedValue(MANAGED_LAKE) },
+    dataLakeAccessGrants: {
+      listActiveByLakes: vi
+        .fn()
+        .mockResolvedValue([{ dataLakeId: 'managed', principalType: 'user', principalId: grantee, role: 'curator' }]),
+    },
+    organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
+  }) as never;
+
 const makeContext = (overrides: Partial<ToolContext> = {}): ToolContext =>
   ({
     userId: 'u1',
@@ -45,28 +72,59 @@ describe('resolveSessionLakeAccess', () => {
 
   it('unions a pre-authorized lake in before narrowing to the session tags', async () => {
     getDynamicDataLakeAccessMock.mockResolvedValue(RESOLVED);
-    const findById = vi.fn().mockResolvedValue({
-      id: 'managed',
-      name: 'Managed Lake',
-      slug: 'managed-lake',
-      datalakeTag: 'datalake:managed',
-      fileTagPrefix: 'managed:',
-      status: 'active',
-      createdByUserId: 'other-user',
-    });
 
     const out = await resolveSessionLakeAccess(
       makeContext({
         sessionPreauthorizedLakeIds: ['managed'],
         sessionRetrievalTags: ['datalake:managed'],
-        db: { dataLakes: { findById } } as never,
+        db: preauthDb(),
       })
     );
 
-    // The narrow (session tags = ['datalake:managed']) keeps ONLY the unioned lake - proving
-    // union really ran before narrow, not after (a post-narrow union would leak 'alpha' back in
-    // via a raw union, or the narrow would drop 'managed' if union never ran at all).
+    // Pins that the union ran AT ALL: without it the narrow to ['datalake:managed'] would drop
+    // 'alpha' and return []. It does NOT pin the ordering - both orders yield ['managed'] here
+    // (narrow-first gives [], then the union adds 'managed'). The next test covers the ordering.
     expect(out.lakes.map(l => l.id)).toEqual(['managed']);
+  });
+
+  // The discriminating fixture for composition ORDER, and the reason it has to be separate from the
+  // case above: scoping the session to a lake the grant does NOT name is the only shape where the two
+  // orders disagree. Union-then-narrow (shipped) lets the narrow drop the pre-authorized lake the
+  // session was never scoped to -> ['alpha']. Narrow-then-union would re-add it after the narrow had
+  // already run -> ['alpha', 'managed'], putting 'datalake:managed' into the tag set the search query
+  // is built from, so the grant would escape the session's own scoping.
+  it('narrows a pre-authorized lake back out when the session is scoped to a different lake', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(RESOLVED);
+
+    // The grant is held ON PURPOSE: with the admission revoked this would return ['alpha'] too,
+    // and the test would pass without ever exercising the narrow it exists to pin.
+    const out = await resolveSessionLakeAccess(
+      makeContext({
+        sessionPreauthorizedLakeIds: ['managed'],
+        sessionRetrievalTags: ['datalake:alpha'],
+        db: preauthDb(),
+      })
+    );
+
+    expect(out.lakes.map(l => l.id)).toEqual(['alpha']);
+    expect(out.dataLakeTags).not.toContain('datalake:managed');
+  });
+
+  // Pins the actor the manage re-check runs as. The session document is identical to the admitting
+  // case above - only the grant's principal differs - so a re-check wired to the wrong id (or to
+  // no id) would admit here and hand a revoked maintainer the lake's files for the whole session.
+  it('drops a pre-authorized lake whose manage grant names a different principal', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(RESOLVED);
+
+    const out = await resolveSessionLakeAccess(
+      makeContext({
+        sessionPreauthorizedLakeIds: ['managed'],
+        sessionRetrievalTags: ['datalake:managed'],
+        db: preauthDb('someone-else'),
+      })
+    );
+
+    expect(out.lakes).toEqual([]);
   });
 
   it('leaves the resolved access unchanged when the session names no lake opinion', async () => {

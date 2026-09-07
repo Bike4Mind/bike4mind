@@ -26,7 +26,10 @@ const makeContext = (
   user: DataLakeAccessContext['user'] = { id: OWNER, tags: [] },
   organizationIds: string[] = [],
   fallbackLakeSettings?: DataLakeAccessContext['db']['fallbackLakeSettings'],
-  byIdLakes: IDataLakeDocument[] = []
+  byIdLakes: IDataLakeDocument[] = [],
+  // The manage re-check's readers, wired but EMPTY by default: a pre-authorized id is revoked
+  // unless a test states the rung that holds it, so no test admits a lake by fixture accident.
+  recheck: { grants?: unknown[]; adminOrgIds?: string[] } = {}
 ): DataLakeAccessContext & { findMock: ReturnType<typeof vi.fn>; findByIdMock: ReturnType<typeof vi.fn> } => {
   const findMock = vi.fn().mockResolvedValue(lakes);
   const byId = new Map(byIdLakes.map(lake => [lake.id, lake]));
@@ -38,7 +41,13 @@ const makeContext = (
         findActiveByUserTagsAndEntitlements: findMock,
         findById: findByIdMock,
       },
-      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(organizationIds) },
+      organizations: {
+        findMembershipOrgIds: vi.fn().mockResolvedValue(organizationIds),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue(recheck.adminOrgIds ?? []),
+      },
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi.fn().mockResolvedValue(recheck.grants ?? []),
+      } as never,
       fallbackLakeSettings,
     },
     user,
@@ -436,12 +445,34 @@ describe('getAccessibleDataLakePrompts', () => {
       });
       // findActiveByUserTagsAndEntitlements resolves nothing - the manager is neither the creator
       // nor a member of org-partner - so admission depends entirely on the pre-authorization union.
-      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [managed]);
+      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [managed], {
+        grants: [{ dataLakeId: 'managed', principalType: 'user', principalId: 'manager', role: 'curator' }],
+      });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
         preauthorizedLakeIds: ['managed'],
         restrictToDatalakeTags: ['datalake:managed'],
       });
       expect(prompts).toEqual([{ id: 'managed', name: 'Managed Lake', systemPrompt: 'Sales playbook.' }]);
+    });
+
+    // The prompt-injection door is SEPARATE from the retrieval door (this function keeps its own
+    // inline union), so revocation has to be pinned on both or a revoked maintainer keeps
+    // injecting the lake's prompt into every session already created for it.
+    it('stops injecting once the manage grant that admitted the caller is gone', async () => {
+      const managed = makeLake({
+        id: 'managed',
+        name: 'Managed Lake',
+        datalakeTag: 'datalake:managed',
+        createdByUserId: 'someone-else',
+        organizationId: 'org-partner',
+        systemPrompt: 'Sales playbook.',
+      });
+      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [managed], { grants: [] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        preauthorizedLakeIds: ['managed'],
+        restrictToDatalakeTags: ['datalake:managed'],
+      });
+      expect(prompts).toEqual([]);
     });
 
     it('restrictTags is NEVER bypassed - a pre-authorized lake the turn did not retrieve injects nothing', async () => {
@@ -453,7 +484,11 @@ describe('getAccessibleDataLakePrompts', () => {
         organizationId: 'org-partner',
         systemPrompt: 'Sales playbook.',
       });
-      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [managed]);
+      // Grant the rung ON PURPOSE: without it this would return [] because the re-check revoked
+      // the admission, and the test would pass while proving nothing about restrictTags.
+      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [managed], {
+        grants: [{ dataLakeId: 'managed', principalType: 'user', principalId: 'manager', role: 'curator' }],
+      });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
         preauthorizedLakeIds: ['managed'],
         // A different lake's tag - this turn retrieved something else, not the managed lake.

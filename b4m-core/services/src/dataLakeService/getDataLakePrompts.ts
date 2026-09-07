@@ -2,6 +2,7 @@ import { DATA_LAKES, DATALAKE_TAG_PREFIX, lakeMatchesAccess, normalizeEntitlemen
 import type { DataLakeConfig, IDataLakeDocument } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
+import { filterStillManagedLakes, type ManageRecheckAdapter } from './filterStillManagedLakes';
 
 /**
  * The distinct `datalake:*` provenance tags among a bag of file tag names - i.e. which lakes a set
@@ -123,7 +124,10 @@ function isTrustedForInjection(
  * fallback lake's prompt keeps requiring its ordinary org-trust arm regardless of pre-authorization.
  */
 export async function getAccessibleDataLakePrompts(
-  context: DataLakeAccessContext,
+  // The re-check slice is intersected here rather than added to DataLakeAccessContext because only
+  // this function runs the manage re-check; getDynamicDataLakeAccess shares the context and has no
+  // pre-authorization concept.
+  context: DataLakeAccessContext & { db: ManageRecheckAdapter },
   options?: { restrictToDatalakeTags?: Iterable<string>; preauthorizedLakeIds?: Iterable<string> }
 ): Promise<DataLakePrompt[]> {
   // Normalize the scope once. An EMPTY (but present) restrict set means "this turn retrieved no
@@ -157,6 +161,10 @@ export async function getAccessibleDataLakePrompts(
   // bail: a caller who never wired dataLakes but did wire fallbackLakeSettings must still reach
   // the registry branch below.
   let lakes: IDataLakeDocument[] = [];
+  // The pre-authorized ids that STILL pass the manage gate this turn (see the union block below).
+  // `undefined` means the re-check never ran - no pre-authorized ids, or no reader to run it with -
+  // which is indistinguishable from "none survived" for every consumer, both denying.
+  let stillManagedPreauthorizedIds: Set<string> | undefined;
   if (context.db.dataLakes) {
     try {
       lakes = await context.db.dataLakes.findActiveByUserTagsAndEntitlements(
@@ -173,8 +181,20 @@ export async function getAccessibleDataLakePrompts(
         const existingIds = new Set(lakes.map(lake => lake.id));
         const missingIds = [...preauthorizedIds].filter(id => !existingIds.has(id));
         const fetched = await Promise.all(missingIds.map(id => findById(id)));
-        for (const lake of fetched) {
-          if (lake && lake.status === 'active') lakes.push(lake);
+        // Re-derive the manage gate the admission was granted under. Covers the ids the ordinary
+        // predicate ALREADY returned as well as the missing ones, because the re-check governs the
+        // trust short-circuit too: an id checked only when it was missing would keep piercing
+        // isTrustedForInjection for a revoked maintainer who happens to also be a member.
+        const candidates = [
+          ...lakes.filter(lake => preauthorizedIds.has(lake.id)),
+          ...fetched.filter((lake): lake is IDataLakeDocument => !!lake && lake.status === 'active'),
+        ];
+        const stillManaged = await filterStillManagedLakes(candidates, userId ?? '', context.db);
+        stillManagedPreauthorizedIds = new Set(stillManaged.map(lake => lake.id));
+        // A revoked id is not merely denied its short-circuit - it must not become a candidate at
+        // all, or its slug would suppress the matching registry lake in `dynamicSlugIds` below.
+        for (const lake of stillManaged) {
+          if (!existingIds.has(lake.id)) lakes.push(lake);
         }
       }
     } catch (err) {
@@ -191,10 +211,11 @@ export async function getAccessibleDataLakePrompts(
     .filter(
       lake =>
         // A pre-authorized lake short-circuits the ordinary access+trust check (it is trusted BY
-        // the admission itself, granted once at session-create - see the function doc comment).
+        // the admission itself - re-derived above against the current manage rights, not taken on
+        // the session's word; see the function doc comment).
         // `restrictTags` stays OUTSIDE this OR as an unconditional separate conjunct below, so
         // pre-authorization alone never injects a prompt the turn did not actually retrieve.
-        (!!preauthorizedIds?.has(lake.id) ||
+        (!!stillManagedPreauthorizedIds?.has(lake.id) ||
           (lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
             isTrustedForInjection(lake, { userId, organizationIds }))) &&
         // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact

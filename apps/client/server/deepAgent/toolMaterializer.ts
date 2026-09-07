@@ -9,6 +9,7 @@ import {
   adminSettingsRepository,
   apiKeyRepository,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fallbackLakeSettingsRepository,
@@ -92,6 +93,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed

@@ -40,6 +40,7 @@ import {
   GenerateImageToolCallSchema,
   AudioGenerationToolCallSchema,
   ILatticeModel,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
   CitableSource,
@@ -195,6 +196,13 @@ interface DatabaseAdapters {
     IDataLakeRepository,
     'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
   >;
+  /**
+   * Grant reader for the per-turn manage re-check on a session's `preauthorizedLakeIds`
+   * (filterStillManagedLakes). Optional in the type but REQUIRED in practice on any host that
+   * creates pre-authorized sessions: without it the curator / org-grant / transferred-owner rungs
+   * cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+   */
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
@@ -1692,7 +1700,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
     const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys });
-    return unionPreauthorizedLakeAccess(resolved, this.preauthorizedLakeIds, db);
+    // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
+    // reaches this process after vetPreauthorizedLakeIds has established the two are the same
+    // principal, and an unvetted path leaves the field unset.
+    return unionPreauthorizedLakeAccess(resolved, this.preauthorizedLakeIds, String(user.id), db);
   }
 
   /**

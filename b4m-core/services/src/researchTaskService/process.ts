@@ -65,7 +65,7 @@ interface ResearchTaskProcessAdapters {
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
     // `findMembershipOrgIds` off it).
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];

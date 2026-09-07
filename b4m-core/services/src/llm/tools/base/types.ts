@@ -11,6 +11,7 @@ import {
   IFabFileChunkRepository,
   IUserRepository,
   IProjectRepository,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
   ISkillRepository,
@@ -133,7 +134,14 @@ export interface ToolContext {
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
      * an absent resolver would silently drop every org lake from retrieval.
      */
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    /**
+     * Grant reader for the per-turn manage re-check on a session's `preauthorizedLakeIds`
+     * (filterStillManagedLakes). Optional in the type but REQUIRED in practice on any host that
+     * creates pre-authorized sessions: without it the curator / org-grant / transferred-owner rungs
+     * cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+     */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
     /**
      * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.

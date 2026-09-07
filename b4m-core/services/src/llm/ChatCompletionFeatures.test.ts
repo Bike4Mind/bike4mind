@@ -622,11 +622,21 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
 });
 
 describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => {
-  const makeCtx = (findById: ReturnType<typeof vi.fn>) => ({
+  // `grantee` holds the curator grant the re-check looks for; defaults to the ctx user, so a test
+  // naming someone else exercises revocation on an otherwise identical session.
+  const makeCtx = (findById: ReturnType<typeof vi.fn>, grantee: string = 'u1') => ({
     logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
     user: { id: 'u1', tags: [] },
     db: {
-      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      organizations: {
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: 'managed', principalType: 'user', principalId: grantee, role: 'curator' }]),
+      },
       dataLakes: {
         findActiveByUserTags: vi.fn().mockResolvedValue([]),
         findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
@@ -636,19 +646,21 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
     resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
   });
 
+  const MANAGED_LAKE = {
+    id: 'managed',
+    name: 'Managed Lake',
+    slug: 'managed-lake',
+    datalakeTag: 'datalake:managed',
+    fileTagPrefix: 'managed:',
+    status: 'active',
+    createdByUserId: 'other-user',
+  };
+
   // The knowledge tools' resolveSessionLakeAccess and this feature's forced-retrieval door are
   // two separate call sites into the same union (unionPreauthorizedLakeAccess) - this pins that
   // the forced-retrieval door actually wires its ctor arg through, not just the tool door.
   it('unions a pre-authorized lake the ordinary resolver could not reach', async () => {
-    const findById = vi.fn().mockResolvedValue({
-      id: 'managed',
-      name: 'Managed Lake',
-      slug: 'managed-lake',
-      datalakeTag: 'datalake:managed',
-      fileTagPrefix: 'managed:',
-      status: 'active',
-      createdByUserId: 'other-user',
-    });
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
     const ctx = makeCtx(findById);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
@@ -664,6 +676,29 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
 
     expect(findById).toHaveBeenCalledWith('managed');
     expect(access.lakes.map(l => l.id)).toEqual(['managed']);
+  });
+
+  // Same session record as above, only the grant's principal differs: the forced-retrieval door
+  // re-derives the manage gate per turn rather than trusting what the session was admitted with.
+  it('drops a pre-authorized lake once the caller no longer manages it', async () => {
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
+    const ctx = makeCtx(findById, 'someone-else');
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['managed']
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakes: Array<{ id: string }>; dataLakeTags: string[] }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakes).toEqual([]);
+    expect(access.dataLakeTags).not.toContain('datalake:managed');
   });
 
   it('does not touch findById when no lakes are pre-authorized', async () => {
