@@ -122,8 +122,9 @@ function formatSemanticResults(
     // separators only.
     //
     // The id is here so this channel attributes a passage the same way the other two do
-    // (`### Name (ID: ...)`): the conflict note above names documents by `fabFileId` alone, and
-    // without it on the heading the model has no way to map a named id back to a passage it can read.
+    // (`### Name (ID: ...)`): the conflict note that precedes the block names documents by
+    // `fabFileId` alone, and without it on the heading the model has no way to map a named id back
+    // to a passage it can read.
     return (
       `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})` +
       `${documentDateClause(r.fileCreatedAt)}\n` +
