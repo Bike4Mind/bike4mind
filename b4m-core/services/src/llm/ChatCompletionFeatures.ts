@@ -55,6 +55,7 @@ import {
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   DATALAKE_TAG_PREFIX,
+  PROMPT_TEXT_MAX,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -406,7 +407,7 @@ export const QuestStartBodySchema = z.object({
   /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
   /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
-  systemPrompt: z.string().max(16_000).optional(),
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   enableAgents: z.boolean().optional(),
   enableLattice: z.boolean().optional(),
   promptMeta: PromptMetaZodSchema,

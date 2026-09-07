@@ -3,7 +3,8 @@ import { defangRetrievedContent } from '../dataLakeService/renderRetrievedConten
 
 /**
  * Prompt-injection defenses and block composer for the caller-supplied `systemPrompt` field on
- * POST /api/chat (the API-only counterpart to the app UI's four system-prompt surfaces). Shares
+ * POST /api/chat and /api/ai/llm - a per-request counterpart to the tenant- and user-authored
+ * system-prompt surfaces the app UI exposes (organization, data lake, agent persona, skill). Shares
  * shape with renderDataLakePromptBlock.ts/renderRetrievedContentBlock.ts (fixed header our code
  * owns, plus a line-initial defang) but is neither: a lake prompt is author-supplied guidance a
  * lake owner can only reach org members with, and retrieved content is pure data the model must

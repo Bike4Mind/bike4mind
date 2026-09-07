@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ApiErrorCode } from '../apiErrorCodes';
+import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -64,11 +65,25 @@ export const SimplifiedChatRequestSchema = z.object({
   // Returned inline on this response only and never persisted, since a stored prompt would
   // reach every reader of the quest. Server-authored blocks stay redacted even here.
   includeSystemPrompt: z.boolean().optional(),
-  // Caller-supplied system-prompt text (API-only channel; the app UI has no equivalent field).
+  // Caller-supplied system-prompt text. No SPA control authors this, but it is not exclusive to
+  // this route: /api/ai/llm spreads its body into the same invoke params, so the browser-facing
+  // path reaches the field too.
+  //
   // Rendered as a defended, deference-postured block appended after every other system-prompt
-  // source - it can refine behavior but never override org/session/lake instructions. Capped to
-  // match PROMPT_TEXT_MAX (briefcasePrompt.ts); an oversized value is a 422, never truncated.
-  systemPrompt: z.string().max(16_000).optional(),
+  // source. The block's prose instructs the model to defer to org/session/lake guidance; that is
+  // instruction authority, NOT budget retention - under system-budget pressure this block is
+  // retained ahead of retrieval (SYSTEM_PROMPT_PRIORITY in systemPromptSources.ts), so it can
+  // outlive the lake grounding rather than yield to it.
+  systemPrompt: z
+    .string()
+    .max(PROMPT_TEXT_MAX)
+    .optional()
+    .describe(
+      'System-prompt text for this request only, never persisted. Rendered as a defended block ' +
+        'appended after every other system-prompt source, with prose instructing the model to ' +
+        'defer to organization, session and data-lake guidance. Over the cap is a 422, never ' +
+        'truncated.'
+    ),
 });
 
 export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;

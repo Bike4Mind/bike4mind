@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -83,7 +84,7 @@ const sendMessageShape = {
   model: z.string().optional().describe('Model id to use; defaults to the instance default'),
   systemPrompt: z
     .string()
-    .max(16_000)
+    .max(PROMPT_TEXT_MAX)
     .optional()
     .describe('Caller-supplied system-prompt text for this message only; refines but never overrides other guidance'),
 };

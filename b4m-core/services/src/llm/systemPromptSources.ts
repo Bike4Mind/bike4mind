@@ -72,7 +72,8 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'recentImages',
   'urls',
   'attachedFiles',
-  // Caller-supplied systemPrompt (API-only). Appended last, after every source above it -
+  // Caller-supplied systemPrompt (no SPA control authors it, but /api/ai/llm reaches it too).
+  // Appended last, after every source above it -
   // including the caller's own attached files/URLs - so it sits inside the per-caller cached
   // tail (see markShareablePrefixBoundary) rather than in front of anything shareable.
   'callerPrompt',
@@ -120,7 +121,9 @@ export const SIDE_EFFECT_ONLY_FEATURES: featureNames[] = [
  * Bike4Mind impossible to compare against the bare model - and a measured comparison found the
  * stack was costing more than it added on some question shapes.
  *
- * - `raw`: only what the caller themselves supplied. Nothing we author.
+ * - `raw`: only what the caller themselves supplied. The one thing we author that survives is
+ *   the defended header/footer wrapped around a caller-supplied `systemPrompt` - so a bare-model
+ *   comparison should omit that field, not just set the mode.
  * - `grounded`: `raw` plus forced data-lake retrieval, so the answer is cited but unstyled.
  * - `surface`: `grounded` plus the prompts a product surface or org authored for the session.
  *

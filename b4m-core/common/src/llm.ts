@@ -3,6 +3,7 @@ import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './s
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
+import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -222,11 +223,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
   /**
-   * Caller-supplied system-prompt text (API-only). Rendered as a defended,
-   * deference-postured block appended last in the system-prompt stack. Capped to match
-   * PROMPT_TEXT_MAX (briefcasePrompt.ts); enforced upstream as a 422, never truncated.
+   * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
+   * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm,
+   * which validate the cap at their own boundaries so an oversized value is rejected before a
+   * quest row exists rather than here, after it.
    */
-  systemPrompt: z.string().max(16_000).optional(),
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */

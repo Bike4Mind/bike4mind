@@ -1,5 +1,5 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, LLMApiRequestBody, redactSessionForClient } from '@bike4mind/common';
+import { ApiKeyScope, LLMApiRequestBody, PROMPT_TEXT_MAX, redactSessionForClient } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
@@ -30,6 +30,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   )
   .post(async (req: Request<unknown, unknown, LLMApiRequestBody>, res) => {
     const { sessionId: reqSessionId, sessionName, ...invokeParams } = req.body;
+
+    // This route has never parsed its body - it spreads req.body straight into the invoke params.
+    // `systemPrompt` reaches the same injection path as POST /api/chat, where the contract rejects
+    // an oversized value with a 422 before anything is created. Here the only enforcement is
+    // QuestStartBodySchema, which runs AFTER the quest row is written and whose ZodError is caught
+    // and turned into an errored quest returned with a 200 - so without this check an oversized
+    // value looks like success and leaves a junk row. Checked before getOrCreateSession so a
+    // rejected request creates nothing at all.
+    if (typeof req.body.systemPrompt === 'string' && req.body.systemPrompt.length > PROMPT_TEXT_MAX) {
+      return res.status(422).json({
+        error: 'Unprocessable Entity',
+        message: `systemPrompt exceeds the ${PROMPT_TEXT_MAX}-character limit.`,
+        code: 'SYSTEM_PROMPT_TOO_LONG',
+      });
+    }
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: req.body.sessionId,
