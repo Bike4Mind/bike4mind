@@ -4,10 +4,13 @@ import type { SlackEventData } from './SlackEvent';
 
 export type SlackAttachment = NonNullable<SlackEventData['files']>[number];
 
-/** A Slack attachment carrying every field an ingest path needs to download and store it. */
+/**
+ * A Slack attachment carrying every field an ingest path needs to download and store it.
+ * `mimetype` stays whatever Slack sent (possibly absent) - it is never validated or read past
+ * this point; type resolution is fully extension-based (see `resolvedMimeType`).
+ */
 export type CompleteSlackAttachment = SlackAttachment & {
   name: string;
-  mimetype: string;
   url_private_download: string;
   size: number;
 };
@@ -57,7 +60,10 @@ export type SlackFileValidation =
  * trailing disposition ("Skipping.") so each caller frames it in its own voice.
  */
 export function validateSlackFileForIngest(file: SlackAttachment): SlackFileValidation {
-  if (!file.mimetype || !file.name || !file.url_private_download || file.size === undefined) {
+  // `file.mimetype` is not checked here - nothing below reads it, type resolution is fully
+  // extension-based (see resolvedMimeType). Requiring it would silently drop a well-formed
+  // attachment whose client-reported mimetype happens to be empty.
+  if (!file.name || !file.url_private_download || file.size === undefined) {
     return {
       ok: false,
       reason: 'incomplete',
@@ -71,21 +77,26 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
   // resolved value also decides the size cap below, so a claimed `image/png` on a non-image
   // file no longer gets the looser cap either.
   const ext = getFileExtension(file.name);
-  // Only assume plain text for a name with NO dot anywhere (e.g. LICENSE, Dockerfile) -
-  // gating on `!file.name.includes('.')` rather than `!ext`, because a name that DOES have a
-  // dot but still resolves no extension (a trailing dot like "payload.", or a leading-dot-only
-  // name like ".exe") must still be refused below, not silently coerced to plain text.
-  const resolvedMimeType = file.name.includes('.') ? getMimeTypeByExtension(ext) : SupportedFabFileMimeTypes.TXT_PLAIN;
+  // `path.extname` reports no extension both for a bare name (LICENSE, Dockerfile) and for a
+  // dotfile (.env, .eslintrc, .exe-as-a-literal-filename) - both must fall back to plain text.
+  // A trailing dot ("payload.") also reports no extension via `getFileExtension`, but it's
+  // malformed rather than extension-less, so it stays refused below instead of being coerced.
+  const hasNoExtension = ext === '' && !file.name.endsWith('.');
+  const resolvedMimeType = hasNoExtension ? SupportedFabFileMimeTypes.TXT_PLAIN : getMimeTypeByExtension(ext);
   if (!resolvedMimeType || !SUPPORTED_SLACK_FILE_MIME_TYPES.includes(resolvedMimeType)) {
     // Name what actually decided the rejection - the resolved (extension-based) type, or the
-    // raw extension if it did not resolve to any known mimetype - never `file.mimetype`, which
-    // is only the client's claim and can name a type that IS on the allow-list (e.g. a `.py`
-    // file claiming `text/plain` would otherwise report "unsupported type text/plain").
-    const reportedType = resolvedMimeType || ext || 'unknown';
+    // raw extension if it looks like one - never `file.mimetype` (only the client's claim, which
+    // can name a type that IS on the allow-list) and never a bare digit fragment `path.extname`
+    // can grab out of a date or version suffix ("07" from "2026.09.07", "2" from "v1.2"), which
+    // reads as gibberish rather than a type.
+    const looksLikeExtension = /^[a-z][a-z0-9]{0,7}$/.test(ext);
+    const reportedType = resolvedMimeType || (looksLikeExtension ? ext : '');
     return {
       ok: false,
       reason: 'unsupported_type',
-      message: `File "${file.name}" has unsupported type ${reportedType}.`,
+      message: reportedType
+        ? `File "${file.name}" has unsupported type ${reportedType}.`
+        : `File "${file.name}" has no recognized file type.`,
     };
   }
 
