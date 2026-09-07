@@ -219,15 +219,25 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
-  // This route parses no body, so `systemPrompt` would otherwise be capped only by
-  // QuestStartBodySchema - which runs after the quest row is written and whose ZodError is
-  // swallowed into an errored quest returned with a 200. These two pin the boundary here
-  // instead, mirroring the pair on POST /api/chat.
+  // invoke()'s own parse already rejects a bad systemPrompt, but only after getOrCreateSession
+  // has written a session and moved lastNotebookId. What these pin is that the rejection happens
+  // before that - hence the assertions on mockGetOrCreateSession, not just the status.
   it('rejects an oversized systemPrompt (422) before creating a session or quest', async () => {
     const { req, res } = fire({ body: { systemPrompt: 'x'.repeat(16_001) } });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
     expect(res._getJSONData().code).toBe('SYSTEM_PROMPT_TOO_LONG');
+    // The envelope's `error` carries the message: CLI callers read it before `message`.
+    expect(res._getJSONData().error).toContain('16000');
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string systemPrompt (422) before creating a session or quest', async () => {
+    const { req, res } = fire({ body: { systemPrompt: 12_345 as unknown as string } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().code).toBe('SYSTEM_PROMPT_INVALID');
     expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
   });

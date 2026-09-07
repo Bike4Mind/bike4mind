@@ -224,9 +224,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
   /**
    * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
-   * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm,
-   * which validate the cap at their own boundaries so an oversized value is rejected before a
-   * quest row exists rather than here, after it.
+   * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm.
+   *
+   * This cap is the universal backstop, not a duplicate of a route check: the parse that opens
+   * invoke() runs outside any try and before a quest row is written, so it holds for every caller
+   * including ones that pass through no route schema. Do not drop it on the assumption that
+   * whoever called validated first.
    */
   systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   /** Whether Mementos is enabled */

@@ -31,17 +31,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   .post(async (req: Request<unknown, unknown, LLMApiRequestBody>, res) => {
     const { sessionId: reqSessionId, sessionName, ...invokeParams } = req.body;
 
-    // This route has never parsed its body - it spreads req.body straight into the invoke params.
-    // `systemPrompt` reaches the same injection path as POST /api/chat, where the contract rejects
-    // an oversized value with a 422 before anything is created. Here the only enforcement is
-    // QuestStartBodySchema, which runs AFTER the quest row is written and whose ZodError is caught
-    // and turned into an errored quest returned with a 200 - so without this check an oversized
-    // value looks like success and leaves a junk row. Checked before getOrCreateSession so a
-    // rejected request creates nothing at all.
-    if (typeof req.body.systemPrompt === 'string' && req.body.systemPrompt.length > PROMPT_TEXT_MAX) {
+    // This route spreads req.body straight into the invoke params rather than parsing it here, but
+    // it is not unvalidated: the ChatCompletionInvokeParamsSchema.parse that opens invoke() caps
+    // systemPrompt and throws outside any try, so an oversized value already 422s with no quest
+    // row. Re-checking here is purely about side effects - getOrCreateSession runs first and writes
+    // a session, notifies, logs an analytics event and moves the user's lastNotebookId, all of
+    // which that later 422 leaves behind.
+    const { systemPrompt } = req.body;
+    if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
+      return res.status(422).json({ error: 'systemPrompt must be a string.', code: 'SYSTEM_PROMPT_INVALID' });
+    }
+    if (typeof systemPrompt === 'string' && systemPrompt.length > PROMPT_TEXT_MAX) {
       return res.status(422).json({
-        error: 'Unprocessable Entity',
-        message: `systemPrompt exceeds the ${PROMPT_TEXT_MAX}-character limit.`,
+        error: `systemPrompt exceeds the ${PROMPT_TEXT_MAX}-character limit.`,
         code: 'SYSTEM_PROMPT_TOO_LONG',
       });
     }
