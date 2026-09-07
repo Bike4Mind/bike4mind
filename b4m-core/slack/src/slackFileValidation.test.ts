@@ -28,7 +28,6 @@ describe('validateSlackFileForIngest', () => {
   });
 
   it.each([
-    ['mimetype', { mimetype: undefined }],
     ['name', { name: undefined }],
     ['url_private_download', { url_private_download: undefined }],
     ['size', { size: undefined }],
@@ -65,14 +64,39 @@ describe('validateSlackFileForIngest', () => {
     }
   );
 
-  it.each(['payload.', '.exe'])(
-    'rejects %s - a dot is present but resolves no extension, so it must not get the extension-less fallback',
+  it.each(['.env', '.eslintrc', '.prettierrc', '.exe'])(
+    'accepts dotfile %s - `path.extname` reports no extension for it, same as a bare LICENSE/Dockerfile name, so it must not be refused as unsupported (regression: main accepts these)',
+    name => {
+      const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
+
+      expect(result.ok).toBe(true);
+    }
+  );
+
+  it('rejects payload. - a trailing dot resolves no extension too, but is malformed rather than extension-less, so it must not get the dotfile fallback', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'payload.', mimetype: 'text/plain' }));
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.message).toBe('File "payload." has no recognized file type.');
+  });
+
+  it.each(['Meeting notes 2026.09.07', 'My Report v1.2'])(
+    'rejects %s without naming a bare digit fragment as the type (a date/version suffix is not an extension)',
     name => {
       const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
 
       expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+      if (result.ok) throw new Error('expected rejection');
+      expect(result.message).toBe(`File "${name}" has no recognized file type.`);
     }
   );
+
+  it('accepts an attachment with no client-reported mimetype - nothing downstream reads that field', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'notes.pdf', mimetype: undefined }));
+
+    expect(result.ok).toBe(true);
+  });
 
   it('holds a real image to the tighter cap even when it claims a non-image mimetype (#2025 sibling)', () => {
     // The extension says PNG; the claimed mimetype tries to dodge the tighter image cap.
