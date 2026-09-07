@@ -1,4 +1,5 @@
 import { type ChunkStallReason } from '../../constants/chunking';
+import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 
@@ -300,6 +301,14 @@ export interface IFabFile {
    * ~60s as not-yet-queryable (mongot indexing lag), so this is read-time readiness, not a cache.
    */
   chunkEmbeddingModelStampedAt?: Date | null;
+  /**
+   * Set when this file's chunks were committed but handing them off to the vectorize queue
+   * failed (see fabFileChunk.ts). The chunks exist and `chunked` is true, so the un-chunked
+   * rescue sweep (chunkCount: 0) cannot see the file at all - this stamp is what makes the
+   * state findable, and buildStrandedVectorizeScanFilter selects on it. Cleared once the
+   * fan-out is resumed successfully.
+   */
+  vectorizeEnqueueFailedAt?: Date | null;
 
   system?: boolean;
 
@@ -497,6 +506,19 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
+   * The first `limit` chunks of one file as text only, ascending by insertion order.
+   *
+   * A separate read from `findByFabFileId`, which is unbounded and carries `vector` - the bulk of a
+   * chunk row. Callers that want prose over a bounded sample must not pay for embeddings.
+   */
+  findChunkTextSample(fabFileId: string, limit: number): Promise<string[]>;
+
+  /**
+   * Ids of this file's chunks that still hold no vector - the resume set for a vectorize
+   * fan-out that never happened or only half happened (see fabFileChunk.ts).
+   */
+  findVectorlessChunkIds(fabFileId: string): Promise<string[]>;
+  /**
    * The file's vectorize rollup in ONE pass over its chunks (the `vector` fetch is unavoidable and
    * must not be paid twice per batch):
    *  - `terminalChunkCount`: chunks that have a vector OR are oversized past the context window
@@ -638,13 +660,32 @@ export type DataLakeMembershipScope =
     };
 
 /**
+ * The lake arms an attachment resolution may add to its CASL scope. Server-supplied only - a
+ * `creatorUserId` inside a membership scope widens what the query matches, so a value reaching this
+ * from request input would let a caller name any user and read their files. Same contract as
+ * `IFabFileRepository.search`'s `lakeMemberships` (fabFileSearchQuery.ts).
+ *
+ * All three fields optional and an absent object means "no lake arms": the fail-safe direction for
+ * every door that cannot resolve its buckets is to omit them, never to widen.
+ */
+export interface AttachmentLakeAccess {
+  lakeMemberships?: DataLakeMembershipScope[];
+  dataLakeTags?: string[];
+  dataLakeTagPrefixes?: string[];
+}
+
+/**
  * The model interface for the FabFile model.
  *
  * Defines the database methods that are available on the FabFile model.
  */
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
-  getAccessibleFiles: (fabFileIds: string[], scope: Record<string, unknown>) => Promise<IFabFileDocument[]>;
+  getAccessibleFiles: (
+    fabFileIds: string[],
+    scope: Record<string, unknown>,
+    lakeAccess?: AttachmentLakeAccess
+  ) => Promise<IFabFileDocument[]>;
 
   /**
    * Persist the chunk-policy outcome for a file (#1662): the effective target its current chunks
@@ -1125,6 +1166,35 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     }>
   >;
   /**
+   * Per-member MEMBERSHIP facts (#2245): who is in this lake, by which arm, and what identifies them.
+   *
+   * A third read rather than an extension of `findDataLakeHealthMembers`, for the same reason
+   * convergence has its own: it asks a different question and so admits a different population.
+   * Health excludes chunkless members because they carry no retrievable content; membership must
+   * KEEP them - a chunkless copy of a document is exactly the duplicate an owner wants removed, and
+   * excluding it would report the lake as clean.
+   *
+   * `arm` is computed in the pipeline rather than by shipping the whole `tags` array, which on a
+   * large lake is the bulk of the payload and is not otherwise needed.
+   *
+   * `limit` fetches one extra row so the caller can detect overflow instead of silently truncating.
+   */
+  findDataLakeMembershipMembers(
+    scope: DataLakeMembershipScope,
+    limit?: number
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      fileName?: string;
+      // Tri-state is preserved deliberately: `null` ("chunked, no extractable text") must not be
+      // confused with an absent hash, and NEITHER proves identity. See isFingerprint.
+      serverTextHash: string | null;
+      fileSize: number | null;
+      createdAt: Date | null;
+      arm: MembershipArm;
+    }>
+  >;
+  /**
    * Per-member facts owner-triggered convergence (#1681) decides on. Deliberately NOT
    * `findDataLakeHealthMembers`: convergence asks a different question and needs three fields health
    * does not (the owner `userId` to re-enqueue under, the #1662 stamped chunk target, and the file's
@@ -1234,6 +1304,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
   /**
+   * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
+   * chunkless reasons by whether a producer actually removed its passages, and clearing the
+   * pending-rebuild stamp in the SAME write so the file is never both paused and pending.
+   *
+   * A dedicated method rather than an `update` from the caller because the reason to write depends on
+   * a field the same statement clears - see the implementation for why that has to be one statement
+   * and why it has to be idempotent.
+   */
+  markConvergencePaused(id: string): Promise<void>;
+  /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
    * "rebuild done" from "some files gave up".
@@ -1249,6 +1329,18 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   countDataLakeFilesByMembership(
     scopes: DataLakeMembershipScope[]
   ): Promise<Record<string, DataLakeMembershipFileCounts>>;
+  /**
+   * The same live-member count as `countDataLakeFilesByMembership`, split into the two DISJOINT
+   * arms that make up membership: `metaCount` (carries the `datalake:*` tag) and
+   * `prefixOnlyCount` (a member solely via a `fileTagPrefix` tag, with no meta-tag). The creator
+   * conjunct on the prefix arm applies only for an `owned`-scope lake; a `registry` scope omits
+   * it, so a registry lake's `prefixOnlyCount` can include files it does not own - see
+   * `buildDataLakePrefixOnlyMembershipFilter`. `metaCount + prefixOnlyCount` always equals the
+   * combined count. Powers the lake-manager's per-arm visibility.
+   */
+  countDataLakeFilesByMembershipArm(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, { metaCount: number; prefixOnlyCount: number }>>;
   /**
    * DISTINCT live files across every scope. The per-lake counts above deliberately count a file
    * once per lake it belongs to, so they can sum HIGHER than this; use this wherever an

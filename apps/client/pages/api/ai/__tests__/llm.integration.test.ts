@@ -136,12 +136,15 @@ import { ApiKeyScope } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 
-function fire({ apiKey = VALID_KEY as string | null }: { apiKey?: string | null } = {}) {
+function fire({
+  apiKey = VALID_KEY as string | null,
+  body,
+}: { apiKey?: string | null; body?: Record<string, unknown> } = {}) {
   const { req, res } = createMocks(
     {
       method: 'POST',
       url: '/api/ai/llm',
-      body: { sessionId: 'sess-1', message: 'Hello there' },
+      body: { sessionId: 'sess-1', message: 'Hello there', ...body },
       headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}) },
     },
     { eventEmitter: EventEmitter }
@@ -214,5 +217,38 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockValidate).not.toHaveBeenCalled();
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  // invoke()'s own parse already rejects a bad systemPrompt, but only after getOrCreateSession
+  // has written a session and moved lastNotebookId. What these pin is that the rejection happens
+  // before that - hence the assertions on mockGetOrCreateSession, not just the status.
+  it('rejects an oversized systemPrompt (422) before creating a session or quest', async () => {
+    const { req, res } = fire({ body: { systemPrompt: 'x'.repeat(16_001) } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().code).toBe('SYSTEM_PROMPT_TOO_LONG');
+    // errorHandler's own 422 envelope puts the human text in `error` and has no `message` key,
+    // so the guard's body matches the shape every other error on this route returns.
+    expect(res._getJSONData().error).toContain('16000');
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string systemPrompt (422) before creating a session or quest', async () => {
+    const { req, res } = fire({ body: { systemPrompt: 12_345 as unknown as string } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().code).toBe('SYSTEM_PROMPT_INVALID');
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('accepts a systemPrompt at exactly the cap (200) and forwards it to invoke', async () => {
+    const atCap = 'x'.repeat(16_000);
+    const { req, res } = fire({ body: { systemPrompt: atCap } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].body.systemPrompt).toBe(atCap);
   });
 });

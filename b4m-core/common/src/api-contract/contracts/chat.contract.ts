@@ -39,6 +39,7 @@ export const chatContract = defineEndpoint({
     },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
+    422: { description: 'Request body failed schema validation.', schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {

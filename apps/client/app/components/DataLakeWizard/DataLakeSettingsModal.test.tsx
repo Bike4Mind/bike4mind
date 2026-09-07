@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 
@@ -41,6 +42,19 @@ const useDataLakeProposalsMock = vi.fn(() => ({
 }));
 const reviewProposalMutate = vi.fn();
 
+// Steady state for tests that don't exercise the "Test this lake" picker: two reachable lakes,
+// loaded. The Test-scope suite below overrides this per test.
+type MockPickerLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean };
+const useGetDataLakesMock = vi.fn(() => ({
+  data: [
+    { id: 'lake-1', name: 'Test Lake', datalakeTag: 'datalake:test-lake' },
+    { id: 'lake-2', name: 'Open Lake', datalakeTag: 'datalake:open-lake' },
+  ] as MockPickerLake[],
+  isLoading: false,
+  isError: false,
+  refetch: vi.fn(),
+}));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
   useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
@@ -48,6 +62,12 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
   useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
+  useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),
+}));
+
+const startChatWithLakesMock = vi.fn();
+vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
+  useStartChatWithLakes: () => startChatWithLakesMock,
 }));
 
 // The picker's options come from an async react-query hook. Mock it so the modal renders
@@ -91,6 +111,17 @@ beforeEach(() => {
   activatablePrompts = [TRIAGE_ROUTER];
   activatableLoading = false;
   activatableError = false;
+  startChatWithLakesMock.mockReset();
+  useGetDataLakesMock.mockClear();
+  useGetDataLakesMock.mockReturnValue({
+    data: [
+      { id: 'lake-1', name: 'Test Lake', datalakeTag: 'datalake:test-lake' },
+      { id: 'lake-2', name: 'Open Lake', datalakeTag: 'datalake:open-lake' },
+    ],
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  });
   useDataLakeSpendMock.mockClear();
   useDataLakeSpendMock.mockReturnValue({
     data: undefined,
@@ -1057,5 +1088,66 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeSettingsModal - Test this lake', () => {
+  it('hides the action for a reader (canManage: false)', () => {
+    const readerLake = { ...openLake, id: 'lake-11', canManage: false };
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId(`datalake-settings-test-btn-${readerLake.id}`)).not.toBeInTheDocument();
+  });
+
+  it('opens the scope dialog pre-selecting the lake under test, and starts a scoped chat on confirm', async () => {
+    startChatWithLakesMock.mockResolvedValue({ id: 'session-1' });
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId(`datalake-settings-test-btn-${openLake.id}`));
+    expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
+    // openLake.id === 'lake-2', so its checkbox starts checked; the other lake does not.
+    expect(screen.getByTestId('test-lake-scope-checkbox-lake-2').querySelector('input')).toBeChecked();
+    expect(screen.getByTestId('test-lake-scope-checkbox-lake-1').querySelector('input')).not.toBeChecked();
+
+    await user.click(screen.getByTestId('test-lake-scope-checkbox-lake-1').querySelector('input')!);
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    // Tags come back in the fetched-lakes list order, not selection order. The fixture tags are
+    // deliberately unequal to the lake ids and carry the `datalake:` prefix, so this discriminates
+    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that no
+    // `corpusGroundingMode` rides along: /api/sessions/create strips it off any request without a
+    // `dataLakeId`, so sending one would be a silent no-op.
+    expect(startChatWithLakesMock).toHaveBeenCalledWith({
+      retrievalTags: ['datalake:test-lake', 'datalake:open-lake'],
+    });
+    // The scope dialog is a separate flow from the settings form - confirming it must not also
+    // close the settings modal out from under the caller.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a toast and keeps the dialog open when the session create fails', async () => {
+    startChatWithLakesMock.mockRejectedValue(new Error('boom'));
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId(`datalake-settings-test-btn-${openLake.id}`));
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not start a test chat for this lake'));
+    expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
   });
 });

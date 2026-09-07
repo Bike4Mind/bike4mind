@@ -578,6 +578,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         attachmentList={messageData.attachmentList}
         navigationIntents={messageData.navigationIntents}
         attachmentNotices={messageData.attachmentNotices}
+        attachmentDelivery={messageData.attachmentDelivery}
         uiSideEffects={messageData.uiSideEffects}
         jupyterNotebook={messageData.jupyterNotebook}
         notebookContent={notebookContent}
@@ -1127,6 +1128,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   attachmentList,
   navigationIntents,
   attachmentNotices,
+  attachmentDelivery,
   uiSideEffects,
   jupyterNotebook,
   notebookContent,
@@ -1916,7 +1918,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Deliberately not gated on `completed`: a failed attachment is known before the reply
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
-      <AttachmentNotices attachmentNotices={attachmentNotices} />
+      <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
 
       {uiSideEffects && uiSideEffects.length > 0 && completed && (
         <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />

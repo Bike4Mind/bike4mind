@@ -38,6 +38,7 @@ let deps: SlackLinkIngestDeps;
 let createLakeFileFromUrl: ReturnType<typeof vi.fn>;
 let resolveEntitlementKeys: ReturnType<typeof vi.fn>;
 let resolveMembershipOrgIds: ReturnType<typeof vi.fn>;
+let resolveAdministeredOrgIds: ReturnType<typeof vi.fn>;
 let listByLake: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -47,6 +48,7 @@ beforeEach(() => {
   createLakeFileFromUrl = vi.fn().mockResolvedValue({ id: 'fab-1', fileName: 'An Article' });
   resolveEntitlementKeys = vi.fn().mockResolvedValue(['ent-a']);
   resolveMembershipOrgIds = vi.fn().mockResolvedValue(['org-1']);
+  resolveAdministeredOrgIds = vi.fn().mockResolvedValue(['org-2']);
 
   assertLakeWriteAccess.mockResolvedValue(lake);
   assertCanWriteDataLakeTags.mockResolvedValue(undefined);
@@ -65,6 +67,7 @@ beforeEach(() => {
     createLakeFileFromUrl,
     resolveEntitlementKeys,
     resolveMembershipOrgIds,
+    resolveAdministeredOrgIds,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
 });
@@ -187,9 +190,13 @@ describe('successful ingest', () => {
     await run();
 
     expect(resolveMembershipOrgIds).toHaveBeenCalledWith('user-1');
+    // The org-ADMIN set rides the same prologue and is equally invisible to typecheck here, so it is
+    // pinned on this path too: membership grants read, admin rights fire canManageLake's org rungs,
+    // and a fake reusing one set for both would pass on the wrong one.
+    expect(resolveAdministeredOrgIds).toHaveBeenCalledWith('user-1');
     expect(assertLakeWriteAccess).toHaveBeenCalledWith(
       'sales',
-      expect.objectContaining({ userId: 'user-1', organizationIds: ['org-1'] }),
+      expect.objectContaining({ userId: 'user-1', organizationIds: ['org-1'], administeredOrgIds: ['org-2'] }),
       expect.anything()
     );
   });
@@ -207,6 +214,11 @@ describe('successful ingest', () => {
         sourceType: FabFileSourceType.SLACK,
         sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', sourceUrl: LINK },
       },
+      // Carried from the AUTHORIZED context, and asserted here because `createFabFile` runs a third
+      // manage gate that cannot derive this from the user document: dropping it refuses an org admin
+      // the prologue already authorized. Exact-match assertion, so a future field cannot go
+      // unnoticed either.
+      administeredOrgIds: ['org-2'],
     });
     expect(outcome).toEqual({ ok: true, lakeName: 'Sales', fileName: 'An Article', sourceUrl: LINK });
   });

@@ -1,14 +1,20 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 // SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
 // management endpoint the ws-completions route streams through.
 const mockResource = vi.hoisted(() => ({
   CHAT_COMPLETION_INTERNAL_SECRET: { value: 'test-shared-secret' },
   websocket: { managementEndpoint: 'https://ws.test', url: 'wss://ws.test' },
+  App: { stage: 'test' },
 }));
 vi.mock('sst', () => ({ Resource: mockResource }));
+
+// The quest-processing-failure metric's emit seam.
+const mockEmitMetrics = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
 
 // WS connection lookup + fanout seams for the ws-completions route.
 const mockConnectionFind = vi.hoisted(() => vi.fn());
@@ -47,6 +53,9 @@ const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 
 // Replace the production schema (25+ fields) with a minimal one so the test can drive the
 // 400 (invalid) vs 202 (valid) branches without constructing a full QuestStartBody.
+// categorizeToolError's own bucketing rules are covered by TelemetryBuilder.test.ts; here it's
+// stubbed so this route test only asserts that its result flows into the emitted metric.
+const mockCategorizeToolError = vi.hoisted(() => vi.fn().mockReturnValue('internal_error'));
 vi.mock('@bike4mind/services', async () => {
   const { z } = await import('zod');
   return {
@@ -57,6 +66,7 @@ vi.mock('@bike4mind/services', async () => {
       message: z.string().min(1),
     }),
     executeCompletion: mockExecuteCompletion,
+    categorizeToolError: mockCategorizeToolError,
   };
 });
 
@@ -155,6 +165,7 @@ describe('ChatCompletion /process', () => {
     await post(VALID_BODY, { authorization: AUTH });
     await vi.waitFor(() => expect(mockProcessQuest).toHaveBeenCalledTimes(1));
     expect(mockQuestSettleIfUnfinished).not.toHaveBeenCalled();
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
   });
 
   // The generic reply must never be written unconditionally: ChatCompletionProcess persists the
@@ -171,6 +182,41 @@ describe('ChatCompletion /process', () => {
       type: 'error',
       reply: GENERIC_PROCESSING_FAILURE_REPLY,
     });
+  });
+
+  // Operator-facing signal: a quest-processing failure must emit a metric even though the user
+  // never sees anything different (that's #2278's job) - detection previously depended on a user
+  // complaining. Asserts both the Stage-only alarmable datum and the Stage+ErrorClass breakdown
+  // datum, since infra/alarms.ts only ever reads the former.
+  it('emits a ProcessingFailed metric labeled by error class on a processing failure', async () => {
+    mockProcessQuest.mockRejectedValueOnce(new Error('boom'));
+    await post(VALID_BODY, { authorization: AUTH });
+
+    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    expect(mockCategorizeToolError).toHaveBeenCalledWith('boom');
+    expect(mockEmitMetrics).toHaveBeenCalledWith('Lumina5/Quests', [
+      expect.objectContaining({
+        name: 'ProcessingFailed',
+        value: 1,
+        unit: StandardUnit.Count,
+        dimensions: { Stage: 'test' },
+      }),
+      expect.objectContaining({
+        name: 'ProcessingFailed',
+        value: 1,
+        unit: StandardUnit.Count,
+        dimensions: { Stage: 'test', ErrorClass: 'internal_error' },
+      }),
+    ]);
+  });
+
+  it('still settles the quest and emits the metric when it is a non-Error throw', async () => {
+    mockProcessQuest.mockRejectedValueOnce('a raw string failure');
+    await post(VALID_BODY, { authorization: AUTH });
+
+    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    expect(mockCategorizeToolError).toHaveBeenCalledWith('a raw string failure');
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
   });
 
   it('leaves the processor-persisted reply alone when the quest is already settled', async () => {

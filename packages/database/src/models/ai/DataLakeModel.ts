@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import type {
   IDataLakeDocument,
   IDataLakeRepository,
@@ -60,6 +61,26 @@ const DataLakeSchema = new mongoose.Schema(
     // (#1662): a member file whose effective target differs is reported as a conflict, never
     // re-chunked. No index (tiny collection, only read from a lake already in hand).
     requiredPassageTokenTarget: { type: Number },
+    // Last inconsistency report and when it ran. `mongoose.Schema.Types.Mixed` deliberately: this is a
+    // report payload the pure detector owns the shape of, and re-declaring its fields here would give
+    // two sources of truth that drift.
+    //
+    // BOUNDED BY THE WRITER, and the only writer that bounds it today is
+    // `detectLakeInconsistencies`, which passes INCONSISTENCY_FINDINGS_CAP as `maxFindings` and caps
+    // evidence per finding at EVIDENCE_MAX. Nothing in this schema or in the pure detector enforces a
+    // size on a caller that omits the cap - so a second writer (a cron, a queue handler, another
+    // route) must pass it too. Said explicitly because the previous wording implied the detector
+    // enforced the persisted size, which would have let the next writer add no cap of its own.
+    //
+    // Excluded from every multi-document read on DataLakeRepository - the named list methods via
+    // LIST_PROJECTION, and the inherited `find` via an override that injects the same exclusion.
+    // Both are needed: the exclusion has to live on the class that owns the field, so naming it in a
+    // DataLakeBatchRepository projection is a silent no-op, and naming it only on the named methods
+    // misses the door every service outside this file actually uses. The override yields to a caller
+    // that names ANY projection of its own, including an exclusion-only one that could safely have
+    // been merged - see its docblock for why it does not try to tell the two apart.
+    inconsistencyReport: { type: mongoose.Schema.Types.Mixed, default: null },
+    inconsistencyComputedAt: { type: Date, default: null },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },
@@ -265,9 +286,41 @@ const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): 
   return { $or: arms };
 };
 
+// The lakes collection's only unbounded field. Every multi-document read on this class excludes it:
+// the two routes that read a report (health, inconsistencies) each load a SINGLE lake by id or slug,
+// so no list path has a reader, and without this a per-lake report multiplies by the result size on
+// reads that never look at it.
+//
+// Two forms because there are two ways out of this class. The named methods below use the string on
+// `.select()`; the `find` OVERRIDE covers the inherited one, which is published on
+// IDataLakeRepository and is how every service outside this file reads lakes - except when that
+// caller names a projection itself, in which case the override steps aside entirely.
+const LIST_PROJECTION = '-inconsistencyReport';
+const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
+
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
+  }
+
+  /**
+   * Inherited `find`, narrowed to exclude the report - the projection on the named methods below
+   * cannot reach here, and this is the door nearly every caller uses.
+   *
+   * `IBaseRepository.find` declares no options parameter, so services read lakes through it with no
+   * projection and get whole documents; one of them (`listDataLakes.listAllDataLakes`) reads every
+   * draft+active lake unpaginated. Excluding at the six named methods left that path carrying the
+   * full report, which is the same silent no-op this exclusion was written to fix, one level up.
+   *
+   * Injected ONLY when the caller named no projection of its own: Mongo refuses a projection mixing
+   * inclusion with exclusion, so a caller that arrives with an inclusion set has to win outright
+   * rather than be merged with. No caller passes one today; this keeps the first one that does from
+   * failing at the server.
+   */
+  async find(filter: Record<string, unknown>, options: Record<string, unknown> = {}) {
+    const { skip, limit, sort, ...projection } = options;
+    if (Object.keys(projection).length > 0) return super.find(filter, options);
+    return super.find(filter, { ...options, ...LIST_PROJECTION_FIELDS });
   }
 
   async findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null> {
@@ -294,7 +347,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (datalakeTags.length === 0) return [];
     // Same globally-unique index as findByDatalakeTag, so the result carries at most one lake
     // per tag and a caller can key it by `datalakeTag` without losing a match.
-    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } });
+    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } }).select(LIST_PROJECTION);
     return docs.map(doc => doc.toJSON() as IDataLakeDocument);
   }
 
@@ -311,10 +364,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   async findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
-    const results = await this.dataLakeModel.find({
-      status: 'active',
-      $or: [{ requiredUserTag: { $in: allTags } }, { requiredUserTag: null }, { requiredUserTag: '' }],
-    });
+    const results = await this.dataLakeModel
+      .find({
+        status: 'active',
+        $or: [{ requiredUserTag: { $in: allTags } }, { requiredUserTag: null }, { requiredUserTag: '' }],
+      })
+      .select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
@@ -375,12 +430,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // including private gateless ones. Only when a userId is supplied.
     if (userId) accessArms.unshift({ createdByUserId: userId });
 
-    const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms });
+    const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
   async findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]> {
-    const results = await this.dataLakeModel.find({ organizationId: orgId });
+    const results = await this.dataLakeModel.find({ organizationId: orgId }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
@@ -461,7 +516,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
           $or: [{ createdByUserId: ctx.userId }, ...nonOwnerArms],
         };
 
-    const results = await this.dataLakeModel.find(filter);
+    const results = await this.dataLakeModel.find(filter).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
@@ -520,7 +575,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     const total = await this.dataLakeModel.countDocuments(filter);
     // `_id` breaks name ties so the ordering is total: without it, same-named lakes have no
     // stable order under skip/limit, and one could appear on two pages or be skipped between them.
-    const results = await this.dataLakeModel.find(filter).sort({ name: 1, _id: 1 }).skip(offset).limit(limit);
+    const results = await this.dataLakeModel
+      .find(filter)
+      .select(LIST_PROJECTION)
+      .sort({ name: 1, _id: 1 })
+      .skip(offset)
+      .limit(limit);
     return { lakes: results.map(r => r.toJSON() as IDataLakeDocument), total };
   }
 
@@ -747,6 +807,7 @@ const DataLakeBatchFileSchema = new mongoose.Schema(
       default: 'pending',
     },
     error: { type: String },
+    failureCounted: { type: Boolean },
   },
   { _id: false }
 );
@@ -882,6 +943,11 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   async updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void> {
     const update: Record<string, unknown> = { 'files.$.status': status };
     if (error) update['files.$.error'] = error;
+    // Pessimistic pairing with the failure $inc that follows this write: that $inc is guarded on a
+    // non-terminal batch while this write is not, so stamping "not charged" in the SAME document
+    // write as the status means every crash point classifies safely - a lost markFailureCounted
+    // leaves the entry conservatively uncounted rather than falsely counted (see revertFileFailure).
+    if (status === 'failed') update['files.$.failureCounted'] = false;
 
     await this.batchModel.updateOne({ _id: batchId, 'files.fabFileId': fabFileId }, { $set: update });
   }
@@ -908,6 +974,128 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { $set: { 'files.$.status': to } }
     );
     return res.modifiedCount === 1;
+  }
+
+  /**
+   * Exact inverse of the per-file failure accounting in fabFileChunk.ts's accountFileFailure:
+   * pull ONE manifest entry back out of 'failed' into `to`, drop the error text it carries, and
+   * hand back the failedFiles/processingFailedFiles that entry took - all in one write, so the
+   * manifest and the tally can never disagree. `alsoIncrement` carries whatever the new status
+   * itself owes the batch (a file whose chunks already hold every vector lands straight on
+   * 'complete', which owes a vectorizedFiles).
+   *
+   * Why this exists at all: claimFileStatus can only move an entry BETWEEN the states it is given,
+   * and no success path lists 'failed' as a legal `from` - so without an explicit revoke, a file
+   * that recovers after a failure was recorded is counted failed forever (#1412 is the same gate
+   * seen from the other side).
+   *
+   * `errorPrefix` is the ownership guard, mirroring the FabFile-side rule in fabFileChunk.ts: only
+   * the caller whose own failure text is on the entry may revoke it, so a real chunking failure
+   * recorded by something else is never quietly un-counted.
+   *
+   * Deliberately NOT guarded on a non-terminal batch, unlike incrementCounters: a strand that
+   * finalized the batch 'completed_with_errors' is exactly the case this has to repair. Callers
+   * reopen the batch first (see reopenFinalizedWithErrors) - and a reopen makes
+   * finalizeBatchIfComplete's whole post-finalize block run a second time, which for
+   * enqueueLakeMemoryExtractionIfWanted means a full-lake extraction may re-fire (bounded by the
+   * per-lake daily cap and de-duped by its ledger).
+   *
+   * It IS guarded on 'cancelled'/'failed', the same invariant reopenFinalizedWithErrors protects:
+   * those are decisions, not tallies, and a late recovery must not rewrite a batch someone
+   * deliberately settled (#2102) - cancel is a status-only transition that neither stops in-flight
+   * messages nor clears the FabFile markers, so the rescue sweep does reach files on one.
+   */
+  async revertFileFailure(
+    batchId: string,
+    fabFileId: string,
+    to: Extract<BatchFileStatus, 'complete' | 'chunking'>,
+    opts: {
+      errorPrefix: string;
+      // The failure counters are excluded because alsoIncrement is spread into the same $inc
+      // literal as the -1s below, where a later key would silently cancel the revoke.
+      alsoIncrement?: Partial<Record<Exclude<BatchCounterField, 'failedFiles' | 'processingFailedFiles'>, number>>;
+    }
+  ): Promise<IDataLakeBatchDocument | null> {
+    const entry = { fabFileId, status: 'failed', error: { $regex: `^${escapeRegex(opts.errorPrefix)}` } };
+    const match = { _id: batchId, status: { $nin: ['cancelled', 'failed'] } };
+    const set = {
+      $set: { 'files.$.status': to },
+      $unset: { 'files.$.error': 1, 'files.$.failureCounted': 1 },
+    };
+
+    // Whether to give the counters back is a PER-ENTRY fact, not a batch-level one: two entries can
+    // sit at 'failed' with only one of them charged (accountFileFailure's manifest write is
+    // unguarded while its $inc is guarded on a non-terminal batch), and a global failedFiles >= 1
+    // would happily spend the other file's counters - dropping the tally to 0 while that file is
+    // still genuinely failed. `failureCounted` is written false by updateFileStatus alongside the
+    // 'failed' status and raised to true once the $inc lands (markFailureCounted); absent can only
+    // mean an entry that pre-dates the flag, so trust the counters as before.
+    const counted = { ...match, files: { $elemMatch: { ...entry, failureCounted: { $ne: false } } } };
+
+    // $inc has no clamp, so the counters must still be there to give back.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { ...counted, failedFiles: { $gte: 1 }, processingFailedFiles: { $gte: 1 } },
+      { ...set, $inc: { failedFiles: -1, processingFailedFiles: -1, ...opts.alsoIncrement } },
+      { new: true }
+    );
+    if (doc) return doc.toJSON() as IDataLakeBatchDocument;
+
+    // Nothing was charged for this entry (or the counters are already gone): repair the status
+    // alone rather than pushing a tally that belongs to another file's failure negative.
+    const repaired = await this.batchModel.findOneAndUpdate(
+      { ...match, files: { $elemMatch: entry } },
+      opts.alsoIncrement ? { ...set, $inc: opts.alsoIncrement } : set,
+      { new: true }
+    );
+    return (repaired?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
+   * Record on the manifest entry itself whether the failure counters were actually charged for it,
+   * so revertFileFailure can tell whose counters it is handing back (see the attribution note
+   * there). Must stay paired with accountFileFailure's guarded incrementCounters call.
+   */
+  async markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void> {
+    await this.batchModel.updateOne(
+      { _id: batchId, 'files.fabFileId': fabFileId },
+      { $set: { 'files.$.failureCounted': counted } }
+    );
+  }
+
+  /**
+   * Reopen a batch whose ONLY terminal outcome was 'completed_with_errors', so a file that has
+   * since recovered can still be counted: every counter write here is guarded on a non-terminal
+   * batch, so a settled batch would otherwise swallow the increment that makes it 'completed'.
+   *
+   * Narrow on purpose. 'cancelled' and 'failed' are decisions, not tallies, and 'completed' cannot
+   * be reached with a failed file in the first place - only the errors variant is a verdict that a
+   * recovery can legitimately overturn. Everything else stays settled (#2102).
+   *
+   * `owner` is the same eligibility predicate revertFileFailure applies, so the reopen never fires
+   * blind: without it a resume with no failure of ours to revoke (a non-final attempt stamps the
+   * stranded marker before any accounting is written) would flip a batch out of and straight back
+   * into its verdict, paying a second recordBatchCompletion and a lake-memory extraction slot.
+   */
+  async reopenFinalizedWithErrors(
+    batchId: string,
+    owner: { fabFileId: string; errorPrefix: string }
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      {
+        _id: batchId,
+        status: 'completed_with_errors',
+        files: {
+          $elemMatch: {
+            fabFileId: owner.fabFileId,
+            status: 'failed',
+            error: { $regex: `^${escapeRegex(owner.errorPrefix)}` },
+          },
+        },
+      },
+      { $set: { status: 'processing' }, $unset: { completedAt: 1, completionReason: 1 } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   async incrementCounter(

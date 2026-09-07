@@ -39,9 +39,9 @@ describe('provenancePayloadShape (fail-soft to user)', () => {
   });
 
   it('preserves a valid origin and lakeId', () => {
-    expect(schema.parse({ origin: 'convergence', lakeId: 'lake-1' })).toEqual({
+    expect(schema.parse({ origin: 'convergence', lakeId: LAKE_OID })).toEqual({
       origin: 'convergence',
-      lakeId: 'lake-1',
+      lakeId: LAKE_OID,
     });
   });
 
@@ -49,6 +49,13 @@ describe('provenancePayloadShape (fail-soft to user)', () => {
     expect(schema.parse({ origin: 'garbage' }).origin).toBeUndefined();
   });
 });
+
+/**
+ * A real 24-char hex id. The per-lake arm only runs for an id that can address a row - a static
+ * registry lake's id is a human slug, and passing one to findById is what used to CastError and fail
+ * the whole switch open (see the guard in resolvePauseFlag).
+ */
+const LAKE_OID = '0123456789abcdef01234567';
 
 describe('isConvergenceHalted', () => {
   const makeDeps = () => ({
@@ -92,14 +99,14 @@ describe('isConvergenceHalted', () => {
   });
 
   it('halts per-lake convergence work when the lake override resolves to paused', async () => {
-    deps.dataLakes.findById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'u1' });
+    deps.dataLakes.findById.mockResolvedValue({ id: LAKE_OID, createdByUserId: 'u1' });
     resolveScopedSetting.mockResolvedValue({ value: true, source: 'Lake' } as never);
 
-    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: 'lake-1' }, deps)).toBe(true);
-    expect(scopeForLake).toHaveBeenCalledWith({ id: 'lake-1', createdByUserId: 'u1' });
+    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: LAKE_OID }, deps)).toBe(true);
+    expect(scopeForLake).toHaveBeenCalledWith({ id: LAKE_OID, createdByUserId: 'u1' });
     expect(resolveScopedSetting).toHaveBeenCalledWith(
       'PauseLakeConvergence',
-      { lakeId: 'lake-1' },
+      { lakeId: LAKE_OID },
       expect.objectContaining({ adminSettings: deps.adminSettings, scopedSettings: deps.scopedSettings }),
       expect.anything()
     );
@@ -108,15 +115,35 @@ describe('isConvergenceHalted', () => {
   });
 
   it('lets per-lake convergence work run when the lake override resolves to not-paused', async () => {
-    deps.dataLakes.findById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'u1' });
+    deps.dataLakes.findById.mockResolvedValue({ id: LAKE_OID, createdByUserId: 'u1' });
     resolveScopedSetting.mockResolvedValue({ value: false, source: 'Platform' } as never);
-    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: 'lake-1' }, deps)).toBe(false);
+    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: LAKE_OID }, deps)).toBe(false);
+  });
+
+  it('reads the PLATFORM switch for a static registry lake, whose id is a slug not an ObjectId', async () => {
+    // The whole switch used to fail open here: BaseModel.findById passes the slug straight to
+    // Mongoose, the CastError lands in resolvePauseFlag's catch, and it returns false WITHOUT ever
+    // reading the platform value - so a paused platform did not halt the one lake class the
+    // "Rebuild passages" door is deliberately kept open for.
+    deps.adminSettings.getSettingsValue.mockResolvedValue(true);
+
+    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: 'opti-knowledge' }, deps)).toBe(true);
+
+    // No lookup attempted at all - a lake with no document has nowhere to carry a scoped override.
+    expect(deps.dataLakes.findById).not.toHaveBeenCalled();
+    expect(resolveScopedSetting).not.toHaveBeenCalled();
+    expect(deps.adminSettings.getSettingsValue).toHaveBeenCalledWith('PauseLakeConvergence');
+  });
+
+  it('lets a static registry lake run when the platform switch is off', async () => {
+    deps.adminSettings.getSettingsValue.mockResolvedValue(false);
+    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: 'opti-knowledge' }, deps)).toBe(false);
   });
 
   it('falls back to the platform switch when the lake was deleted between enqueue and handling', async () => {
     deps.dataLakes.findById.mockResolvedValue(null);
     deps.adminSettings.getSettingsValue.mockResolvedValue(true);
-    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: 'gone' }, deps)).toBe(true);
+    expect(await isConvergenceHalted({ origin: 'convergence', lakeId: LAKE_OID }, deps)).toBe(true);
     expect(resolveScopedSetting).not.toHaveBeenCalled();
   });
 

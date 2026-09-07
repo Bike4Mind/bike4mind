@@ -102,6 +102,11 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // reader, and the lease timestamp would leak when/whether extraction is running.
   lakeMemoryExtractionAt: 'withheld',
   lakeMemoryCursor: 'withheld',
+  // Withheld: the report carries EXCERPTS of the lake's documents, and a reader who can see the lake
+  // is not necessarily entitled to read every member's prose. It is also an editorial-quality signal
+  // for whoever curates the lake, not information a consumer of it acts on.
+  inconsistencyReport: 'withheld',
+  inconsistencyComputedAt: 'withheld',
 };
 
 /**
