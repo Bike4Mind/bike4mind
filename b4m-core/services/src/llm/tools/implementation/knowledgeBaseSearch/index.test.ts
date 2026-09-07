@@ -3161,9 +3161,12 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     expect(note).toBeGreaterThanOrEqual(0);
     // Inside the block the defang pass would indent it, and it would read as document text.
     expect(note).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
-    expect(out).toContain('metric-disagreement: 1');
-    expect(out).toContain('file-a');
-    expect(out).toContain('file-b');
+    // Sliced to the note itself: the ids also appear in the passage headings, so asserting over the
+    // whole output would pass whether or not the note named a document.
+    const noteText = out.slice(note, out.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement: 1');
+    expect(noteText).toContain('file-a');
+    expect(noteText).toContain('file-b');
   });
 
   it('emits nothing when the passages agree, so the note cannot ship always-on', async () => {

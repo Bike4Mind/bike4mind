@@ -2734,9 +2734,12 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     const note = content.indexOf('NOTE: the retrieved documents below disagree');
     expect(note).toBeGreaterThanOrEqual(0);
     expect(note).toBeLessThan(content.indexOf(BEGIN));
-    expect(content).toContain('metric-disagreement: 1');
-    expect(content).toContain('fileA');
-    expect(content).toContain('fileB');
+    // Sliced to the note itself: the ids also appear in the passage headings, so asserting over the
+    // whole message would pass whether or not the note named a document.
+    const noteText = content.slice(note, content.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement: 1');
+    expect(noteText).toContain('fileA');
+    expect(noteText).toContain('fileB');
   });
 
   it('says nothing when the injected documents agree', async () => {

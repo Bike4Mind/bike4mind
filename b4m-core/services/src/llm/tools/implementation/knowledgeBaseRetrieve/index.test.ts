@@ -1328,7 +1328,11 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
     const note = out.indexOf('NOTE: the retrieved documents below disagree');
     expect(note).toBeGreaterThanOrEqual(0);
     expect(note).toBeLessThan(out.indexOf(BEGIN));
-    expect(out).toContain('metric-disagreement: 1');
+    // Sliced to the note itself: the ids also appear in the `### ... (ID: ...)` headings.
+    const noteText = out.slice(note, out.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement: 1');
+    expect(noteText).toContain('file-a');
+    expect(noteText).toContain('file-b');
   });
 
   it('says nothing when the documents agree', async () => {
