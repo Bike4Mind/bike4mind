@@ -108,7 +108,11 @@ export interface CreateFabFileAdapters {
   administeredOrgIds?: string[];
 }
 
-const DEFAULT_MAX_FILE_SIZE = 20;
+// Matches the `MaxFileSize` settings schema's own `defaultValue` (settings.ts) - this constant
+// only applies when the settings map has no entry at all, and it used to diverge from the
+// schema default (20 vs 30), so the same missing-row case answered differently depending on
+// which of the two MaxFileSize resolution paths a caller used (#2025).
+const DEFAULT_MAX_FILE_SIZE = 30;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
 /**
