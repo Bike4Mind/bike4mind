@@ -71,12 +71,19 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
       etag?: string;
     }>;
   };
+  /**
+   * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
+   * does). It cannot be read off the user document, so omitting it drops the two org rungs of
+   * `canManageLake` from `reconcileLakeTags`' join gate - making this write strictly narrower than
+   * the route gate in front of it. Same adapter, for the same reason, as `createFabFile`'s.
+   */
+  administeredOrgIds?: string[];
 }
 
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, logger, storage }: UpdateFabFileAdapters
+  { db, logger, storage, administeredOrgIds }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
@@ -123,7 +130,7 @@ export const updateFabFile = async (
     params.tags === undefined
       ? undefined
       : await reconcileLakeTags(
-          { userId: user.id, isAdmin: !!user.isAdmin },
+          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] },
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,

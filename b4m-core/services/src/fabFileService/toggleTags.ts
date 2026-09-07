@@ -52,6 +52,13 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
+  /**
+   * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
+   * does). It cannot be read off the user document, so omitting it drops the two org rungs of
+   * `canManageLake` from every gate below - making this door strictly narrower than the route gate
+   * in front of it. Same adapter, for the same reason, as `createFabFile`'s and `updateFabFile`'s.
+   */
+  administeredOrgIds?: string[];
 }
 
 const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
@@ -92,7 +99,11 @@ const matchingStoredNames = (storedNames: readonly string[], tag: string): strin
  * file fails mid-batch, the files already written stay written. Every write is idempotent, so
  * retrying the same call converges rather than double-applying.
  */
-export const toggleTags = async (userId: string, params: unknown, { db, logger }: FabFileToggleTagsAdapters) => {
+export const toggleTags = async (
+  userId: string,
+  params: unknown,
+  { db, logger, administeredOrgIds }: FabFileToggleTagsAdapters
+) => {
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
 
   // Toggling one tag twice in a request is meaningless, and acting on it twice is harmful: the
@@ -121,11 +132,12 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     throw new BadRequestError('Some files are not accessible or you do not have permission to edit them');
   }
 
-  const actor = { userId, isAdmin: !!user.isAdmin };
+  const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
   // Grant-aware manage gates below: consult each lake's active grants so a transferred lake's
   // superseded creator does not still pass. Batched + cached across both prefix-arm gate passes.
-  // (This file-tag door is file-owner-centric and does not resolve the org-admin rung; org admins
-  // manage lakes through the dedicated data-lake endpoints.)
+  // The org rungs fire only when the caller resolved `administeredOrgIds` for us - the route door
+  // does, so an org admin the route just authorized is not refused by `addFileToLake` one call
+  // later.
   const grantResolver = makeLakeGrantResolver({ db });
 
   // A lake a file belongs to ONLY via its prefix arm (no meta-tag) is invisible to
