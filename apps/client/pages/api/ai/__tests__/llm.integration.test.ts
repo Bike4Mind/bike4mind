@@ -227,7 +227,8 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
     expect(res._getJSONData().code).toBe('SYSTEM_PROMPT_TOO_LONG');
-    // The envelope's `error` carries the message: CLI callers read it before `message`.
+    // errorHandler's own 422 envelope puts the human text in `error` and has no `message` key,
+    // so the guard's body matches the shape every other error on this route returns.
     expect(res._getJSONData().error).toContain('16000');
     expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
