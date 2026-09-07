@@ -465,6 +465,31 @@ export class CommandHandler {
     const fileMetadata: Array<{ fabFileId: string; filename: string; mimeType: string; sizeBytes: number }> = [];
     const errors: string[] = [];
 
+    // Enforce the same MaxFileSize + storage limits fabFilesService.createFabFile applies on
+    // the web upload path (#1685): this path writes the FabFile directly and never called that
+    // service, so neither limit applied here before. Resolved once per message, not per
+    // attachment - neither the admin setting nor the org lookup below can change mid-call.
+    const { adminSettingsRepository, Organization, FabFile } = getSlackDb();
+    const { storage } = getSlackDeps();
+    // any: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary; the
+    // bound implementation (slackPackageInit.ts) is the real IAdminSettingsRepository.
+    const maxFileSizeMB = await (adminSettingsRepository as any as IAdminSettingsRepository).getSettingsValue(
+      'MaxFileSize'
+    );
+    const maxFileSizeBytes = typeof maxFileSizeMB === 'number' ? maxFileSizeMB * 1024 * 1024 : undefined;
+    // Memoized rather than resolved eagerly: most messages carry no attachment that actually
+    // needs the storage check, so this only pays for the lookup the first time it is used.
+    // any: same DI-boundary reason as adminSettingsRepository above - Organization is typed
+    // `unknown` at the DI boundary, so the memoized promise stays `any` rather than fighting
+    // checkStorageLimitForFile's real `Promise<IOrganizationDocument | null>` signature.
+    let organizationLookup: Promise<any> | undefined;
+    const findOrganizationOnce = (id: string) => {
+      organizationLookup ??= (Organization as any).findById(id);
+      // TS can't narrow a closed-over variable past `??=` on its own - it is always assigned
+      // by this point.
+      return organizationLookup as Promise<any>;
+    };
+
     for (const rawFile of files) {
       try {
         const validation = validateSlackFileForIngest(rawFile);
@@ -481,18 +506,7 @@ export class CommandHandler {
           errors.push(error);
           continue;
         }
-        const file = validation.file;
-
-        // Enforce the same MaxFileSize + storage limits fabFilesService.createFabFile applies
-        // on the web upload path (#1685): this path writes the FabFile directly and never
-        // called that service, so neither limit applied here before.
-        const { adminSettingsRepository, Organization } = getSlackDb();
-        // any: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary;
-        // the bound implementation (slackPackageInit.ts) is the real IAdminSettingsRepository.
-        const maxFileSizeMB = await (adminSettingsRepository as any as IAdminSettingsRepository).getSettingsValue(
-          'MaxFileSize'
-        );
-        const maxFileSizeBytes = typeof maxFileSizeMB === 'number' ? maxFileSizeMB * 1024 * 1024 : undefined;
+        const { file, resolvedMimeType } = validation;
 
         // Checked against Slack's CLAIMED size before downloading - mirrors
         // dataLakeFileIngest.ts's own "before it is downloaded" reasoning: an over-limit file
@@ -528,9 +542,7 @@ export class CommandHandler {
             this.user,
             fileBuffer.length,
             this.user.organizationId ?? undefined,
-            (id: string) =>
-              // any: same DI-boundary reason as adminSettingsRepository above.
-              (Organization as any).findById(id)
+            findOrganizationOnce
           );
         } catch (limitError) {
           const message = limitError instanceof Error ? limitError.message : 'Storage limit exceeded';
@@ -545,21 +557,23 @@ export class CommandHandler {
         }
 
         // Upload to S3 storage
-        const { storage } = getSlackDeps();
         const filePath = `slack-files/${this.user.id}/${Date.now()}-${file.name}`;
         await storage.filesStorage.upload(fileBuffer, filePath, {
           ContentType: file.mimetype,
         });
 
         // Create FAB file record in database
-        const { FabFile } = getSlackDb();
         const { KnowledgeType, FabFileSourceType } = await import('@bike4mind/common');
         const fabFile = await (FabFile as any).create({
           userId: this.user.id,
           fileName: file.name,
-          mimeType: file.mimetype,
+          // Persist what the checks above actually verified, not the client's claim: the
+          // resolved (extension-based) type, and the real downloaded byte count. A client that
+          // under-reports its claimed size would otherwise pass both size checks (the real
+          // buffer is checked too) yet permanently undercount this file's recorded fileSize.
+          mimeType: resolvedMimeType,
           filePath: filePath,
-          fileSize: file.size,
+          fileSize: fileBuffer.length,
           type: KnowledgeType.FILE,
           status: 'complete',
           sourceType: FabFileSourceType.SLACK,
@@ -574,13 +588,13 @@ export class CommandHandler {
         fileMetadata.push({
           fabFileId: fabFileIdStr,
           filename: file.name,
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
+          mimeType: resolvedMimeType,
+          sizeBytes: fileBuffer.length,
         });
         this.logger.debug('Successfully created FAB file from Slack attachment', {
           fileName: file.name,
           fabFileId: fabFileIdStr,
-          mimeType: file.mimetype,
+          mimeType: resolvedMimeType,
         });
       } catch (error) {
         const errorMsg = `\u274c Failed to process file "${rawFile.name}": ${
