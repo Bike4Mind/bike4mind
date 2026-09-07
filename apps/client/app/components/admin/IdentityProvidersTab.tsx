@@ -53,6 +53,11 @@ interface IdentityProvider {
     authServerId?: string;
     useOrgAuthServer?: boolean;
   };
+  /**
+   * Which credentials are stored. The list API sends these instead of the secrets
+   * themselves, so the form can tell a configured IdP from one saved with a blank one.
+   */
+  hasSecrets?: { decryptionPvk: boolean; privateCert: boolean; clientSecret: boolean };
   createdAt: string;
   updatedAt: string;
 }
@@ -445,8 +450,15 @@ const IdentityProvidersTab: React.FC = () => {
                     }
                   />
                   {/* The API never sends a stored secret back, so this field is always blank on
-                      an edit. Say so, or a blank field reads as "the secret is gone". */}
-                  {editingIdp && <FormHelperText>Leave blank to keep the current secret.</FormHelperText>}
+                      an edit. Say what is actually stored, or a blank field reads as
+                      "the secret is gone" - and a genuinely missing one stays invisible. */}
+                  {editingIdp && (
+                    <FormHelperText>
+                      {editingIdp.hasSecrets?.clientSecret
+                        ? 'A secret is stored. Leave blank to keep it.'
+                        : 'No secret is stored for this provider - logins will fall back to the deploy-level Okta credentials.'}
+                    </FormHelperText>
+                  )}
                 </FormControl>
 
                 <FormControl>

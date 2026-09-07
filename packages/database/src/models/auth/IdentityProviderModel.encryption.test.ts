@@ -114,4 +114,54 @@ describe('IdentityProviderRepository secrets at rest', () => {
     const forLogin = await identityProviderRepository.findByIdWithSecrets(created.id);
     expect(forLogin?.oktaConfig?.clientSecret).toBe('ROTATED-SECRET');
   });
+
+  it('preserves the stored secret when the configured key cannot read it', async () => {
+    const created = await identityProviderRepository.createIDP(oktaIdp('badkey.example'));
+    const before = await IdentityProviderModel.findById(created.id).select('+oktaConfig.clientSecret').lean();
+    const storedCiphertext = before?.oktaConfig?.clientSecret as string;
+
+    // A rotation that lost the old key: the ciphertext is still on disk and still
+    // recoverable, but nothing configured can decrypt it right now.
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      // The ordinary admin edit - rename only, secret field left blank as the UI instructs.
+      await identityProviderRepository.updateIDP(created.id, {
+        name: 'Renamed under the wrong key',
+        oktaConfig: { audience: 'https://acme.okta.com', clientId: 'client-1' },
+      } as never);
+
+      const after = await IdentityProviderModel.findById(created.id).select('+oktaConfig.clientSecret').lean();
+      // Carrying the DECRYPTED value forward would have written '' here and destroyed a
+      // credential that a restored key would otherwise have recovered.
+      expect(after?.oktaConfig?.clientSecret).toBe(storedCiphertext);
+      expect(after?.name).toBe('Renamed under the wrong key');
+    } finally {
+      configureSecretsAtRest(KEY);
+    }
+
+    // Proof the credential really is intact: the right key still reads it back.
+    const recovered = await identityProviderRepository.findByIdWithSecrets(created.id);
+    expect(recovered?.oktaConfig?.clientSecret).toBe('OKTA-CLIENT-SECRET');
+  });
+
+  it('reports which secrets are stored without returning any of them', async () => {
+    await identityProviderRepository.createIDP(oktaIdp('presence.example'));
+    await identityProviderRepository.createIDP({
+      name: 'No secret',
+      emailDomain: 'blank.example',
+      type: 'okta' as const,
+      createdBy: 'admin-1',
+      oktaConfig: { audience: 'https://blank.okta.com', clientId: 'client-2' },
+    } as never);
+
+    const rows = await identityProviderRepository.findAllWithSecretPresence();
+    const configured = rows.find(r => r.emailDomain === 'presence.example');
+    const blank = rows.find(r => r.emailDomain === 'blank.example');
+
+    expect(configured?.hasSecrets.clientSecret).toBe(true);
+    expect(blank?.hasSecrets.clientSecret).toBe(false);
+    // The flag is the whole point: no secret value may ride along with it.
+    expect(configured?.oktaConfig?.clientSecret).toBeUndefined();
+    expect(JSON.stringify(rows)).not.toContain('OKTA-CLIENT-SECRET');
+  });
 });

@@ -36,7 +36,8 @@ export interface IIdentityProviderDocument extends Document {
   oktaConfig?: {
     audience: string;
     clientId: string;
-    clientSecret: string;
+    /** Optional because it is select:false: only the *WithSecrets reads resolve it. */
+    clientSecret?: string;
     /** Authorization server ID (default: 'default') */
     authServerId?: string;
     /** If true, use org-level authorization server (no /oauth2/ path) */
@@ -48,6 +49,14 @@ export interface IIdentityProviderDocument extends Document {
   createdBy: string; // User ID who created this IDP
 }
 
+/**
+ * An IdP as the admin list serves it: no secret values, plus a flag per credential saying
+ * whether one is stored. See findAllWithSecretPresence.
+ */
+export type IdentityProviderWithSecretPresence = IIdentityProviderDocument & {
+  hasSecrets: { decryptionPvk: boolean; privateCert: boolean; clientSecret: boolean };
+};
+
 export interface IIdentityProviderRepository {
   findByEmailDomain: (domain: string) => Promise<IIdentityProviderDocument | null>;
   findActiveByEmailDomain: (domain: string) => Promise<IIdentityProviderDocument | null>;
@@ -55,6 +64,7 @@ export interface IIdentityProviderRepository {
   findActiveIDPs: () => Promise<IIdentityProviderDocument[]>;
   findByIdWithSecrets: (id: string) => Promise<IIdentityProviderDocument | null>;
   findAllWithSecrets: () => Promise<IIdentityProviderDocument[]>;
+  findAllWithSecretPresence: () => Promise<IdentityProviderWithSecretPresence[]>;
   createIDP: (data: Partial<IIdentityProviderDocument>) => Promise<IIdentityProviderDocument>;
   updateIDP: (id: string, data: Partial<IIdentityProviderDocument>) => Promise<IIdentityProviderDocument | null>;
   deleteIDP: (id: string) => Promise<boolean>;
@@ -217,6 +227,30 @@ class IdentityProviderRepository
     return docs.map(decryptDoc);
   }
 
+  /**
+   * The admin-list read: every IdP plus which credentials are actually stored, and no
+   * credential values. Needed because the plain reads cannot answer "is this configured?"
+   * at all - the fields are select:false - which would otherwise leave an IdP saved with a
+   * blank secret looking identical to a working one in the admin UI. Presence is computed
+   * here, inside the only layer that loads secrets, so no value reaches a response.
+   */
+  async findAllWithSecretPresence(): Promise<IdentityProviderWithSecretPresence[]> {
+    const docs = await this.model.find({}).select(SECRET_SELECT).sort({ createdAt: -1 });
+    return docs.map(doc => {
+      const json = doc.toJSON() as unknown as IIdentityProviderDocument;
+      // Two-step cast for the same reason decryptDoc needs one: a serialised document is a
+      // plain object, so it does not satisfy the Document half of the intersection.
+      return {
+        ...stripSecrets(json),
+        hasSecrets: {
+          decryptionPvk: !!json.samlConfig?.decryptionPvk,
+          privateCert: !!json.samlConfig?.privateCert,
+          clientSecret: !!json.oktaConfig?.clientSecret,
+        },
+      } as unknown as IdentityProviderWithSecretPresence;
+    });
+  }
+
   async createIDP(data: Partial<IIdentityProviderDocument>): Promise<IIdentityProviderDocument> {
     if (data.emailDomain) {
       data.emailDomain = data.emailDomain.toLowerCase();
@@ -234,9 +268,17 @@ class IdentityProviderRepository
     // never hands the secrets back out - so an ordinary edit round trip submits a config
     // with the secret fields missing. Carry the stored values forward instead of wiping
     // the IdP's key material; a caller that genuinely wants to replace one sends it.
+    //
+    // Deliberately the RAW ciphertext, not findByIdWithSecrets: decryptAtRest returns ''
+    // when no configured key can read a value, so carrying the decrypted form would let a
+    // single admin edit under a mis-rotated SECRET_ENCRYPTION_KEY overwrite recoverable
+    // ciphertext with '' - turning a fixable key problem into a destroyed credential.
+    // encryptAtRest passes an already-encrypted value through untouched, so re-storing
+    // the ciphertext is a no-op.
     let next = data;
     if (data.samlConfig || data.oktaConfig) {
-      const current = await this.findByIdWithSecrets(id);
+      const stored = await this.model.findById(id).select(SECRET_SELECT);
+      const current = stored ? (stored.toJSON() as unknown as IIdentityProviderDocument) : null;
       next = {
         ...data,
         ...(data.samlConfig
