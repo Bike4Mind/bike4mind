@@ -234,8 +234,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * user, scoped to an org. organizationId is REQUIRED so one org can never overwrite another org's
    * credential. Credential + connectedBy are written unconditionally; status/lastError heal to
    * `connected` only from a non-`syncing` state, so a Re-sync during an in-flight ingest cannot flip
-   * the claim and start a duplicate run (see the model note). SECURITY: `encryptedRefreshToken` must
-   * already be encrypted by the caller (packages/database cannot reach the crypto helpers).
+   * the claim and start a duplicate run (see the model note). `enabled` is re-stamped true as well,
+   * which is the ONLY repair for a lifecycle re-enable that was lost - callers must therefore refuse
+   * a lake that is not draft/active, or this re-enables an archived lake's poll (see the model note
+   * and drive-sync.ts). SECURITY: `encryptedRefreshToken` must already be encrypted by the caller
+   * (packages/database cannot reach the crypto helpers).
    */
   updateCredential(
     id: string,
