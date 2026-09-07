@@ -136,16 +136,20 @@ describe('createSession knowledgeIds validation', () => {
   // enter createSession's own input - it is authorized and written as a SEPARATE call by the create
   // route, strictly after createSession returns (see pages/api/sessions/create.ts). A caller that
   // tries to pass it here - fork/snip/clone included, though none of them do today; they build their
-  // own db.sessions.create() literal and never call this function at all - must fail to COMPILE, not
-  // merely be ignored at runtime, so the field can never be smuggled in by a future refactor that
-  // starts forwarding a source session's fields wholesale.
-  it('rejects preauthorizedLakeIds as a param at compile time', async () => {
-    const { adapters } = makeAdapters();
+  // own db.sessions.create() literal and never call this function at all - must not be able to
+  // smuggle it in via a future refactor that forwards a source session's fields wholesale.
+  //
+  // The COMPILE-time half of this guarantee lives in create.ts
+  // (CreateSessionParametersOmitPreauthorizedLakeIds), because tsconfig.json excludes test files:
+  // a `@ts-expect-error` here would be in no typecheck program and could never fail. What this test
+  // pins is the RUNTIME half - secureParameters strips the unknown key, so it never reaches the doc.
+  it('strips preauthorizedLakeIds instead of persisting it', async () => {
+    const { adapters, created } = makeAdapters();
     await createSession(
       user,
-      // @ts-expect-error - preauthorizedLakeIds is not part of CreateSessionParameters.
-      { name: 'ok', preauthorizedLakeIds: ['lake1'] },
+      { name: 'ok', preauthorizedLakeIds: ['lake1'] } as unknown as Parameters<typeof createSession>[1],
       adapters
     );
+    expect(created[0].preauthorizedLakeIds).toBeUndefined();
   });
 });
