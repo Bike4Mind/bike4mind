@@ -507,6 +507,7 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
     expect(sent).not.toMatch(/(^|\s)\d+(\s|$)/);
   });
 });
+
 describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
   // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
   const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;
