@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
 import {
+  IMAGE_SIZE_CONSTRAINTS,
   ImageModels,
   isGPTImageModel,
   isGPTImage2Model,
@@ -56,6 +57,72 @@ export function buildModerationBlockedError(error: InstanceType<typeof OpenAI.AP
       `Tip: Switch to an alternative model with different content policies — e.g. ${ALTERNATIVE_IMAGE_MODELS} — which may accept this prompt.\n\n` +
       `If you believe this is an error, you can report it to OpenAI with request ID: ${requestId}`
   );
+}
+
+/**
+ * Splits a WIDTHxHEIGHT size into its two edges, or null when the value is not a
+ * pair of non-zero numbers (e.g. 'auto', '', 'wide'). Null means "not a custom
+ * resolution" rather than "invalid": generate() has always left such values
+ * untouched, and that behaviour is preserved.
+ */
+function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
+  if (typeof size !== 'string') {
+    return null;
+  }
+  const [width, height] = size.split('x').map(Number);
+  if (!width || !height) {
+    return null;
+  }
+  return { width, height };
+}
+
+/**
+ * True when a custom gpt-image-2 resolution meets OpenAI's documented limits.
+ * gpt-image-2 accepts any resolution satisfying these, not only the presets in
+ * OPENAI_GPT_IMAGE_2_IMAGE_SIZES, so a flat preset check would reject valid
+ * custom sizes. Must stay the single source of this rule for generate() and edit().
+ */
+function satisfiesGptImage2Constraints({ width, height }: { width: number; height: number }): boolean {
+  const { maxEdge, minTotalPixels, maxTotalPixels, edgeMultiple, maxAspectRatio } =
+    IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.constraints;
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  const totalPixels = width * height;
+
+  return (
+    longEdge <= maxEdge &&
+    width % edgeMultiple === 0 &&
+    height % edgeMultiple === 0 &&
+    longEdge / shortEdge <= maxAspectRatio &&
+    totalPixels >= minTotalPixels &&
+    totalPixels <= maxTotalPixels
+  );
+}
+
+/**
+ * True when `size` may be forwarded to images.edit for `model`. gpt-image-2 takes
+ * its presets (including 'auto') or any custom WIDTHxHEIGHT meeting the same
+ * constraints generate() enforces; the gpt-image-1 family is limited to its three
+ * fixed sizes. An unsupported size is dropped by the caller so OpenAI applies its
+ * own default instead of rejecting the whole request with a 400.
+ *
+ * GPT-Image tiers only: dall-e-2 has its own size list and passes size through
+ * untouched, so do not route that model here.
+ */
+export function isSupportedEditSize(model?: string | null, size?: string | null): boolean {
+  if (typeof size !== 'string') {
+    return false;
+  }
+
+  if (isGPTImage2Model(model)) {
+    if ((OPENAI_GPT_IMAGE_2_IMAGE_SIZES as readonly string[]).includes(size)) {
+      return true;
+    }
+    const edges = parseSizeEdges(size);
+    return edges !== null && satisfiesGptImage2Constraints(edges);
+  }
+
+  return (OPENAI_GPT_IMAGE_1_IMAGE_SIZES as readonly string[]).includes(size);
 }
 
 export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> & {
@@ -114,25 +181,11 @@ export class OpenAIImageService extends AIImageService {
         if (isGPTImage2Model(options.model)) {
           // gpt-image-2 supports flexible sizes - validate constraints instead of fixed list
           if (openaiOptions.size && openaiOptions.size !== 'auto') {
-            const [w, h] = openaiOptions.size.split('x').map(Number);
-            if (w && h) {
-              const maxEdge = Math.max(w, h);
-              const minEdge = Math.min(w, h);
-              const totalPixels = w * h;
-              if (
-                maxEdge > 3840 ||
-                w % 16 !== 0 ||
-                h % 16 !== 0 ||
-                maxEdge / minEdge > 3 ||
-                totalPixels < 655_360 ||
-                totalPixels > 8_294_400
-              ) {
-                const originalSize = openaiOptions.size;
-                openaiOptions.size = '1024x1024';
-                parameterWarnings.push(
-                  `Size '${originalSize}' violates gpt-image-2 constraints, changed to '1024x1024'`
-                );
-              }
+            const edges = parseSizeEdges(openaiOptions.size);
+            if (edges && !satisfiesGptImage2Constraints(edges)) {
+              const originalSize = openaiOptions.size;
+              openaiOptions.size = '1024x1024';
+              parameterWarnings.push(`Size '${originalSize}' violates gpt-image-2 constraints, changed to '1024x1024'`);
             }
           } else if (!openaiOptions.size) {
             // gpt-image-2 defaults to 'auto' if no size provided
@@ -344,14 +397,12 @@ export class OpenAIImageService extends AIImageService {
       }
 
       // GPT-Image models (1, 1.5, 1-mini, 2) also accept `size` and `mask`, but only a size
-      // from the resolved model's own supported set - passing a dall-e-2 size (e.g.
-      // 256x256/512x512) or an arbitrary string is a 400 from OpenAI. An invalid/absent size
-      // is omitted so OpenAI's `auto` sizing applies, same as before this validation existed.
+      // their own tier supports - a dall-e-2 size (e.g. 256x256/512x512) or an out-of-range
+      // resolution is a 400 from OpenAI. gpt-image-2 also takes any custom WIDTHxHEIGHT
+      // meeting its constraints, so this must not be a flat preset check. An unsupported or
+      // absent size is omitted so OpenAI's own default sizing applies, as it did before.
       // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
-      const gptImageSizes: readonly string[] = isGPTImage2Model(editModel)
-        ? OPENAI_GPT_IMAGE_2_IMAGE_SIZES
-        : OPENAI_GPT_IMAGE_1_IMAGE_SIZES;
-      const isValidGptImageSize = typeof size === 'string' && gptImageSizes.includes(size);
+      const forwardSize = isSupportedEditSize(editModel, size);
 
       const response = await openai.images.edit(
         isGPTImageModel(editModel)
@@ -359,7 +410,7 @@ export class OpenAIImageService extends AIImageService {
               model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
               image: [imageFile],
               prompt,
-              ...(isValidGptImageSize ? { size } : {}),
+              ...(forwardSize ? { size } : {}),
               ...(maskFile ? { mask: maskFile } : {}),
             }
           : {
