@@ -150,6 +150,8 @@ describe('metric units', () => {
     ['a unit outside the vocabulary', 'Latency is 40usec.', 'Latency is 40 ms.'],
     ['an alphanumeric identifier', 'Instance is 8xlarge.', 'Instance is 16xlarge.'],
     ['a version suffix', 'Version is 3beta.', 'Version is 7beta.'],
+    // `_` is a word character, so the guard has to cover it too or this one slips past the class.
+    ['an underscored identifier', 'Version is 1_2.', 'Version is 3_4.'],
   ])('does not read a value out of the middle of a token: %s', (_label, a, b) => {
     expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
   });

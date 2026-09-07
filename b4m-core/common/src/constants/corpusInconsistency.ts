@@ -167,12 +167,17 @@ const SUPERLATIVE_SUBJECT =
  * - A WORD-shaped unit is followed by a non-word char, so `1,200 gbps` declines to read `gb`. `%` is
  *   exempt: it has no `\b` after it, so a guard covering the whole group would make `99.9%.` and
  *   `50%off` - a routine extraction artifact - capture unitless.
- * - The unit-ABSENT branch carries its OWN guard. Without it the value can end mid-token, so
- *   `Latency is 40usec` becomes the unitless metric `40` and disagrees with `Latency is 40 ms`, and
- *   `Instance is 8xlarge` becomes a metric at all.
+ * - The unit-ABSENT branch carries its OWN guard, over the same character class `\b` treats as a
+ *   word - `_` included, or `Version is 1_2` matches where it never did before. Without the guard
+ *   the value can end mid-token, so `Latency is 40usec` becomes the unitless metric `40` and
+ *   disagrees with `Latency is 40 ms`, and `Instance is 8xlarge` becomes a metric at all.
+ *
+ * Residual, and older than any of the three: a value carrying a `.` can still stop at it, so
+ * `Latency is 99.9usec` reads as `99`. Closing that means refusing a match rather than shortening
+ * one, which is a different change to a rule two surfaces already depend on.
  */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?![a-z0-9]))|(?![A-Za-z0-9]))/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?![a-z0-9]))|(?![A-Za-z0-9_]))/i;
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
