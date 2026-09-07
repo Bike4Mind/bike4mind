@@ -48,7 +48,8 @@ export const SUPPORTED_SLACK_FILE_MIME_TYPES: readonly string[] = [
 export type SlackFileRejectionReason = 'incomplete' | 'unsupported_type' | 'too_large';
 
 export type SlackFileValidation =
-  { ok: true; file: CompleteSlackAttachment } | { ok: false; reason: SlackFileRejectionReason; message: string };
+  | { ok: true; file: CompleteSlackAttachment; resolvedMimeType: string }
+  | { ok: false; reason: SlackFileRejectionReason; message: string };
 
 /**
  * Validate one Slack attachment for ingest. On success the returned `file` is narrowed so callers
@@ -70,11 +71,11 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
   // resolved value also decides the size cap below, so a claimed `image/png` on a non-image
   // file no longer gets the looser cap either.
   const ext = getFileExtension(file.name);
-  // Only assume plain text for a genuinely extension-less file (e.g. LICENSE, Dockerfile),
-  // matching fabFileService/create.ts's own fallback - otherwise those previously-accepted
-  // attachments would start being rejected outright, since an empty extension resolves no
-  // mimetype at all.
-  const resolvedMimeType = ext ? getMimeTypeByExtension(ext) : SupportedFabFileMimeTypes.TXT_PLAIN;
+  // Only assume plain text for a name with NO dot anywhere (e.g. LICENSE, Dockerfile) -
+  // gating on `!file.name.includes('.')` rather than `!ext`, because a name that DOES have a
+  // dot but still resolves no extension (a trailing dot like "payload.", or a leading-dot-only
+  // name like ".exe") must still be refused below, not silently coerced to plain text.
+  const resolvedMimeType = file.name.includes('.') ? getMimeTypeByExtension(ext) : SupportedFabFileMimeTypes.TXT_PLAIN;
   if (!resolvedMimeType || !SUPPORTED_SLACK_FILE_MIME_TYPES.includes(resolvedMimeType)) {
     return {
       ok: false,
@@ -96,5 +97,5 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  return { ok: true, file: file as CompleteSlackAttachment };
+  return { ok: true, file: file as CompleteSlackAttachment, resolvedMimeType };
 }
