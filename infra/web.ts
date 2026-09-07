@@ -241,6 +241,12 @@ export const web = new sst.aws.Nextjs(
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
+      // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
+      // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
+      // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy
+      // THROWS on an unlinked key rather than returning undefined - so the route's optional-chained
+      // guard would never run and every start would 500.
+      dataLakeResearchQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],

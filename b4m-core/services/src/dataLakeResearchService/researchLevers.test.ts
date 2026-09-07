@@ -110,6 +110,26 @@ describe('normalizeResearchLevers', () => {
       ]);
     });
 
+    // Every one of these failed OPEN on a deny list before the entry was parsed rather than
+    // string-sliced: the value never reduced to a hostname, so it matched nothing and nothing told
+    // the manager their rule had not taken.
+    it.each([
+      ['a pasted URL', 'https://spam.net', 'spam.net'],
+      ['a pasted URL with a path', 'https://spam.net/articles/1', 'spam.net'],
+      ['credentials and a port', 'http://user:pw@Spam.NET:8443/x', 'spam.net'],
+      ['a trailing root dot', 'spam.net.', 'spam.net'],
+      ['a bare wildcard', '*spam.net', 'spam.net'],
+      // The hostname a URL actually carries is the punycode form, so a unicode entry has to become
+      // one here or it can never match.
+      ['a unicode host', '\u043f\u0440\u0438\u0432\u0435\u0442.com', 'xn--b1agh1afp.com'],
+    ])('reduces %s to the hostname a rule is matched against', (_label, entry, expected) => {
+      expect(normalizeResearchLevers({ query: 'q', blockedDomains: [entry] }).blockedDomains).toEqual([expected]);
+    });
+
+    it('drops an entry that cannot be a hostname at all rather than keeping a rule that matches nothing', () => {
+      expect(normalizeResearchLevers({ query: 'q', blockedDomains: ['not a host', '***'] }).blockedDomains).toEqual([]);
+    });
+
     it('caps the list length', () => {
       const many = Array.from({ length: RESEARCH_DOMAIN_LIST_MAX + 10 }, (_v, i) => `d${i}.com`);
       expect(normalizeResearchLevers({ query: 'q', allowedDomains: many }).allowedDomains).toHaveLength(

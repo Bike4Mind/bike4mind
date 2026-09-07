@@ -11,7 +11,10 @@ export function sourceHostname(url: string): string | null {
     // Only http(s) can be a source: `proposeDataLakeContent` answers `unusable_source` for anything
     // else, so admitting one here would spend a judgment and a fetch to reach a guaranteed refusal.
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    return parsed.hostname.toLowerCase();
+    // The trailing root dot is stripped to meet `normalizeDomainEntry`, which strips it on the rule
+    // side: `https://evil.com./x` has hostname `evil.com.`, and a deny entry of `evil.com` would
+    // otherwise sail past it. `URL` has already lowercased and punycoded the host.
+    return parsed.hostname.toLowerCase().replace(/\.$/, '');
   } catch {
     return null;
   }

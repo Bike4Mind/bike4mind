@@ -4,7 +4,11 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IDataLakeResearchConfigDocument, IDataLakeResearchRunDocument } from '@bike4mind/common';
-import { emptyResearchRunTotals } from '@bike4mind/common';
+import {
+  emptyResearchRunTotals,
+  RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
+  RESEARCH_MIN_RELEVANCE_DEFAULT,
+} from '@bike4mind/common';
 import { DataLakeResearchPanel } from './DataLakeResearchPanel';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -182,6 +186,39 @@ describe('DataLakeResearchPanel', () => {
       );
     });
 
+    // The default state of a new configuration, and the one the wire schema used to reject: the
+    // Default option's value is '', which `draftToInput` sends as null.
+    it('sends a null judge model when the Default option is left alone', () => {
+      const spies = renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(expect.objectContaining({ model: null }));
+    });
+
+    // Blank is "use the default", not 0: the server clamps rather than rejects, so a 0 here would
+    // silently mean "propose everything" on the relevance floor and 1 micro-USD on the ceiling.
+    it('falls back to the shared defaults when a numeric lever is cleared', () => {
+      const spies = renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.change(screen.getByTestId('datalake-research-min-relevance-input'), { target: { value: '' } });
+      fireEvent.change(screen.getByTestId('datalake-research-cost-ceiling-input'), { target: { value: '' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
+          costCeilingMicroUsd: RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
+        })
+      );
+    });
+
     it('will not submit without a name and a question', () => {
       renderPanel();
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
@@ -209,7 +246,12 @@ describe('DataLakeResearchPanel', () => {
       expect((screen.getByTestId('datalake-research-blocked-input') as HTMLTextAreaElement).value).toBe('spam.net');
 
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
-      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ name: 'Weekly sweep' }));
+      // `model` included: a stored judge model has to survive an edit that never touches the Select,
+      // which is the other half of the null-model case above.
+      expect(spies.onUpdate).toHaveBeenCalledWith(
+        'config-1',
+        expect.objectContaining({ name: 'Weekly sweep', model: 'gpt-4.1-mini' })
+      );
       expect(spies.onCreate).not.toHaveBeenCalled();
     });
 

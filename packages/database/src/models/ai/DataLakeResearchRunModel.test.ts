@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import mongoose from 'mongoose';
 import type { IDataLakeResearchRun, ResearchRunLevers } from '@bike4mind/common';
-import { emptyResearchRunTotals } from '@bike4mind/common';
-import { dataLakeResearchRunRepository as repo } from './DataLakeResearchRunModel';
+import { emptyResearchRunTotals, RESEARCH_RUN_STALE_AFTER_MS } from '@bike4mind/common';
+import { DataLakeResearchRunModel, dataLakeResearchRunRepository as repo } from './DataLakeResearchRunModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 const LAKE = 'lake-1';
@@ -33,6 +34,17 @@ const input = (overrides: Partial<CreateInput> = {}): CreateInput => ({
 
 /** Advance the wall clock past `createdAt`'s millisecond resolution. */
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+
+/**
+ * Age a run row by `ms`. Straight through the native driver on purpose: Mongoose ignores
+ * `timestamps: false` on an update, so a model-level write would leave `createdAt` where it was.
+ */
+const backdate = async (id: string, ms: number) => {
+  const past = new Date(Date.now() - ms);
+  await mongoose
+    .model('DataLakeResearchRun')
+    .collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { createdAt: past, startedAt: past } });
+};
 
 describe('DataLakeResearchRunRepository', () => {
   setupMongoTest();
@@ -75,6 +87,21 @@ describe('DataLakeResearchRunRepository', () => {
   it('answers null on a junk id rather than throwing', async () => {
     expect(await repo.findByIdInLake('not-an-object-id', LAKE)).toBeNull();
     expect(await repo.claimForExecution('not-an-object-id', new Date())).toBeNull();
+  });
+
+  // The other half of that: a junk id is an ANSWER (no such row, on every redelivery), a database
+  // fault is not. Null on a fault would tell the handler the work was already done, it would return
+  // successfully, SQS would delete the message, and the row would sit `queued` forever holding the
+  // one-at-a-time guard shut with nothing left to redeliver it.
+  it('lets a database fault propagate out of the claim instead of reporting it as "not queued"', async () => {
+    const boom = new Error('connection timed out');
+    const spy = vi.spyOn(DataLakeResearchRunModel, 'findOneAndUpdate').mockRejectedValueOnce(boom as never);
+
+    await expect(repo.claimForExecution(new mongoose.Types.ObjectId().toString(), new Date())).rejects.toThrow(
+      /connection timed out/
+    );
+
+    spy.mockRestore();
   });
 
   // The at-least-once guard. SQS redelivers, and a second pass over the loop would not merely write
@@ -169,6 +196,29 @@ describe('DataLakeResearchRunRepository', () => {
         spentMicroUsd: 0,
         totals: emptyResearchRunTotals(),
       });
+      expect(await repo.countActiveByLake(LAKE)).toBe(0);
+    });
+
+    // The lockout this bound exists to prevent: a hard Lambda timeout, an OOM or a replaced
+    // container leaves `running` behind with no catch ever executing, and nothing reaps it. Without
+    // an age bound that lake could never start another run - no cancel endpoint, no reaper, no
+    // admin path back.
+    it('stops counting a run that has been abandoned past the stale window', async () => {
+      const created = await repo.createRun(input());
+      await repo.claimForExecution(created.id, new Date());
+      expect(await repo.countActiveByLake(LAKE)).toBe(1);
+
+      // Backdated through the native driver: Mongoose ignores `timestamps: false` on updateOne, so
+      // going through the model would refuse to move `createdAt`.
+      await backdate(created.id, RESEARCH_RUN_STALE_AFTER_MS + 60_000);
+
+      expect(await repo.countActiveByLake(LAKE)).toBe(0);
+    });
+
+    it('stops counting a queued run whose message never arrived', async () => {
+      const created = await repo.createRun(input());
+      await backdate(created.id, RESEARCH_RUN_STALE_AFTER_MS + 60_000);
+
       expect(await repo.countActiveByLake(LAKE)).toBe(0);
     });
 

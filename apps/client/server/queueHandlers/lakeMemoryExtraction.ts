@@ -105,10 +105,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     const { hasMore } = await extractLakeMemoryForBatch(
       // Real Lambda clock, so the deadline guard accounts for cold start and time already spent.
+      // Optional-chained for the same reason as `dataLakeResearchRun`: a Context shim without the
+      // method must degrade to "no deadline", not to a TypeError mid-batch.
       {
         dataLakeId: payload.dataLakeId,
         restart: payload.restart,
-        getRemainingTimeInMillis: () => context.getRemainingTimeInMillis(),
+        getRemainingTimeInMillis: () => context?.getRemainingTimeInMillis?.() ?? Number.MAX_SAFE_INTEGER,
       },
       logger
     );

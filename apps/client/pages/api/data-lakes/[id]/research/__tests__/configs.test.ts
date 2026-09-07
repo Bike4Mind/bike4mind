@@ -102,6 +102,49 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     );
   });
 
+  // The panel's Default option has value '', and `draftToInput` sends `model: null` for it - so a
+  // null judge model is what EVERY new configuration is saved with unless someone picks one. Both
+  // verbs, because both extend the same lever object and a schema that rejects null breaks both.
+  it('carries a null judge model through on create, the way the form sends the Default option', async () => {
+    const { res } = makeRes();
+
+    await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', model: null }), res);
+
+    expect(h.createResearchConfig).toHaveBeenCalledWith(
+      'lake-oid-1',
+      'user-1',
+      expect.objectContaining({ model: null }),
+      expect.anything()
+    );
+  });
+
+  it('carries a null judge model through on update', async () => {
+    const { res } = makeRes();
+
+    await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { model: null }), res);
+
+    expect(h.updateResearchConfig).toHaveBeenCalledWith(
+      'config-1',
+      'lake-oid-1',
+      'user-1',
+      expect.objectContaining({ model: null }),
+      expect.anything()
+    );
+  });
+
+  it('carries a chosen judge model through on create', async () => {
+    const { res } = makeRes();
+
+    await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', model: 'gpt-4.1-mini' }), res);
+
+    expect(h.createResearchConfig).toHaveBeenCalledWith(
+      'lake-oid-1',
+      'user-1',
+      expect.objectContaining({ model: 'gpt-4.1-mini' }),
+      expect.anything()
+    );
+  });
+
   // Ranges are the service's job (it clamps). What the route owes is type safety at the boundary.
   it('refuses a lever of the wrong type rather than passing it to the service', async () => {
     const { res } = makeRes();

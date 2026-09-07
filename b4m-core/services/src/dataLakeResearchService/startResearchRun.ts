@@ -41,8 +41,15 @@ export async function startResearchRun(
   const config = await db.dataLakeResearchConfigs.findByIdInLake(configId, dataLakeId);
   if (!config) throw new NotFoundError('Research configuration not found');
 
-  // One at a time per lake. Checked before the daily cap because it is the guard that catches the
-  // common mistake (a double-clicked Run button), and it deserves the clearer message of the two.
+  // One at a time per lake. Checked before the daily cap because it is the guard whose message is
+  // the clearer of the two.
+  //
+  // Read-then-write, and knowingly so: there is no partial-unique index behind it and no
+  // compare-and-set, so two POSTs racing (two tabs, a client retry, a proxy replay) can both read
+  // zero and both insert. The daily cap and the 20-config cap are racy the same way. What bounds
+  // the damage is that each run carries its own cost ceiling, so a lost race costs one extra
+  // ceiling rather than an unbounded amount - this is a spend rail, not a mutual exclusion
+  // primitive, and `claimForExecution` is where correctness actually lives.
   const active = await db.dataLakeResearchRuns.countActiveByLake(dataLakeId);
   if (active > 0) {
     throw new BadRequestError('A research run is already in progress for this data lake');
@@ -51,8 +58,10 @@ export async function startResearchRun(
   const startedAt = now();
   const started = await db.dataLakeResearchRuns.countStartedSince(dataLakeId, new Date(startedAt.getTime() - DAY_MS));
   if (started >= RESEARCH_RUNS_PER_LAKE_PER_DAY) {
+    // "in the last 24 hours", not "today": the window is rolling (see DAY_MS), so a manager
+    // refused at 10am because of a 3pm burst yesterday can act on the former and not the latter.
     throw new BadRequestError(
-      `This data lake has already started ${RESEARCH_RUNS_PER_LAKE_PER_DAY} research runs today`
+      `This data lake has already started ${RESEARCH_RUNS_PER_LAKE_PER_DAY} research runs in the last 24 hours`
     );
   }
 

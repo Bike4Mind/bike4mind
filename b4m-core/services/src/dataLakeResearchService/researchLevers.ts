@@ -39,20 +39,37 @@ const boundedStringList = (values: readonly unknown[] | undefined, max: number):
   ).slice(0, max);
 
 /**
- * Domains are compared case-insensitively against a hostname, so they are lowercased here and a
- * leading `*.` or `.` is stripped - both are how people habitually write a suffix pattern, and both
- * would otherwise never match anything, failing OPEN on an allow list (nothing matches, so nothing
- * is considered) and CLOSED on a deny list (nothing matches, so nothing is blocked). A silent
- * no-match on a security-shaped list is the worst of the available failures.
+ * Reduce one free-text list entry to the hostname `hostMatchesDomain` will compare against, or ''
+ * when it cannot be one (dropped by the caller's `boundedStringList`).
+ *
+ * The field is a textarea whose placeholder is `example.net`, so what actually arrives is a mix of
+ * `example.net`, `*.example.net`, `https://example.net/blog` and the occasional pasted URL with a
+ * port or a trailing dot. Every spelling that does not reduce to a hostname fails OPEN on a deny
+ * list (nothing matches, so nothing is blocked) and CLOSED on an allow list, silently, with nothing
+ * telling the manager their rule did not take - the worst of the available failures on a
+ * security-shaped list.
+ *
+ * Parsing rather than string-surgery is what makes that exhaustive: one `new URL` drops the scheme,
+ * credentials, port, path and query, lowercases the host, punycodes an IDN so a Cyrillic entry can
+ * match the `xn--` hostname a URL actually carries, and leaves a trailing root dot for us to strip
+ * (`sourceHostname` strips it on the other side, so the two meet).
  */
+const normalizeDomainEntry = (value: string): string => {
+  const bare = value
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/^[*.]+/, '');
+  if (!bare) return '';
+  try {
+    return new URL(`https://${bare}`).hostname.replace(/\.$/, '');
+  } catch {
+    return '';
+  }
+};
+
 const normalizeDomainList = (values: readonly unknown[] | undefined): string[] =>
   boundedStringList(
-    boundedStringList(values, RESEARCH_DOMAIN_LIST_MAX).map(value =>
-      value
-        .toLowerCase()
-        .replace(/^\*?\./, '')
-        .replace(/\/.*$/, '')
-    ),
+    boundedStringList(values, RESEARCH_DOMAIN_LIST_MAX).map(normalizeDomainEntry),
     RESEARCH_DOMAIN_LIST_MAX
   );
 

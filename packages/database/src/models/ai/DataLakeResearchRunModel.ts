@@ -8,6 +8,7 @@ import type {
 } from '@bike4mind/common';
 import {
   emptyResearchRunTotals,
+  RESEARCH_RUN_STALE_AFTER_MS,
   RESEARCH_RUN_STATUSES,
   RESEARCH_RUN_STOP_REASONS,
   RESEARCH_RUN_TRIGGERS,
@@ -36,6 +37,7 @@ const ResearchRunTotalsSchema = {
   searchHits: { type: Number, default: 0 },
   filteredBySource: { type: Number, default: 0 },
   belowRelevance: { type: Number, default: 0 },
+  judgeFailed: { type: Number, default: 0 },
   fetchFailed: { type: Number, default: 0 },
   proposed: { type: Number, default: 0 },
   duplicatePending: { type: Number, default: 0 },
@@ -116,9 +118,24 @@ class DataLakeResearchRunRepository
   async claimForExecution(id: string, startedAt: Date): Promise<IDataLakeResearchRunDocument | null> {
     // `status: 'queued'` in the FILTER is the whole at-least-once guard. Never a read then a write:
     // SQS redelivers, and a second pass over the loop would spend a second ceiling.
-    const doc = await this.runModel
-      .findOneAndUpdate({ _id: id, status: 'queued' }, { $set: { status: 'running', startedAt } }, { new: true })
-      .catch(() => null);
+    //
+    // Deliberately NOT a blanket `.catch(() => null)`. Null here means "the row was not queued",
+    // and the handler treats that as work already done: it returns successfully and SQS deletes
+    // the message. Reporting a connect timeout or a stepdown that way would leave the row `queued`
+    // with nothing left to redeliver it, and `countActiveByLake` would then refuse every later run
+    // on the lake. A fault has to propagate so the handler rethrows and SQS retries.
+    //
+    // A malformed id is the one exception, and it is not a fault: it is a definitive answer that
+    // no such row exists, deterministic across every redelivery, so throwing it would only buy a
+    // DLQ entry. Guarded ahead of the query the way `ModelDiscoveryRunModel.runById` does it,
+    // rather than caught after, so the two cases can never be confused for one another.
+    if (!mongoose.isValidObjectId(id)) return null;
+
+    const doc = await this.runModel.findOneAndUpdate(
+      { _id: id, status: 'queued' },
+      { $set: { status: 'running', startedAt } },
+      { new: true }
+    );
     return (doc?.toJSON() as IDataLakeResearchRunDocument) ?? null;
   }
 
@@ -147,8 +164,24 @@ class DataLakeResearchRunRepository
     return this.runModel.countDocuments({ dataLakeId, createdAt: { $gte: since } });
   }
 
+  /**
+   * Rows that still hold the one-at-a-time guard shut.
+   *
+   * Bounded by AGE, because nothing reaps a run whose catch never executed - a hard Lambda timeout,
+   * an OOM, a container replaced mid-run all leave `running` behind, and a message that dies before
+   * its handler leaves `queued`. An unbounded count would turn any of those into a permanent
+   * lockout: no cancel endpoint, no reaper cron, no admin surface back. Past the bound SQS has
+   * already redelivered and given up, so a row still in either state is abandoned, not in flight.
+   */
   async countActiveByLake(dataLakeId: string): Promise<number> {
-    return this.runModel.countDocuments({ dataLakeId, status: { $in: ['queued', 'running'] } });
+    const activeSince = new Date(Date.now() - RESEARCH_RUN_STALE_AFTER_MS);
+    return this.runModel.countDocuments({
+      dataLakeId,
+      $or: [
+        { status: 'running', startedAt: { $gte: activeSince } },
+        { status: 'queued', createdAt: { $gte: activeSince } },
+      ],
+    });
   }
 
   async deleteForLake(dataLakeId: string): Promise<number> {

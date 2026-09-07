@@ -126,14 +126,17 @@ describe('executeResearchRun', () => {
       expect(result.stopReason).toBe('cost_ceiling');
     });
 
-    it('treats an unreachable model as below-relevance, so a broken model proposes nothing', async () => {
+    it('proposes nothing when the model is unreachable, and says so rather than blaming the web', async () => {
       const { ports } = makePorts({ candidates: [hit(1), hit(2)] });
       (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
       const result = await executeResearchRun(levers(), 'run-1', ports);
 
-      // A null judgment reports no cost, but is still conservative for the candidate.
-      expect(result.totals.belowRelevance).toBe(2);
+      // A null judgment reports no cost, and is still conservative for the candidate - but it is
+      // counted apart from a genuine low score, because "20 hits, 20 below relevance" would send a
+      // manager off to retune a query that was never the problem.
+      expect(result.totals.judgeFailed).toBe(2);
+      expect(result.totals.belowRelevance).toBe(0);
       expect(result.totals.proposed).toBe(0);
     });
   });

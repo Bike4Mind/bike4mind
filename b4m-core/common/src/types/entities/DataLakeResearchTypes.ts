@@ -82,11 +82,31 @@ export const RESEARCH_MAX_RESULTS_LIMIT = 50;
 export const RESEARCH_MAX_PROPOSALS_DEFAULT = 5;
 export const RESEARCH_MAX_PROPOSALS_LIMIT = 25;
 
-/** Longest recency window a run may ask for, in days. Beyond this the run just does not filter. */
-export const RESEARCH_RECENCY_DAYS_LIMIT = 3650;
+/**
+ * Longest recency window a run may ask for, in days.
+ *
+ * A year, because that is the widest bucket either search provider can express (`recencyBucket`
+ * maps to SerpAPI's `qdr:d|w|m|y` and SearXNG's `time_range`, and returns null past `year`).
+ * Allowing more would let a manager save "last 730 days", see 730 on the config and on the run
+ * card, and get a search with no date filter at all - the one direction `WebSearchOptions`
+ * promises against, since it says the window WIDENS to the smallest containing bucket.
+ */
+export const RESEARCH_RECENCY_DAYS_LIMIT = 366;
 
 /** How many domains an allow or deny list may hold. Bounded so one config cannot become a corpus. */
 export const RESEARCH_DOMAIN_LIST_MAX = 50;
+
+/**
+ * How long a `queued` or `running` run keeps holding the one-at-a-time guard before it is read as
+ * abandoned rather than in flight.
+ *
+ * Must stay ABOVE the research queue's visibility timeout plus its handler timeout
+ * (`infra/queues.ts`: 10-minute Lambda, 12-minute redelivery), so a run that is genuinely still
+ * working - or a message SQS has yet to redeliver - is never counted out from under itself. Past
+ * that window nothing is left to resume the row, and without this bound a run killed hard (a
+ * timeout, an OOM, a replaced container) would lock its lake out of research permanently.
+ */
+export const RESEARCH_RUN_STALE_AFTER_MS = 25 * 60 * 1000;
 
 /**
  * The relevance floor a candidate must clear to be fetched and proposed. This is a PRODUCER-side
@@ -170,6 +190,13 @@ export interface ResearchRunTotals {
   filteredBySource: number;
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
+  /**
+   * Candidates the judge could not score at all, because the model was unreachable. Counted apart
+   * from `belowRelevance` even though the candidate meets the same fate: a run whose judge is down
+   * reports "20 hits, 20 below relevance, 0 proposed", which reads as "the web had nothing" and
+   * sends a manager off to retune a query that was never the problem.
+   */
+  judgeFailed: number;
   /** Candidates whose page could not be fetched or parsed. */
   fetchFailed: number;
   proposed: number;
@@ -187,6 +214,7 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   searchHits: 0,
   filteredBySource: 0,
   belowRelevance: 0,
+  judgeFailed: 0,
   fetchFailed: 0,
   proposed: 0,
   duplicatePending: 0,

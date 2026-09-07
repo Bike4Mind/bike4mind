@@ -12,7 +12,9 @@ import { z } from 'zod';
  */
 export const ResearchLeversInput = z.object({
   query: z.string().optional(),
-  model: z.string().optional(),
+  // Nullable for the same reason as `recencyDays`: the UI's Default option has value '' and the
+  // panel sends `model: null` for it, which is the state EVERY new configuration starts in.
+  model: z.string().nullable().optional(),
   maxResults: z.number().optional(),
   maxProposals: z.number().optional(),
   // Nullable so a client can CLEAR the window. The normalizer reads 0 and null alike as "no

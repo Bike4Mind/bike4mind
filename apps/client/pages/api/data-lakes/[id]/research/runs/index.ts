@@ -28,8 +28,12 @@ const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
-    const { limit } = ListQuery.parse(req.query);
+    // Gated before the query is parsed, matching the POST below and the config routes: a caller who
+    // may not manage this lake should not be able to probe the request schema by reading which
+    // field it complains about. Nothing leaks through this particular 400, but a rule the two verbs
+    // in one file disagree about is a rule that erodes.
     const lake = await assertLakeResearchManage(req, id);
+    const { limit } = ListQuery.parse(req.query);
 
     const runs = await dataLakeResearchRunRepository.listByLake(lake.id, { limit: limit ?? DEFAULT_LIMIT });
     return res.json({ data: runs });

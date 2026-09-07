@@ -46,8 +46,9 @@ export interface ResearchRunPorts {
   search(query: string, maxResults: number, recencyDays?: number): Promise<ResearchCandidate[]>;
   /**
    * Score one candidate 0..1 and report what the judgment cost. Null when the model could not be
-   * reached at all - counted as below-relevance, so a broken model proposes nothing rather than
-   * everything.
+   * reached at all: the candidate is dropped, so a broken model proposes nothing rather than
+   * everything, but it is counted as `judgeFailed` rather than `belowRelevance` so the run card
+   * says "the model was down" and not "the web had nothing".
    */
   judge(candidate: ResearchCandidate): Promise<{ relevance: number; rationale?: string; costMicroUsd: number } | null>;
   /**
@@ -117,8 +118,15 @@ export async function executeResearchRun(
     spentMicroUsd += judgement?.costMicroUsd ?? 0;
 
     // A null judgment (the model was unreachable) and a low score are the same outcome for the
-    // candidate, and both are conservative: nothing reaches a human unvouched-for.
-    if (!judgement || judgement.relevance < levers.minRelevance) {
+    // CANDIDATE - both conservative, nothing reaches a human unvouched-for - but they are opposite
+    // answers for the operator, so they are counted apart. Folding them together is how a run
+    // reports a dead model as an empty web.
+    if (!judgement) {
+      totals.judgeFailed += 1;
+      await ports.onProgress?.(spentMicroUsd, totals);
+      continue;
+    }
+    if (judgement.relevance < levers.minRelevance) {
       totals.belowRelevance += 1;
       await ports.onProgress?.(spentMicroUsd, totals);
       continue;

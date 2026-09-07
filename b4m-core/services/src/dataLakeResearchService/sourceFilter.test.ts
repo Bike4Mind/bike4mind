@@ -19,6 +19,12 @@ describe('sourceHostname', () => {
     expect(sourceHostname('data:text/plain,hello')).toBeNull();
   });
 
+  // `new URL` keeps the root dot, so `evil.com.` would sail past a deny entry of `evil.com`.
+  // `normalizeDomainEntry` strips it on the rule side; this is the other half of that pair.
+  it('strips a trailing root dot, so a rule written without one still matches', () => {
+    expect(sourceHostname('https://evil.com./x')).toBe('evil.com');
+  });
+
   it('returns null rather than throwing on an unparseable URL', () => {
     expect(sourceHostname('not a url')).toBeNull();
     expect(sourceHostname('')).toBeNull();

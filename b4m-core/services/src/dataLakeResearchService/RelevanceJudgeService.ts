@@ -75,8 +75,10 @@ export class RelevanceJudgeService {
   /**
    * Judge one candidate. Returns null when the call or its response could not be used - fail-soft
    * for the same reason lake-memory extraction is: one uncooperative judgment should cost the
-   * candidate, not the run. A null is counted as below-relevance by the caller, which is the
-   * conservative direction (nothing reaches a human that a model did not vouch for).
+   * candidate, not the run. The caller drops a null candidate, which is the conservative direction
+   * (nothing reaches a human that a model did not vouch for), and counts it as `judgeFailed` rather
+   * than as a low score - the two are the same fate for the candidate and opposite answers for the
+   * operator.
    */
   async judge({
     apiKeyTable,

@@ -32,8 +32,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     const { claimed } = await runLakeResearch(payload.runId, logger, {
       // Real Lambda clock, so the loop's time-budget stop accounts for cold start and for time
-      // already spent rather than assuming a fresh invocation.
-      remainingTimeMs: () => context.getRemainingTimeInMillis(),
+      // already spent rather than assuming a fresh invocation. Optional-chained the way
+      // `driveLakeIngest` does it: a Context shim that omits the method (the cast in
+      // `selfHostWorker.fakeContext` hides that from the compiler) must not become a TypeError on
+      // the first candidate. A non-number reads as "no deadline", which is true of a worker.
+      remainingTimeMs: () => context?.getRemainingTimeInMillis?.() ?? Number.MAX_SAFE_INTEGER,
     });
     if (!claimed) {
       logger.log(`Research run ${payload.runId} was not queued (already claimed or settled) - skipping`);

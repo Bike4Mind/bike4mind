@@ -122,9 +122,17 @@ const parseNullableNumber = (value: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-/** Blank falls back to the shared default rather than sending NaN at the server. */
+/**
+ * Blank falls back to the shared default rather than sending NaN at the server - and blank has to
+ * be tested BEFORE `Number`, because `Number('')` is 0 and 0 is finite. The server clamps rather
+ * than rejects, so a cleared field would otherwise submit a silently wrong lever: 0 relevance is
+ * "propose everything", the opposite of what clearing that field reaches for, and a 0 ceiling
+ * clamps to 1 micro-USD and stops the run having judged nothing.
+ */
 const parseNumber = (value: string, fallback: number): number => {
-  const parsed = Number(value.trim());
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
@@ -181,6 +189,7 @@ const isRunInFlight = (run: IDataLakeResearchRunDocument): boolean =>
 const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed'>, string> = {
   filteredBySource: 'blocked by source rules',
   belowRelevance: 'below the relevance floor',
+  judgeFailed: 'could not be judged (the model was unreachable)',
   alreadyInLake: 'already in the lake',
   duplicatePending: 'already awaiting review',
   suppressedByTombstone: 'previously declined',
