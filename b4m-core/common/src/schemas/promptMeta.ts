@@ -433,6 +433,16 @@ export const RetrievalSummarySchema = z.object({
   injectedLakePromptIds: z.array(z.string()).optional(),
   /** mementoCount/mementoIds precedent: mirrors injectedLakePromptIds.length. */
   injectedLakePromptCount: z.number().optional(),
+  /**
+   * Which of this turn's injected lake prompt ids came from a session's pre-authorized (manage-
+   * but-not-member admission) set, rather than the caller's ordinary accessible lakes - see
+   * unionPreauthorizedLakeAccess and pages/api/sessions/create.ts. A subset of injectedLakePromptIds,
+   * never a superset. Lets a turn that actually used the widening be asserted directly, instead of
+   * inferred from the session's static `preauthorizedLakeIds` (which records what was ADMITTED, not
+   * what a given turn actually injected). Absent means no pre-authorized id was among this turn's
+   * injections - including every turn on a session with no pre-authorization at all.
+   */
+  preauthorizedLakeIdsUsed: z.array(z.string()).optional(),
 });
 
 /**

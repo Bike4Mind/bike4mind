@@ -42,12 +42,17 @@ const handler = baseApi().post(
     const body = req.body as CreateSessionBody;
     const { projectId } = body;
 
-    // corpusGroundingMode is resolved server-side from the lake (resolveLakeSessionDefaults), never
-    // client-supplied. Strip any value a hand-built body carries BEFORE the merge below, so it can
-    // neither override a lake editor's deliberate per-lake mode (body would otherwise win the spread)
-    // nor pin a mode on an ordinary non-lake session and switch off size-based deferral there. The
-    // lake arm re-sets it from the lake; a non-lake session is left with no mode (size-only behavior).
-    delete body.corpusGroundingMode;
+    // corpusGroundingMode is resolved server-side from the lake (resolveLakeSessionDefaults) whenever
+    // a lake is named, never client-supplied for one: strip it unconditionally when `dataLakeId` is
+    // set so a lake editor's deliberate per-lake mode always wins the merge below. The one caller
+    // trusted to set it directly is a session that names a lake ONLY by `retrievalTags` (no
+    // `dataLakeId`) - e.g. "test this lake" - where there is no later lake-defaults merge to be
+    // overridden and the mode is the caller's own choice of what to test. An ordinary non-lake
+    // session (neither field set) still has it stripped, leaving no mode (size-only behavior).
+    const namesALakeByTagsOnly = !body.dataLakeId && Array.isArray(body.retrievalTags) && body.retrievalTags.length > 0;
+    if (!namesALakeByTagsOnly) {
+      delete body.corpusGroundingMode;
+    }
 
     // Manage-but-not-member admission: a lake maintainer who is not a member of the lake's org (or
     // does not otherwise pass the ordinary tag/entitlement gate) can still test it, for exactly this
@@ -87,6 +92,14 @@ const handler = baseApi().post(
         // zod schema, so nothing upstream has checked the shape.
         if (!isValidObjectId(lakeId)) {
           throw new NotFoundError(`Data lake ${lakeId} not found`);
+        }
+        // A key that widens the caller's own manage rights would otherwise let a leaked API key
+        // reach every lake its minting user manages, not just the lakes the key was bound to at
+        // mint time. This is IN ADDITION to the canManageLake check below, never instead of it - the
+        // key binding narrows what the underlying user's authority may be used for, it never grants
+        // authority the user lacks.
+        if (req.apiKeyInfo && !req.apiKeyInfo.preauthorizedLakeIds?.includes(lakeId)) {
+          throw new ForbiddenError(`This API key is not bound to data lake ${lakeId}`);
         }
         const lake = await dataLakeRepository.findById(lakeId);
         if (!lake || lake.status !== 'active') {

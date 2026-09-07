@@ -1752,6 +1752,40 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
   });
+
+  it('records preauthorizedLakeIdsUsed when the injected lake came from the pre-authorized set', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toEqual(['lakeX']);
+  });
+
+  it('leaves preauthorizedLakeIdsUsed absent when the injected lake was not pre-authorized', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
+  });
 });
 
 /**

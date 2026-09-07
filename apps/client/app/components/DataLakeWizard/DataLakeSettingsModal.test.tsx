@@ -1124,11 +1124,11 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
     // Tags come back in the fetched-lakes list order, not selection order. The fixture tags are
     // deliberately unequal to the lake ids and carry the `datalake:` prefix, so this discriminates
-    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that no
-    // `corpusGroundingMode` rides along: /api/sessions/create strips it off any request without a
-    // `dataLakeId`, so sending one would be a silent no-op.
+    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that the
+    // lake-under-test's own `groundingMode` rides along, not some other value.
     expect(startChatWithLakesMock).toHaveBeenCalledWith({
       retrievalTags: ['datalake:test-lake', 'datalake:open-lake'],
+      groundingMode: 'retrieve',
     });
     // The scope dialog is a separate flow from the settings form - confirming it must not also
     // close the settings modal out from under the caller.

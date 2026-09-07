@@ -60,18 +60,19 @@ describe('useStartChatWithLake (single lake)', () => {
 });
 
 describe('useStartChatWithLakes (multi-lake subset)', () => {
-  it('sends retrievalTags and forceKnowledgeRetrieval only - no dataLakeId, no corpusGroundingMode', async () => {
+  it('sends retrievalTags, forceKnowledgeRetrieval, and the given groundingMode - no dataLakeId', async () => {
     apiPost.mockResolvedValue({ data: { id: 'session-2' } });
     const { result } = renderWithClient(() => useStartChatWithLakes());
 
     await act(async () => {
-      await result.current({ retrievalTags: ['datalake:a', 'datalake:b'] });
+      await result.current({ retrievalTags: ['datalake:a', 'datalake:b'], groundingMode: 'inline' });
     });
 
     expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
       name: 'New Notebook',
       retrievalTags: ['datalake:a', 'datalake:b'],
       forceKnowledgeRetrieval: true,
+      corpusGroundingMode: 'inline',
     });
     expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-2' });
   });
@@ -82,7 +83,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
 
     await expect(
       act(async () => {
-        await result.current({ retrievalTags: ['datalake:a'] });
+        await result.current({ retrievalTags: ['datalake:a'], groundingMode: 'retrieve' });
       })
     ).rejects.toThrow('network down');
     expect(setCurrentSession).not.toHaveBeenCalled();

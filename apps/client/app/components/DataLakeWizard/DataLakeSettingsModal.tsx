@@ -306,7 +306,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     if (!lake) return;
     setStartingTestChat(true);
     try {
-      await startChatWithLakes({ retrievalTags });
+      await startChatWithLakes({
+        retrievalTags,
+        groundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+      });
       setTestScopeOpen(false);
     } catch {
       toast.error('Could not start a test chat for this lake');
@@ -351,7 +354,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you and to members of this lake's organization - not to users granted access by tag or entitlement - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to members of this lake's organization, and to a manager testing it in a scoped session - not to users granted access by tag or entitlement - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
