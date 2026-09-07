@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { updateUserSchema, applyBaseUserUpdates } from './update';
+import { updateUserSchema, applyBaseUserUpdates, toUserUpdatePartial } from './update';
 import {
   CreditHolderType,
   ICreditTransactionRepository,
@@ -45,6 +45,12 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // CreditTransaction (description + metadata.note) instead. See `currentCredits`
   // routing in `adminUpdateUser`.
   creditReason: z.string().max(500).optional(),
+  // Signed credit adjustment (e.g. -50 / +100) from the admin credit-adjustment UI.
+  // Applied verbatim to the ledger so interim spend between the admin's page load and
+  // this write is never refunded (the failure mode of sending a frozen client snapshot
+  // as an absolute `currentCredits`). Not a user-doc field: stripped from the doc write
+  // and routed to addCredits/subtractCredits. Takes precedence over `currentCredits`.
+  creditDelta: z.number().optional(),
 });
 
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
@@ -54,7 +60,7 @@ export interface AdminUpdateUserAdapters {
     users: IUserRepository;
     organizations: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
-      update: (organization: IOrganizationDocument) => Promise<unknown>;
+      update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
     };
     friendship: IFriendshipModelAdapter;
     /**
@@ -118,24 +124,35 @@ export async function adminUpdateUser(
   // Route a `currentCredits` change through the audited ledger when the adapter
   // is wired. The ledger runs before every write below, so a failure aborts with
   // nothing persisted; its atomic `$inc` is the sole owner of the balance.
+  //
+  // `moderationStatus`/`creditReason`/`creditDelta` are handled out-of-band (a dedicated
+  // repo call, the CreditTransaction record, and the ledger respectively) - pull them out
+  // so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
-  const creditDelta =
-    params.currentCredits !== undefined && params.currentCredits !== previousBalance
-      ? params.currentCredits - previousBalance
-      : 0;
+  const { moderationStatus, creditReason, creditDelta: signedDelta, ...baseParams } = params;
+  // A signed `creditDelta` is applied verbatim (no interim-spend refund). Absolute
+  // `currentCredits` falls back to delta-from-fresh-balance.
+  const rawDelta =
+    signedDelta !== undefined
+      ? signedDelta
+      : params.currentCredits !== undefined && params.currentCredits !== previousBalance
+        ? params.currentCredits - previousBalance
+        : 0;
+  // Never drive the balance below zero (mirrors the old client-side Math.max(0, ...)
+  // clamp, but against the fresh server balance instead of a stale snapshot).
+  const creditDelta = Math.max(rawDelta, -previousBalance);
   const auditCreditChange = creditDelta !== 0 && !!db.creditTransactions;
 
-  // `moderationStatus`/`creditReason` are handled out-of-band (a dedicated repo
-  // call and the credit ledger, respectively) - pull them out so they never land
-  // as stray top-level fields on the user doc.
-  const { moderationStatus, creditReason, ...baseParams } = params;
-  const builtUser = applyBaseUserUpdates(user, { ...baseParams, lastCreditsPurchasedAt });
-  // When auditing, omit `currentCredits` from the doc write so its `$set` cannot
-  // clobber the ledger `$inc`. `applyBaseUserUpdates` re-adds it via the `...user`
-  // spread, so it is dropped from the built doc here (not just `baseParams`). The
-  // legacy path keeps it and overwrites the balance directly.
-  const { currentCredits, ...auditedUser } = builtUser;
-  const updatedUser = auditCreditChange ? auditedUser : builtUser;
+  const builtParams = { ...baseParams, lastCreditsPurchasedAt };
+  const builtUser = applyBaseUserUpdates(user, builtParams);
+  // Persist ONLY the fields this request changed, never a spread of the read snapshot -
+  // that is what let an admin save round-trip (and revert) a concurrent tokenVersion bump
+  // or credit deduction. When auditing, drop `currentCredits` so its `$set` cannot clobber
+  // the ledger `$inc`; the legacy (no-ledger) path keeps it and overwrites the balance.
+  const writeData = toUserUpdatePartial(builtUser, builtParams);
+  if (auditCreditChange) {
+    delete (writeData as { currentCredits?: number }).currentCredits;
+  }
 
   // Audited credit adjustment: runs BEFORE any persistence (org membership, the
   // user-doc write, the moderation transition) so a ledger failure leaves nothing
@@ -143,7 +160,7 @@ export async function adminUpdateUser(
   // generic_add / generic_deduct CreditTransaction.
   if (auditCreditChange && db.creditTransactions) {
     const note = creditReason?.trim() || undefined;
-    const resultingBalance = params.currentCredits as number;
+    const resultingBalance = previousBalance + creditDelta;
     const metadata: Record<string, unknown> = { actorId: userId, previousBalance, resultingBalance };
     if (note) {
       metadata.note = note;
@@ -188,8 +205,8 @@ export async function adminUpdateUser(
         throw new Error('Organization not found');
       }
 
-      currentOrg.users = currentOrg.users.filter(userDetail => userDetail.userId !== user.id);
-      await db.organizations.update(currentOrg);
+      const remainingUsers = currentOrg.users.filter(userDetail => userDetail.userId !== user.id);
+      await db.organizations.update({ id: currentOrg.id, users: remainingUsers });
     }
 
     if (params.organizationId) {
@@ -200,12 +217,12 @@ export async function adminUpdateUser(
 
       await sendFriendRequestsToOrgMembers(userId, newOrg, db);
 
-      newOrg.users.push({ userId: user.id, permissions: [Permission.read] });
-      await db.organizations.update(newOrg);
+      const updatedUsers = [...newOrg.users, { userId: user.id, permissions: [Permission.read] }];
+      await db.organizations.update({ id: newOrg.id, users: updatedUsers });
     }
   }
 
-  await db.users.update(updatedUser);
+  await db.users.update(writeData);
 
   // Apply the moderation escalation transition last so it authoritatively sets
   // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.

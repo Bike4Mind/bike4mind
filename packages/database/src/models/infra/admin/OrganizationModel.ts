@@ -16,7 +16,10 @@ export interface IOrganizationObject extends HydratedDocument<IOrganizationDocum
 
 interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   isNew: boolean;
-  update: (organization: IOrganizationDocument) => Promise<unknown>;
+  // Accepts a targeted partial (id + only the changed fields), not just a whole document -
+  // the static below just $sets whatever it is handed, and passing a partial is how callers
+  // avoid reverting a concurrent write to fields they did not touch.
+  update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
   findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
 
@@ -162,7 +165,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
 
         return result;
       },
-      update: function (organization: IOrganizationDocument) {
+      update: function (organization: Partial<IOrganizationDocument> & { id: string }) {
         return this.updateOne({ _id: organization.id }, { $set: organization });
       },
     },
