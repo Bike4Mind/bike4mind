@@ -272,6 +272,69 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('creates the file and logs, rather than failing the whole call, when the MaxFileSize settings lookup rejects', async () => {
+    getSettingsValue.mockRejectedValue(new Error('db down'));
+
+    const result = await makeHandler().processSlackFiles([attachment()] as never);
+
+    expect(result.fabFileIds).toEqual(['fab-1']);
+    expect(result.errors).toEqual([]);
+    expect(logger.error).toHaveBeenCalledWith(
+      '[Slack Files] Failed to resolve MaxFileSize setting, proceeding without it',
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+
+  it('rejects the second of two attachments that together exceed storage even though each individually fits', async () => {
+    // Neither the admin setting nor the org lookup applies here - this pins the same-message
+    // accumulator itself, not the org lookup covered separately below.
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', storageLimit: 1, currentStorageSize: 0 } as never; // 1MB total, empty
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const bytes = 600_000; // under the 1,000,000-byte (1MB) limit alone; two together exceed it
+    downloadFile.mockResolvedValue(Buffer.alloc(bytes));
+
+    const result = await handler.processSlackFiles([
+      attachment({ id: 'F1', name: 'one.pdf', size: bytes }),
+      attachment({ id: 'F2', name: 'two.pdf', size: bytes }),
+    ] as never);
+
+    expect(result.fabFileIds).toEqual(['fab-1']);
+    expect(result.fileMetadata).toHaveLength(1);
+    expect(result.fileMetadata[0].filename).toBe('one.pdf');
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('two.pdf');
+    expect(result.errors[0]).toContain('storage limit');
+  });
+
+  it('does not charge a file against the same-message quota unless it is actually persisted', async () => {
+    // If a file's bytes were charged as soon as it cleared the storage check - rather than
+    // after upload + create actually succeed - a later attachment in the same message could be
+    // wrongly refused against bytes that were never durably stored.
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', storageLimit: 1, currentStorageSize: 0 } as never; // 1MB total, empty
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const bytes = 400_000; // three of these exceed 1,000,000 bytes; any two never do
+    downloadFile.mockResolvedValue(Buffer.alloc(bytes));
+    create.mockImplementation(async (data: { fileName: string }) => {
+      if (data.fileName === 'fails-to-persist.pdf') throw new Error('S3 write failed');
+      return { _id: { toString: () => `fab-${data.fileName}` } };
+    });
+
+    const result = await handler.processSlackFiles([
+      attachment({ id: 'F1', name: 'one.pdf', size: bytes }),
+      attachment({ id: 'F2', name: 'fails-to-persist.pdf', size: bytes }),
+      attachment({ id: 'F3', name: 'three.pdf', size: bytes }),
+    ] as never);
+
+    expect(result.fabFileIds).toEqual(['fab-one.pdf', 'fab-three.pdf']);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('fails-to-persist.pdf');
+    expect(result.errors[0]).not.toContain('storage limit');
+  });
+
   it('checks the org storage limit for 2+ attachments from an org-affiliated user without re-executing the lookup', async () => {
     // A real Mongoose Query is a one-shot thenable: awaiting (or `.exec()`-ing) the SAME query
     // instance a second time throws "Query was already executed". `Organization.findById(id)`
@@ -284,9 +347,15 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
       executed = true;
       return Promise.resolve({ storageLimit: 1000, currentStorageSize: 0 });
     };
+    // Models the real chain: `.findById(id).select(...).lean()` still returns an un-executed,
+    // one-shot Mongoose Query - only `.exec()` (or awaiting it) actually runs it.
     organizationFindById.mockReturnValue({
-      exec: execute,
-      then: (resolve: never, reject: never) => execute().then(resolve, reject),
+      select: () => ({
+        lean: () => ({
+          exec: execute,
+          then: (resolve: never, reject: never) => execute().then(resolve, reject),
+        }),
+      }),
     });
 
     const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
