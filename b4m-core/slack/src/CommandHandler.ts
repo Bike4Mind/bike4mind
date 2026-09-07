@@ -16,7 +16,12 @@ import { updateUserSlackSettings } from './handlers/notebook-manager';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import { notebookNew } from './tools/notebookNew';
 import { notebookStatus } from './tools/notebookStatus';
-import { IUserDocument, type IAdminSettingsRepository, type IOrganizationDocument } from '@bike4mind/common';
+import {
+  IUserDocument,
+  BadRequestError,
+  type IAdminSettingsRepository,
+  type IOrganizationDocument,
+} from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
 
 const HISTORY_COUNT = 20;
@@ -505,6 +510,10 @@ export class CommandHandler {
     }
     // Memoized rather than resolved eagerly: most messages carry no attachment that actually
     // needs the storage check, so this only pays for the lookup the first time it is used.
+    // Deliberately NOT fail-open like the MaxFileSize lookup above: a rejected lookup stays
+    // memoized as the rejection, so every attachment in the message that needs it fails the
+    // same way. Unlike an absent MaxFileSize, there is no safe "no limit" fallback for a
+    // storage check we could not actually run.
     let organizationLookup:
       Promise<Pick<IOrganizationDocument, 'storageLimit' | 'currentStorageSize'> | null> | undefined;
     const findOrganizationOnce = (id: string) => {
@@ -588,7 +597,16 @@ export class CommandHandler {
             findOrganizationOnce
           );
         } catch (limitError) {
-          const message = limitError instanceof Error ? limitError.message : 'Storage limit exceeded';
+          // Only a `BadRequestError` (the three thrown by checkStorageLimitForFile/
+          // checkOrganizationStorageLimit in @bike4mind/utils) is safe to post verbatim to
+          // Slack. Anything else - notably whatever the memoized `Organization.findById(...)`
+          // lookup throws on a DB blip - is an internal error (can name a host/port) and must
+          // not be echoed into a customer channel.
+          if (!(limitError instanceof BadRequestError)) {
+            this.logger.error('[Slack Files] Storage limit check failed', { error: limitError, fileName: file.name });
+          }
+          const message =
+            limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit';
           const error = `\u26a0\ufe0f ${message}. Skipping "${file.name}".`;
           this.logger.warn(error);
           errors.push(error);
