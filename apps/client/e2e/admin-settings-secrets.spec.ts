@@ -32,9 +32,10 @@ type SettingDoc = { settingName: string; settingValue: unknown };
 async function gotoAdminSettings(page: Page, adminPage: { gotoAdmin: () => Promise<void> }) {
   await adminPage.gotoAdmin();
 
-  // Admin Settings lives in the "General Ops" accordion, which is collapsed on load - its
-  // summary swallows the click otherwise. The nav also renders twice (desktop rail and
-  // mobile drawer), so every lookup takes the on-screen one.
+  // Admin Settings lives in the "General Ops" accordion, which is collapsed on load, and a
+  // collapsed panel's contents are not visible - so the section has to be opened before the
+  // nav button can be clicked. The nav also renders twice (desktop rail and mobile drawer),
+  // so every lookup takes the on-screen one.
   const section = page.getByRole('button', { name: 'General Ops' }).filter({ visible: true }).first();
   await expect(section).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   if ((await section.getAttribute('aria-expanded')) !== 'true') {
