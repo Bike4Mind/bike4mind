@@ -331,6 +331,20 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     expect(result.textContent).not.toMatch(/<pre|<span|<a\s/i);
   });
 
+  it('preserves <pre> indentation instead of collapsing it like ordinary prose whitespace', async () => {
+    // A code block's leading-space indentation is meaningful; the per-line whitespace collapse
+    // that normalizes ordinary prose must not touch it.
+    const page =
+      '<html><body>' + '<pre>def foo():\n    return 1</pre>' + '<p>Some   text   here</p>' + '</body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/snippet', { logger });
+
+    expect(result.textContent).toContain('def foo():\n    return 1');
+    // Ordinary prose whitespace still collapses to a single space, unaffected by the <pre> fix.
+    expect(result.textContent).toContain('Some text here');
+  });
+
   it('separates adjacent <div>-only content instead of jamming it into one word', async () => {
     // Many React/SPA-rendered pages use <div> per line rather than <p> - without a break after
     // each div, "Hello" and "World" concatenate into the unreadable "HelloWorld".
