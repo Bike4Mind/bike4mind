@@ -365,6 +365,12 @@ export interface DataLakeConfig {
    */
   isPublic?: boolean;
   /**
+   * Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Reader-visible, matching
+   * auditQueryTextEnabled's precedent - it answers "is the option on", not "is there a profile"
+   * (that is health's derived `lakeMemory.state`).
+   */
+  lakeMemoryEnabled?: boolean;
+  /**
    * Whether the requesting caller may WRITE/MANAGE this lake (add files, edit settings,
    * archive, remove files). Server-computed per request from the manage rule (admin or
    * creator; fallback lakes are read-only for everyone) - the SAME predicate the write
@@ -500,6 +506,18 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * (fails closed) rather than surfacing a compile error at the one spot that forgot it.
    */
   canManageSettings: boolean;
+  /**
+   * Whether the requesting caller may ERASE this lake's extracted memory profile - an irreversible
+   * crypto-shred. Strictly narrower than `canManage`: creator or platform admin only, with no grant
+   * or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the one
+   * `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the erase
+   * affordance on `canManage` instead offered it to curators and org admins the endpoint then 403'd.
+   *
+   * REQUIRED for the same reason as `canRebuild` and `canManageSettings`: an absent field reads as
+   * falsy and hides the affordance silently instead of failing the build at the producer that forgot
+   * it. A fallback (built-in) lake has no document and no memory profile, so it is always `false`.
+   */
+  canManageMemory: boolean;
 }
 
 /**
@@ -659,6 +677,7 @@ export function toDataLakeConfig(dl: {
   organizationId?: string;
   description?: string;
   isPublic?: boolean;
+  lakeMemoryEnabled?: boolean;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -671,6 +690,7 @@ export function toDataLakeConfig(dl: {
     organizationId: dl.organizationId,
     description: dl.description,
     isPublic: dl.isPublic,
+    lakeMemoryEnabled: dl.lakeMemoryEnabled,
   };
 }
 

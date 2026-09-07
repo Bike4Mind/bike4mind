@@ -1001,6 +1001,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'fileTagPrefix',
         'id',
         'isPublic',
+        'lakeMemoryEnabled',
         'lastSyncAt',
         'name',
         'organizationId',
@@ -1440,6 +1441,85 @@ describe('updateDataLake — clearing an access gate', () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('updateDataLake - lake memory platform kill-switch is retain-but-inert', () => {
+  const makeDb = (l: IDataLakeDocument, platformEnabled: boolean) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const getSettingsValue = vi.fn().mockResolvedValue(platformEnabled);
+    return {
+      db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update }, adminSettings: { getSettingsValue } },
+      update,
+      getSettingsValue,
+    };
+  };
+
+  it('records lakeMemoryEnabled ON even while the platform flag is off, so the opt-in survives', async () => {
+    // The platform flag gates BEHAVIOUR, not the stored preference: recall, the build door, the
+    // extraction chain and the health state each check it independently, so a stored `true` under a
+    // disabled platform is inert on its own. Dropping the write instead would defeat the very contract
+    // the kill-switch's retain-but-inert design exists for - the platform coming back on would have no
+    // memory of who had opted in.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false, name: 'Old Name' });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'New Name', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    expect(update.mock.calls[0][0]).toMatchObject({ name: 'New Name', lakeMemoryEnabled: true });
+  });
+
+  it('does not consult the platform flag at all on this route', async () => {
+    // Not merely unused: the adapter no longer requires an adminSettings port, so a route wiring one
+    // would be wiring something this service does not read. Asserted so the check cannot creep back in
+    // without someone deciding to.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false });
+    const { db, getSettingsValue } = makeDb(l, false);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: true }, { db });
+
+    expect(getSettingsValue).not.toHaveBeenCalled();
+  });
+
+  it('never writes lakeMemoryEnabled false as a side effect of the platform flag being off', async () => {
+    // Retain-but-inert, from the destructive side: an unrelated edit while the kill-switch is off must
+    // not clear anyone's opt-in. Re-asserting the value the lake already holds is a harmless idempotent
+    // $set (the audit diff sees no movement, since nothing moved); writing `false` would not be.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'Renamed', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    expect(update.mock.calls[0][0]).not.toMatchObject({ lakeMemoryEnabled: false });
+    expect(l.lakeMemoryEnabled).toBe(true);
+  });
+
+  it('allows turning lakeMemoryEnabled OFF regardless of the platform flag', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: false }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: false }));
+  });
+
+  it('applies a request to turn lakeMemoryEnabled ON when the platform flag is on', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false });
+    const { db, update } = makeDb(l, true);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: true }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: true }));
   });
 });
 

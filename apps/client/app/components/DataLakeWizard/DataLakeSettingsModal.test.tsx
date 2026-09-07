@@ -100,6 +100,14 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: (...a: unknown[]) => warn(...a) },
 }));
 
+// Platform lake-memory flag: on by default so the toggle's helper text describes the feature
+// rather than "disabled platform-wide" - the platform-off suite below overrides it per test.
+const lakeMemoryPlatformEnabled = vi.fn(() => true);
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useFeatureFlags: (features: string[]) =>
+    Object.fromEntries(features.map(f => [f, f === 'EnableLakeMemory' ? lakeMemoryPlatformEnabled() : false])),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
@@ -154,6 +162,7 @@ const gatedLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -169,6 +178,7 @@ const openLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -184,6 +194,7 @@ const entitlementGatedLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -1149,5 +1160,71 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not start a test chat for this lake'));
     expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeSettingsModal - lake memory toggle', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+    lakeMemoryPlatformEnabled.mockReset();
+    lakeMemoryPlatformEnabled.mockReturnValue(true);
+  });
+
+  it('renders for an editor, seeded from the lake, and does not render for a non-editor', () => {
+    const readerLake = { ...openLake, id: 'lake-mem-1', canManage: false };
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-2', lakeMemoryEnabled: true }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-memory-toggle')).toBeChecked();
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-memory-toggle')).not.toBeInTheDocument();
+  });
+
+  it('sends the toggled value only when the editor changes it', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-memory-toggle'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ lakeMemoryEnabled: true });
+  });
+
+  it('never sends lakeMemoryEnabled when the editor leaves it unchanged', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-4' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('lakeMemoryEnabled');
+  });
+
+  it('explains the platform kill-switch when it is off, without hiding the toggle', () => {
+    lakeMemoryPlatformEnabled.mockReturnValue(false);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-5', lakeMemoryEnabled: true }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-memory-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-memory-toggle-help')).toHaveTextContent(/disabled platform-wide/i);
   });
 });

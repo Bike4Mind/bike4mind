@@ -17,6 +17,7 @@ import {
   KnowledgeType,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
+  type CitableFabFileFields,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -737,6 +738,31 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findAllByIds(ids: string[]) {
     const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
     return result.map(d => d.toJSON());
+  }
+
+  /**
+   * Existence only, nothing hydrated. See IFabFileRepository.findExistingIdsByIds for why this is not
+   * `findAllByIds`: that one builds a full mongoose document per id to answer the same question.
+   */
+  async findExistingIdsByIds(ids: string[]): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsByIds') } })
+      .select('_id')
+      .lean<{ _id: unknown }[]>();
+    return docs.map(d => String(d._id));
+  }
+
+  /** The citability projection only - see IFabFileRepository.findCitableFieldsByIds. */
+  async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsByIds') } })
+      .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized')
+      .lean<
+        ({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]
+      >();
+    // `.lean()` skips the `id` virtual, so map it explicitly rather than leaning on toJSON (which
+    // would defeat the projection by hydrating the document first).
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));
   }
 
   async findByIdAndUserId(id: string, userId: string) {

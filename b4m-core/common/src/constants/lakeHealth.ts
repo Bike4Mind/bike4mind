@@ -546,6 +546,12 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    */
   duplicateMembers: LakeHealthDuplicatesReport;
   /**
+   * Lake memory: whether this lake's extracted-fact profile is enabled, present and current.
+   * See `LakeMemoryHealth` and `deriveLakeMemoryState` above - the same shape the build door's own
+   * GET returns, so the two surfaces cannot disagree about what "built" means.
+   */
+  lakeMemory: LakeMemoryHealth;
+  /**
    * SUMMARY of the last cross-document inconsistency report (#2242), or null when detection has never
    * run. Null is NOT "clean" and a surface must not render it as such - detection is an
    * owner-triggered pass, because it reads chunk text and health may not (#1665).
@@ -581,6 +587,112 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
     truncated: boolean;
     countsByKind: Record<InconsistencyKind, number>;
   } | null;
+};
+
+/**
+ * Lake memory: whether a lake's extracted-fact profile is enabled, present, and current - a
+ * state machine layered on top of the four content predicates above, not a replacement for them.
+ */
+
+/**
+ * How long a per-lake extraction lease is honored before another run may reclaim it. Shared by
+ * `extractLakeMemory.ts` (which claims/releases it), the build-door's "no lease held" precondition,
+ * and `isLeaseHeld` below, so the three cannot disagree about what "still running" means. Longer
+ * than the Lambda's own 10-minute timeout (infra/queues.ts), so a healthy in-flight run is never
+ * stolen; short enough that a crashed run (which never released its lease) is reclaimable on the
+ * next attempt without a reconciler.
+ */
+export const LAKE_MEMORY_EXTRACTION_LEASE_MS = 15 * 60_000;
+
+/**
+ * Whether a lake-memory extraction lease is still in force at `now`. `at` is the lake's
+ * `lakeMemoryExtractionAt` - `null`/`undefined` means no run currently holds it (either none ever
+ * has, or the last one released cleanly in its `finally`); a stamp older than the lease window is a
+ * crashed run's STALE lease, which reads as not-held here for the same reason
+ * `claimLakeMemoryExtraction` would let a new run reclaim it.
+ */
+export function isLeaseHeld(at: Date | string | null | undefined, now: Date): boolean {
+  if (!at) return false;
+  const claimedAt = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(claimedAt.getTime())) return false;
+  return claimedAt.getTime() >= now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS;
+}
+
+/** The six lake-memory states: the issue's five plus `building`, which the extraction lease makes observable. */
+export const LAKE_MEMORY_STATES = ['platform-off', 'lake-off', 'never-built', 'building', 'stale', 'current'] as const;
+export type LakeMemoryState = (typeof LAKE_MEMORY_STATES)[number];
+
+/**
+ * These six are NOT mutually exclusive - `building` genuinely co-occurs with `platform-off`: the
+ * platform kill-switch drops queued messages (`lakeMemoryExtraction.ts`) but cannot stop a run that
+ * already claimed its lease. So precedence is written down explicitly here rather than left to
+ * `LAKE_MEMORY_STATES`'s array order above:
+ *
+ *   platform-off > lake-off > building > never-built > stale > current
+ *
+ * `building` = lease held OR continuation cursor non-null (a chain claims/releases its lease PER
+ * SLICE, so between two slices of one chain the lease reads null while the work is demonstrably
+ * unfinished - the cursor is what survives across slices). Pure: every input is a fact the caller
+ * has already computed (from the lease, the cursor, and the ledger aggregate), so this function
+ * does no I/O and needs no mocking to test.
+ */
+export function deriveLakeMemoryState(input: {
+  platformEnabled: boolean;
+  lakeEnabled: boolean;
+  building: boolean;
+  everBuilt: boolean;
+  stale: boolean;
+}): LakeMemoryState {
+  if (!input.platformEnabled) return 'platform-off';
+  if (!input.lakeEnabled) return 'lake-off';
+  if (input.building) return 'building';
+  if (!input.everBuilt) return 'never-built';
+  if (input.stale) return 'stale';
+  return 'current';
+}
+
+/**
+ * The shape both lake-memory surfaces return: the build door's GET, and `lakeMemory` on
+ * `LakeHealthApiResponse` below. One type so the two endpoints cannot describe "lake memory state"
+ * differently.
+ *
+ * `factCount`/`sourceDocumentCount`/`lastBuiltAt` are derived from the memory ledger, not a lake
+ * field - the lake carries no build stamp, only a concurrency lease (see `isLeaseHeld`). They are
+ * approximate in the senses documented at each field below.
+ */
+export type LakeMemoryHealth = {
+  state: LakeMemoryState;
+  /**
+   * Whether a run holds the extraction lease RIGHT NOW - the strict half of `state === 'building'`,
+   * which is also true for a parked continuation cursor.
+   *
+   * Needed because those two halves want opposite affordances and `state` alone cannot separate them.
+   * A held lease means "wait, something is working". A parked cursor with no lease means the chain
+   * ended without finishing - the slice ceiling was hit, the platform or lake flag went off mid-chain,
+   * or a run died - and the only way forward is for someone to build again. Without this, every one of
+   * those reads as `building` forever, and a UI that hides its build control while building offers no
+   * way out of a state nothing will leave on its own.
+   *
+   * A boolean, never the lease timestamp: `redactLakeForActor` withholds `lakeMemoryExtractionAt` from
+   * readers on purpose, and this keeps the derived signal on the same footing as `building` itself.
+   */
+  running: boolean;
+  /** Newest surviving ledger event's timestamp for this lake's principal, or null if none exists. */
+  lastBuiltAt: Date | null;
+  /**
+   * Approximate count of distinct subjects (folded beliefs) in the surviving chain. Not exact in the
+   * `readProfile` sense: it counts raw subject cardinality, not the result of applying retract
+   * semantics.
+   */
+  factCount: number;
+  /**
+   * Distinct source documents cited by the surviving chain. A document cited by a live event was
+   * certainly read; one whose only citing events were later shredded is indistinguishable from one
+   * never read - so this is a lower bound once anything has been purged.
+   */
+  sourceDocumentCount: number;
+  /** The lake's current member count (from its own stats), for comparing against `sourceDocumentCount`. */
+  memberCount: number;
 };
 
 function emptyTally(): PredicateTally {

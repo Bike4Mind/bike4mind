@@ -54,6 +54,8 @@ import {
   __resetPurgingLakesForTests,
   INITIAL_REBUILD_POLL_STATE,
   nextRebuildPoll,
+  lakeMemoryPollInterval,
+  LAKE_MEMORY_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
   useDataLakeSpend,
@@ -785,6 +787,28 @@ describe('nextRebuildPoll', () => {
  * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
  * still pass if that helper's shape drifted away from what the query is actually keyed under.
  */
+/**
+ * The build door's poll predicate. Same reason nextRebuildPoll is tested here: an inline
+ * `refetchInterval` lambda is executed by no test, so a wrong predicate ships green - and the wrong
+ * one here is a 5s poll that never terminates.
+ */
+describe('lakeMemoryPollInterval', () => {
+  it('polls while a lease is actually held', () => {
+    expect(lakeMemoryPollInterval({ running: true, state: 'building' })).toBe(LAKE_MEMORY_POLL_MS);
+  });
+
+  // The bug the `running` split exists to prevent. A parked continuation cursor also reports
+  // 'building', and nothing moves it, so keying off the state polled forever.
+  it('does NOT poll a stalled build - state building, no live lease', () => {
+    expect(lakeMemoryPollInterval({ running: false, state: 'building' })).toBe(false);
+  });
+
+  it('does not poll a settled or absent payload', () => {
+    expect(lakeMemoryPollInterval({ running: false, state: 'current' })).toBe(false);
+    expect(lakeMemoryPollInterval(undefined)).toBe(false);
+  });
+});
+
 describe('config-history invalidation on the non-update config writes', () => {
   const mountWith = () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
