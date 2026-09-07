@@ -19,6 +19,7 @@ const appendMock = vi.fn();
 const claimLakeMemoryExtractionMock = vi.fn();
 const releaseLakeMemoryExtractionMock = vi.fn();
 const setLakeMemoryCursorMock = vi.fn();
+const setLakeMemoryCursorIfFenceUnmovedMock = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
@@ -28,6 +29,7 @@ vi.mock('@bike4mind/database', () => ({
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
     releaseLakeMemoryExtraction: (...a: unknown[]) => releaseLakeMemoryExtractionMock(...a),
     setLakeMemoryCursor: (...a: unknown[]) => setLakeMemoryCursorMock(...a),
+    setLakeMemoryCursorIfFenceUnmoved: (...a: unknown[]) => setLakeMemoryCursorIfFenceUnmovedMock(...a),
     // Never-purged, never-deleted: the purge fence is inert for these tests, which are about the
     // clock. Its own behaviour lives in extractLakeMemoryPurgeFence.test.ts.
     getLakeMemoryFence: async () => ({ exists: true, purgedAt: null }),
@@ -109,6 +111,7 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
     // release/setCursor return promises - the producer awaits (and .catch-es) them.
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
+    setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
   });
 
   it('processes every doc when there is plenty of time left', async () => {
@@ -147,7 +150,7 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
     expect(appendMock).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ran out of time after 2/10 docs'));
     // The cursor resumes from the last doc ATTEMPTED (doc index 1), not the cap boundary.
-    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', 'doc-001');
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledWith('lake-1', 'doc-001', null);
   });
 
   it('falls back to the wall clock when the Lambda clock reports a non-finite value', async () => {
@@ -216,6 +219,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
+    setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
   });
 
   it('skips the run entirely when another run already holds the lease', async () => {
@@ -245,7 +249,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
 
     expect(result.docsProcessed).toBe(100);
     expect(result.hasMore).toBe(true);
-    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', 'doc-099');
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledWith('lake-1', 'doc-099', null);
     expect(releaseLakeMemoryExtractionMock).toHaveBeenCalledTimes(1);
     // The 101st row is the probe that reported "more remain"; it is never processed.
     expect(evaluateMock).toHaveBeenCalledTimes(100);
@@ -285,7 +289,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
 
     expect(result.docsProcessed).toBe(100);
     expect(result.hasMore).toBe(false);
-    expect(setLakeMemoryCursorMock).not.toHaveBeenCalledWith('lake-1', 'doc-099');
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalledWith('lake-1', 'doc-099', null);
   });
 
   it('resumes from the persisted cursor and clears it once the scan reaches the end', async () => {

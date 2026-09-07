@@ -20,6 +20,7 @@ const appendMock = vi.fn();
 const claimLakeMemoryExtractionMock = vi.fn();
 const releaseLakeMemoryExtractionMock = vi.fn();
 const setLakeMemoryCursorMock = vi.fn();
+const setLakeMemoryCursorIfFenceUnmovedMock = vi.fn();
 const getLakeMemoryFenceMock = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
@@ -30,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
     releaseLakeMemoryExtraction: (...a: unknown[]) => releaseLakeMemoryExtractionMock(...a),
     setLakeMemoryCursor: (...a: unknown[]) => setLakeMemoryCursorMock(...a),
+    setLakeMemoryCursorIfFenceUnmoved: (...a: unknown[]) => setLakeMemoryCursorIfFenceUnmovedMock(...a),
     getLakeMemoryFence: (...a: unknown[]) => getLakeMemoryFenceMock(...a),
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
@@ -96,6 +98,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
+    setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
     getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: null });
   });
 
@@ -116,6 +119,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     expect(appendMock).toHaveBeenCalledTimes(2);
     expect(result.hasMore).toBe(false);
     expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('purged (or the lake deleted) after 2/10'));
   });
 
@@ -143,6 +147,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     expect(appendMock).toHaveBeenCalledTimes(2);
     expect(result.hasMore).toBe(false);
     expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalled();
   });
 
   it('suppresses the cursor write when the purge lands after the last document', async () => {
@@ -161,8 +166,44 @@ describe('extractLakeMemoryForBatch purge fence', () => {
 
     expect(appendMock).toHaveBeenCalledTimes(100);
     expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalled();
     expect(result.hasMore).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('as this run finished'));
+  });
+
+  it('leaves the cleared cursor alone when the purge lands DURING the cursor write', async () => {
+    // The residual window the end-of-run fence READ cannot close: read and write are two round trips,
+    // so a purge in between would have its cursor clear reinstated here. The write itself is therefore
+    // conditional on the fence, and a lost race must not chain a continuation - the resumed run would
+    // otherwise start mid-lake, past documents whose beliefs the purge destroyed, and nothing re-scans
+    // from the top until two further runs have walked the cursor off the end.
+    seedLake(101);
+    const logger = makeLogger();
+    // Every fence READ says unmoved; only the guarded WRITE reports the race.
+    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: null });
+    setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(false);
+
+    const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, logger as never);
+
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledWith('lake-1', 'doc-099', null);
+    expect(result.hasMore).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('as the continuation cursor was being written'));
+  });
+
+  it("compares against the run's own fence snapshot, not a constant", async () => {
+    // A lake purged BEFORE this run started carries a non-null fence, and the guard has to compare
+    // against that value. Hardcoding null would make the write unconditional for every such lake -
+    // i.e. exactly the lakes that have been erased once already.
+    seedLake(101, { lakeMemoryPurgedAt: new Date('2026-09-01T00:00:00.000Z') });
+    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: new Date('2026-09-01T00:00:00.000Z') });
+
+    await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
+
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledWith(
+      'lake-1',
+      'doc-099',
+      new Date('2026-09-01T00:00:00.000Z')
+    );
   });
 
   it('leaves an ordinary run untouched when the fence never moves', async () => {

@@ -638,6 +638,26 @@ describe('computeLakeMemoryHealth', () => {
     expect(health.state).toBe('lake-off');
   });
 
+  // `running` is what the UI needs to tell "wait, work is happening" from "a run stopped part-way and
+  // needs restarting" - both of which report state 'building'. Collapsing the two passed every other
+  // test in this file, so these two assertions are the only thing pinning the distinction.
+  it('reports running alongside building when the extraction lease is currently held', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryExtractionAt: new Date() }, db as never);
+    expect(health).toMatchObject({ state: 'building', running: true });
+  });
+
+  it('reports running false for a parked continuation cursor, which still reads as building', async () => {
+    // A stalled run: the lease has expired but the cursor survives. The state is honest (work is
+    // outstanding) and the UI must still offer a rebuild rather than an indefinite spinner.
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth(
+      { ...memoryLake, lakeMemoryExtractionAt: null, lakeMemoryCursor: 'cursor-1' },
+      db as never
+    );
+    expect(health).toMatchObject({ state: 'building', running: false });
+  });
+
   it('returns building when the extraction lease is currently held', async () => {
     const db = memoryDb(NO_COVERAGE);
     const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryExtractionAt: new Date() }, db as never);

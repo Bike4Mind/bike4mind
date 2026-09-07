@@ -239,8 +239,12 @@ export async function extractLakeMemoryForBatch(
       // one projected field, negligible next to a document's LLM call - and stop the moment it moves,
       // both so no fact the user just erased is re-appended and so the bookkeeping below leaves the
       // cursor the purge cleared alone. Checked at a document boundary, so at most the facts of the
-      // one document already in flight when the purge landed can survive it; the next build discards
-      // them anyway, since a purge destroys the key they were written under.
+      // one document already in flight when the purge landed can survive it.
+      //
+      // Those surviving facts are READABLE, not inert - do not assume otherwise. The append path
+      // re-mints a DEK on demand (getOrCreate upserts), so a write landing after the shred creates a
+      // fresh key rather than failing closed, and the facts under it decrypt normally. They are also
+      // not marked shredded, so recall serves them. The window is one document's extract call.
       if (await fenceMoved()) {
         purged = true;
         logger.warn(
@@ -318,13 +322,28 @@ export async function extractLakeMemoryForBatch(
     } else if (docsAttempted > 0 && hasUncovered && lastAttemptedId) {
       try {
         // Resume from what was ATTEMPTED, not the cap: persist the last attempted id as the cursor.
-        await dataLakeRepository.setLakeMemoryCursor(lake.id, lastAttemptedId);
-        hasMore = true; // only ask for a continuation once progress is durably recorded
+        //
+        // Fence-guarded, because the read above and this write are two round trips: a purge landing
+        // between them would have its cursor clear reinstated here, and the next build would resume
+        // mid-lake - past every document the purged scan had already covered, whose beliefs the purge
+        // destroyed. Nothing self-heals that quickly: the resumed run finds nothing uncovered and only
+        // then clears the cursor, so a THIRD run is the first to re-scan from the top, and until it
+        // lands the profile is silently missing the front of the lake.
+        const landed = await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, lastAttemptedId, fenceAt);
+        if (landed) {
+          hasMore = true; // only ask for a continuation once progress is durably recorded
+        } else {
+          logger.warn(
+            `[lakeMemory] lake ${datalakeTag}: memory was purged (or the lake deleted) as the continuation ` +
+              `cursor was being written; leaving the cleared cursor alone and recording no continuation`
+          );
+        }
       } catch (err) {
         // Gate hasMore on the cursor actually landing. If it will not persist, a re-enqueued
         // continuation would read the un-advanced cursor, redo this slice and re-bill it - and a
-        // persistent failure would loop. Leave the remainder to the next batch finalize, which re-scans
-        // from the top; failing loudly here rather than papering over it.
+        // persistent failure would loop. Leave the remainder to the next batch finalize; that re-scans
+        // from the top only if the cursor is null, otherwise it resumes from the stale cursor and the
+        // uncovered tail waits a further run. Failing loudly here rather than papering over it.
         logger.warn(
           `[lakeMemory] lake ${datalakeTag} could not persist the continuation cursor; the remaining ` +
             `doc(s) (at least ${atLeastUncovered}) will be picked up on ` +

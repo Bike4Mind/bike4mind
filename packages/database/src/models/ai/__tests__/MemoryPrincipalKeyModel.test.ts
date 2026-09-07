@@ -23,6 +23,24 @@ describe('MemoryPrincipalKeyRepository', () => {
     expect(await memoryPrincipalKeyRepository.findDek('user', 'u1')).toBeNull();
   });
 
+  it('refuses an unscoped destroy rather than shredding an arbitrary tenant key', async () => {
+    // Mongoose STRIPS undefined keys out of a query filter, so `destroy('lake', undefined)` degrades
+    // to `deleteOne({ principalKind: 'lake' })` - a crypto-shred of whichever lake mongo returns
+    // first, with no way back. Callers all check today; the guard puts the invariant on the only
+    // method that cannot be undone.
+    await memoryPrincipalKeyRepository.getOrCreate('lake', 'lake:one', 'owner1', 'dek-1');
+    await memoryPrincipalKeyRepository.getOrCreate('lake', 'lake:two', 'owner2', 'dek-2');
+
+    await expect(memoryPrincipalKeyRepository.destroy('lake', undefined as unknown as string)).rejects.toThrow(
+      /principalId/
+    );
+    await expect(memoryPrincipalKeyRepository.destroy('lake', '')).rejects.toThrow(/principalId/);
+
+    // Both survive - the point of the guard.
+    expect(await memoryPrincipalKeyRepository.findDek('lake', 'lake:one')).toBe('dek-1');
+    expect(await memoryPrincipalKeyRepository.findDek('lake', 'lake:two')).toBe('dek-2');
+  });
+
   it('mints exactly one key under a concurrent first-write race (E11000 -> read the winner)', async () => {
     // Mongo does not serialize upserts: several first-writes for the same new principal all attempt the
     // insert, the unique index rejects the losers with E11000, and getOrCreate must turn that into a read

@@ -81,8 +81,16 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
     return doc?.dek ?? null;
   }
 
-  /** Destroy the principal's key - the irreversible act of crypto-shred. */
+  /**
+   * Destroy the principal's key - the irreversible act of crypto-shred.
+   *
+   * The empty-id guard is not defensive noise: mongoose STRIPS undefined keys out of a query filter,
+   * so `destroy('lake', undefined)` would degrade to `deleteOne({ principalKind: 'lake' })` and
+   * silently shred one arbitrary tenant's lake key. Every caller happens to check first; this makes
+   * the invariant local to the only method that cannot be undone.
+   */
   async destroy(principalKind: IMemoryPrincipalKey['principalKind'], principalId: string): Promise<void> {
+    if (!principalId) throw new Error('destroy requires a principalId - refusing an unscoped key delete');
     await this.model.deleteOne({ principalKind, principalId });
   }
 }

@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   purgeUserMemory: vi.fn(),
   setLakeMemoryCursor: vi.fn(),
   stampLakeMemoryPurge: vi.fn(),
+  findAllByIds: vi.fn(),
   logAuditEvent: vi.fn(),
 }));
 
@@ -45,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
   deepAgentCharterRepository: {},
+  fabFileRepository: { findAllByIds: h.findAllByIds },
   memoryLedgerRepository: {},
   memoryPrincipalKeyRepository: {},
   mementoRepository: {},
@@ -110,6 +112,8 @@ beforeEach(() => {
   h.setLakeMemoryCursor.mockResolvedValue(undefined);
   h.stampLakeMemoryPurge.mockResolvedValue(undefined);
   h.logAuditEvent.mockResolvedValue(undefined);
+  // Default: every cited source still exists, so the orphan filter is a no-op unless a test says so.
+  h.findAllByIds.mockImplementation(async (ids: string[]) => ids.map(id => ({ id })));
 });
 
 describe('GET /api/memory/lake/:id - org-shared read', () => {
@@ -154,6 +158,83 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
     const { res } = makeRes();
 
     await expect(invoke(makeReq({ method: 'GET', kind: 'lake', id: 'lake-1' }), res)).rejects.toThrow('NotFound');
+  });
+
+  // The orphan filter. `purgeDataLakeDocument` destroys a source document without touching the beliefs
+  // already distilled from it, so extracted content can outlive its only source - and no later purge
+  // can reach it, because purges are keyed by source id.
+  it('withholds a lake belief whose every cited source has been destroyed, and says how many', async () => {
+    h.assertLakeAccess.mockResolvedValue(LAKE);
+    h.readPrincipalMemory.mockResolvedValue({
+      beliefs: [
+        { id: 'live', fact: 'still sourced', sources: ['doc-alive'] },
+        { id: 'orphan', fact: 'from a destroyed doc', sources: ['doc-gone'] },
+      ],
+    });
+    h.findAllByIds.mockResolvedValue([{ id: 'doc-alive' }]);
+    const { res, status, json } = makeRes();
+
+    await invoke(makeReq({ method: 'GET', kind: 'lake', id: 'lake-1' }), res);
+
+    expect(status).toHaveBeenCalledWith(200);
+    const payload = json.mock.calls[0][0];
+    expect(payload.profile.beliefs.map((b: { id: string }) => b.id)).toEqual(['live']);
+    expect(payload.withheldOrphans).toBe(1);
+  });
+
+  it('keeps a belief with one surviving source among several destroyed ones', async () => {
+    h.assertLakeAccess.mockResolvedValue(LAKE);
+    h.readPrincipalMemory.mockResolvedValue({
+      beliefs: [{ id: 'partial', fact: 'x', sources: ['doc-gone', 'doc-alive'] }],
+    });
+    h.findAllByIds.mockResolvedValue([{ id: 'doc-alive' }]);
+    const { res, json } = makeRes();
+
+    await invoke(makeReq({ method: 'GET', kind: 'lake', id: 'lake-1' }), res);
+
+    const payload = json.mock.calls[0][0];
+    expect(payload.profile.beliefs).toHaveLength(1);
+    expect(payload).not.toHaveProperty('withheldOrphans');
+  });
+
+  // A source-less belief is not an orphan: nothing was destroyed. Treating an empty list as evidence
+  // of a purge would silently hide beliefs no purge ever touched.
+  it('keeps a belief that cites no sources at all', async () => {
+    h.assertLakeAccess.mockResolvedValue(LAKE);
+    h.readPrincipalMemory.mockResolvedValue({ beliefs: [{ id: 'sourceless', fact: 'x' }] });
+    h.findAllByIds.mockResolvedValue([]);
+    const { res, json } = makeRes();
+
+    await invoke(makeReq({ method: 'GET', kind: 'lake', id: 'lake-1' }), res);
+
+    expect(json.mock.calls[0][0].profile.beliefs.map((b: { id: string }) => b.id)).toEqual(['sourceless']);
+  });
+
+  // The filter is lake-only: the owner-scoped kinds have no source-document lifecycle to orphan
+  // against, and running it there would need a FabFile read that answers nothing.
+  it('does not run the orphan filter for a non-lake principal', async () => {
+    h.readPrincipalMemory.mockResolvedValue({ beliefs: [{ id: 'b1', fact: 'x', sources: ['doc-gone'] }] });
+    const { res, json } = makeRes();
+
+    await invoke(makeReq({ method: 'GET', kind: 'user', id: 'caller-1' }), res);
+
+    expect(h.findAllByIds).not.toHaveBeenCalled();
+    expect(json.mock.calls[0][0].profile.beliefs).toHaveLength(1);
+  });
+
+  it('filters the ?q recall arm too, not just the profile listing', async () => {
+    h.assertLakeAccess.mockResolvedValue(LAKE);
+    const orphan = { id: 'orphan', fact: 'from a destroyed doc', sources: ['doc-gone'] };
+    h.readPrincipalMemory.mockResolvedValue({ beliefs: [orphan] });
+    h.findAllByIds.mockResolvedValue([]);
+    // recall() would happily surface the orphan; it must never be handed the withheld belief.
+    h.recall.mockImplementation((beliefs: unknown[]) => beliefs.map(b => ({ belief: b, relevance: 0.9, score: 1 })));
+    const { res, json } = makeRes();
+
+    await invoke(makeReq({ method: 'GET', kind: 'lake', id: 'lake-1', q: 'destroyed' }), res);
+
+    expect(h.recall).toHaveBeenCalledWith([], 'destroyed');
+    expect(json.mock.calls[0][0].recalled).toEqual([]);
   });
 
   it('includes ACT-R recall when ?q is present', async () => {

@@ -46,6 +46,30 @@ export function isFabFileCitable(
 }
 
 /**
+ * Which of these source documents still EXIST at all?
+ *
+ * Deliberately NOT `isFabFileCitable`, and the difference is the whole point. Citability answers
+ * "can the semantic arm surface this doc right now", so it also rejects a live doc that is merely
+ * un-vectorized or sitting in a different embedding space. That is correct for recall and wrong for
+ * any surface reporting what a lake KNOWS: it would hide beliefs whose documents are alive and fine,
+ * making the report understate the profile.
+ *
+ * This predicate is existence only, which is what a retention question needs - a belief whose every
+ * source has been permanently destroyed is an orphan no future purge can find, because purges are
+ * keyed by source id. Beliefs with no sources at all are NOT orphans (nothing was destroyed), so
+ * callers must not use an empty source list as evidence of anything.
+ */
+export function createSurvivingSourcesResolver(deps: {
+  fabfiles: Pick<IFabFileRepository, 'findAllByIds'>;
+}): (sourceIds: string[]) => Promise<Set<string>> {
+  return async sourceIds => {
+    if (sourceIds.length === 0) return new Set();
+    const files = await deps.fabfiles.findAllByIds(sourceIds);
+    return new Set(files.map(f => f.id));
+  };
+}
+
+/**
  * Build the reachability resolver `recallLakeMemory` injects: given a belief set's source FabFile ids,
  * return the subset the knowledge tool can currently cite. Batches one `findAllByIds` read and applies
  * `isFabFileCitable` per file. Fail-safe is the CALLER's job (recallLakeMemory drops uncited beliefs);

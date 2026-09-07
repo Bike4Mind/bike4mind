@@ -797,6 +797,30 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   /**
+   * Advance the continuation cursor ONLY IF the purge fence still reads what the caller snapshotted.
+   * Returns false when it moved (or the lake is gone), meaning the caller lost the race and must not
+   * chain a continuation.
+   *
+   * The unguarded setter cannot express this: an extraction re-reads the fence and then writes, and a
+   * purge landing in that gap has its cursor clear immediately reinstated - so the next build resumes
+   * mid-lake, past documents whose beliefs the purge destroyed, and those stay missing until two
+   * further runs walk the cursor off the end.
+   *
+   * `matchedCount`, not `modifiedCount`: re-writing the same cursor value is a legitimate no-op that
+   * mongo may elide, so only the match tells you whether the fence held.
+   *
+   * An equality match on `null` also matches an ABSENT field, which is what makes one filter shape
+   * cover both a never-purged lake and one whose fence was cleared.
+   */
+  async setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, lakeMemoryPurgedAt: fenceAt },
+      { $set: { lakeMemoryCursor: cursor } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  /**
    * Raise the purge fence and clear the continuation cursor in ONE write (see
    * IDataLake.lakeMemoryPurgedAt). Both halves belong to the same fact - this lake's learned state was
    * discarded - and splitting them leaves a window where a fresh build resumes from the old cursor.
@@ -808,9 +832,8 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    */
   async stampLakeMemoryPurge(id: string, at: Date): Promise<void> {
     // `$max`, not `$set`: two purges racing on one lake would otherwise let the later WRITE land the
-    // earlier TIMESTAMP, so the stamp would read as a purge that never happened last. The fence only
-    // tests for inequality, so either operator stops an in-flight run - but the field is also the
-    // honest answer to "when was this last purged", and $max is what makes it monotonic.
+    // earlier TIMESTAMP, so the stamp would read as a purge that never happened last. The field is
+    // the honest answer to "when was this last purged", and $max is what keeps it monotonic.
     await this.dataLakeModel.updateOne(
       { _id: id },
       { $max: { lakeMemoryPurgedAt: at }, $set: { lakeMemoryCursor: null } }

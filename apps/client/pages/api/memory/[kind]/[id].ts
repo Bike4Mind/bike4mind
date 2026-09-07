@@ -3,6 +3,7 @@ import {
   agentRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
+  fabFileRepository,
   deepAgentCharterRepository,
   memoryLedgerRepository,
   memoryPrincipalKeyRepository,
@@ -30,6 +31,7 @@ import {
 import { createKeyProvider } from '@server/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
+import { createSurvivingSourcesResolver } from '@server/memory/lakeSourceReachability';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -290,23 +292,49 @@ handler.get(async (req, res) => {
   const profile = await readPrincipalMemory(resolution.principal, resolution.store);
   if (!profile) return res.status(404).json({ error: 'No memory found for this principal.' });
 
+  // A lake belief cites the document it was distilled from, and `purgeDataLakeDocument` destroys the
+  // document without touching beliefs already derived from it - so a belief can outlive its only
+  // source. Chat never surfaces one (recallLakeMemory drops uncited beliefs); this read had no
+  // equivalent, which left a PERMANENTLY destroyed document's extracted content readable here
+  // indefinitely, and no purge can reach it afterwards because purges are keyed by source id.
+  //
+  // Existence, not citability - see createSurvivingSourcesResolver for why reusing the recall
+  // predicate here would wrongly hide live-but-unvectorized sources. And this withholds on READ
+  // only: the rows stay at rest under the lake DEK until a whole-lake purge or lake deletion shreds
+  // them, so it closes the disclosure and not the retention.
+  let served = profile;
+  let withheldOrphans = 0;
+  if (kind === 'lake') {
+    const survivingSources = createSurvivingSourcesResolver({ fabfiles: fabFileRepository });
+    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(b => b.sources ?? []))]);
+    // A source-less belief is kept: nothing was destroyed, so it is not an orphan.
+    const kept = profile.beliefs.filter(b => {
+      const sources = b.sources ?? [];
+      return sources.length === 0 || sources.some(sourceId => surviving.has(sourceId));
+    });
+    withheldOrphans = profile.beliefs.length - kept.length;
+    served = { ...profile, beliefs: kept };
+  }
+
   // Strip the embedding from each belief before serializing. A vector is 512 floats (~1MB across a
   // real user's beliefs) that no reader of this endpoint needs - and, like the /api/mementos 502, an
   // unbounded vector payload is how this route would eventually blow the Lambda response limit.
-  const lean = ({ embedding: _e, ...b }: (typeof profile.beliefs)[number]) => b;
-  const leanProfile = { ...profile, beliefs: profile.beliefs.map(lean) };
+  const lean = ({ embedding: _e, ...b }: (typeof served.beliefs)[number]) => b;
+  const leanProfile = { ...served, beliefs: served.beliefs.map(lean) };
+  // Reported rather than filtered silently, so a reader can tell a small profile from a censored one.
+  const orphanNote = withheldOrphans > 0 ? { withheldOrphans } : {};
 
   const query = typeof req.query.q === 'string' ? req.query.q : undefined;
   if (query !== undefined) {
-    const recalled = recall(profile.beliefs, query).map(r => ({
+    const recalled = recall(served.beliefs, query).map(r => ({
       belief: lean(r.belief),
       relevance: r.relevance,
       score: r.score,
     }));
-    return res.status(200).json({ profile: leanProfile, query, recalled });
+    return res.status(200).json({ profile: leanProfile, query, recalled, ...orphanNote });
   }
 
-  return res.status(200).json({ profile: leanProfile });
+  return res.status(200).json({ profile: leanProfile, ...orphanNote });
 });
 
 export default handler;

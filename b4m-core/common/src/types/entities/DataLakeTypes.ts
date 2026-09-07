@@ -573,6 +573,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * whole lake.
    */
   setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
+  /** Advance the cursor only while the purge fence still matches `fenceAt`; false means it moved. */
+  setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────

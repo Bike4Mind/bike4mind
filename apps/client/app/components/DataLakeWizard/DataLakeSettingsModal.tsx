@@ -308,10 +308,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // Editor-only, same manage gate. Always a concrete mode (no clear sentinel - a lake always
         // has a grounding mode), so it is sent as the chosen enum value.
         ...(lake.canManage ? { groundingMode } : {}),
-        // Editor-only. Sent only when changed: the server silently drops a `true` while the platform
-        // flag is off (retain-but-inert), so re-sending an unchanged true on every save would be a
-        // no-op there but is still worth skipping for the same reason as preferredSystemPromptId -
-        // never resubmit a value the editor didn't touch.
+        // Editor-only. Sent only when changed, for the same reason as preferredSystemPromptId: never
+        // resubmit a value the editor didn't touch, since a PUT that changes nothing still moves
+        // `lastUpdatedByUserId`. The server STORES a `true` even while the platform flag is off
+        // (retain-but-inert); it is the consumers that make it inert, not the write.
         ...(lake.canManage && lakeMemoryEnabled !== lake.lakeMemoryEnabled ? { lakeMemoryEnabled } : {}),
         // Editor-only, same manage gate. Sent even when null - null is the server's explicit CLEAR
         // sentinel (drop the requirement and go back to inheriting), which is a state an owner has

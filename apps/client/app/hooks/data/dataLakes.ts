@@ -1151,16 +1151,27 @@ export function useRechunkDataLake(dataLakeId: string | null) {
  */
 export type LakeMemoryHealthResponse = Omit<LakeMemoryHealth, 'lastBuiltAt'> & { lastBuiltAt: string | null };
 
+export const LAKE_MEMORY_POLL_MS = 5_000;
+
+/**
+ * Poll cadence for the lake-memory build door. Exported and pure for the same reason
+ * `nextRebuildPoll` is: an inline poll predicate is executed by nothing in a test, so a bug in it
+ * ships green.
+ *
+ * Keys off `running` - a lease actually held - and NOT `state === 'building'`, which is also true for
+ * a parked continuation cursor. That distinction is the whole termination argument: a cursor left by
+ * a chain that ended unfinished never changes on its own, so polling `building` meant a tick every
+ * 5s for as long as the panel stayed open, against a state nothing was going to move. A lease, by
+ * contrast, either expires or is released.
+ */
+export function lakeMemoryPollInterval(data: Pick<LakeMemoryHealthResponse, 'running' | 'state'> | undefined) {
+  return data?.running ? LAKE_MEMORY_POLL_MS : (false as const);
+}
+
 /**
  * The manual build door's own state (GET /api/data-lakes/:id/lake-memory) - kept separate
  * from the whole-lake /health report so the UI can poll it while a build runs without paying for
- * health's per-file member scan on every tick.
- *
- * Polls on `running` - a lease actually held - and NOT on `state === 'building'`, which is also true
- * for a parked continuation cursor. That distinction is the whole bound: a cursor left behind by a
- * chain that ended unfinished never changes on its own, so polling `building` meant a 5s tick every
- * 5s for as long as the panel stayed open, against a state nothing was going to move. Bounded by
- * construction now for real - a lease either expires or is released, so the poll always terminates.
+ * health's per-file member scan on every tick. Cadence in `lakeMemoryPollInterval`.
  */
 export function useGetLakeMemoryHealth(dataLakeId: string | null, enabled = true) {
   return useQuery({
@@ -1172,7 +1183,7 @@ export function useGetLakeMemoryHealth(dataLakeId: string | null, enabled = true
     enabled: enabled && !!dataLakeId,
     retry: false,
     refetchOnWindowFocus: false,
-    refetchInterval: query => (query.state.data?.running ? 5_000 : false),
+    refetchInterval: query => lakeMemoryPollInterval(query.state.data),
   });
 }
 

@@ -836,6 +836,50 @@ describe('DataLakeRepository - lake-memory extraction lease + continuation curso
     expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
   });
 
+  describe('fence-guarded cursor write', () => {
+    it('advances the cursor while the fence still matches the snapshot', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('refuses the write once a purge has moved the fence', async () => {
+      // The race the guard exists for: the extraction snapshotted an unpurged fence, a purge landed and
+      // cleared the cursor, and the unguarded write would reinstate it - sending the next build past
+      // documents whose beliefs the purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, new Date('2026-03-01T00:00:00Z'));
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(false);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('accepts the write when the snapshot carries the SAME earlier purge', async () => {
+      // A lake purged before the run started is a normal build, not a race. Comparing against a
+      // hardcoded null instead of the snapshot would lock out exactly these lakes.
+      const lake = await makeLake();
+      const purgedAt = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, purgedAt);
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', purgedAt)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('reports false for a lake that no longer exists', async () => {
+      expect(
+        await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(new mongoose.Types.ObjectId().toString(), 'd', null)
+      ).toBe(false);
+    });
+
+    it('reports true when re-writing the cursor value it already holds', async () => {
+      // `matchedCount`, not `modifiedCount`: mongo may elide a self-valued $set, so a modified-count
+      // guard would report a lost race on a write that in fact succeeded.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+    });
+  });
+
   describe('purge fence', () => {
     it('stamps the fence and clears the continuation cursor in one write', async () => {
       // Both halves matter: the stamp stops an in-flight run, and the cleared cursor is what makes
