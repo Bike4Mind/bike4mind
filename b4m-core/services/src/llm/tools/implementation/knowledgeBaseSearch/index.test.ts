@@ -3245,6 +3245,11 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     expect(scanNote).toBeLessThan(truncationNote);
     expect(truncationNote).toBeLessThan(conflict);
     expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+
+    // And after the "answer directly" line, which tells the model to do the opposite of what the
+    // conflict note asks. Whichever instruction comes last is the one it reads against the content.
+    expect(conflict).toBeGreaterThan(out.indexOf('so answer directly and only call'));
+    expect(conflict).toBeGreaterThan(out.indexOf(GROUNDED_NO_INVENTION_RULE));
   });
 
   // The third column-0 note the ordering test above cannot reach: it emits only under a configured

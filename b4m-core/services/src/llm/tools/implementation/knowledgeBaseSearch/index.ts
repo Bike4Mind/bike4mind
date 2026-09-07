@@ -166,18 +166,19 @@ function formatSemanticResults(
     bounding?.budgetBound && bounding.droppedCount > 0
       ? `NOTE: ${bounding.droppedCount} further relevant passage(s) matched but were not included, to stay within a configured retrieval budget. Do not state or imply the knowledge base has nothing further on this topic; call retrieve_knowledge_content for a specific file if you need more.\n\n`
       : '';
-  // Last of the column-0 notes, so it sits nearest the content it describes. The notes above are
-  // about what was reached and how much of it was served; this one is about the served passages
-  // contradicting each other.
+  // Last of our column-0 framing, nearest the content it describes - and deliberately AFTER the
+  // "answer directly" line below, which is the opposite instruction for a corpus that disagrees with
+  // itself. The notes above are about what was reached and how much of it was served; this one is
+  // about the served passages contradicting each other, so it gets the last word.
   const conflictNote = buildRetrievalConflictNote(conflictPassages);
   return (
     formatSkipNotice(skipNotice) +
     partial +
     truncated +
     budgetNote +
-    conflictNote +
     `Found ${results.length} relevant passage(s) in the knowledge base \u2014 the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+    conflictNote +
     renderRetrievedContentBlock(blocks)
   );
 }

@@ -38,9 +38,10 @@ export interface RetrievalPassage {
 }
 
 /**
- * Documents named before the list degrades to "and at least N more". Keeps the note a bounded length.
+ * Documents named before the list degrades to "and at least N more". Keeps the note a bounded length,
+ * and bounds the grouped form too: past it the note states one flat list rather than the pairings.
  */
-export const RETRIEVAL_CONFLICT_MAX_IDS = 10;
+const RETRIEVAL_CONFLICT_MAX_IDS = 10;
 
 /**
  * `nowYear` is inert here: the only rule reading it is `expired-claim`, which this surface filters
@@ -53,7 +54,7 @@ export const RETRIEVAL_CONFLICT_MAX_IDS = 10;
  * producing no such finding for the filter to drop - and would make a test of that filter vacuous.
  * If a date-bearing kind ever joins the asserted list this has to become a caller-supplied year.
  */
-const ALL_DATED_CLAIMS_EXPIRED_YEAR = 9999;
+export const ALL_DATED_CLAIMS_EXPIRED_YEAR = 9999;
 
 /**
  * Defensive ceiling on text swept per call. Every site today is bounded well under this by its own
@@ -83,11 +84,10 @@ const NOTE_OPENING = 'NOTE: the retrieved documents below may contradict each ot
  * the full figure. The unit follows the value, so any cut INSIDE the value takes the unit with it and
  * the fragment stops being a metric at all.
  *
- * The residual, unfixed: a cut inside the unit WORD can truncate it into a shorter valid unit -
- * `5 gbps` clipped to `5 gb`, `30 sprints` to `30 s`. That needs one exact offset per such token
- * rather than any offset inside a number, and the code fix (drop a trailing metric whose unit abuts
- * end-of-string) would re-cost the recall on unterminated bullet text that requiring a unit just
- * bought back. Known and accepted, not overlooked.
+ * The residual is `METRIC`'s own, recorded beside the rule: a cut landing inside the unit WORD can
+ * shorten it into another valid unit. It needs one exact offset per such token rather than any offset
+ * inside a number, and the code fix here (drop a trailing metric whose unit abuts end-of-string) would
+ * re-cost the recall on unterminated bullet text that requiring a unit just bought back.
  */
 export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string {
   const identified = passages.filter(p => p.fabFileId);
@@ -132,14 +132,37 @@ export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string
     .filter(t => t.count > 0);
   const kindTerms = terms.length === 1 ? terms[0].kind : terms.map(t => `${t.kind}: ${t.count}`).join(', ');
 
-  const ids = [...new Set(kept.flatMap(f => f.evidence.map(e => e.fabFileId)))];
+  // Ids in the order the channel serves the passages, so the model reads them against the block below
+  // rather than against the detector's internal grouping.
+  const rank = new Map<string, number>();
+  for (const { fabFileId } of identified) if (!rank.has(fabFileId)) rank.set(fabFileId, rank.size);
+  const byRank = (a: string, b: string) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0);
+
+  // One group per finding, deduped by membership: two conflicts over DISJOINT document pairs must not
+  // read as one list of four documents that all disagree with each other. Six subjects over the SAME
+  // pair is one relationship to state, not six, which is what the dedup collapses.
+  // Groups themselves in serve order too: the detector orders findings by kind and subject, which is
+  // its own internal order and not one the model can see anything against.
+  const groups = [
+    ...new Map(
+      kept.map(finding => {
+        const group = [...new Set(finding.evidence.map(e => e.fabFileId))].sort(byRank);
+        return [group.join(','), group] as const;
+      })
+    ).values(),
+  ].sort((a, b) => byRank(a[0], b[0]));
+
+  const ids = [...new Set(groups.flat())].sort(byRank);
   const overflow = ids.length - RETRIEVAL_CONFLICT_MAX_IDS;
   // "at least": `evidence` is itself capped upstream, so a finding spanning more documents than that
-  // cap contributes no id for them and the overflow here is a lower bound on the unnamed.
+  // cap contributes no id for them and the overflow here is a lower bound on the unnamed. Past either
+  // bound the flat list is the bounded form, and the count clause still says the conflicts are separate.
   const idList =
     overflow > 0
       ? `${ids.slice(0, RETRIEVAL_CONFLICT_MAX_IDS).join(', ')}, and at least ${overflow} more`
-      : ids.join(', ');
+      : groups.length > 1 && groups.flat().length <= RETRIEVAL_CONFLICT_MAX_IDS
+        ? groups.map(group => `(${group.join(', ')})`).join(' and ')
+        : ids.join(', ');
 
   const conflicts = `${kept.length} cross-document ${kept.length === 1 ? 'conflict' : 'conflicts'}`;
   return (

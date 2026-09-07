@@ -1,6 +1,8 @@
+import { detectCorpusInconsistencies } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { defangRetrievedContent } from './renderRetrievedContentBlock';
 import {
+  ALL_DATED_CLAIMS_EXPIRED_YEAR,
   buildRetrievalConflictNote,
   RETRIEVAL_CONFLICT_MAX_CHARS,
   type RetrievalPassage,
@@ -274,6 +276,108 @@ describe('buildRetrievalConflictNote', () => {
       passage('file-b', `${'padding text. '.repeat(RETRIEVAL_CONFLICT_MAX_CHARS / 10)}Uptime is 95%.`)
     );
     expect(note).toBe('');
+  });
+
+  it('names every document a conflict spans, including two that agree with each other', () => {
+    // Three documents, one conflict: file-c contradicts the other two, which agree. Both agreeing
+    // documents are still party to a real disagreement and have to be named - and the pair that
+    // WITNESSES it leads the evidence, which is what puts file-c ahead of file-b in the raw order.
+    const note = noteFor(
+      passage('file-a', 'Uptime is 99.9%.'),
+      passage('file-b', 'Uptime is 99.9%.'),
+      passage('file-c', 'Uptime is 95%.')
+    );
+    expect(note).toContain('1 cross-document conflict detected');
+    expect(note).toContain('across documents file-a, file-b, file-c.');
+  });
+
+  it('names the documents in the order the channel serves them', () => {
+    // Evidence comes out witness-pair-first, so without a re-sort the note names a lower-ranked
+    // passage before a higher-ranked one and the model reads the list against nothing.
+    const note = noteFor(
+      passage('file-a', 'Uptime is 99.9%.'),
+      passage('file-b', 'Uptime is 99.9%.'),
+      passage('file-c', 'Uptime is 95%.')
+    );
+    expect(note).not.toContain('file-a, file-c, file-b');
+  });
+
+  it('groups the documents per conflict when two conflicts share no document', () => {
+    // Flattened, this reads as one list of four documents that all disagree with each other. Only
+    // file-a/file-b and file-c/file-d are actually in conflict, and the pairs are unrelated.
+    const note = noteFor(
+      passage('file-a', 'Uptime is 99.9%.'),
+      passage('file-b', 'Uptime is 95%.'),
+      passage('file-c', 'Latency is 10 ms.'),
+      passage('file-d', 'Latency is 40 ms.')
+    );
+    expect(note).toContain('2 cross-document conflicts detected');
+    expect(note).toContain('across documents (file-a, file-b) and (file-c, file-d).');
+  });
+
+  it('states one flat list when both conflicts span the same documents', () => {
+    // Six subjects over one pair is one relationship to state, not six identical groups.
+    const subjects = ['uptime', 'latency', 'margin'];
+    const note = noteFor(
+      passage('file-a', subjects.map(s => `The ${s} is 10%.`).join('\n')),
+      passage('file-b', subjects.map(s => `The ${s} is 90%.`).join('\n'))
+    );
+    expect(note).toContain('across documents file-a, file-b.');
+    expect(note).not.toContain('(file-a');
+  });
+
+  it('names exactly the cap without claiming an overflow', () => {
+    // The boundary the 15-document fixture cannot reach: at exactly the cap `overflow` is 0, and an
+    // `overflow >= 0` comparison would render "and at least 0 more" here.
+    const passages = Array.from({ length: 10 }, (_, i) => passage(`file-${i}`, `Uptime is ${i + 1}%.`));
+    const note = buildRetrievalConflictNote(passages);
+
+    expect(note).toContain('file-9.');
+    expect(note).not.toContain('more');
+  });
+
+  // The figure has to be compared as a number. `99.90%` in a table against `99.9%` in prose is
+  // ordinary in a curated corpus, and asserting it to the model as a contradiction is a formatting
+  // difference dressed up as a numeric one. Pinned upstream too; here because this is the surface
+  // that ASSERTS it.
+  it('says nothing about the same figure written with a trailing zero', () => {
+    expect(noteFor(passage('file-a', 'Uptime is 99.90%.'), passage('file-b', 'Uptime is 99.9%.'))).toBe('');
+  });
+
+  /**
+   * The note's whole deliverable: a hedge, so the model does not treat a heuristic match as proven,
+   * and the instruction to surface the disagreement instead of picking a side. Everything else
+   * asserted about the note is its frame - marker, count, kind, ids - all of which survives deleting
+   * this prose entirely, and three of these clauses are review-directed wording that would otherwise
+   * revert green.
+   */
+  it('carries the hedge and the instruction the note exists to deliver', () => {
+    const note = noteFor(passage('file-a', 'Uptime is 99.9%.'), passage('file-b', 'Uptime is 95%.'));
+
+    expect(note).toContain('heuristic pattern matches over the passage text, not proven contradictions');
+    expect(note).toContain('the same label can be measured over a different scope in each document');
+    expect(note).toContain('say so rather than silently picking one side');
+    expect(note).toContain('attribute each conflicting claim to the document it came from');
+    // Deferred rather than named, so the note does not fight a channel that cites by bracketed index.
+    expect(note).toContain('whatever citation style this context already specifies');
+  });
+
+  // The literal keeps this surface off the clock, and it is past DATED_CLAIM's own range so every
+  // dated claim reads as expired - which is what keeps the kind filter's expired-claim arm live. A
+  // past year would be equally inert by producing no such finding at all, and the test above that
+  // pins the filter would then pass whatever the filter did.
+  it('reads every dated claim as expired, so the kind filter is exercised rather than vacuous', () => {
+    const documents = [
+      { fabFileId: 'file-a', text: 'Available through 2099.' },
+      { fabFileId: 'file-b', text: 'Supported through 2099.' },
+    ];
+    const findings = detectCorpusInconsistencies(documents, {
+      nowYear: ALL_DATED_CLAIMS_EXPIRED_YEAR,
+      metricUnitRequired: true,
+    }).findings;
+
+    expect(findings.map(f => f.kind)).toEqual(['expired-claim']);
+    expect(findings[0].documentCount).toBe(2);
   });
 
   it('reads the part of a document that fits under the char ceiling', () => {
