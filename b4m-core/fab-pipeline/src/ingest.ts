@@ -173,7 +173,7 @@ async function fetchWithoutRedirects(url: string, timeoutMs: number) {
 // Block-level elements after which we force a line break, since cheerio's `.text()` on the whole
 // body otherwise concatenates every text node with no separator at all - a heading, a list item
 // and the next paragraph would run together as one word-jammed line.
-const BLOCK_LEVEL_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, tr, div';
+const BLOCK_LEVEL_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, tr, div';
 
 /**
  * Extract readable text from the WHOLE document, not just `<p>` elements. The single collector
@@ -184,15 +184,33 @@ const BLOCK_LEVEL_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, tr
  *
  * `head` (title/meta/script/style all live there, and the caller already reads `<title>`
  * separately) plus any stray `script`/`style`/`noscript` outside it are removed before extraction,
- * so none of that reaches what gets embedded. Table cells get a trailing space (still the same
- * row, but no longer jammed into the next cell's word); every other block-level element gets a
- * trailing newline; runs of whitespace and blank lines are then collapsed. Returns `''` when
- * nothing extractable was found, so the caller stores nothing rather than falling back to raw
- * HTML.
+ * so none of that reaches what gets embedded. `<pre>` content is pulled out and stashed BEFORE the
+ * rest of the document is collapsed, and spliced back in verbatim afterward - it needs to skip the
+ * whitespace-collapse below (a code block's leading-space indentation is meaningful, unlike prose
+ * whitespace) but still needs to land in the right place relative to everything else. Table cells
+ * get a trailing space (still the same row, but no longer jammed into the next cell's word); every
+ * other block-level element gets a trailing newline; runs of whitespace and blank lines are then
+ * collapsed. Returns `''` when nothing extractable was found, so the caller stores nothing rather
+ * than falling back to raw HTML.
  */
 function extractReadableText($: CheerioAPI): string {
   $('head, script, style, noscript').remove();
   $('br').replaceWith('\n');
+
+  const preBlocks: string[] = [];
+  $('pre').each((_index, element) => {
+    const text = $(element).text();
+    // An empty <pre> has nothing worth preserving - remove it outright rather than stashing an
+    // empty placeholder, or a page whose only "content" is an empty <pre> would incorrectly stop
+    // being classified as having no extractable text.
+    if (text) {
+      preBlocks.push(text);
+      $(element).replaceWith(`@@PRE_BLOCK_${preBlocks.length - 1}@@\n`);
+    } else {
+      $(element).remove();
+    }
+  });
+
   $('td, th').each((_index, cell) => {
     $(cell).after(' ');
   });
@@ -202,12 +220,14 @@ function extractReadableText($: CheerioAPI): string {
 
   // `$.root()` covers the whole remaining document in one call - no need to special-case a
   // missing `<body>` (malformed HTML with no body tag still has its text picked up).
-  return $.root()
+  const collapsed = $.root()
     .text()
     .split('\n')
     .map(line => line.replace(/[ \t]+/g, ' ').trim())
     .filter(Boolean)
     .join('\n');
+
+  return collapsed.replace(/@@PRE_BLOCK_(\d+)@@/g, (_match, index) => preBlocks[Number(index)]);
 }
 
 // Fetch and parse HTML content from a URL; returns the page title and text.
