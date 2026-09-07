@@ -58,7 +58,7 @@ const SECRETS = {
   oauthCredentials: { github: 'ghp_secret_value' },
   securityQuestions: [{ question: 'first pet', answer: 'mittens' }],
   loginRecords: [{ ip: '203.0.113.7', at: new Date(0) }],
-  authProviders: [{ provider: 'google', accessToken: 'ya29.secret_value' }],
+  authProviders: [{ id: 'goog-sub-1', strategy: 'google', accessToken: 'ya29.secret_value' }],
   googleDrive: { accessToken: 'gd_secret_value', refreshToken: 'gd_refresh_value', expiresAt: new Date(0) },
 };
 const USER = {
@@ -185,9 +185,10 @@ describe('GET /api/identify', () => {
       expect(user.oauthCredentials).toBeUndefined();
       expect(user.securityQuestions).toBeUndefined();
       expect(user.loginRecords).toBeUndefined();
-      // authProviders is rebuilt per-provider: the OAuth tokens are dropped but the
-      // provider identity survives so the linked-account indicator still renders.
-      expect(user.authProviders).toEqual([{ provider: 'google' }]);
+      // authProviders is rebuilt per-provider by an { id, strategy } allowlist: the OAuth
+      // tokens are dropped but the provider identity survives so the linked-account
+      // indicator still renders.
+      expect(user.authProviders).toEqual([{ id: 'goog-sub-1', strategy: 'google' }]);
       // googleDrive is rebuilt as status-only metadata, so the tokens are gone but
       // the connected-state the UI reads survives.
       expect(user.googleDrive?.accessToken).toBeUndefined();
