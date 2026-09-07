@@ -42,7 +42,9 @@ const LAKE = { principal: { kind: 'lake' as const, id: 'datalake:test' }, ownerU
 describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    appendMemoryEventMock.mockResolvedValue(undefined);
+    // A truthy sealed event: the session now reads a falsy return as a shred REFUSAL and stops, so a
+    // mock resolving undefined would silently make every append look declined.
+    appendMemoryEventMock.mockResolvedValue({ seq: 0, hash: 'h', prevHash: null });
   });
 
   it('reads the profile once for the whole run and coalesces across existing AND same-run beliefs', async () => {

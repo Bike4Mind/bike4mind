@@ -80,7 +80,14 @@ export const handler = withEventContext(async (event, logger) => {
   const writeToLedger = async (summary: string, embedding?: number[]) => {
     if (!writeV2) return;
     try {
-      await writeFactToLedger({ userId, summary, sources, embedding });
+      // A `false` return is a REFUSAL, not a failure: the user erased their memory while this
+      // extraction was already in flight, so declining to write is the correct outcome. It must not
+      // take the throw path below - doing so would fail this background job (and eventually DLQ it)
+      // for behaving correctly, and would report an erase as an outage.
+      const written = await writeFactToLedger({ userId, summary, sources, embedding });
+      if (!written) {
+        logger.info('Mementos V2: ledger write declined - memory was erased after this extraction began');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!writeV1) throw new Error(`Mementos V2 is the only enabled pipeline and its write failed: ${message}`);
