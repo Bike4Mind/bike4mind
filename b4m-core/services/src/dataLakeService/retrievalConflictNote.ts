@@ -45,8 +45,8 @@ export const RETRIEVAL_CONFLICT_MAX_IDS = 10;
 /**
  * `nowYear` is inert here: the only rule reading it is `expired-claim`, which this surface filters
  * out (see DISAGREEMENT_INCONSISTENCY_KINDS). The detector's parameter is not optional, so a value
- * must be passed, and a literal keeps this surface off the clock - the convention both other callers
- * state, so that a finding never depends on when it was computed.
+ * must be passed, and a literal keeps this surface off the clock - the convention the detector and
+ * detectLakeInconsistencies.ts both state, so that a finding never depends on when it was computed.
  *
  * Past the end of `DATED_CLAIM`'s own `(19|20)\d{2}` range on purpose, so every dated claim reads as
  * expired and the kind filter stays exercised. A year in the PAST would be equally inert, by
@@ -121,7 +121,9 @@ export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string
   if (kept.length === 0) return '';
 
   // Order is the detector's kind order, so the term list is fixed rather than incidental. A per-kind
-  // count with only one kind in the list restates the headline count, so it is omitted there.
+  // count with only one kind in the list restates the headline count, so it is omitted there - which
+  // is every note today, since the asserted list has one member. The counted arm is the growth path:
+  // a second asserted kind makes it reachable without a caller having to notice.
   const terms = asserted
     .map(kind => ({
       kind,
