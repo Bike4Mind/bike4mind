@@ -32,6 +32,7 @@ import ResearchTaskDetailLiveStatus from './Detail/LiveStatus';
 import ResearchTaskDetailInfo from './Detail/Info';
 import ResearchTaskFileList from './FileList';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
+import { sanitizeHtmlForIframe } from '@client/app/utils/htmlSanitizer';
 
 interface ResearchTaskDetailProps {
   task: IResearchTask;
@@ -434,7 +435,8 @@ const ResearchTaskDetail: FC<ResearchTaskDetailProps> = ({ task: propTask, onEdi
                       )}
                       {viewMode === 'html' && content && (
                         <div
-                          dangerouslySetInnerHTML={{ __html: content }}
+                          // Scraped third-party page HTML - strip active content before rendering.
+                          dangerouslySetInnerHTML={{ __html: sanitizeHtmlForIframe(content).cleanHtml }}
                           style={{
                             fontSize: '14px',
                             lineHeight: '1.7',

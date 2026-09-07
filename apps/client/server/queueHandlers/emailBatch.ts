@@ -239,25 +239,30 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function renderTemplate(
+export function renderTemplate(
   template: IEmailTemplateDocument,
   variables: Record<string, string>,
   trackingToken: string
 ): { subject: string; html: string } {
   const baseUrl = requireEnv('APP_URL', process.env.APP_URL);
 
+  // Function replacers, not string replacements: a string replacement expands `$&`, `$1`,
+  // etc. in the value, so a substitution value containing those splices raw template text
+  // (and, in HTML, past escapeHtml). A replacer function receives the value verbatim.
+
   // 1. Substitute variables in subject (plain text, no HTML escaping needed)
   let subject = template.subject;
   for (const [key, value] of Object.entries(variables)) {
     const regex = new RegExp(`{{${key}}}`, 'g');
-    subject = subject.replace(regex, value);
+    subject = subject.replace(regex, () => value);
   }
 
   // 2. Substitute variables in HTML (escape values to prevent XSS)
   let html = template.htmlContent;
   for (const [key, value] of Object.entries(variables)) {
     const regex = new RegExp(`{{${key}}}`, 'g');
-    html = html.replace(regex, escapeHtml(value));
+    const escaped = escapeHtml(value);
+    html = html.replace(regex, () => escaped);
   }
 
   // 3. Inject tracking pixel (1x1 transparent GIF) before </body>
