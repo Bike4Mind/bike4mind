@@ -32,7 +32,7 @@ passport.use(
           done(null, Config.JWT_SECRET);
         } catch (err) {
           // If verification fails, try previous secret if available
-          const jwtSecretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
+          const jwtSecretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
           let prevSecret = undefined;
 
           // Grace period: accept the previous key only within the shared rotation window.

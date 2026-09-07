@@ -38,7 +38,7 @@ const handler = baseApi()
           tokenVersion: req.user!.tokenVersion ?? 0,
         }));
       } else {
-        const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
+        const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
         let previousSecret = undefined;
         // Accept the previous key only within the shared rotation grace window.
         if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {

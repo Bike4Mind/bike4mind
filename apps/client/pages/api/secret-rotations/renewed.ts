@@ -1,7 +1,7 @@
 import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError, InternalServerError, NotFoundError } from '@bike4mind/utils';
-import { calculateNextRotationDate } from '@client/lib/secretRotation/utils';
+import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 import { Config } from '@server/utils/config';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
@@ -39,7 +39,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       lastRotatedByName: req.user?.name,
     });
 
-    return res.json(updated);
+    if (!updated) {
+      throw new InternalServerError('Failed to update secret');
+    }
+    // Never `res.json(updated)`: this handler just wrote the live JWT_SECRET into
+    // `previousKey`, and the raw document would carry it to the browser.
+    return res.json(toSafeSecretRotation(updated));
   } catch (error) {
     throw new InternalServerError('Failed to update secret', { error });
   }

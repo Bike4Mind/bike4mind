@@ -80,7 +80,7 @@ const handler = baseApi({ auth: false })
     // (mint a fresh AuthSession + opaque refresh token) so nobody is logged out on deploy.
     // Support secret rotation: if JWT_SECRET was recently rotated, allow tokens
     // signed with the previous secret for a 24-hour grace period
-    const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
+    const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
     let previousSecret: string | undefined;
     if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
       previousSecret = secretRotation?.previousKey;

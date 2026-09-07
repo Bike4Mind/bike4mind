@@ -15,7 +15,7 @@ import jwt from 'jsonwebtoken';
  * missing here lets a revoked or wrong-type token ride the socket after REST already refused it.
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
-  const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
+  const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
   let previousSecret = undefined;
   // Accept the previous key only within the shared rotation grace window.
   if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {

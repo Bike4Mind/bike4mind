@@ -9,6 +9,7 @@ import { createMocks } from 'node-mocks-http';
 const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
+  getHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,6 +24,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
         mockRefs.postHandler = fn;
         return chain;
       },
+      get: (fn: any) => {
+        mockRefs.getHandler = fn;
+        return chain;
+      },
     };
     return chain;
   },
@@ -30,11 +35,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 const mockUpdate = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 's1' }));
 const mockFindById = vi.hoisted(() => vi.fn());
+const mockFindActive = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const mockCreate = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: {},
   secretRotationRepository: {
     update: (...a: unknown[]) => mockUpdate(...a),
     findById: (...a: unknown[]) => mockFindById(...a),
+    findActiveKeys: (...a: unknown[]) => mockFindActive(...a),
+    create: (...a: unknown[]) => mockCreate(...a),
   },
 }));
 
@@ -44,6 +53,7 @@ vi.mock('@server/utils/config', () => ({
 
 import '../[id]/index';
 import '../renewed';
+import '../index';
 
 function request(body: unknown) {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -121,5 +131,56 @@ describe('POST /api/secret-rotations/renewed', () => {
     (req as any).ability = { can: () => false };
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('previousKey never reaches a response', () => {
+  beforeEach(() => {
+    mockUpdate.mockClear();
+    mockFindActive.mockClear();
+  });
+
+  it('strips previousKey from the renew response even when the repo hands it back', async () => {
+    mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
+    // A stored document round-trips the field; the response must not.
+    mockUpdate.mockResolvedValue({
+      id: 's1',
+      keyName: 'JWT_SECRET',
+      previousKey: 'server-held-jwt-secret',
+      rotatedAt: new Date(),
+      nextRotation: new Date(),
+      rotationIntervalDays: 30,
+      isActive: true,
+    });
+
+    const { req, res } = request({ id: 's1' });
+    await mockRefs.postHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body).not.toHaveProperty('previousKey');
+    expect(JSON.stringify(body)).not.toContain('server-held-jwt-secret');
+    expect(body.keyName).toBe('JWT_SECRET');
+  });
+
+  it('strips previousKey from the list response', async () => {
+    mockFindActive.mockResolvedValue([
+      {
+        id: 's1',
+        keyName: 'JWT_SECRET',
+        previousKey: 'server-held-jwt-secret',
+        rotatedAt: new Date(),
+        nextRotation: new Date(),
+        rotationIntervalDays: 30,
+        isActive: true,
+      },
+    ]);
+
+    const { req, res } = request({});
+    await mockRefs.getHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(JSON.stringify(body)).not.toContain('server-held-jwt-secret');
+    expect(body[0]).not.toHaveProperty('previousKey');
+    expect(body[0].keyName).toBe('JWT_SECRET');
   });
 });
