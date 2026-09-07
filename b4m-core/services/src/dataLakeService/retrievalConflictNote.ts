@@ -20,8 +20,9 @@ import {
  * Distinct surface from detectLakeInconsistencies.ts, which shares the same rule engine but is an
  * async, stored, admin-facing whole-lake health scan. That surface OFFERS a finding to a human who
  * triages it, so it wants every rule's recall; this one ASSERTS disagreement to a model that cannot
- * check it, so it runs only the rules that can carry an assertion. Do not route one through the
- * other, and do not widen the kinds below to match the scan's.
+ * check it, so it keeps only the findings whose kind can carry an assertion. Every rule still runs;
+ * the classification is DISAGREEMENT_INCONSISTENCY_KINDS, which lives beside the rules in common.
+ * Do not route one surface through the other, and do not widen that list to match the scan's.
  */
 
 /** One passage as a retrieval channel already holds it: the id it will attribute, the text it will render. */

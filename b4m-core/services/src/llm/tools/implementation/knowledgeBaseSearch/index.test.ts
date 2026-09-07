@@ -3211,22 +3211,33 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     const out = await run(conflictContext());
 
     expect(out).not.toContain('Uptime is 95%.');
+    expect(out).toContain('Uptime is 99.9%.');
     expect(out).not.toContain(CONFLICT_NOTE);
   });
 
   it('renders last of the column-0 notes, nearest the content it describes', async () => {
+    // Two notes ahead of it, not one: file-c is long enough to be clipped, which is what emits the
+    // truncation note, and carries no metric so it stays out of the conflict itself.
     semanticDataLakeSearchMock.mockResolvedValue(
-      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')], {
-        ...scan,
-        truncated: true,
-        filesScanned: 1,
-      })
+      searchReturning(
+        [
+          hitOf('file-a', 'Uptime is 99.9%.'),
+          hitOf('file-b', 'Uptime is 95%.'),
+          hitOf('file-c', 'padding text. '.repeat(1000)),
+        ],
+        { ...scan, truncated: true, filesScanned: 1 }
+      )
     );
 
     const out = await run(conflictContext());
 
-    expect(out.indexOf('covered only 1 of 2 documents')).toBeGreaterThanOrEqual(0);
-    expect(out.indexOf('covered only 1 of 2 documents')).toBeLessThan(out.indexOf(CONFLICT_NOTE));
-    expect(out.indexOf(CONFLICT_NOTE)).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+    const scanNote = out.indexOf('covered only 1 of 2 documents');
+    const truncationNote = out.indexOf('NOTE: 1 of the 3 passages below was truncated');
+    const conflict = out.indexOf(CONFLICT_NOTE);
+    expect(scanNote).toBeGreaterThanOrEqual(0);
+    expect(truncationNote).toBeGreaterThanOrEqual(0);
+    expect(scanNote).toBeLessThan(truncationNote);
+    expect(truncationNote).toBeLessThan(conflict);
+    expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
   });
 });

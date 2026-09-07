@@ -51,8 +51,10 @@ export type InconsistencyKind = (typeof INCONSISTENCY_KINDS)[number];
 
 /**
  * The kinds whose finding can support the claim that two DOCUMENTS disagree with each other, rather
- * than only "worth a human's eye". Classified here, beside the rules, so a fifth rule has to place
- * itself rather than default into whatever allowlist a caller happens to carry.
+ * than only "worth a human's eye". Classified here, beside the rules, rather than in whatever
+ * allowlist each caller happens to carry. `satisfies` checks membership, not coverage: a fifth kind
+ * compiles with this list untouched and defaults to not-asserted. That is the safe default, but it
+ * is a default and not an enforcement - classify a new rule here deliberately.
  *
  * Only `metric-disagreement` qualifies, and only because it is the one rule with a `distinguish`
  * predicate over a comparable value. The other two cross-document kinds cannot show disagreement:
@@ -301,6 +303,12 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
  * (`days` is not in the alternation), and a per-period series of `Monthly active users: 1,200` a
  * disagreement with its own next quarter. Requiring a unit drops all three; requiring it to MATCH
  * keeps `100 ms` from being read as disagreeing with `2 s` on evidence that is really a unit change.
+ *
+ * What it also drops, and should not: `METRIC.exec` takes the FIRST match in a sentence, so a
+ * leading unitless number shadows a real metric behind it. `Section 2 of 5 states that uptime is
+ * 99.9%` matches as label `Section 2` / value `5` / no unit, and the sentence is discarded before the
+ * `99.9%` is ever seen. `Section N of M` is the exact shape this mode exists to drop; when it merely
+ * PRECEDES a genuine metric the cost is recall, not a false assertion, which is why it is left as is.
  *
  * The unit rides in `subject` to do that grouping, so a caller enabling this and RENDERING `subject`
  * gets `uptime %` rather than `uptime`.

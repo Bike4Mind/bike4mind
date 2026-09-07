@@ -2754,7 +2754,7 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     expect(content).not.toContain(CONFLICT_NOTE);
   });
 
-  it('renders after the capability and coverage notes, nearest the content it describes', async () => {
+  it('renders after the capability note, nearest the content it describes', async () => {
     const content = await run([
       { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
       { fabFileId: 'fileB', text: 'Uptime is 95%.' },

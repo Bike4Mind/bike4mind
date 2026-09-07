@@ -3,7 +3,6 @@ import { defangRetrievedContent } from './renderRetrievedContentBlock';
 import {
   buildRetrievalConflictNote,
   RETRIEVAL_CONFLICT_MAX_CHARS,
-  RETRIEVAL_CONFLICT_MAX_IDS,
   type RetrievalPassage,
 } from './retrievalConflictNote';
 
@@ -206,8 +205,11 @@ describe('buildRetrievalConflictNote', () => {
     const passages = Array.from({ length: 15 }, (_, i) => passage(`file-${i}`, `Uptime is ${i + 1}%.`));
     const note = buildRetrievalConflictNote(passages, NOW_YEAR);
 
-    expect(note).toContain(`, and at least ${15 - RETRIEVAL_CONFLICT_MAX_IDS} more`);
-    expect(note).not.toContain('file-14');
+    // Literals, not the constant: an assertion computed from RETRIEVAL_CONFLICT_MAX_IDS moves with it
+    // and holds at any cap. Evidence comes out in insertion order, so file-9/file-10 is the boundary.
+    expect(note).toContain(', and at least 5 more');
+    expect(note).toContain('file-9,');
+    expect(note).not.toContain('file-10');
   });
 
   it('stops reading documents once the char ceiling is reached', () => {
