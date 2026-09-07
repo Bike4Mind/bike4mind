@@ -87,7 +87,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       user: { id: 'u1', tags: [] },
       entitlementKeys: [],
     } as never);
-    expect(findActive).toHaveBeenCalledWith([], [], ['org-a', 'org-b'], 'u1');
+    expect(findActive).toHaveBeenCalledWith([], [], ['org-a', 'org-b'], 'u1', []);
   });
 
   it('threads entitlementKeys and tags into the DB pre-filter alongside the resolved membership set', async () => {
@@ -99,7 +99,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       entitlementKeys: ['k:pro'],
     });
     expect(findMembershipOrgIds).toHaveBeenCalledWith('u1');
-    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], ['org123'], 'u1');
+    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], ['org123'], 'u1', []);
   });
 
   it('resolves an empty membership set (never calling db.organizations) for an id-less caller', async () => {
@@ -112,7 +112,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     // An id-less caller is a member of nothing - the resolver must not even ask, since there is
     // no id to resolve membership for.
     expect(findMembershipOrgIds).not.toHaveBeenCalled();
-    expect(spy).toHaveBeenCalledWith([], [], [], undefined);
+    expect(spy).toHaveBeenCalledWith([], [], [], undefined, []);
   });
 
   it('string-coerces an ObjectId-like id before resolving membership and querying', async () => {
@@ -124,7 +124,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       user: { id: { toString: () => 'user-oid' }, tags: [] },
     });
     expect(findMembershipOrgIds).toHaveBeenCalledWith('user-oid');
-    expect(spy).toHaveBeenCalledWith([], [], [], 'user-oid');
+    expect(spy).toHaveBeenCalledWith([], [], [], 'user-oid', []);
   });
 
   it('passes the resolved membership set through to the collection query unchanged', async () => {
@@ -136,7 +136,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never, organizations: { findMembershipOrgIds } },
       user: { id: 'u1', tags: [] },
     });
-    expect(spy).toHaveBeenCalledWith([], [], ['org-hex', 'org-hex-2'], 'u1');
+    expect(spy).toHaveBeenCalledWith([], [], ['org-hex', 'org-hex-2'], 'u1', []);
   });
 
   it('drops a DB lake that carries a static-registry meta-tag, gate or no gate', async () => {
@@ -417,5 +417,135 @@ describe('lakeMembershipsFrom', () => {
 
   it('returns [] for an empty lake set', () => {
     expect(lakeMembershipsFrom([])).toEqual([]);
+  });
+});
+
+/**
+ * The grant arm (#2424). Browse folded owner/curator grants into its lake set; this resolver had no
+ * `dataLakeAccessGrants` adapter at all, so a transferred-owner lake browsed but never grounded a
+ * chat answer. The DB-level half of the agreement - that the retrieval query and the browse query
+ * return the same lake for the same grant - is pinned in
+ * packages/database/src/models/ai/DataLakeModel.grantScopeAgreement.test.ts; what these pin is the
+ * resolver: it feeds the grant ids to the query and restores the granted lake through the in-memory
+ * filter, which is a pure tag/entitlement predicate and would otherwise drop it again.
+ */
+describe('getDynamicDataLakeAccess - the access-grant arm', () => {
+  const grantRepo = (rows: { dataLakeId: string; role: string }[]) => ({
+    listByPrincipal: vi
+      .fn()
+      .mockResolvedValue(rows.map(r => ({ ...r, principalType: 'user', principalId: 'curator' }))),
+  });
+
+  /** A lake gated by a tag the caller does not hold and created by someone else: grant-only reach. */
+  const grantOnlyLake = () =>
+    dbLake({ id: 'handbook', createdByUserId: 'new-owner', requiredUserTag: 'TagIDoNotHold' });
+
+  const grantCtx = (
+    lakes: IDataLakeDocument[],
+    grants: { listByPrincipal: ReturnType<typeof vi.fn> },
+    over: Partial<DataLakeAccessContext> = {}
+  ): DataLakeAccessContext => ({
+    db: {
+      dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes) } as never,
+      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      dataLakeAccessGrants: grants as never,
+    },
+    user: { id: 'curator', tags: [] },
+    ...over,
+  });
+
+  it('resolves a curator grant into the lake query and restores the lake past the in-memory filter', async () => {
+    const grants = grantRepo([{ dataLakeId: 'handbook', role: 'curator' }]);
+    const context = grantCtx([grantOnlyLake()], grants);
+
+    const res = await getDynamicDataLakeAccess(context);
+
+    // The ids must go IN to the query - a grant-held lake matches none of its other arms, so
+    // filtering the result could never surface it.
+    expect(context.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith([], [], [], 'curator', [
+      'handbook',
+    ]);
+    expect(res.dataLakeTags).toEqual(['datalake:handbook']);
+    expect(res.scopedTagPrefixes).toEqual(['handbook:']);
+    // A DB lake's prefix stays SCOPED - a grant is not a promotion into the ownership bypass.
+    expect(res.dataLakeTagPrefixes).toEqual([]);
+    expect(res.lakeViewComplete).toBe(true);
+  });
+
+  it('leaves reader and org-principal grants out, so retrieval stays a subset of browse', async () => {
+    // Both are gated on the read-grant cutover (READ_GRANT_ENFORCEMENT_READY) at the browse gate,
+    // and `grantedLakeIdsFor`'s default `includeReaders: false` is what keeps this side in step.
+    const grants = grantRepo([{ dataLakeId: 'handbook', role: 'reader' }]);
+    const context = grantCtx([grantOnlyLake()], grants);
+
+    const res = await getDynamicDataLakeAccess(context);
+
+    expect(context.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith([], [], [], 'curator', []);
+    expect(res.dataLakeTags).toEqual([]);
+    expect(res.scopedTagPrefixes).toEqual([]);
+    expect(grants.listByPrincipal).toHaveBeenCalledTimes(1);
+    expect(grants.listByPrincipal).toHaveBeenCalledWith('user', 'curator', expect.anything());
+  });
+
+  it('still drops a gated lake the caller holds NO grant on, even when the DB over-returns', async () => {
+    // The restore is an intersection with the resolved grant ids, not "the query returned it" - the
+    // same second-opinion rule the owner exemption follows.
+    const res = await getDynamicDataLakeAccess(grantCtx([grantOnlyLake()], grantRepo([])));
+
+    expect(res.dataLakeTags).toEqual([]);
+    expect(res.scopedTagPrefixes).toEqual([]);
+  });
+
+  it('reports an incomplete view when the grants read fails, and resolves without the arm', async () => {
+    // Same fail-closed contract as the dataLakes read: narrow, and SAY the view is partial, or a
+    // consumer reads the absent tag as proof of unreachability.
+    const grants = { listByPrincipal: vi.fn().mockRejectedValue(new Error('grants unavailable')) };
+    const warn = vi.fn();
+    const context = grantCtx([grantOnlyLake()], grants, {
+      user: { id: 'curator', tags: [] },
+      logger: { warn } as never,
+    });
+
+    const res = await getDynamicDataLakeAccess(context);
+
+    expect(res.lakeViewComplete).toBe(false);
+    expect(res.dataLakeTags).toEqual([]);
+    expect(context.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith([], [], [], 'curator', []);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('never asks about grants for an id-less caller, who is a member of nothing', async () => {
+    const grants = grantRepo([{ dataLakeId: 'handbook', role: 'curator' }]);
+    const res = await getDynamicDataLakeAccess(grantCtx([grantOnlyLake()], grants, { user: { tags: [] } }));
+
+    expect(grants.listByPrincipal).not.toHaveBeenCalled();
+    expect(res.dataLakeTags).toEqual([]);
+  });
+
+  it('restores a granted lake once, not twice, when the caller also created it', async () => {
+    const own = dbLake({ id: 'handbook', createdByUserId: 'curator', requiredUserTag: 'TagIDoNotHold' });
+    const res = await getDynamicDataLakeAccess(grantCtx([own], grantRepo([{ dataLakeId: 'handbook', role: 'owner' }])));
+
+    expect(res.dataLakeTags).toEqual(['datalake:handbook']);
+    expect(res.scopedTagPrefixes).toEqual(['handbook:']);
+  });
+
+  it('refuses to restore a granted lake whose meta-tag its own slug would not mint', async () => {
+    // The grant arm inherits the owner exemption's environment-independent guard: a row whose tag
+    // and slug disagree did not come through createDataLake, and a grant must not launder it in.
+    const malformed = dbLake({
+      id: 'handbook',
+      slug: 'handbook',
+      datalakeTag: 'datalake:something-else',
+      createdByUserId: 'new-owner',
+      requiredUserTag: 'TagIDoNotHold',
+    });
+
+    const res = await getDynamicDataLakeAccess(
+      grantCtx([malformed], grantRepo([{ dataLakeId: 'handbook', role: 'curator' }]))
+    );
+
+    expect(res.dataLakeTags).toEqual([]);
+    expect(res.scopedTagPrefixes).toEqual([]);
   });
 });

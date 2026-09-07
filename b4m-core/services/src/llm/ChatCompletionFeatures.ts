@@ -40,6 +40,7 @@ import {
   GenerateImageToolCallSchema,
   AudioGenerationToolCallSchema,
   ILatticeModel,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
   CitableSource,
@@ -187,6 +188,12 @@ interface DatabaseAdapters {
     IDataLakeRepository,
     'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
   >;
+  /**
+   * Access-grant lookup for the retrieval resolver's grant arm (getDynamicDataLakeAccess), so a
+   * lake reached only by an owner/curator grant grounds a turn as it browses. Optional - absent
+   * means forced retrieval and the knowledge tools resolve lake access with no grant arm.
+   */
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,

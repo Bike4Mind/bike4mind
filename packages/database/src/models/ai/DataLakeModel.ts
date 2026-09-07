@@ -329,7 +329,8 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     userTags: string[],
     entitlementKeys: string[],
     organizationIds?: string[] | null,
-    userId?: string | null
+    userId?: string | null,
+    grantedLakeIds?: string[] | null
   ): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
@@ -374,6 +375,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // Owner bypass (mirrors findAccessible): the creator always retrieves their own lakes,
     // including private gateless ones. Only when a userId is supplied.
     if (userId) accessArms.unshift({ createdByUserId: userId });
+
+    // Explicit-grant arm, the exact counterpart of findAccessible's: a lake the caller holds an
+    // active grant on is reachable by that grant alone - the grant IS the authorization, so it
+    // needs none of the org/gate constraints. Ids are pre-resolved by the caller from
+    // listByPrincipal (an empty list adds no arm), which is what keeps this retrieval read in step
+    // with the browse/list read instead of the two disagreeing about a transferred lake.
+    const grantArmIds = grantedLakeIds ?? [];
+    if (grantArmIds.length > 0) accessArms.push({ _id: { $in: grantArmIds } });
 
     const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms });
     return results.map(r => r.toJSON() as IDataLakeDocument);

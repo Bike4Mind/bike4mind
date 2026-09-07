@@ -11,6 +11,7 @@ import {
   IFabFileChunkRepository,
   IUserRepository,
   IProjectRepository,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
   ISkillRepository,
@@ -107,6 +108,12 @@ export interface ToolContext {
       IDataLakeRepository,
       'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
     >;
+    /**
+     * Access-grant lookup for the retrieval resolver's grant arm, so a lake the caller reaches
+     * only by an owner/curator grant grounds chat as it browses. Optional - absent means the
+     * knowledge tools resolve lake access with no grant arm (see getDynamicDataLakeAccess).
+     */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
      * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch;
