@@ -2,7 +2,13 @@ import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageSe
 import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
-import { ImageModels, isGPTImageModel, isGPTImage2Model } from '@bike4mind/common';
+import {
+  ImageModels,
+  isGPTImageModel,
+  isGPTImage2Model,
+  OPENAI_GPT_IMAGE_1_IMAGE_SIZES,
+  OPENAI_GPT_IMAGE_2_IMAGE_SIZES,
+} from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The image-generation Lambda has a 10-minute timeout. The OpenAI SDK's default
@@ -337,14 +343,24 @@ export class OpenAIImageService extends AIImageService {
         editModel = ImageModels.GPT_IMAGE_2;
       }
 
-      // IMPORTANT: GPT-Image models (1, 1.5, 1-mini) only support: model, image (array), prompt
+      // GPT-Image models (1, 1.5, 1-mini, 2) also accept `size` and `mask`, but only a size
+      // from the resolved model's own supported set - passing a dall-e-2 size (e.g.
+      // 256x256/512x512) or an arbitrary string is a 400 from OpenAI. An invalid/absent size
+      // is omitted so OpenAI's `auto` sizing applies, same as before this validation existed.
       // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
+      const gptImageSizes: readonly string[] = isGPTImage2Model(editModel)
+        ? OPENAI_GPT_IMAGE_2_IMAGE_SIZES
+        : OPENAI_GPT_IMAGE_1_IMAGE_SIZES;
+      const isValidGptImageSize = typeof size === 'string' && gptImageSizes.includes(size);
+
       const response = await openai.images.edit(
         isGPTImageModel(editModel)
           ? {
               model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
               image: [imageFile],
               prompt,
+              ...(isValidGptImageSize ? { size } : {}),
+              ...(maskFile ? { mask: maskFile } : {}),
             }
           : {
               model: editModel as 'dall-e-2',
