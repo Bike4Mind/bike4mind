@@ -1151,4 +1151,25 @@ describe('DataLakeSettingsModal - Test this lake', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not start a test chat for this lake'));
     expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
   });
+
+  it("surfaces the route's own refusal rather than the generic fallback", async () => {
+    // An axios rejection, not a plain Error: the route's reason lives on response.data.error, and
+    // axios's `message` is only "Request failed with status code N" - a plain-Error mock cannot
+    // tell a working extraction from a broken one.
+    startChatWithLakesMock.mockRejectedValue({
+      message: 'Request failed with status code 403',
+      response: { data: { error: 'You do not manage data lake lake-1' } },
+    });
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId(`datalake-settings-test-btn-${openLake.id}`));
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('You do not manage data lake lake-1'));
+  });
 });
