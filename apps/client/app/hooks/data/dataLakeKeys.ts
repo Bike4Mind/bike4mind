@@ -49,6 +49,13 @@ export const dataLakeKeys = {
   /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
    *  is the moment a pending "indexing" badge should become measured (the message carries no lake id). */
   healthRoot: ['dataLakeHealth'] as const,
+  /**
+   * One lake's unanswered duplicate groups (GET /api/data-lakes/:id/membership-duplicates), #2238.
+   * Kept out of the `health` key even though both report duplicates: this one is manage-gated and
+   * ruling-aware, so a reader who may see `health` may get a 4xx here, and sharing a key would let
+   * one surface's permission rejection blank the other.
+   */
+  membershipDuplicates: (dataLakeId: string) => ['dataLakeMembershipDuplicates', dataLakeId] as const,
   /** One lake's count of under-chunked files (GET /api/data-lakes/:id/rechunk) - the "Rebuild
    *  passages" badge, polled while a rebuild drains. */
   rebuildStatus: (dataLakeId: string) => ['dataLakeRebuildStatus', dataLakeId] as const,

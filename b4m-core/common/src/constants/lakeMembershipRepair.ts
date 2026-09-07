@@ -9,7 +9,13 @@
  * Nothing here mutates anything. A plan is a proposal.
  */
 
-import { byNewestFirst, type DuplicateBucket, type DuplicateGroup } from './lakeMembershipHealth';
+import {
+  byNewestFirst,
+  type DuplicateBucket,
+  type DuplicateGroup,
+  type MembershipScopeDisclosure,
+  type WireDuplicateGroup,
+} from './lakeMembershipHealth';
 import type { ILakeMembershipDecision } from '../types/entities/LakeMembershipDecisionTypes';
 
 /**
@@ -115,6 +121,41 @@ export interface MembershipRepairPlan {
   settled: PlannedRepairGroup[];
   /** Total members this plan would remove if executed with no decisions supplied. */
   removalCount: number;
+}
+
+/**
+ * The plan as GET /api/data-lakes/:id/membership-duplicates ships it (#2238): the groups a manager
+ * still has to answer, already stripped to the wire shape.
+ *
+ * Declared beside the plan rather than in the service that builds it (`loadMembershipRepairPlan`)
+ * for the same reason `LakeHealthApiResponse` is: the route, the service and the client hook all
+ * have to agree on it, and a shape declared in the service is one the client has to restate.
+ */
+export interface MembershipRepairPlanRead {
+  /**
+   * Groups still awaiting an answer, worst-understood first (see `summarizeLakeMembership`), capped.
+   * Includes groups whose identity is proven: nothing executes a repair plan automatically today, so
+   * from this door's point of view a collapsible group is simply one nobody has answered yet.
+   */
+  open: WireDuplicateGroup[];
+  /** Exact count of open groups even when `open` is capped, so no surface implies fewer. */
+  openGroupCount: number;
+  /**
+   * Groups a still-valid ruling answers, and which are therefore NOT offered. Reported so a surface
+   * can say what it is suppressing rather than presenting a settled lake as one with no history.
+   */
+  settledGroupCount: number;
+  /**
+   * Groups whose recorded ruling was never carried out - a `keep-newest`/`keep-specific` whose
+   * removal failed after the ruling was written (the decision door records first on purpose). These
+   * are counted here AND offered in `open`, because re-answering is the recovery: the ruling upserts
+   * over itself and the removal is retried.
+   */
+  stalledGroupCount: number;
+  /** The arm and principal every number above was computed over. */
+  scope: MembershipScopeDisclosure;
+  /** True when the lake exceeded the member scan bound, so `openGroupCount` is a lower bound. */
+  scanTruncated: boolean;
 }
 
 /**

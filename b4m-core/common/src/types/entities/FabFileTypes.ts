@@ -668,6 +668,38 @@ export type DataLakeMembershipScope =
  * All three fields optional and an absent object means "no lake arms": the fail-safe direction for
  * every door that cannot resolve its buckets is to omit them, never to widen.
  */
+/**
+ * One lake member as the MEMBERSHIP dimension reads it (#2245): who is in the lake, by which arm,
+ * what identifies the document, and how confidently two copies can be called identical.
+ *
+ * Structurally satisfies `LakeMembershipMemberInput`, which is the point - every consumer feeds
+ * these rows straight into `buildDuplicateGroups` / `summarizeLakeMembership`. Declared once so the
+ * lake-wide scan and the per-name sibling lookup cannot drift on what they project; a field added to
+ * one aggregation and not the other is what silently sends the refinement down a weaker tier.
+ */
+export interface LakeMembershipMemberRow {
+  fabFileId: string;
+  fileName?: string;
+  // Tri-state is preserved deliberately: `null` ("chunked, no extractable text") must not be
+  // confused with an absent hash, and NEITHER proves identity. See isFingerprint.
+  serverTextHash: string | null;
+  fileSize: number | null;
+  createdAt: Date | null;
+  /**
+   * The uploader. Neither membership arm carries an ownership conjunct, so a same-name group can
+   * span contributors and the repair arm gates removal on that - see DuplicateGroupMember.userId.
+   */
+  userId: string | null;
+  arm: MembershipArm;
+  /**
+   * The two stronger source-identity signals, read only to split a same-name group (#2238). Both are
+   * null on the doors that record neither - a plain single-file upload has no folder path and no
+   * Drive id - which is the file-name tier this report already used before they existed.
+   */
+  relativePath: string | null;
+  driveFileId: string | null;
+}
+
 export interface AttachmentLakeAccess {
   lakeMemberships?: DataLakeMembershipScope[];
   dataLakeTags?: string[];
@@ -1201,18 +1233,33 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findDataLakeMembershipMembers(
     scope: DataLakeMembershipScope,
     limit?: number
-  ): Promise<
-    Array<{
-      fabFileId: string;
-      fileName?: string;
-      // Tri-state is preserved deliberately: `null` ("chunked, no extractable text") must not be
-      // confused with an absent hash, and NEITHER proves identity. See isFingerprint.
-      serverTextHash: string | null;
-      fileSize: number | null;
-      createdAt: Date | null;
-      arm: MembershipArm;
-    }>
-  >;
+  ): Promise<Array<LakeMembershipMemberRow>>;
+  /**
+   * The same per-member facts, narrowed to ONE file name within one lake - the same-identity lookup
+   * the admission checkpoint runs per admitted file (#2238), where scanning the lake would put a
+   * tag-range fetch on the ingestion hot path.
+   *
+   * Returns the whole same-name set, NOT only the rows sharing the caller's identity tier. The
+   * refinement is `buildDuplicateGroups`' to make, and a decision is recorded against the group that
+   * function builds, so a repository that pre-filtered would hand back a set `groupIdentity` was
+   * never computed over.
+   *
+   * `excludeFabFileId` drops the candidate itself, which is normally already a member by the time
+   * the admission check runs (the checkpoint is POST-chunk). `detectSameIdentityAdmission` requires
+   * the candidate to be absent from its sibling list, so leaving it in reports a member as its own
+   * duplicate. OMIT it to read the WHOLE same-name group - what the decision door needs, since a
+   * ruling is stamped over every member the group holds.
+   *
+   * `limit` bounds one name's set rather than the lake's - a bound this can hit only on a name held
+   * by more copies than any decision surface could present, so it truncates rather than reporting
+   * partiality.
+   */
+  findLakeMemberSiblingsByFileName(
+    scope: DataLakeMembershipScope,
+    fileName: string,
+    excludeFabFileId?: string | null,
+    limit?: number
+  ): Promise<Array<LakeMembershipMemberRow>>;
   /**
    * Per-member facts owner-triggered convergence (#1681) decides on. Deliberately NOT
    * `findDataLakeHealthMembers`: convergence asks a different question and needs three fields health

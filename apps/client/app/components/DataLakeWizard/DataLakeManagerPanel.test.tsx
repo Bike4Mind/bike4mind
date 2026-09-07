@@ -63,6 +63,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetLakeMemoryHealth: () => ({ data: undefined, isLoading: false }),
     useBuildLakeMemory: mutation,
     usePurgeLakeMemory: mutation,
+    // The duplicates chip in the info panel reads this. A factory mock replaces the whole module,
+    // so an unlisted export is `undefined` and every render here throws - not a missing assertion
+    // but 41 broken tests.
+    useGetLakeMembershipDuplicates: () => ({ data: undefined, isLoading: false }),
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),

@@ -99,6 +99,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   computeDataLakeStats: vi.fn(),
   findDataLakeHealthMembers: vi.fn(),
   findDataLakeMembershipMembers: vi.fn().mockResolvedValue([]),
+  findLakeMemberSiblingsByFileName: vi.fn().mockResolvedValue([]),
   findLakeConvergenceMembers: vi.fn(),
   findLakeMemoryExtractionMembers: vi.fn(),
   findFileIdsMissingChunkedCharCount: vi.fn(),

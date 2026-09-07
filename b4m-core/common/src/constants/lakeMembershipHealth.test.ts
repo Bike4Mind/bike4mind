@@ -199,6 +199,67 @@ describe('summarizeLakeMembership grouping', () => {
   });
 });
 
+describe('source-identity refinement', () => {
+  it('reports a same-name group on the file-name tier when nothing stronger is recorded', () => {
+    const report = summarize([member(), member()]);
+
+    expect(report.duplicateNameCount).toBe(1);
+    expect(report.duplicateGroups[0].tier).toBe('fileName');
+    expect(report.duplicateGroups[0].memberCount).toBe(2);
+  });
+
+  it('does NOT report two same-named files at different relativePaths', () => {
+    // The false pair the bare file-name tier is known to produce. Offering to collapse it is the
+    // one error this report cannot afford, since acting on it removes membership.
+    const report = summarize([member({ relativePath: 'a/' }), member({ relativePath: 'b/' })]);
+
+    expect(report.duplicateNameCount).toBe(0);
+    expect(report.duplicateMemberCount).toBe(0);
+    expect(report.bucketCounts).toEqual({ 'proven-identical': 0, differing: 0, unverified: 0 });
+  });
+
+  it('drops the members whose identity differs from the NEWEST, keeping one group for the name', () => {
+    // Two generations under `docs/` plus an unrelated file of the same name elsewhere. The name must
+    // still yield at most ONE group: the ruling is stored against (lake, fileName), so two groups
+    // would share one tombstone key and a decision about one pair would settle the other.
+    const newest = member({ relativePath: 'docs/', createdAt: new Date('2026-03-01T00:00:00Z') });
+    const older = member({ relativePath: 'docs/', createdAt: new Date('2026-01-01T00:00:00Z') });
+    const unrelated = member({ relativePath: 'archive/', createdAt: new Date('2026-02-01T00:00:00Z') });
+
+    const report = summarize([older, unrelated, newest]);
+
+    expect(report.duplicateGroups).toHaveLength(1);
+    expect(report.duplicateGroups[0].tier).toBe('relativePath');
+    expect(report.duplicateGroups[0].members.map(m => m.fabFileId)).toEqual([newest.fabFileId, older.fabFileId]);
+    // Counted over the REFINED group, not the name collision: the unrelated member is not a duplicate.
+    expect(report.duplicateMemberCount).toBe(2);
+  });
+
+  it('matches on driveFileId even when the file was renamed, and never on the name alone', () => {
+    const renamed = member({ fileName: 'policy-v2.md', driveFileId: 'd1' });
+    const original = member({ fileName: 'policy-v2.md', driveFileId: 'd1' });
+    expect(summarize([renamed, original]).duplicateGroups[0].tier).toBe('driveFileId');
+
+    // Same name, different Drive documents: not a duplicate. The stronger tier wins, so the shared
+    // name cannot pull them together.
+    const twoDocs = summarize([member({ driveFileId: 'd1' }), member({ driveFileId: 'd2' })]);
+    expect(twoDocs.duplicateNameCount).toBe(0);
+  });
+
+  it('keeps the identity signals out of the wire payload', () => {
+    const wire = toWireMembershipReport(
+      summarize([member({ relativePath: 'docs/' }), member({ relativePath: 'docs/' })])
+    );
+    const [m] = wire.duplicateGroups[0].members;
+
+    // A relativePath is a slice of the uploader's local folder tree; the derived `tier` is what a
+    // client needs and it lives on the group.
+    expect(m).not.toHaveProperty('relativePath');
+    expect(m).not.toHaveProperty('driveFileId');
+    expect(wire.duplicateGroups[0].tier).toBe('relativePath');
+  });
+});
+
 describe('summarizeLakeMembership disclosure and shape', () => {
   it('reports the arm split without grading either arm', () => {
     const report = summarize([

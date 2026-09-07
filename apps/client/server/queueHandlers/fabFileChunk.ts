@@ -643,6 +643,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // transient, so it redid the fetch and the tokenization up to `maxRetries` more times before
     // failing deterministically. Convergence sweeps the LARGEST documents first, which is exactly
     // that population. Now a transient write conflict retries the writes alone.
+    // The fingerprint THIS run committed, lifted out of the phase-two scope below because the
+    // same-identity check further down needs it and the `fabFile` document loaded before chunking
+    // still carries the previous run's value. Never re-derived: a second `computeServerTextHash`
+    // call over re-read text is a second chance to disagree with what was actually persisted.
+    let committedServerTextHash: string | null = null;
     const fabFileChunks = await (async () => {
       const prepared = await fabFilesService.prepareFabFileChunks(
         user,
@@ -654,6 +659,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         },
         chunkAdapters
       );
+      committedServerTextHash = prepared.serverTextHash;
       return withTransaction(async () => fabFilesService.commitFabFileChunks(prepared, chunkAdapters));
     })().catch(async (err: unknown) => {
       // A stale-claim takeover already reassigned this file to a successor mid-run (#1802 Phase
@@ -825,6 +831,47 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
     } catch (err) {
       logger.error(`Error computing chunk-policy conflict for ${fabFileId}: ${err}`);
+    }
+
+    // Same-identity admission (#2238): does a sibling in a lake this file just joined already claim
+    // this document's identity? Keyed on SOURCE identity, not on the fingerprint above - the case a
+    // corpus assembled over time produces is two REVISIONS of one document, whose text differs by
+    // definition, so a hash comparison would only ever catch an exact re-upload.
+    //
+    // HERE, not at the membership write, because the ruling an owner records is stamped with
+    // `groupIdentity` - which covers each member's `serverTextHash`. Detect before chunking and
+    // every fingerprint is still absent, so the identity moves the instant this run stamps one and
+    // the tombstone is stale before the owner ever sees the question.
+    //
+    // Report-only and permanently so, for the same reason as the verdict above and one more: a
+    // same-named upload is very often a legitimate revision, which is precisely the pattern that
+    // produced the duplicated corpora this check came from. A gate would have refused the
+    // CORRECTED copies. The offer is made to the lake's manager afterwards (see
+    // POST /api/data-lakes/:id/membership-decisions); this only records that there is one to make.
+    //
+    // Separate try from the recompute above, not a widening of it: that block already ran and
+    // persisted its conflict, and folding this in would report a duplicate-detection failure as a
+    // chunk-policy error.
+    try {
+      await dataLakeService.detectAdmissionDuplicates(
+        {
+          id: fabFileId,
+          userId: fabFile.userId,
+          fileName: fabFile.fileName,
+          relativePath: fabFile.relativePath,
+          driveFileId: fabFile.driveFileId,
+          // The value this run committed, not `fabFile.serverTextHash` - that document was read
+          // before chunking, so its hash is the PREVIOUS chunking's and would bucket the group
+          // against text this file no longer has.
+          serverTextHash: committedServerTextHash,
+          fileSize: fabFile.fileSize,
+          createdAt: fabFile.createdAt,
+          tags: fabFile.tags,
+        },
+        { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository }, logger }
+      );
+    } catch (err) {
+      logger.error(`Error detecting same-identity admission for ${fabFileId}: ${err}`);
     }
 
     // The chunk rows and `chunked: true` are committed by now, so a failure here is NOT just a
