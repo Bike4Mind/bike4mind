@@ -3,11 +3,13 @@ import { canManageLake, type ManageActor } from './manageRule';
 import { makeLakeGrantResolver } from './authorizeLakeManage';
 
 /**
- * The reads a per-turn manage re-check needs. Both are OPTIONAL and both degrade CLOSED:
- * without the grant repo the curator, org-grant and transferred-owner rungs cannot pass, and
- * without the org repo the org-admin rung cannot. A caller that has not wired them therefore
- * narrows the admission rather than widening it - but it also revokes a legitimate maintainer,
- * so every path that populates `preauthorizedLakeIds` is expected to wire both.
+ * The reads a per-turn manage re-check needs. Both are OPTIONAL and both degrade CLOSED: without
+ * the org repo the org-admin rung cannot pass, and without the grant repo neither can the curator
+ * and org-grant rungs - nor the owner rung, which is refused outright in that case rather than
+ * falling back to the creator (see the creator-rung note in filterStillManagedLakes). A caller
+ * that has not wired them therefore narrows the admission rather than widening it - but it also
+ * revokes a legitimate maintainer, so every path that populates `preauthorizedLakeIds` is
+ * expected to wire both.
  */
 export interface ManageRecheckAdapter {
   dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
@@ -54,5 +56,19 @@ export async function filterStillManagedLakes(
   ]);
 
   const actor: ManageActor = { userId: actorUserId, isAdmin: false, administeredOrgIds };
-  return lakes.filter(lake => canManageLake(lake, actor, grantResolver.get(lake.id)));
+  // The creator rung is the one rung that passes on ABSENT evidence: resolveEffectiveOwnerIds falls
+  // back to `createdByUserId` when it sees no owner grant, and an ownership TRANSFER is exactly an
+  // owner grant that never mutates that field - so with no grant repo wired a former owner would
+  // still read as the effective owner, the one way this re-check could degrade OPEN. Blanking the
+  // creator denies that rung alone: canManageLake's owner rung is guarded on the truthiness of the
+  // field and already fails closed on a blank identity, so the shared rule needs no change, and
+  // `organizationId` is carried through so the grant-free org-admin rung stays available.
+  const trustCreatorRung = !!db.dataLakeAccessGrants;
+  return lakes.filter(lake =>
+    canManageLake(
+      trustCreatorRung ? lake : { createdByUserId: '', organizationId: lake.organizationId },
+      actor,
+      grantResolver.get(lake.id)
+    )
+  );
 }

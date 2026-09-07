@@ -67,6 +67,25 @@ describe('filterStillManagedLakes', () => {
     expect(kept).toEqual([]);
   });
 
+  // The creator rung reads no grants, so it is the one rung that would still pass with the grant
+  // repo unwired - and an ownership TRANSFER lives in an owner grant that never touches
+  // createdByUserId, so it would pass for someone who no longer owns the lake. Refused instead.
+  it('refuses the creator rung when no grant reader is wired', async () => {
+    const kept = await filterStillManagedLakes([lake({ id: 'mine', createdByUserId: ACTOR })], ACTOR, {
+      organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) } as never,
+    });
+
+    expect(kept).toEqual([]);
+  });
+
+  it('still admits the org-admin rung with no grant reader - the refusal is scoped to the creator', async () => {
+    const kept = await filterStillManagedLakes([lake({ id: 'a', organizationId: 'org-1' })], ACTOR, {
+      organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue(['org-1']) } as never,
+    });
+
+    expect(kept.map(l => l.id)).toEqual(['a']);
+  });
+
   it('batches into a single grant read across every lake', async () => {
     const db = readers();
     await filterStillManagedLakes([lake({ id: 'a' }), lake({ id: 'b' }), lake({ id: 'c' })], ACTOR, db);
