@@ -75,6 +75,17 @@ describe('/api/pyodide-sandbox CSP', () => {
     expect(headers['X-Frame-Options']).toBe('SAMEORIGIN');
   });
 
+  it('permits WebAssembly compilation but not string eval', () => {
+    // Pyodide IS WebAssembly, and CSP3 gates wasm compilation on script-src. Omitting this
+    // token does not degrade anything - loadPyodide() dies on instantiateStreaming and Python
+    // never starts. 'unsafe-eval' stays out: the narrow token allows wasm and still denies
+    // js.eval() to guest Python. Both halves measured on a preview.
+    const scriptSrc = directives(invoke().headers['Content-Security-Policy'])['script-src'];
+    expect(scriptSrc).toContain("'wasm-unsafe-eval'");
+    expect(scriptSrc).not.toContain("'unsafe-eval' ");
+    expect(scriptSrc.split(' ')).not.toContain("'unsafe-eval'");
+  });
+
   it('permits the blob Worker the sandbox depends on', () => {
     const parsed = directives(invoke().headers['Content-Security-Policy']);
     expect(parsed['worker-src']).toBe('blob:');

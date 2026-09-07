@@ -47,7 +47,13 @@ function buildSandboxCsp(): string {
     // The shell script is inline; the Worker is a blob; the Worker importScripts() pyodide.js
     // from the distribution. A blob Worker inherits THIS policy, so the distribution has to be
     // named here as well as in connect-src.
-    `script-src 'unsafe-inline' blob: ${pyodideSources}`,
+    //
+    // 'wasm-unsafe-eval' is load-bearing, not a nicety: CSP3 gates WebAssembly compilation on
+    // script-src, and Pyodide IS WebAssembly. Without it loadPyodide() dies on
+    // WebAssembly.instantiateStreaming with a CompileError and Python never starts.
+    // Note what is deliberately NOT granted: 'unsafe-eval'. The narrow token permits wasm and
+    // still refuses string-to-JS eval, so guest Python cannot reach js.eval().
+    `script-src 'unsafe-inline' blob: 'wasm-unsafe-eval' ${pyodideSources}`,
     // The only network reach guest Python has. Pyodide fetches its own wasm and wheels here;
     // there is deliberately no 'self', so the app origin is unreachable from inside.
     `connect-src ${pyodideSources}`,

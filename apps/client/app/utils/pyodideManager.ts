@@ -35,6 +35,17 @@ export const PYODIDE_SANDBOX_SRC = '/api/pyodide-sandbox';
 const SANDBOX_HANDSHAKE_TIMEOUT_MS = 15000;
 
 /**
+ * How long the sandbox may go silent DURING initialization before we give up.
+ *
+ * Idle rather than total, because Pyodide is a multi-megabyte download and a slow link is not a
+ * failure - every `initializing` message re-arms this. What it catches is the runtime dying
+ * inside third-party code: a CSP that starves Pyodide, for instance, fails in
+ * `WebAssembly.instantiateStreaming` deep in pyodide.js, which logs a console warning and never
+ * rejects, so the worker has nothing to report and the Run button spins forever.
+ */
+const PYODIDE_INIT_IDLE_TIMEOUT_MS = 60000;
+
+/**
  * The sandbox shell's handshake. It posts this once the Worker is constructed; until then the
  * frame cannot accept an `initialize`.
  */
@@ -93,6 +104,7 @@ class PyodideManager {
   private executeRejecter: ((error: Error) => void) | null = null;
   private initResolver: (() => void) | null = null;
   private initRejecter: ((error: Error) => void) | null = null;
+  private initIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners: Set<(state: PyodideManagerState) => void> = new Set();
 
   /**
@@ -167,6 +179,7 @@ class PyodideManager {
 
   /** Drop the sandbox, which takes the Worker inside it with it. */
   private teardownSandbox(): void {
+    this.clearInitWatchdog();
     if (this.messageListener) {
       window.removeEventListener('message', this.messageListener);
       this.messageListener = null;
@@ -176,6 +189,33 @@ class PyodideManager {
     this.frameReady = null;
   }
 
+  /**
+   * (Re)start the initialization watchdog. Called when `initialize` is posted and on every
+   * progress message, so it only fires when the sandbox has genuinely gone quiet.
+   */
+  private armInitWatchdog(): void {
+    this.clearInitWatchdog();
+    this.initIdleTimer = setTimeout(() => {
+      this.initIdleTimer = null;
+      const reject = this.initRejecter;
+      this.initResolver = null;
+      this.initRejecter = null;
+      // Not memoized: the next Run gets a fresh sandbox rather than this failure forever.
+      this.initPromise = null;
+      this.teardownSandbox();
+      const error = new Error('The Python runtime stopped responding while loading. Reload the page and try again.');
+      this.updateState({ isLoading: false, isExecuting: false, isReady: false, error: error.message });
+      reject?.(error);
+    }, PYODIDE_INIT_IDLE_TIMEOUT_MS);
+  }
+
+  private clearInitWatchdog(): void {
+    if (this.initIdleTimer) {
+      clearTimeout(this.initIdleTimer);
+      this.initIdleTimer = null;
+    }
+  }
+
   private postToSandbox(message: PyodideWorkerMessage): void {
     this.frame?.contentWindow?.postMessage(message, '*');
   }
@@ -183,6 +223,8 @@ class PyodideManager {
   private handleWorkerMessage(msg: PyodideWorkerResponse): void {
     switch (msg.type) {
       case 'initializing':
+        // Proof of life: the runtime is still loading, so the watchdog starts over.
+        if (this.initRejecter) this.armInitWatchdog();
         this.updateState({
           isLoading: true,
           loadProgress: msg.progress,
@@ -191,6 +233,7 @@ class PyodideManager {
         break;
 
       case 'ready':
+        this.clearInitWatchdog();
         this.updateState({
           isLoading: false,
           loadProgress: 100,
@@ -224,6 +267,7 @@ class PyodideManager {
         break;
 
       case 'error':
+        this.clearInitWatchdog();
         this.updateState({
           isLoading: false,
           isExecuting: false,
@@ -272,6 +316,7 @@ class PyodideManager {
           new Promise<void>((resolve, reject) => {
             this.initResolver = resolve;
             this.initRejecter = reject;
+            this.armInitWatchdog();
             this.postToSandbox({ type: 'initialize', baseUrl: this.baseUrl });
           })
       )

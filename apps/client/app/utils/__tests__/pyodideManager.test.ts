@@ -330,6 +330,61 @@ describe('sandbox transport', () => {
 
     expect(frame.isConnected).toBe(false);
   });
+
+  // Measured failure, not a hypothetical: a sandbox CSP that omitted 'wasm-unsafe-eval' killed
+  // Pyodide inside WebAssembly.instantiateStreaming. pyodide.js logged a console warning and
+  // never rejected, so the worker had nothing to report - initialize() hung and the Run button
+  // spun forever. The runtime dying in third-party code has to be an error, not silence.
+  it('rejects initialize when the sandbox goes silent mid-load', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pyodideManager, frame, pending } = await readySandbox();
+      const settled = pending.then(() => 'resolved').catch((error: Error) => error.message);
+
+      frame.dispatchEvent(new Event('load'));
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'initializing', progress: 30, message: 'Initializing Python runtime...' },
+          source: frame.contentWindow,
+        })
+      );
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await expect(settled).resolves.toMatch(/stopped responding/i);
+      expect(pyodideManager.getState().isReady).toBe(false);
+      // The frame goes with it, so the next Run gets a fresh sandbox rather than this one.
+      expect(frame.isConnected).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a slow load keep going as long as it reports progress', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pyodideManager, frame, pending } = await readySandbox();
+      void pending.catch(() => {});
+
+      // Pyodide is a multi-megabyte download; a slow link is not a failure.
+      for (let i = 0; i < 5; i++) {
+        await vi.advanceTimersByTimeAsync(40_000);
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: { type: 'initializing', progress: 30 + i, message: 'loading' },
+            source: frame.contentWindow,
+          })
+        );
+        await Promise.resolve();
+      }
+
+      expect(pyodideManager.getState().error).toBeNull();
+      expect(frame.isConnected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('execution timeout', () => {
