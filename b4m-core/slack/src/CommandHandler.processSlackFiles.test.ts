@@ -96,9 +96,11 @@ describe('processSlackFiles', () => {
 
     expect(result.fabFileIds).toEqual([]);
     expect(result.errors).toHaveLength(1);
-    // Wording is user-visible in Slack: keep the name, the type and "Skipping.".
+    // Wording is user-visible in Slack: keep the name, the type and "Skipping.". Names the
+    // extension ("zip"), not the client's claimed mimetype - reporting the claim let it name a
+    // type that IS on the allow-list for other files, e.g. a .py claiming text/plain.
     expect(result.errors[0]).toContain('archive.zip');
-    expect(result.errors[0]).toContain('application/zip');
+    expect(result.errors[0]).toContain('unsupported type zip');
     expect(result.errors[0]).toMatch(/skipping\./i);
     expect(downloadFile).not.toHaveBeenCalled();
   });
@@ -268,5 +270,37 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
 
     expect(result.fabFileIds).toEqual(['fab-1']);
     expect(result.errors).toEqual([]);
+  });
+
+  it('checks the org storage limit for 2+ attachments from an org-affiliated user without re-executing the lookup', async () => {
+    // A real Mongoose Query is a one-shot thenable: awaiting (or `.exec()`-ing) the SAME query
+    // instance a second time throws "Query was already executed". `Organization.findById(id)`
+    // must be memoized as an already-executed Promise, not as the raw Query, or the second
+    // attachment's `checkStorageLimitForFile` call - which awaits the memoized value again -
+    // reproduces that throw and wrongly refuses an otherwise-valid file.
+    let executed = false;
+    const execute = () => {
+      if (executed) throw new Error('Query was already executed: organizations.findOne(...)');
+      executed = true;
+      return Promise.resolve({ storageLimit: 1000, currentStorageSize: 0 });
+    };
+    organizationFindById.mockReturnValue({
+      exec: execute,
+      then: (resolve: never, reject: never) => execute().then(resolve, reject),
+    });
+
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', organizationId: 'org-1' } as never;
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const result = await handler.processSlackFiles([
+      attachment({ id: 'F1', name: 'one.pdf' }),
+      attachment({ id: 'F2', name: 'two.pdf' }),
+    ] as never);
+
+    expect(result.errors).toEqual([]);
+    expect(result.fabFileIds).toEqual(['fab-1', 'fab-1']);
+    // Memoized: the org lookup is resolved once per message, not once per attachment.
+    expect(organizationFindById).toHaveBeenCalledTimes(1);
   });
 });
