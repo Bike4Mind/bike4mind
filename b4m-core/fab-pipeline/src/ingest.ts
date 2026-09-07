@@ -172,8 +172,12 @@ async function fetchWithoutRedirects(url: string, timeoutMs: number) {
 
 // Block-level elements after which we force a line break, since cheerio's `.text()` on the whole
 // body otherwise concatenates every text node with no separator at all - a heading, a list item
-// and the next paragraph would run together as one word-jammed line.
-const BLOCK_LEVEL_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, tr, div';
+// and the next paragraph would run together as one word-jammed line. Includes the common HTML5
+// semantic containers (article/section/header/footer/main), definition-list terms/definitions,
+// and figure/table captions - any of these sitting directly against a sibling with no intervening
+// div/p/li reproduces the same word-jamming bug for that tag.
+const BLOCK_LEVEL_SELECTOR =
+  'h1, h2, h3, h4, h5, h6, p, li, blockquote, tr, div, article, section, header, footer, main, dt, dd, figcaption, caption';
 
 /**
  * Extract readable text from the WHOLE document, not just `<p>` elements. The single collector
@@ -197,6 +201,15 @@ function extractReadableText($: CheerioAPI): string {
   $('head, script, style, noscript').remove();
   $('br').replaceWith('\n');
 
+  // The stash-and-splice marker is scoped to a per-call random token, not a fixed string - this
+  // function processes arbitrary third-party HTML, and a fixed marker could collide with a page's
+  // own text (accidentally, or by design) and get silently overwritten with unrelated pre-block
+  // content. A private-use-area delimiter (never a real character in ordinary or malicious page
+  // text) plus the nonce makes an unintended match effectively impossible.
+  const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const markerFor = (index: number) => `\uE000PRE${nonce}_${index}\uE000`;
+  const markerPattern = new RegExp(`\\uE000PRE${nonce}_(\\d+)\\uE000`, 'g');
+
   const preBlocks: string[] = [];
   $('pre').each((_index, element) => {
     const text = $(element).text();
@@ -205,7 +218,7 @@ function extractReadableText($: CheerioAPI): string {
     // being classified as having no extractable text.
     if (text) {
       preBlocks.push(text);
-      $(element).replaceWith(`@@PRE_BLOCK_${preBlocks.length - 1}@@\n`);
+      $(element).replaceWith(`${markerFor(preBlocks.length - 1)}\n`);
     } else {
       $(element).remove();
     }
@@ -227,7 +240,13 @@ function extractReadableText($: CheerioAPI): string {
     .filter(Boolean)
     .join('\n');
 
-  return collapsed.replace(/@@PRE_BLOCK_(\d+)@@/g, (_match, index) => preBlocks[Number(index)]);
+  // Bounds-checked defensively: every marker this function emits has a valid index, but a
+  // corrupted/out-of-range match should never splice in the literal string "undefined" - leave
+  // it as the harmless marker text instead.
+  return collapsed.replace(markerPattern, (match, indexStr) => {
+    const index = Number(indexStr);
+    return index >= 0 && index < preBlocks.length ? preBlocks[index] : match;
+  });
 }
 
 // Fetch and parse HTML content from a URL; returns the page title and text.
@@ -332,7 +351,16 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
     const original = redactUrlCredentials(url);
     const final = redactUrlCredentials(currentUrl);
     const fetched = original === final ? original : `${original} -> ${final}`;
-    logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
+    // Distinguished from the ordinary success log below: an empty extraction still returns
+    // successfully (by design - see `extractReadableText`), so without this line it looks
+    // identical in the logs to a normal fetch that happened to parse into real content.
+    if (urlContent === '') {
+      logger.log(
+        `Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}, but no extractable text was found`
+      );
+    } else {
+      logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
+    }
     return { title, textContent: urlContent, mimeType: urlMimeType, ext: mime.extension(urlMimeType) || null };
   } catch (error) {
     // Redacted for the same reason as the success log: this metadata is attached to the log record, and
