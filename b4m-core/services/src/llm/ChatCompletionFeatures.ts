@@ -91,6 +91,7 @@ import {
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
+import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
@@ -2289,6 +2290,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    content, hedged by whether the scan was complete.
       let used = 0;
       const sections: string[] = [];
+      // Fed the budget-sliced text below, so detection sees exactly what is injected.
+      const conflictPassages: RetrievalPassage[] = [];
       const sourceFileIds: string[] = [];
       const injectedChunkIds: string[] = [];
       const injectedScores: number[] = [];
@@ -2328,6 +2331,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})${datedClause}`
             : `### ${safeName} (ID: ${candidate.fabFileId})${datedClause}`;
         sections.push(`${heading}\n${text}`);
+        conflictPassages.push({ fabFileId: candidate.fabFileId, text });
         used += text.length;
       }
 
@@ -2439,6 +2443,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         'one is available to you, and otherwise say plainly that you can search this library but cannot count it, ' +
         'and that the total is shown on its page in the product. Never guess a number, and never suggest queries, ' +
         'consoles or other infrastructure steps for counting it.\n\n';
+      // Last of the column-0 notes, nearest the content it describes: the injected passages
+      // contradict each other, so the model must surface that rather than pick the top-ranked side.
+      const conflictNote = buildRetrievalConflictNote(conflictPassages);
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +
@@ -2450,7 +2457,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
-      // The header, capability and coverage notes are ours and stay OUTSIDE the block at column 0;
+      // The header, capability, coverage and conflict notes are ours and stay OUTSIDE the block at column 0;
       // only the retrieved sections go inside it. renderRetrievedContentBlock owns the same
       // `\n\n---\n\n` join this used to do inline, so the separator is unchanged.
       const retrievedContext: IMessage = {
@@ -2460,6 +2467,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           `${GROUNDED_NO_INVENTION_RULE}\n\n` +
           capabilityNote +
           coverageNote +
+          conflictNote +
           renderRetrievedContentBlock(sections),
       };
 

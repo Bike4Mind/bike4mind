@@ -3100,3 +3100,82 @@ describe('search_knowledge_base narrows lake access to the session lake', () => 
     expect(args.dataLakeTags).toEqual(['datalake:mine', 'datalake:other']);
   });
 });
+
+describe('search_knowledge_base flags passages that contradict each other', () => {
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 2,
+    filesScoped: 2,
+    filesScanned: 2,
+    chunksScanned: 2,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  const hitOf = (fileId: string, chunkText: string) => ({
+    chunkId: `chunk-${fileId}`,
+    fileId,
+    fileName: `${fileId}.pdf`,
+    fileTags: [],
+    chunkText,
+    score: 0.81,
+  });
+
+  function conflictContext(): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('keeps the conflict note at column 0, outside the untrusted block', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')],
+      totalChunksSearched: 2,
+      filesInScope: 2,
+      scan,
+    });
+
+    const out = await run(conflictContext());
+
+    const note = out.indexOf('NOTE: the retrieved documents below disagree');
+    expect(note).toBeGreaterThanOrEqual(0);
+    // Inside the block the defang pass would indent it, and it would read as document text.
+    expect(note).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+    expect(out).toContain('metric-disagreement: 1');
+    expect(out).toContain('file-a');
+    expect(out).toContain('file-b');
+  });
+
+  it('emits nothing when the passages agree, so the note cannot ship always-on', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 99.9%.')],
+      totalChunksSearched: 2,
+      filesInScope: 2,
+      scan,
+    });
+
+    const out = await run(conflictContext());
+
+    expect(out).not.toContain('disagree with each other');
+  });
+});

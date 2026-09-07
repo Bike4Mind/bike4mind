@@ -16,6 +16,7 @@ import {
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
+import { buildRetrievalConflictNote, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { attributeAccessedLakeIds } from '../../../../dataLakeService/attributeAccessedLakes';
@@ -306,6 +307,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // Fetch chunks for each file, respecting char budget
           let totalCharsUsed = 0;
           const sections: string[] = [];
+          // Pre-defang `content`, which is the same bytes modulo the defang's leading spaces.
+          const conflictPassages: RetrievalPassage[] = [];
           const retrievedFiles: IFabFileDocument[] = [];
           const zeroChunkFiles: IFabFileDocument[] = [];
 
@@ -419,6 +422,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 defangRetrievedContent(content)
             );
 
+            conflictPassages.push({ fabFileId: file.id, text: content });
             totalCharsUsed += content.length;
             retrievedFiles.push(file);
           }
@@ -589,7 +593,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // route the model here for "more detail" - the exact moment a leading question tempts it to
           // top off the answer with an unsupported specific. Same shared const as the other surfaces.
           // The rule is our framing and stays outside the delimited content block.
-          const result = header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + renderRetrievedContentBlock(sections);
+          // Last of our column-0 framing, nearest the content it describes: the documents the caller
+          // named disagree with each other, so say so rather than let the model pick a side.
+          const result =
+            header +
+            '\n' +
+            `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+            buildRetrievalConflictNote(conflictPassages) +
+            renderRetrievedContentBlock(sections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

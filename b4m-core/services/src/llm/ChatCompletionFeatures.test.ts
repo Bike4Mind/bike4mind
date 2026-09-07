@@ -2676,3 +2676,75 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
     expect((quest.promptMeta as { warnings?: string[] }).warnings?.join(' ')).toContain('stopped advancing');
   });
 });
+
+/**
+ * Forced retrieval is the only always-on retrieval channel, so a corpus that disagrees with itself
+ * reaches the model here whether or not the model chose to search. The note is composed by
+ * retrievalConflictNote.ts (unit-tested there); this locks the WIRING and the column-0 placement.
+ */
+describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
+  const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+
+  const makeCtx = (chunks: Array<{ fabFileId: string; text: string }>) => {
+    const files = [...new Set(chunks.map(c => c.fabFileId))].map(id => ({ id, fileName: `${id}.pdf`, tags: [] }));
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve(
+              chunks.map((c, i) => ({ id: `ch${i}`, fabFileId: c.fabFileId, text: c.text, vector: [1, 0] }))
+            )
+          ),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>) => {
+    const ctx = makeCtx(chunks);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'uptime'
+    );
+    return messages[0]?.content ?? '';
+  };
+
+  it('keeps the note at column 0, outside the untrusted block', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const note = content.indexOf('NOTE: the retrieved documents below disagree');
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(note).toBeLessThan(content.indexOf(BEGIN));
+    expect(content).toContain('metric-disagreement: 1');
+    expect(content).toContain('fileA');
+    expect(content).toContain('fileB');
+  });
+
+  it('says nothing when the injected documents agree', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    expect(content).not.toContain('disagree with each other');
+  });
+});

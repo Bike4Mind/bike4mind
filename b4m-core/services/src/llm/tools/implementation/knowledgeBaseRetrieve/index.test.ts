@@ -1287,3 +1287,53 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
     expect(record).toHaveBeenCalled();
   });
 });
+
+/**
+ * This channel returns whole documents the caller named, so a conflict here is lower-signal than on
+ * the ranked paths - but two explicitly-requested documents disagreeing is still a disagreement the
+ * user should hear. The note is composed by retrievalConflictNote.ts (unit-tested there); this locks
+ * the WIRING and the column-0 placement.
+ */
+describe('retrieve_knowledge_content cross-document conflict note', () => {
+  const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+
+  /** Per-file chunk text, unlike pagedTextChunkRepo above, which serves one document. */
+  function multiFileChunkRepo(byFileId: Record<string, string>) {
+    return {
+      findTextsByFabFileId: vi.fn(async (id: string, opts?: { afterChunkId?: string }) =>
+        opts?.afterChunkId ? [] : [{ id: `${id}-c1`, text: byFileId[id] ?? '' }]
+      ),
+      countByFabFileId: vi.fn(async () => 1),
+    };
+  }
+
+  async function runQuery(byFileId: Record<string, string>) {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() },
+        fabfilechunks: multiFileChunkRepo(byFileId),
+      } as never,
+    });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: Object.keys(byFileId).map(id => makeFile({ id, fileName: `${id}.pdf` })),
+    });
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    return (await tool.toolFn({ query: 'uptime' })) as string;
+  }
+
+  it('keeps the note at column 0, outside the untrusted block', async () => {
+    const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });
+
+    const note = out.indexOf('NOTE: the retrieved documents below disagree');
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(note).toBeLessThan(out.indexOf(BEGIN));
+    expect(out).toContain('metric-disagreement: 1');
+  });
+
+  it('says nothing when the documents agree', async () => {
+    const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 99.9%.' });
+
+    expect(out).not.toContain('disagree with each other');
+  });
+});

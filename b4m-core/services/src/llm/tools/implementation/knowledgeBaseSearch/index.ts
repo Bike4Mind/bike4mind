@@ -26,6 +26,7 @@ import {
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
+import { buildRetrievalConflictNote, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
@@ -105,12 +106,16 @@ function formatSemanticResults(
 ): string {
   let clippedCount = 0;
   let longestChars = 0;
+  // Fed the SERVED text, not r.chunkText: a conflict whose evidence was clipped out of the block
+  // would be a note about content the model cannot check.
+  const conflictPassages: RetrievalPassage[] = [];
   const blocks = results.map((r, i) => {
     // Measured AFTER trim on purpose: the budget governs what this function emits, and the trimmed
     // string is what it emits. A padded chunk that fits once trimmed is served whole, correctly.
     longestChars = Math.max(longestChars, r.chunkText.trim().length);
     const { text, clipped } = servedPassageText(r, maxChunkChars);
     if (clipped) clippedCount++;
+    conflictPassages.push({ fabFileId: r.fileId, text });
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
     // crafted name carries a newline plus a forged marker into the label line. The date needs no
     // such wrap - documentDateClause emits digits and separators only.
@@ -156,11 +161,16 @@ function formatSemanticResults(
     bounding?.budgetBound && bounding.droppedCount > 0
       ? `NOTE: ${bounding.droppedCount} further relevant passage(s) matched but were not included, to stay within a configured retrieval budget. Do not state or imply the knowledge base has nothing further on this topic; call retrieve_knowledge_content for a specific file if you need more.\n\n`
       : '';
+  // Last of the column-0 notes, so it sits nearest the content it describes. The notes above are
+  // about what was reached and how much of it was served; this one is about the served passages
+  // contradicting each other.
+  const conflictNote = buildRetrievalConflictNote(conflictPassages);
   return (
     formatSkipNotice(skipNotice) +
     partial +
     truncated +
     budgetNote +
+    conflictNote +
     `Found ${results.length} relevant passage(s) in the knowledge base \u2014 the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     `${GROUNDED_NO_INVENTION_RULE}\n\n` +
     renderRetrievedContentBlock(blocks)
