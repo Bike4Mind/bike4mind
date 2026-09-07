@@ -96,6 +96,42 @@ describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
     expect(readProfileMock).toHaveBeenCalledTimes(1);
   });
 
+  it('returns false on a shred refusal and keeps the refused belief OUT of the de-dup set', async () => {
+    // Ordering is the property here, not just the boolean. Recording a refused belief would make a
+    // later fact in the same run coalesce onto a subject that was never written: the assert would key
+    // on a non-existent belief, so the fact ends up unreachable rather than merely unwritten.
+    readProfileMock.mockResolvedValue({ principal: LAKE.principal, beliefs: [] });
+    const session = await createLedgerAppendSession(LAKE);
+
+    appendMemoryEventMock.mockResolvedValueOnce(null);
+    const refused = await session.append({
+      summary: 'the coolant pump model is XZ-40',
+      evidenceTier: 'external-facing',
+      embedding: [0, 1, 0],
+    });
+    expect(refused).toBe(false);
+
+    // A near-identical later fact keys on its OWN fresh subject, exactly as if the first append had
+    // never happened. Were the refused belief in the set, this would coalesce onto its subject instead.
+    const second = 'coolant pump is the XZ-40 unit';
+    const sealed = await session.append({ summary: second, evidenceTier: 'external-facing', embedding: [0, 1, 0] });
+
+    expect(sealed).toBe(true);
+    expect(appendMemoryEventMock).toHaveBeenCalledTimes(2);
+    expect(callSubject(1)).toBe(resolveSubject({ fact: second }));
+    expect(callHashed(1)).toBe(false);
+  });
+
+  it('returns true for a content-free summary, so a caller counting refusals does not miscount it', async () => {
+    // `true` means "nothing to write", NOT "written" - and it must not be conflated with a refusal:
+    // extractLakeMemory reads false as a shred refusal and stops the run, so returning false for an
+    // unkeyable summary would abort healthy runs on the first stopword-only fact.
+    const session = await createLedgerAppendSession(LAKE);
+
+    expect(await session.append({ summary: '   ', evidenceTier: 'external-facing' })).toBe(true);
+    expect(appendMemoryEventMock).not.toHaveBeenCalled();
+  });
+
   it('never reads the profile when no fact carries an embedding (lazy load)', async () => {
     const session = await createLedgerAppendSession(LAKE);
 

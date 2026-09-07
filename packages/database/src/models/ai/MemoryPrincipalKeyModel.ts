@@ -72,6 +72,14 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
    * ordinary already-erased principal that a fresh rebuild may legitimately re-key, so the tombstone
    * lifts. One rule covers both, and it needs no separate authorization path.
    *
+   * LIMITATION - the fast path below does NOT apply the fence. A key that is live at the moment of
+   * the read is returned without consulting `startedAt`, so a caller whose work began before a shred
+   * can still be handed a key a third party re-minted after it. Reaching that needs two concurrent
+   * writers on one principal with a purge interleaved between them, which the lake path cannot
+   * produce (its extraction lease outlives the maximum function execution time, so a second
+   * concurrent run cannot exist). Closing it means returning `destroyedAt` alongside the key, which
+   * changes `findDek`'s shape and the KeyProvider interface - deliberately not done.
+   *
    * Race-safe in three ways, all of which matter on one principal's row:
    *  - the fast path is a plain read, so the steady state costs no write;
    *  - the mint/lift is a single conditional update whose FILTER encodes the fence, so two runs
@@ -101,6 +109,11 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
           dek: { $exists: false },
           // Absent destroyedAt = never destroyed (or a row mid-insert). `$lt` is what lifts a tombstone
           // raised STRICTLY before this work began.
+          //
+          // The `$exists: false` arm is unreachable in steady state and so cannot be covered by a test:
+          // no writer produces a row with neither `dek` nor `destroyedAt`, since `destroy` only ever
+          // unsets `dek` while setting the stamp. It matches a row mid-insert, and is kept so the filter
+          // does not silently depend on that invariant holding forever.
           //
           // Strict on purpose. Timestamps collide at millisecond resolution, so a shred stamped in the
           // same millisecond as a run's start is genuinely ambiguous - and the two ways to be wrong are

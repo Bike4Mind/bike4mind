@@ -112,6 +112,9 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
     setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
+    // The ledger seals by default. Left undefined this reads as a shred-fence refusal on the first
+    // fact, which stops the run - see the refusal test in extractLakeMemoryPurgeFence.test.ts.
+    appendMock.mockResolvedValue(true);
   });
 
   it('processes every doc when there is plenty of time left', async () => {
@@ -220,6 +223,9 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
     setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
+    // The ledger seals by default. Left undefined this reads as a shred-fence refusal on the first
+    // fact, which stops the run - see the refusal test in extractLakeMemoryPurgeFence.test.ts.
+    appendMock.mockResolvedValue(true);
   });
 
   it('skips the run entirely when another run already holds the lease', async () => {
@@ -232,7 +238,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
       logger as never
     );
 
-    expect(result).toEqual({ docsProcessed: 0, factsWritten: 0, hasMore: false });
+    expect(result).toEqual({ docsProcessed: 0, factsWritten: 0, factsRefused: 0, hasMore: false });
     expect(evaluateMock).not.toHaveBeenCalled();
     // Nothing to release - it never won the claim.
     expect(releaseLakeMemoryExtractionMock).not.toHaveBeenCalled();

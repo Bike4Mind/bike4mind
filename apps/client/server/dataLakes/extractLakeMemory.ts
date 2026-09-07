@@ -107,7 +107,7 @@ export async function extractLakeMemoryForBatch(
     getRemainingTimeInMillis?: () => number;
   },
   logger: Logger
-): Promise<{ docsProcessed: number; factsWritten: number; hasMore: boolean }> {
+): Promise<{ docsProcessed: number; factsWritten: number; factsRefused: number; hasMore: boolean }> {
   const startedAt = Date.now();
   // `?? ` alone would not be enough: a non-finite reading (NaN, Infinity) is not nullish, and every
   // comparison against it is false - which would disable the guard silently rather than fall back.
@@ -120,7 +120,7 @@ export async function extractLakeMemoryForBatch(
   const lake = await dataLakeRepository.findById(params.dataLakeId);
   if (!lake?.createdByUserId || !lake.datalakeTag) {
     logger.warn('[lakeMemory] lake missing owner or tag; skipping extraction', { dataLakeId: params.dataLakeId });
-    return { docsProcessed: 0, factsWritten: 0, hasMore: false };
+    return { docsProcessed: 0, factsWritten: 0, factsRefused: 0, hasMore: false };
   }
   const ownerUserId = lake.createdByUserId;
   const datalakeTag = lake.datalakeTag;
@@ -135,7 +135,7 @@ export async function extractLakeMemoryForBatch(
     logger.info('[lakeMemory] another run holds the extraction lease for this lake; skipping duplicate run', {
       dataLakeId: params.dataLakeId,
     });
-    return { docsProcessed: 0, factsWritten: 0, hasMore: false };
+    return { docsProcessed: 0, factsWritten: 0, factsRefused: 0, hasMore: false };
   }
 
   try {
@@ -172,20 +172,27 @@ export async function extractLakeMemoryForBatch(
     const claimedLake = await dataLakeRepository.findById(lake.id).catch(() => null);
     const cursor = (claimedLake ?? lake).lakeMemoryCursor ?? null;
 
-    // Purge fence (see IDataLake.lakeMemoryPurgedAt). Snapshot it from the same post-claim read as the
-    // cursor: everything this run writes is conditional on the lake not having been erased since.
+    // Purge fence (see IDataLake.lakeMemoryPurgedAt). Snapshotted from the same post-claim read as the
+    // cursor, and used ONLY as the compare-and-set baseline for the durable cursor write below - never
+    // as the fence test itself, which is `fenceMoved`.
     const fenceAt = (claimedLake ?? lake).lakeMemoryPurgedAt ?? null;
-    // Trips on a moved stamp (an explicit erase) or on the lake document disappearing (the deletion
-    // sweep shreds the profile and then deletes the record). A failed READ is treated as unmoved,
-    // deliberately: a transient DB blip must not abort a legitimate extraction, and the next document
-    // re-reads it anyway - which is why the failure path returns the snapshot rather than `null`,
-    // since `null` would read as a fence that had been cleared.
+    // Has an erase landed since this run began? Compared against `claimedAt` absolutely, NOT against the
+    // snapshot above, and that difference is the whole correctness of the fence: a purge landing between
+    // the lease claim and that snapshot is already baked into it, so a change test would compare the
+    // stamp against itself, never trip, and let the run re-extract the entire lake under the very key the
+    // purge destroyed. `claimedAt` is taken before the claim, so no window hides inside it. `>=` and not
+    // `>`: a purge stamped in the same millisecond fails closed, matching the ledger's own strict
+    // `destroyedAt < startedAt` fence.
+    //
+    // Also trips on the lake document disappearing (the deletion sweep shreds the profile, then deletes
+    // the record). A failed READ is treated as unmoved, deliberately: a transient DB blip must not abort
+    // a legitimate extraction, and the next document re-reads it anyway.
     const fenceMoved = async () => {
       const fence = await dataLakeRepository
         .getLakeMemoryFence(lake.id)
-        .catch(() => ({ exists: true, purgedAt: fenceAt }));
+        .catch(() => ({ exists: true, purgedAt: null }));
       if (!fence.exists) return true;
-      return (fence.purgedAt?.getTime() ?? null) !== (fenceAt?.getTime() ?? null);
+      return !!fence.purgedAt && fence.purgedAt.getTime() >= claimedAt.getTime();
     };
     let purged = false;
 
@@ -217,10 +224,15 @@ export async function extractLakeMemoryForBatch(
     const session = await createLedgerAppendSession({
       principal: { kind: 'lake', id: datalakeTag },
       ownerUserId,
+      // The run began at the lease claim, not here - the key table, the cursor re-read and the member
+      // page all await in between. Passing `claimedAt` is what makes the ledger refuse a write whose
+      // key was destroyed in that window, rather than re-mint a DEK and resurrect erased facts.
+      startedAt: claimedAt,
     });
 
     let docsProcessed = 0;
     let factsWritten = 0;
+    let factsRefused = 0;
     let docsAttempted = 0;
     let lastAttemptedId: string | null = null;
     for (const doc of docs) {
@@ -241,10 +253,10 @@ export async function extractLakeMemoryForBatch(
       // cursor the purge cleared alone. Checked at a document boundary, so at most the facts of the
       // one document already in flight when the purge landed can survive it.
       //
-      // Those surviving facts are READABLE, not inert - do not assume otherwise. The append path
-      // re-mints a DEK on demand (getOrCreate upserts), so a write landing after the shred creates a
-      // fresh key rather than failing closed, and the facts under it decrypt normally. They are also
-      // not marked shredded, so recall serves them. The window is one document's extract call.
+      // The one in-flight document's facts are not silently readable either: the ledger refuses any
+      // append whose key was destroyed after `claimedAt`, so a purge landing mid-document makes the
+      // remaining appends fail closed instead of re-minting a fresh DEK. That refusal is handled below
+      // and ends the run; this per-document check is the cheap boundary, not the guarantee.
       if (await fenceMoved()) {
         purged = true;
         logger.warn(
@@ -279,7 +291,20 @@ export async function extractLakeMemoryForBatch(
         const tier = evidenceTierForDoc((doc.tags ?? []).map(t => t.name));
         for (const { fact } of facts) {
           const embedding = await embed(fact).catch(() => undefined);
-          await session.append({ summary: fact, evidenceTier: tier, sources: [doc.fabFileId], embedding });
+          const written = await session.append({
+            summary: fact,
+            evidenceTier: tier,
+            sources: [doc.fabFileId],
+            embedding,
+          });
+          // A refusal means the shred fence rejected the write: the key was destroyed after this run
+          // claimed its lease. Every later append refuses for the same reason, so stop the run rather
+          // than counting refusals as writes - discarding this boolean is what let `factsWritten`
+          // report erased facts as written.
+          if (!written) {
+            factsRefused++;
+            break;
+          }
           factsWritten++;
         }
       } catch (err) {
@@ -290,6 +315,17 @@ export async function extractLakeMemoryForBatch(
         logger.warn(
           `[lakeMemory] doc ${doc.fabFileId} failed; skipping it this run: ${err instanceof Error ? err.message : String(err)}`
         );
+      }
+      // A shred-fence refusal is a purge by another name: the key this run seals its facts under is
+      // gone. Treat it exactly like a moved stamp so the bookkeeping below writes no cursor and chains
+      // no continuation - the stamp itself may not be visible yet, since a purge shreds before it fences.
+      if (factsRefused > 0) {
+        purged = true;
+        logger.warn(
+          `[lakeMemory] lake ${datalakeTag}: the ledger refused a write after ${docsAttempted}/${docs.length} ` +
+            `docs - memory was erased after this run claimed its lease; stopping and recording no continuation`
+        );
+        break;
       }
     }
 
@@ -379,6 +415,9 @@ export async function extractLakeMemoryForBatch(
       dataLakeId: params.dataLakeId,
       docsProcessed,
       factsWritten,
+      // Writes the shred fence REFUSED. Non-zero means memory was erased after this run claimed its
+      // lease, so these facts were never sealed - without it the run looks identical to a clean one.
+      factsRefused,
       // Where the slice started. The read ignores a cursor it cannot parse and pages from the top
       // instead of throwing the run into the DLQ, so without this in the summary that rewind would be
       // invisible - it would just look like an unexplained full re-scan.
@@ -393,7 +432,7 @@ export async function extractLakeMemoryForBatch(
       purgedMidRun: purged,
       elapsedMs: Date.now() - startedAt,
     });
-    return { docsProcessed, factsWritten, hasMore };
+    return { docsProcessed, factsWritten, factsRefused, hasMore };
   } finally {
     // Compare-and-clear so a stale takeover's lease is not cleared by our late finish. Best-effort: a
     // failed release just leaves the lease to expire on its own after the window.

@@ -22,6 +22,7 @@ const releaseLakeMemoryExtractionMock = vi.fn();
 const setLakeMemoryCursorMock = vi.fn();
 const setLakeMemoryCursorIfFenceUnmovedMock = vi.fn();
 const getLakeMemoryFenceMock = vi.fn();
+const sessionParamsMock = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
@@ -58,7 +59,10 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/memory/mementoLedgerMirror', () => ({
-  createLedgerAppendSession: async () => ({ append: (...a: unknown[]) => appendMock(...a) }),
+  createLedgerAppendSession: async (...a: unknown[]) => {
+    sessionParamsMock(...a);
+    return { append: (...b: unknown[]) => appendMock(...b) };
+  },
 }));
 
 const { extractLakeMemoryForBatch } = await import('./extractLakeMemory');
@@ -92,11 +96,22 @@ const seedLake = (docCount: number, lakeOver: Record<string, unknown> = {}) => {
 
 const PLENTY_OF_TIME = { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => 10 * 60_000 };
 
+/**
+ * A purge that lands AFTER the run claimed its lease - the only kind the fence refuses. Evaluated when
+ * the mock is called, so it necessarily post-dates the run's `claimedAt`. A hardcoded past timestamp
+ * would describe a purge that PREDATES the run, which the fence deliberately lets through so a rebuild
+ * can re-key a lake that was erased once already.
+ */
+const purgedNow = () => new Date();
+
 describe('extractLakeMemoryForBatch purge fence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
+    // The ledger seals by default; a test that wants a refusal says so. Left undefined this would read
+    // as a refusal on the first fact and silently stop every run in this file.
+    appendMock.mockResolvedValue(true);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
     setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
     getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: null });
@@ -111,7 +126,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     let checks = 0;
     getLakeMemoryFenceMock.mockImplementation(async () => ({
       exists: true,
-      purgedAt: ++checks >= 3 ? new Date('2026-09-06T12:00:00.000Z') : null,
+      purgedAt: ++checks >= 3 ? purgedNow() : null,
     }));
 
     const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, logger as never);
@@ -127,7 +142,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     // hasMore drives the handler's re-enqueue. A purged lake that still asked for a continuation would
     // keep billing LLM work to rebuild exactly what was just erased.
     seedLake(10);
-    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: new Date('2026-09-06T12:00:00.000Z') });
+    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: purgedNow() });
 
     const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
 
@@ -159,7 +174,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     let checks = 0;
     getLakeMemoryFenceMock.mockImplementation(async () => ({
       exists: true,
-      purgedAt: ++checks > 100 ? new Date('2026-09-06T12:00:00.000Z') : null,
+      purgedAt: ++checks > 100 ? purgedNow() : null,
     }));
 
     const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, logger as never);
@@ -215,13 +230,16 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, logger as never);
 
     expect(result.docsProcessed).toBe(5);
+    expect(result.factsWritten).toBe(5);
+    expect(result.factsRefused).toBe(0);
     expect(appendMock).toHaveBeenCalledTimes(5);
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('purged'));
   });
 
-  it('compares against the run\'s own snapshot, not "has this lake ever been purged"', async () => {
+  it('lets a lake purged BEFORE the run build normally, rather than treating any stamp as a trip', async () => {
     // A lake purged last week starts its next build with a non-null stamp. Treating any stamp as a trip
-    // would make that lake permanently unbuildable - the fence is about CHANGE since the run claimed it.
+    // would make that lake permanently unbuildable - the fence asks whether a purge landed AFTER this
+    // run claimed its lease, which is the same question the ledger's tombstone fence asks of the key.
     const purgedLastWeek = new Date('2026-08-30T00:00:00.000Z');
     seedLake(5, { lakeMemoryPurgedAt: purgedLastWeek });
     getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: purgedLastWeek });
@@ -244,11 +262,74 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     expect(appendMock).toHaveBeenCalledTimes(4);
   });
 
+  it('refuses a purge that lands between the lease claim and the post-claim fence snapshot', async () => {
+    // The window that made the fence decorative. The snapshot the run compares against is read AFTER it
+    // claims the lease, so a purge landing in between is already baked INTO that snapshot: a change test
+    // compares the stamp with itself, never trips, and the run re-extracts the whole lake under the very
+    // key the purge destroyed. Both findById reads are staged to reproduce exactly that ordering.
+    seedMembers(Array.from({ length: 10 }, (_, i) => `doc-${String(i).padStart(3, '0')}`));
+    findTextsByFabFileIdMock.mockResolvedValue([{ text: 'some durable reference text' }]);
+    evaluateMock.mockResolvedValue([{ fact: 'the X-200 ships with 36 units' }]);
+    const base = { id: 'lake-1', createdByUserId: 'owner-1', datalakeTag: 'datalake:test' };
+    let reads = 0;
+    let landedAt: Date | null = null;
+    findByIdMock.mockImplementation(async () => {
+      // First read is pre-claim and sees a clean lake; the post-claim re-read already carries the purge.
+      if (++reads === 1) return { ...base };
+      landedAt = landedAt ?? purgedNow();
+      return { ...base, lakeMemoryPurgedAt: landedAt };
+    });
+    getLakeMemoryFenceMock.mockImplementation(async () => ({ exists: true, purgedAt: landedAt }));
+    const logger = makeLogger();
+
+    const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, logger as never);
+
+    expect(appendMock).not.toHaveBeenCalled();
+    expect(result.factsWritten).toBe(0);
+    expect(result.hasMore).toBe(false);
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalled();
+  });
+
+  it("opens the ledger session at the LEASE CLAIM, not at the session's own open", async () => {
+    // The ledger lifts a tombstone only when the shred strictly predates `startedAt`, so defaulting
+    // that to the session open would date the run AFTER a shred landing in the claim-to-open window -
+    // and the fence would lift its own tombstone and re-mint a key over an erasure. Pinned to the exact
+    // instant handed to the lease claim, which is the earliest moment this run can be said to exist.
+    seedLake(2);
+
+    await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
+
+    const claimedAt = claimLakeMemoryExtractionMock.mock.calls[0][1] as Date;
+    expect(claimedAt).toBeInstanceOf(Date);
+    expect(sessionParamsMock).toHaveBeenCalledWith(expect.objectContaining({ startedAt: claimedAt }));
+  });
+
+  it('stops the run when the ledger REFUSES a write, and never counts it as written', async () => {
+    // The other half of the fence, and useless without it: `append` returns false when the shred fence
+    // rejects the seal. Discarding that boolean made every refused fact increment factsWritten, so a run
+    // whose key had been destroyed reported a clean success and chained a continuation.
+    seedLake(10);
+    const logger = makeLogger();
+    appendMock.mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+
+    const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, logger as never);
+
+    expect(result.factsWritten).toBe(2);
+    expect(result.factsRefused).toBe(1);
+    // Stopped on the refusal rather than grinding through the remaining eight documents.
+    expect(appendMock).toHaveBeenCalledTimes(3);
+    expect(result.hasMore).toBe(false);
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('the ledger refused a write'));
+  });
+
   it('releases the extraction lease when it stops on the fence', async () => {
     // The lease is deliberately NOT cleared by the purge itself, precisely so this run releases it -
     // otherwise a post-purge rebuild would 409 until the lease aged out.
     seedLake(10);
-    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: new Date('2026-09-06T12:00:00.000Z') });
+    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: purgedNow() });
 
     await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
 

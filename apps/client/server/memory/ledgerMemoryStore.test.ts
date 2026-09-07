@@ -287,8 +287,9 @@ describe('appendMemoryEvent shred fence', () => {
   });
 
   it('leaves an unshredded principal alone', async () => {
-    // The regression that would hide every other test here: a fence that refused healthy writes would
-    // silently stop all memory, and only this assertion notices.
+    // Negative control for over-refusal: a fence that refused HEALTHY writes would silently stop all
+    // memory. Measured, this assertion does not fire when the guard is merely deleted (the shred tests
+    // catch that); it fires when the guard refuses unconditionally, alongside most of this file.
     const { repo, store } = makeFake();
     const { provider } = makeKeys();
 

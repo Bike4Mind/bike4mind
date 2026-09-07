@@ -101,10 +101,14 @@ export async function createLedgerAppendSession(params: {
   /** DEK owner - the user whose key seals this principal's facts at rest. */
   ownerUserId: string;
   /**
-   * When the caller's work began, for the crypto-shred fence (see appendMemoryEvent). Defaults to the
-   * moment the session opens, which is the right answer for every current caller: a lake run opens
-   * its session immediately after claiming the lease, and a single-fact write opens one per call. Pass
-   * it explicitly only if the work demonstrably started earlier than the session.
+   * When the caller's work began, for the crypto-shred fence (see appendMemoryEvent).
+   *
+   * Defaults to the moment the session opens, which is right only when the work itself starts here -
+   * a single-fact write, which opens a session per call. It is WRONG for a batch run: a lake
+   * extraction claims its lease and then awaits the key table, a cursor re-read and a member page
+   * before opening a session, so a shred landing in that window would be stamped BEFORE the default
+   * and would lift its own tombstone. Any caller whose work began earlier than the session MUST pass
+   * this explicitly; extractLakeMemory passes its lease-claim time.
    */
   startedAt?: Date;
 }): Promise<LedgerAppendSession> {
