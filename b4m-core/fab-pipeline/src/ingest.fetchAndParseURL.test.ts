@@ -377,10 +377,32 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     expect(result.textContent).toContain('404');
   });
 
-  it('never lets script or style content reach the stored text', async () => {
+  it('separates adjacent HTML5 semantic containers instead of jamming them together', async () => {
+    // article/section/header/footer/main/dt/dd/figcaption/caption all had the same word-jamming
+    // gap as bare <div> did before that fix - common on modern blog/doc sites that structure
+    // content with these instead of <p> or <div>.
+    const page =
+      '<html><body>' +
+      '<article><section>First section</section><section>Second section</section></article>' +
+      '<dl><dt>Term</dt><dd>Definition</dd></dl>' +
+      '</body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/blog-post', { logger });
+
+    expect(result.textContent).toContain('First section');
+    expect(result.textContent).toContain('Second section');
+    expect(result.textContent).not.toContain('First sectionSecond section');
+    expect(result.textContent).toContain('Term');
+    expect(result.textContent).toContain('Definition');
+    expect(result.textContent).not.toContain('TermDefinition');
+  });
+
+  it('never lets script, style, or noscript content reach the stored text', async () => {
     const page =
       '<html><head><style>.hidden { display: none }</style></head><body>' +
       '<script>trackPageView("secret-analytics-id");</script>' +
+      '<noscript>enable-javascript-notice</noscript>' +
       '<p>Visible paragraph</p>' +
       '</body></html>';
     axiosGet.mockResolvedValueOnce(html(page));
@@ -390,6 +412,7 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     expect(result.textContent).toContain('Visible paragraph');
     expect(result.textContent).not.toContain('trackPageView');
     expect(result.textContent).not.toContain('hidden');
+    expect(result.textContent).not.toContain('enable-javascript-notice');
   });
 
   it('stores nothing rather than falling back to raw HTML when there is no extractable text', async () => {
@@ -399,5 +422,9 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     const result = await fetchAndParseURL('http://93.184.216.34/empty', { logger });
 
     expect(result.textContent).toBe('');
+    // An empty extraction still returns successfully - the log line has to say so explicitly, or
+    // it reads identically to a normal fetch that parsed into real content.
+    const logged = (logger.log as unknown as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ');
+    expect(logged).toContain('no extractable text was found');
   });
 });
