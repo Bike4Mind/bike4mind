@@ -57,6 +57,20 @@ const createSessionParametersSchema = z.object({
 
 type CreateSessionParameters = z.infer<typeof createSessionParametersSchema>;
 
+/**
+ * Compile-time guard for the manage-but-not-member admission. `preauthorizedLakeIds` must never
+ * become a `createSession` input: the create route authorizes it with `canManageLake` and writes it
+ * in a separate call afterwards, so no copy path (fork/snip/clone) can carry it. Adding the key to
+ * the schema above resolves the argument to `false` and fails the build.
+ *
+ * This lives here rather than as a `@ts-expect-error` in create.test.ts because tsconfig.json
+ * excludes test files, so an assertion in one is in no typecheck program and can never fail.
+ */
+type AssertTrue<T extends true> = T;
+export type CreateSessionParametersOmitPreauthorizedLakeIds = AssertTrue<
+  'preauthorizedLakeIds' extends keyof CreateSessionParameters ? false : true
+>;
+
 export interface CreateSessionAdapters {
   db: {
     sessions: ISessionRepository;

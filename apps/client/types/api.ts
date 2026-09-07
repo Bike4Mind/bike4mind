@@ -68,6 +68,11 @@ export const CreateSessionRequestSchema = z.object({
     .optional(),
   retrievalVectorizedOnly: z.boolean().optional(),
   temperature: z.number().optional(),
+  // Lake ids the caller wants this session admitted to despite not being a member (manage-but-not-
+  // member admission). Consumed and authorized (canManageLake) at the create route, which writes it
+  // onto the session as a SEPARATE authorized write AFTER creation - never persisted through
+  // createSession's own input, so this field is declared here for the shared request type only.
+  preauthorizedLakeIds: z.array(z.string()).optional(),
 });
 
 export const ProjectFilesRequestSchema = z.object({

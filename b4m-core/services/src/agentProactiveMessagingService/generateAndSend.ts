@@ -56,7 +56,7 @@ interface GenerateAndSendProactiveMessageAdapters {
      * `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
      * `findMembershipOrgIds` off it).
      */
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
     /**
      * Scoped-settings overlay for org/owner setting rungs (epic #1658 seam, #1955's
      * search_knowledge_base budgets among them). Optional - resolveSearchBudgets falls back to
