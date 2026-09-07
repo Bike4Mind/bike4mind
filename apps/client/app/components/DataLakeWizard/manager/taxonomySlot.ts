@@ -6,9 +6,15 @@ import type { IDataLakeBatchSummary, TaxonomyStatus } from '@bike4mind/common';
  * and 'failed' open the review panel, so they outrank every in-progress phase;
  * 'analyzing'/'queued' at least render the progress indicator; 'applying' renders in no consumer
  * gate at all (ManagerNav, LakeInfoPanel), so it ranks last rather than hiding a sibling that
- * would show something. Must stay a permutation of TAXONOMY_ATTENTION_STATUSES - taxonomySlot.test.ts
- * asserts every pairwise relation here, that each attention status stays eligible, and that the
- * three phases outside that set stay out.
+ * would show something. Accepted consequence of one chip per lake: a 'failed' batch's error and
+ * its exits (re-analyze, dismiss) wait behind an unresolved 'ready' sibling - review is the more
+ * valuable affordance and a failure is non-destructive - and surface once that sibling is applied
+ * or dismissed and so leaves the attention set.
+ *
+ * Must stay a permutation of TAXONOMY_ATTENTION_STATUSES. taxonomySlot.test.ts pins the pairwise
+ * relations among today's five statuses, that every attention status stays eligible, and that the
+ * three TaxonomyStatus values outside the attention set stay out; those 5 + 3 exhaust the union
+ * today, so a sixth attention status needs its own rows in that pairwise table.
  */
 const SLOT_PRIORITY: readonly TaxonomyStatus[] = ['ready', 'failed', 'analyzing', 'queued', 'applying'];
 
@@ -22,8 +28,8 @@ const rankOf = (batch: IDataLakeBatchSummary): number =>
  * settle - and it has to settle the same way on every 10s poll. Neither key moves on an ingest
  * write, so the winner changes only when a taxonomy phase does. Deliberately NOT `updatedAt`: ingest
  * bumps it per file (incrementCounters, DataLakeModel) on a clock independent of taxonomy, so
- * two 'ready' siblings would trade the slot between polls. Id ascending is oldest-first among
- * equals, ObjectIds being creation-ordered.
+ * two 'ready' siblings would trade the slot between polls. Id ascending only has to be
+ * deterministic; it approximates oldest-first, an ObjectId's timestamp being whole-second.
  */
 const outranks = (candidate: IDataLakeBatchSummary, held: IDataLakeBatchSummary): boolean => {
   const byRank = rankOf(candidate) - rankOf(held);

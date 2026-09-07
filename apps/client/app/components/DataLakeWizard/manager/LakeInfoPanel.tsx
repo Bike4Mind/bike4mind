@@ -462,11 +462,11 @@ export function LakeInfoPanel({
               </Chip>
             </Tooltip>
           )}
-          {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
-              can appear well after the lake's files are already fully uploaded/searchable.
-              Adding or removing a taxonomyStatus gate here means revisiting SLOT_PRIORITY in
-              manager/taxonomySlot.ts, whose order is argued from which statuses these gates
-              render. */}
+          {/* Background AI-tag suggestion chips (progress, review, failed) - an independent
+              clock from ingest, so these can appear well after the lake's files are already
+              fully uploaded/searchable. Adding or removing a taxonomyStatus gate anywhere in
+              this block means revisiting SLOT_PRIORITY in manager/taxonomySlot.ts, whose
+              order is argued from which statuses these gates render. */}
           {(taxonomyBatch?.taxonomyStatus === 'queued' || taxonomyBatch?.taxonomyStatus === 'analyzing') && (
             <Tooltip title="Usually ready in under a minute" size="sm">
               <Chip

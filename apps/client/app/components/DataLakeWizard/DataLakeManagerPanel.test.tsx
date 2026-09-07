@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeManagerPanel from './DataLakeManagerPanel';
@@ -886,7 +887,10 @@ describe('DataLakeManagerPanel - canManageSettings gates the fallback-lake setti
  * that's actually reachable in the app.
  */
 describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
-  const batch = (overrides: Record<string, unknown> = {}) => ({
+  // Typed rather than Record<string, unknown>: a misspelt override there is an inert extra
+  // property that silently leaves the default in force. Note this is an editor-and-review guard
+  // only - apps/client/tsconfig.json excludes *.test.ts(x), so CI never typechecks this file.
+  const batch = (overrides: Partial<IDataLakeBatchSummary> = {}) => ({
     id: 'b1',
     dataLakeId: 'mine',
     taxonomyStatus: 'ready',
@@ -903,15 +907,18 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     expect(screen.queryByTestId('datalake-manager-taxonomy-review-chip-mine')).toBeNull();
   });
 
-  it('shows the in-progress indicator in the sidebar and the right pane while queued/analyzing', async () => {
-    useActiveDataLakeBatches.mockReturnValue({ data: [batch({ taxonomyStatus: 'analyzing' })] });
-    const user = userEvent.setup();
-    renderPanel();
+  it.each(['queued', 'analyzing'] as const)(
+    'shows the in-progress indicator in the sidebar and the right pane while %s',
+    async status => {
+      useActiveDataLakeBatches.mockReturnValue({ data: [batch({ taxonomyStatus: status })] });
+      const user = userEvent.setup();
+      renderPanel();
 
-    expect(screen.getByTestId('datalake-manager-taxonomy-progress-mine')).toBeInTheDocument();
-    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
-    expect(screen.getByTestId('datalake-manager-taxonomy-progress-chip-mine')).toHaveTextContent('AI tagging');
-  });
+      expect(screen.getByTestId('datalake-manager-taxonomy-progress-mine')).toBeInTheDocument();
+      await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+      expect(screen.getByTestId('datalake-manager-taxonomy-progress-chip-mine')).toHaveTextContent('AI tagging');
+    }
+  );
 
   it('opens the review panel with the right batch and prefix from the sidebar indicator', async () => {
     useActiveDataLakeBatches.mockReturnValue({ data: [batch()] });
@@ -960,7 +967,7 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toBeInTheDocument();
 
-    // 'applied' isn't in the attention set, so the batch disappears from the list response.
+    // Once ingest also finishes, an applied batch is in neither server finder and leaves the list.
     useActiveDataLakeBatches.mockReturnValue({ data: [] });
     rerenderPanel(rerender);
 
@@ -988,15 +995,24 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     expect(screen.getByTestId('datalake-manager-taxonomy-failed-mine')).toBeInTheDocument();
     await user.click(screen.getByTestId('datalake-manager-taxonomy-failed-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-id', 'b1');
+
+    await user.click(screen.getByTestId('mock-taxonomy-review-close'));
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.getByTestId('datalake-manager-taxonomy-failed-chip-mine')).toBeInTheDocument();
   });
 
   // A batch whose taxonomy phase is already resolved ('applied') but whose ingest is still
   // running stays in the batches list, and the server's ingest-active finder puts it AHEAD of
   // the sibling awaiting review. It used to take the lake's one chip slot and render nothing,
-  // so the review surface silently did not exist. Both consumer surfaces are asserted.
+  // so the review surface silently did not exist. Both consumer surfaces are asserted. The
+  // squatter's id sorts before the winner's on purpose, so a selector that ranked nothing and fell
+  // through to the id tie-break would answer 'a-still-ingesting' and fail here.
   it('prefers the taxonomy-attention batch when a lake has more than one active batch', async () => {
     useActiveDataLakeBatches.mockReturnValue({
-      data: [batch({ id: 'still-ingesting', taxonomyStatus: 'applied' }), batch({ id: 'b1', taxonomyStatus: 'ready' })],
+      data: [
+        batch({ id: 'a-still-ingesting', taxonomyStatus: 'applied' }),
+        batch({ id: 'b1', taxonomyStatus: 'ready' }),
+      ],
     });
     const user = userEvent.setup();
     renderPanel();

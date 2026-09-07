@@ -37,6 +37,14 @@ describe('selectTaxonomyBatchByLakeId', () => {
     );
   });
 
+  // Arrival order is only sorted for the taxonomy-attention half of the merged server list, so
+  // an ineligible batch can land after the winner. Skipping it must leave the slot alone.
+  it('ignores an applied batch that arrives after the ready one', () => {
+    expect(pick([batch({ id: 'b1', taxonomyStatus: 'ready' }), batch({ id: 'ap2', taxonomyStatus: 'applied' })])).toBe(
+      'b1'
+    );
+  });
+
   // Every pair, both arrival orders. Each relation is argued in SLOT_PRIORITY's docblock from
   // which consumer gate the status can render, so an unnoticed reshuffle is a real regression -
   // e.g. 'analyzing' above 'failed' deletes the failed-review affordance. The 'w'/'l' ids are
@@ -60,6 +68,16 @@ describe('selectTaxonomyBatchByLakeId', () => {
     expect(pick([l, w])).toBe('w');
   });
 
+  // Three-plus active batches on one lake is ordinary; every one has to be scanned, not just the
+  // ends of the list. Ids are picked so a rank that collapsed to the id tie-break answers a loser.
+  it('scans every batch when a lake has three active ones, in either arrival order', () => {
+    const ready = batch({ id: 'b-ready', taxonomyStatus: 'ready' });
+    const queued = batch({ id: 'a-queued', taxonomyStatus: 'queued' });
+    const applying = batch({ id: 'c-applying', taxonomyStatus: 'applying' });
+    expect(pick([ready, queued, applying])).toBe('b-ready');
+    expect(pick([queued, applying, ready])).toBe('b-ready');
+  });
+
   // Two ready siblings on one lake is legal; the winner must not depend on arrival order, and
   // must not move when an unrelated ingest write touches the batch.
   it('breaks a rank tie by id ascending, stably across input order', () => {
@@ -67,6 +85,15 @@ describe('selectTaxonomyBatchByLakeId', () => {
     const z = batch({ id: 'zzz', taxonomyStatus: 'ready', updatedAt: new Date('2026-01-01') });
     expect(pick([z, a])).toBe('aaa');
     expect(pick([a, z])).toBe('aaa');
+  });
+
+  // The server route dedupes by id, so this should not arrive - but `<` vs `<=` in outranks is a
+  // one-character edit, and last-wins on a tie is exactly the poll instability the id key prevents.
+  // Asserted by identity: two batches sharing an id are indistinguishable by id alone.
+  it('keeps the first of two batches sharing an id', () => {
+    const first = batch({ id: 'dup', taxonomyStatus: 'ready' });
+    const second = batch({ id: 'dup', taxonomyStatus: 'ready' });
+    expect(selectTaxonomyBatchByLakeId([first, second]).get('lake-a')).toBe(first);
   });
 
   it('keeps lakes independent', () => {
