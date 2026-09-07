@@ -5,8 +5,10 @@ import { WorkerReplExecutor, type WorkerReplExecutorOptions } from './WorkerRepl
 import { IsolatedVmExecutor, type IsolatedVmExecutorOptions } from './IsolatedVmExecutor';
 
 /**
- * ReplSession owns one ReplContext for the lifetime of an agent session
- * and tracks per-session budget + usage. The agent loop creates one of
+ * ReplSession owns one ReplExecutor for the lifetime of an agent session
+ * and tracks per-session budget + usage. Which executor - and so how much
+ * isolation the guest code gets - is the caller's explicit choice; see
+ * `ReplSessionOptions.executor`. The agent loop creates one of
  * these on first `execute_code` call, reuses it for the rest of the
  * session, and disposes it when the agent retires.
  *
@@ -19,6 +21,13 @@ import { IsolatedVmExecutor, type IsolatedVmExecutorOptions } from './IsolatedVm
  * dozens of sub-LLM calls inside a `for` loop.
  */
 
+/**
+ * How a ReplSession gets its execution backend: a built-in backend by name,
+ * or a caller-supplied `ReplExecutor`. See `ReplSessionOptions.executor` for
+ * what each name costs you in isolation.
+ */
+export type ReplExecutorChoice = 'isolated' | 'worker' | 'in-process-unsafe' | ReplExecutor;
+
 export interface ReplSessionOptions {
   /** Stable identifier for this session (typically the agentSessionId). */
   sessionId: string;
@@ -30,31 +39,43 @@ export interface ReplSessionOptions {
   budget?: {
     /** Max number of `runCode` invocations across the entire session. */
     maxExecutions?: number;
-    /** Max number of sub-LLM calls. Tools that count themselves call `recordSubLlm()`. */
+    /** Max number of sub-LLM calls. Tools claim against this with `reserveSubLlm()`. */
     maxSubLlmCalls?: number;
     /** Max accumulated USD spend on sub-LLM calls. */
     maxCostUsd?: number;
   };
   /**
-   * Pick the execution backend.
-   * - `'in-process'` (default): `vm.runInContext` in the main thread. Fast,
-   *   no isolation. Good for tests + low-trust internal use.
-   * - `'worker'` (Quest 3b): `worker_threads` with `resourceLimits` for memory
-   *   caps and CPU isolation. Adds ~50-100ms startup per session; tool calls
-   *   cost a postMessage round-trip. Right level for production-shape tavern
-   *   use where the LLM code is still our own.
-   * - `'isolated'` (Quest 3c): `isolated-vm` V8 isolate - a real trust
-   *   boundary (separate heap, no shared object graph), not just resource
-   *   isolation. Required before exposing `code_execute` to customer-facing /
-   *   multi-tenant / third-party-LLM surfaces. Tool calls cross as a JSON
-   *   round-trip.
+   * Pick the execution backend. REQUIRED - there is deliberately no default.
+   *
+   * The backend IS the trust boundary, so the choice belongs to the caller
+   * who knows where the code came from. This option used to default to
+   * `'in-process'`, which silently gave every caller an escapable sandbox;
+   * a caller that forgets to choose must now fail to compile, not fail open.
+   *
+   * - `'isolated'`: `isolated-vm` V8 isolate - a real trust boundary
+   *   (separate heap, no shared object graph). The ONLY backend that may run
+   *   code authored by an LLM, an end user, or anyone else outside the
+   *   deploy. Tool calls cross as a JSON round-trip.
+   * - `'worker'`: `worker_threads` with `resourceLimits`. Gives memory + CPU
+   *   isolation and lets a runaway run be force-terminated, but it is NOT a
+   *   trust boundary: the guest runs under `node:vm` inside the worker, and
+   *   `vm` shares the worker's realm, so guest code can reach the worker's
+   *   own `process` / `require` through a `constructor` chain. Use for
+   *   OUR OWN code that we want resource-capped.
+   * - `'in-process-unsafe'`: `vm.runInContext` on the main thread. NOT a
+   *   sandbox of any kind - guest code reaches the host realm's `Function`
+   *   constructor through any injected intrinsic or tool closure and from
+   *   there `process.env` and host `fetch`, in the process holding the
+   *   platform's credentials. Fast and dependency-free, which makes it right
+   *   for unit tests over code the test itself wrote, and wrong for
+   *   everything else. Named to be unmistakable at the call site.
    * - Custom `ReplExecutor` instance: pass your own backend. Use this for
    *   testing seams.
    *
    * If `executorOptions` is provided alongside `'worker'` or `'isolated'`,
    * those override the defaults (timeoutMs, resourceLimits / memoryLimitMb).
    */
-  executor?: 'in-process' | 'worker' | 'isolated' | ReplExecutor;
+  executor: ReplExecutorChoice;
   /**
    * Options forwarded to the resource-isolated backends. Applied when
    * `executor` is `'worker'` (WorkerReplExecutorOptions) or `'isolated'`
@@ -72,6 +93,18 @@ export interface ReplSessionUsage {
   promptTokens: number;
   completionTokens: number;
   startedAt: number;
+}
+
+/**
+ * A claim on the session's sub-LLM budget, taken out BEFORE the provider
+ * request is dispatched. Exactly one of `settle` / `release` must be called;
+ * both are idempotent, and later calls are ignored.
+ */
+export interface SubLlmReservation {
+  /** Swap the reserved estimate for the real cost once the call returns. */
+  settle(actual: { costUsd: number; promptTokens?: number; completionTokens?: number }): void;
+  /** Give the reservation back - the call never reached the provider. */
+  release(): void;
 }
 
 export class BudgetExceededError extends Error {
@@ -156,6 +189,13 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
     startedAt: Date.now(),
   };
   private readonly budget: Required<NonNullable<ReplSessionOptions['budget']>>;
+  /**
+   * Estimated spend on sub-LLM calls that are dispatched but not yet
+   * settled. Held apart from `usage.totalCostUsd` (which only ever holds
+   * real, returned costs) so `getUsage()` stays a truthful record of actual
+   * spend while the caps still see money that is already committed.
+   */
+  private reservedCostUsd = 0;
   /** Wall-clock timestamp of the most recent runCode or recordSubLlm. Used by
    * the registry's idle-TTL and LRU eviction logic. */
   private _lastAccessedAt: number = Date.now();
@@ -176,9 +216,10 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
     this.sessionId = opts.sessionId;
     this.label = opts.label ?? `session:${opts.sessionId.slice(0, 8)}`;
 
-    // Pick the execution backend per opts.executor (default: in-process).
-    const executorChoice = opts.executor ?? 'in-process';
-    if (executorChoice === 'in-process') {
+    // Pick the execution backend per opts.executor. No default: an
+    // unspecified backend is a caller bug, not a cue to pick the fast one.
+    const executorChoice = opts.executor;
+    if (executorChoice === 'in-process-unsafe') {
       this.executor = new ReplContext({
         label: this.label,
         timeoutMs: opts.perCallTimeoutMs,
@@ -259,26 +300,16 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
   }
 
   /**
-   * Record a sub-LLM call against the budget. Tools that fan out to
-   * cheaper LLMs should call this so their cost is accounted for in the
-   * session's totals.
+   * Record a sub-LLM call that has ALREADY hit the provider.
+   *
+   * Prefer `reserveSubLlm()`: this books the spend on the way back, so it
+   * cannot refuse a call that is already in flight and cannot bound a
+   * concurrent fan-out. Kept for callers whose spend is genuinely only
+   * knowable after the fact.
    */
   recordSubLlm(opts: { costUsd: number; promptTokens?: number; completionTokens?: number }): void {
     this.usage.subLlmCalls += 1;
-    this.usage.totalCostUsd += opts.costUsd;
-    if (opts.promptTokens) this.usage.promptTokens += opts.promptTokens;
-    if (opts.completionTokens) this.usage.completionTokens += opts.completionTokens;
-    this._lastAccessedAt = Date.now();
-
-    this.safeEmit('subllm:recorded', {
-      sessionId: this.sessionId,
-      promptTokens: opts.promptTokens ?? 0,
-      completionTokens: opts.completionTokens ?? 0,
-      costUsd: opts.costUsd,
-      cumulativeCalls: this.usage.subLlmCalls,
-      cumulativeCostUsd: this.usage.totalCostUsd,
-      timestamp: Date.now(),
-    });
+    this.bookSubLlmActuals(opts);
 
     // Mid-execution budget enforcement: throw on the call that pushes the
     // session PAST the cap. The throw propagates out of the in-REPL tool
@@ -315,16 +346,107 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
       });
       throw new BudgetExceededError(`${reason} (mid-execution)`);
     }
-    if (this.usage.totalCostUsd >= this.budget.maxCostUsd) {
-      const reason = `cost $${this.usage.totalCostUsd.toFixed(4)}/$${this.budget.maxCostUsd}`;
+    this.enforceCostCap();
+  }
+
+  /**
+   * Claim budget for one sub-LLM call BEFORE dispatching it, throwing
+   * BudgetExceededError if the claim would breach a cap.
+   *
+   * `recordSubLlm` alone cannot bound a fan-out: it is called on the way
+   * back, so `Promise.all` over N calls passes every check while all N are
+   * in flight and the caps only fire once the provider has already been
+   * billed N times. Reserving on the way out makes the counter move before
+   * the request does, so the (N+1)th caller is refused while the first N are
+   * still running.
+   *
+   * The estimate only has to be non-negative - `settle` replaces it with the
+   * real number. Estimating high costs a caller nothing but a slightly
+   * earlier cap; estimating at 0 opts out of cost-based admission control
+   * and leaves only the call-count cap.
+   */
+  reserveSubLlm(opts: { estimatedCostUsd: number }): SubLlmReservation {
+    const estimate = Number.isFinite(opts.estimatedCostUsd) ? Math.max(0, opts.estimatedCostUsd) : 0;
+
+    if (this.usage.subLlmCalls >= this.budget.maxSubLlmCalls) {
+      const reason = `sub-LLM calls ${this.usage.subLlmCalls}/${this.budget.maxSubLlmCalls}`;
       this.safeEmit('budget:exceeded', {
         sessionId: this.sessionId,
         reason,
         phase: 'mid-execution',
         timestamp: Date.now(),
       });
-      throw new BudgetExceededError(`${reason} (mid-execution)`);
+      throw new BudgetExceededError(`${reason} (reservation refused)`);
     }
+    const projected = this.usage.totalCostUsd + this.reservedCostUsd + estimate;
+    if (projected >= this.budget.maxCostUsd) {
+      const reason = `cost $${projected.toFixed(4)}/$${this.budget.maxCostUsd} (incl. in-flight)`;
+      this.safeEmit('budget:exceeded', {
+        sessionId: this.sessionId,
+        reason,
+        phase: 'mid-execution',
+        timestamp: Date.now(),
+      });
+      throw new BudgetExceededError(`${reason} (reservation refused)`);
+    }
+
+    this.usage.subLlmCalls += 1;
+    this.reservedCostUsd += estimate;
+    this._lastAccessedAt = Date.now();
+
+    let closed = false;
+    return {
+      settle: actual => {
+        if (closed) return;
+        closed = true;
+        this.reservedCostUsd = Math.max(0, this.reservedCostUsd - estimate);
+        // The call was counted at reservation time, so book the actuals
+        // directly rather than through recordSubLlm (which counts again).
+        this.bookSubLlmActuals(actual);
+        this.enforceCostCap();
+      },
+      release: () => {
+        if (closed) return;
+        closed = true;
+        this.reservedCostUsd = Math.max(0, this.reservedCostUsd - estimate);
+        this.usage.subLlmCalls -= 1;
+      },
+    };
+  }
+
+  /**
+   * Book a completed sub-LLM call's real cost and tokens against an
+   * ALREADY-COUNTED call and emit the observability event. Never throws, so
+   * callers can enforce their caps in their own order.
+   */
+  private bookSubLlmActuals(opts: { costUsd: number; promptTokens?: number; completionTokens?: number }): void {
+    this.usage.totalCostUsd += opts.costUsd;
+    if (opts.promptTokens) this.usage.promptTokens += opts.promptTokens;
+    if (opts.completionTokens) this.usage.completionTokens += opts.completionTokens;
+    this._lastAccessedAt = Date.now();
+
+    this.safeEmit('subllm:recorded', {
+      sessionId: this.sessionId,
+      promptTokens: opts.promptTokens ?? 0,
+      completionTokens: opts.completionTokens ?? 0,
+      costUsd: opts.costUsd,
+      cumulativeCalls: this.usage.subLlmCalls,
+      cumulativeCostUsd: this.usage.totalCostUsd,
+      timestamp: Date.now(),
+    });
+  }
+
+  /** Throw once real spend has met or passed the session's cost ceiling. */
+  private enforceCostCap(): void {
+    if (this.usage.totalCostUsd < this.budget.maxCostUsd) return;
+    const reason = `cost $${this.usage.totalCostUsd.toFixed(4)}/$${this.budget.maxCostUsd}`;
+    this.safeEmit('budget:exceeded', {
+      sessionId: this.sessionId,
+      reason,
+      phase: 'mid-execution',
+      timestamp: Date.now(),
+    });
+    throw new BudgetExceededError(`${reason} (mid-execution)`);
   }
 
   /**
@@ -370,8 +492,12 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
     if (this.usage.subLlmCalls >= this.budget.maxSubLlmCalls) {
       return `sub-LLM calls ${this.usage.subLlmCalls}/${this.budget.maxSubLlmCalls}`;
     }
-    if (this.usage.totalCostUsd >= this.budget.maxCostUsd) {
-      return `cost $${this.usage.totalCostUsd.toFixed(4)}/$${this.budget.maxCostUsd}`;
+    // Committed + in-flight: a fan-out still awaiting its provider responses
+    // has already spent that money, so a pre-flight check that ignored
+    // reservations would wave through another runCode on a dead budget.
+    const projectedCostUsd = this.usage.totalCostUsd + this.reservedCostUsd;
+    if (projectedCostUsd >= this.budget.maxCostUsd) {
+      return `cost $${projectedCostUsd.toFixed(4)}/$${this.budget.maxCostUsd}`;
     }
     return null;
   }

@@ -48,7 +48,7 @@ describe('buildBackendSubAgentQuery', () => {
   let session: ReplSession;
 
   beforeEach(() => {
-    session = new ReplSession({ sessionId: 'sub-agent-test' });
+    session = new ReplSession({ sessionId: 'sub-agent-test', executor: 'in-process-unsafe' });
   });
 
   it('calls the backend with the provided model + prompt and returns the streamed text', async () => {

@@ -31,6 +31,13 @@ const cdnImageHostname = (() => {
 })();
 
 /** @type {import("next").NextConfig} */
+// isolated-vm is a native addon loaded through `createRequire(...)` inside
+// @bike4mind/agents, which keeps it out of every Lambda that never touches the
+// REPL - and also hides it from static file tracing. Routes that DO construct a
+// sandbox have to name the prebuild themselves. One constant so the three
+// entries below cannot drift apart.
+const ISOLATED_VM_PREBUILDS = '../../node_modules/.pnpm/isolated-vm@*/node_modules/isolated-vm/**/*.node';
+
 const nextConfig = {
   // Self-host build only (open-core #9313): emit a standalone server bundle for
   // the Docker image. The normal SST/OpenNext build manages its own output, so
@@ -53,6 +60,19 @@ const nextConfig = {
 
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
+
+  // Every route that can construct a REPL sandbox. Missing one does not open a
+  // hole - the caller fails closed, rlm-answer with a 503 and a wake by
+  // dropping code_execute - but it does silently disable the feature there.
+  //
+  // The deep-agent wake ALSO runs off deepAgentWakeQueue, which SST bundles
+  // rather than Next; that one is handled in infra/queues.ts. A new sandbox
+  // caller needs an entry in whichever bundler owns it.
+  outputFileTracingIncludes: {
+    '/api/data-lakes/rlm-answer': [ISOLATED_VM_PREBUILDS],
+    '/api/deep-agent/spin': [ISOLATED_VM_PREBUILDS],
+    '/api/agents/[id]/missions': [ISOLATED_VM_PREBUILDS],
+  },
 
   transpilePackages: [
     'react-syntax-highlighter',
@@ -109,6 +129,11 @@ const nextConfig = {
 
   serverExternalPackages: [
     '@aws-sdk/client-bedrock-runtime',
+    // Native addon (.node binary). Bundling it would emit a JS loader with no
+    // binary beside it, so the REPL sandbox would fail to construct at runtime
+    // and every code_execute surface would refuse to run (they fail closed).
+    // Left external so file tracing ships the prebuild next to the handler.
+    'isolated-vm',
     '@aws-sdk/client-s3',
     '@aws-sdk/client-transcribe',
     '@aws-sdk/credential-provider-node',

@@ -35,10 +35,17 @@ const RESERVED_GLOBAL_NAMES = new Set([
  * beside it. Deferring the require means only a function that actually
  * constructs an `IsolatedVmExecutor` ever touches the binary.
  *
- * When the isolated backend IS activated on a Lambda, that function must
- * externalize + install isolated-vm in its SST `nodejs` config
- * (`esbuild: { external: ['isolated-vm'] }` + `install: ['isolated-vm']` -
- * the pattern in `infra/mcp.ts`) so the linux/x64 prebuild is packaged.
+ * The flip side is that a bundler cannot see this require, so every deploy
+ * target that activates the isolated backend must name the addon itself or
+ * the prebuild never ships beside the handler:
+ * - SST `nodejs` functions: `esbuild: { external: ['isolated-vm'] }` +
+ *   `install: ['isolated-vm']` (the pattern in `infra/mcp.ts`).
+ * - The Next.js app (rlm-answer, deep-agent): `serverExternalPackages` plus an
+ *   `outputFileTracingIncludes` entry naming the `.node` prebuild, both in
+ *   `apps/client/next.config.mjs`.
+ * Callers fail closed when the addon is missing, so the symptom of getting
+ * this wrong is a route that refuses every request, not one that runs guest
+ * code unsandboxed.
  */
 let _ivm: typeof import('isolated-vm') | undefined;
 function loadIvm(): typeof import('isolated-vm') {
@@ -92,6 +99,19 @@ function loadIvm(): typeof import('isolated-vm') {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MEMORY_LIMIT_MB = 256;
+/**
+ * Grace added to `timeoutMs` before the HOST gives up on a run.
+ *
+ * The isolate's own `timeout` preempts guest code that is BURNING CPU,
+ * including inside an async continuation, and produces the precise
+ * "Script execution timed out." error while leaving the isolate reusable.
+ * It does not fire for a run that is merely PENDING - `await new Promise(() =>
+ * {})`, or a tool call that never settles - because nothing is executing to
+ * interrupt. The host deadline covers that case, and the grace keeps it from
+ * racing the isolate on the CPU-bound path where the isolate's own answer is
+ * the better one.
+ */
+const HOST_DEADLINE_GRACE_MS = 500;
 const STDOUT_HEAD_BYTES = 5000;
 const STDOUT_TAIL_BYTES = 2000;
 const HARD_PER_LINE_BYTES = 50_000;
@@ -336,13 +356,40 @@ export class IsolatedVmExecutor implements ReplExecutor {
 
     let error: string | null = null;
     let script: IVM.Script | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       script = await this.isolate.compileScript(wrapped);
-      await script.run(this.context, { timeout: this.timeoutMs, promise: true });
+      const run = script.run(this.context, { timeout: this.timeoutMs, promise: true });
+      // isolated-vm offers no way to abandon a pending in-isolate promise, so
+      // the only preemption available is killing the isolate. That ends the
+      // session - deliberately: the alternative is leaving a continuation
+      // parked in a live sandbox that could resume, and run guest code, after
+      // we already told the caller the run was over.
+      const deadline = new Promise<never>((_, reject) => {
+        deadlineTimer = setTimeout(() => {
+          try {
+            if (!this.isolate.isDisposed) this.isolate.dispose();
+          } catch {
+            // already gone; the rejection below is what the caller sees
+          }
+          reject(
+            new Error(
+              `REPL run exceeded the ${this.timeoutMs}ms cap without executing (pending promise or ` +
+                `unresolved tool call); isolate [${this.label}] was terminated`
+            )
+          );
+        }, this.timeoutMs + HOST_DEADLINE_GRACE_MS);
+      });
+      await Promise.race([run, deadline]);
     } catch (e) {
       error = serializeError(e);
     } finally {
-      script?.release();
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      try {
+        script?.release();
+      } catch {
+        // releasing a script whose isolate is already disposed throws
+      }
     }
 
     // A memory-limit breach disposes the isolate out from under us. Mark

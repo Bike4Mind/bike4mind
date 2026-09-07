@@ -21,7 +21,7 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    session = new ReplSession({ sessionId: 'tools-test' });
+    session = new ReplSession({ sessionId: 'tools-test', executor: 'in-process-unsafe' });
     // Spy on global fetch so HTTP calls return canned JSON
     fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as ReturnType<typeof vi.spyOn>;
   });
@@ -182,7 +182,7 @@ describe('buildDataLakeTools - every loopback call runs as the requesting princi
   const callerHeaders = { authorization: 'Bearer caller.jwt.token' };
 
   beforeEach(() => {
-    session = new ReplSession({ sessionId: 'principal-test' });
+    session = new ReplSession({ sessionId: 'principal-test', executor: 'in-process-unsafe' });
     fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as ReturnType<typeof vi.spyOn>;
   });
 

@@ -49,6 +49,8 @@ interface SubAgentArgs {
  *  consistent budget numbers. The actual Bedrock bill comes from AWS. */
 const HAIKU_INPUT_PER_TOKEN = 0.8e-6;
 const HAIKU_OUTPUT_PER_TOKEN = 4e-6;
+/** Rough chars-per-token for the pre-flight reservation estimate only. */
+const ESTIMATE_CHARS_PER_TOKEN = 4;
 
 export function buildBackendSubAgentQuery(deps: BackendSubAgentDeps): ReplToolFn {
   const defaultMax = deps.defaultMaxTokens ?? 1500;
@@ -66,54 +68,74 @@ export function buildBackendSubAgentQuery(deps: BackendSubAgentDeps): ReplToolFn
     let outputTokens = 0;
     let usdCostFromBackend: number | undefined;
 
-    await deps.llm.complete(
-      deps.modelId,
-      [{ role: 'user', content: a.prompt }],
-      {
-        temperature: 0.4,
-        maxTokens,
-        stream: false,
-        tools: [],
-      },
-      async (texts, completionInfo) => {
-        // ICompletionBackend hands us streamed chunks; we accumulate
-        for (const t of texts) {
-          if (typeof t === 'string') responseText += t;
-        }
-        if (completionInfo?.inputTokens) inputTokens = completionInfo.inputTokens;
-        if (completionInfo?.outputTokens) outputTokens = completionInfo.outputTokens;
-        if (typeof completionInfo?.usdCost === 'number') usdCostFromBackend = completionInfo.usdCost;
-      }
-    );
-
-    // Prefer the backend's own cost calculation when available (Bedrock
-    // sets it from the model registry); fall back to a Haiku-rate
-    // estimate so the budget tracker always has a number.
-    let cost: number;
-    if (typeof usdCostFromBackend === 'number') {
-      cost = usdCostFromBackend;
-    } else {
-      cost = inputTokens * HAIKU_INPUT_PER_TOKEN + outputTokens * HAIKU_OUTPUT_PER_TOKEN;
-      if (!fallbackPricingWarnedFor.has(deps.modelId) && !isHaikuModel(deps.modelId)) {
-        // Warn ONCE per session for a non-Haiku model when the backend
-        // didn't supply usdCost - the operator should know the budget
-        // tracker is using Haiku rates as an approximation.
-        fallbackPricingWarnedFor.add(deps.modelId);
-
-        Logger.globalInstance.warn(
-          `[backendSubAgent] modelId="${deps.modelId}" did not provide usdCost on completion; ` +
-            `falling back to Haiku-rate estimate ($0.8/M in, $4/M out). ` +
-            `The recorded session cost may not match the actual bill.`
-        );
-      }
-    }
-    deps.session.recordSubLlm({
-      costUsd: cost,
-      promptTokens: inputTokens,
-      completionTokens: outputTokens,
+    // Claim budget before dispatch, not after. Booking on the way back lets a
+    // `Promise.all` fan-out put every call on the wire before any cap is
+    // consulted, so the caps only fire once the provider has already billed
+    // for all of them. The estimate is deliberately worst-case (the whole
+    // output allowance at Haiku's output rate); settle replaces it with the
+    // backend's real number.
+    const reservation = deps.session.reserveSubLlm({
+      estimatedCostUsd:
+        Math.ceil(a.prompt.length / ESTIMATE_CHARS_PER_TOKEN) * HAIKU_INPUT_PER_TOKEN +
+        maxTokens * HAIKU_OUTPUT_PER_TOKEN,
     });
 
-    return responseText;
+    try {
+      await deps.llm.complete(
+        deps.modelId,
+        [{ role: 'user', content: a.prompt }],
+        {
+          temperature: 0.4,
+          maxTokens,
+          stream: false,
+          tools: [],
+        },
+        async (texts, completionInfo) => {
+          // ICompletionBackend hands us streamed chunks; we accumulate
+          for (const t of texts) {
+            if (typeof t === 'string') responseText += t;
+          }
+          if (completionInfo?.inputTokens) inputTokens = completionInfo.inputTokens;
+          if (completionInfo?.outputTokens) outputTokens = completionInfo.outputTokens;
+          if (typeof completionInfo?.usdCost === 'number') usdCostFromBackend = completionInfo.usdCost;
+        }
+      );
+
+      // Prefer the backend's own cost calculation when available (Bedrock
+      // sets it from the model registry); fall back to a Haiku-rate
+      // estimate so the budget tracker always has a number.
+      let cost: number;
+      if (typeof usdCostFromBackend === 'number') {
+        cost = usdCostFromBackend;
+      } else {
+        cost = inputTokens * HAIKU_INPUT_PER_TOKEN + outputTokens * HAIKU_OUTPUT_PER_TOKEN;
+        if (!fallbackPricingWarnedFor.has(deps.modelId) && !isHaikuModel(deps.modelId)) {
+          // Warn ONCE per session for a non-Haiku model when the backend
+          // didn't supply usdCost - the operator should know the budget
+          // tracker is using Haiku rates as an approximation.
+          fallbackPricingWarnedFor.add(deps.modelId);
+
+          Logger.globalInstance.warn(
+            `[backendSubAgent] modelId="${deps.modelId}" did not provide usdCost on completion; ` +
+              `falling back to Haiku-rate estimate ($0.8/M in, $4/M out). ` +
+              `The recorded session cost may not match the actual bill.`
+          );
+        }
+      }
+      reservation.settle({
+        costUsd: cost,
+        promptTokens: inputTokens,
+        completionTokens: outputTokens,
+      });
+
+      return responseText;
+    } finally {
+      // No-op once settled. Backstop for a throw anywhere between the claim
+      // and the settle - a failed dispatch, a backend that returns nothing
+      // attributable - so a claim can never leak and permanently shrink the
+      // session's remaining budget.
+      reservation.release();
+    }
   };
 }
 

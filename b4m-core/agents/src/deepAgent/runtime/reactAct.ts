@@ -121,15 +121,34 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
     const tools = await config.buildTools(toolNamesToBuild, ctx.charter.identity.ownerUserId);
 
     // Give the agent a sandboxed JS REPL - the web-safe compute lever. Fresh
-    // per wake (in-process; switch to 'worker' for production isolation).
+    // per wake, in an isolated-vm isolate: the code is LLM-authored and this
+    // runtime holds the platform's credentials, so a shared-realm backend
+    // would put `process.env` one `constructor` chain away from the guest.
+    //
+    // If the isolate cannot be built (native addon missing from the deploy
+    // bundle) the wake continues WITHOUT code_execute. Dropping the tool
+    // costs the agent a capability; running it unsandboxed would cost the
+    // platform its secrets.
     let session: ReplSession | undefined;
+    let codeExecuteWired = false;
     if (profile.codeExecute) {
-      session = new ReplSession({
-        sessionId: `deepagent-${ctx.charter.identity.agentId}-${randomUUID()}`,
-        label: `${ctx.charter.identity.role} wake`,
-        budget: { maxExecutions: 30, maxSubLlmCalls: 50, maxCostUsd: 2 },
-      });
-      tools.push(makeCodeExecuteTool({ session, logger: config.logger }));
+      try {
+        session = new ReplSession({
+          sessionId: `deepagent-${ctx.charter.identity.agentId}-${randomUUID()}`,
+          label: `${ctx.charter.identity.role} wake`,
+          executor: 'isolated',
+          budget: { maxExecutions: 30, maxSubLlmCalls: 50, maxCostUsd: 2 },
+        });
+        tools.push(makeCodeExecuteTool({ session, logger: config.logger }));
+        codeExecuteWired = true;
+      } catch (e) {
+        // `session` is deliberately left as-is: if it was constructed and the
+        // wiring below it threw, the finally still has to dispose it.
+        config.logger.error('[deepAgent.act] code_execute disabled - no isolated REPL sandbox available', {
+          agentId: ctx.charter.identity.agentId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
 
     const toolNames = tools.map(t => t.toolSchema?.name).filter(Boolean);
@@ -138,7 +157,7 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
       role: ctx.charter.identity.role,
       actionKind: ctx.policy.actionKind,
       tools: toolNames,
-      codeExecute: profile.codeExecute,
+      codeExecute: codeExecuteWired,
     });
 
     try {

@@ -30,6 +30,18 @@ import type { ReplToolFn, ReplToolMap, ReplRunResult } from './ReplContext';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MEMORY_LIMIT_MB = 256;
+/**
+ * Grace on top of `timeoutMs` before the MAIN THREAD stops waiting on a run.
+ *
+ * The worker's inner `vm.runInContext` timeout only bounds the synchronous
+ * part of the guest code: the run is wrapped in an async IIFE, so anything
+ * after the first `await` - a busy loop, a pending promise, a tool call that
+ * never settles - runs with no cap and the worker never posts `runResult`.
+ * Before this deadline existed the main thread awaited that forever. The
+ * grace lets the worker's own (better-worded) timeout win the ordinary
+ * synchronous case.
+ */
+const MAIN_THREAD_DEADLINE_GRACE_MS = 500;
 const STDOUT_HEAD_BYTES = 5000;
 const STDOUT_TAIL_BYTES = 2000;
 const HARD_PER_LINE_BYTES = 50_000;
@@ -255,6 +267,8 @@ parentPort.on('message', async (msg) => {
 interface PendingRun {
   resolve: (r: ReplRunResult) => void;
   reject: (e: unknown) => void;
+  /** Main-thread deadline for this run. Cleared whenever the run settles. */
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 export class WorkerReplExecutor implements ReplExecutor {
@@ -326,7 +340,24 @@ export class WorkerReplExecutor implements ReplExecutor {
     }
     const id = this.nextRunId++;
     return new Promise<ReplRunResult>((resolve, reject) => {
-      this.pendingRuns.set(id, { resolve, reject });
+      // A worker that blew its deadline is not recoverable - the runaway
+      // continuation still owns the thread - so terminating it is the
+      // preemption. dispose() rejects every other in-flight run for us.
+      const timer = setTimeout(() => {
+        if (!this.pendingRuns.has(id)) return;
+        this.pendingRuns.delete(id);
+        void this.dispose().catch(() => {
+          // terminate() failing changes nothing for this caller
+        });
+        reject(
+          new Error(
+            `REPL run exceeded the ${this.timeoutMs}ms cap (async continuation or unresolved tool ` +
+              `call); worker [${this.label}] was terminated`
+          )
+        );
+      }, this.timeoutMs + MAIN_THREAD_DEADLINE_GRACE_MS);
+
+      this.pendingRuns.set(id, { resolve, reject, timer });
       const msg: MsgRunCode = { type: 'runCode', id, code, timeoutMs: this.timeoutMs };
       // Synchronous postMessage failures (e.g., ERR_WORKER_NOT_RUNNING if
       // the worker exited between our checks and now) must clean up the
@@ -334,6 +365,7 @@ export class WorkerReplExecutor implements ReplExecutor {
       try {
         this.worker.postMessage(msg);
       } catch (e) {
+        clearTimeout(timer);
         this.pendingRuns.delete(id);
         reject(e);
       }
@@ -345,6 +377,7 @@ export class WorkerReplExecutor implements ReplExecutor {
     this.disposed = true;
     // Reject pending runs so callers don't hang forever
     for (const [id, pending] of this.pendingRuns) {
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error(`WorkerReplExecutor disposed before runCode #${id} returned`));
     }
     this.pendingRuns.clear();
@@ -356,6 +389,7 @@ export class WorkerReplExecutor implements ReplExecutor {
       const pending = this.pendingRuns.get(msg.id);
       if (!pending) return;
       this.pendingRuns.delete(msg.id);
+      if (pending.timer) clearTimeout(pending.timer);
       pending.resolve({
         stdout: msg.stdout,
         error: msg.error,
@@ -415,6 +449,7 @@ export class WorkerReplExecutor implements ReplExecutor {
     // all in-flight runs so awaiting callers don't hang forever.
     this.disposed = true;
     for (const [, pending] of this.pendingRuns) {
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error(`worker crashed: ${err.message}`));
     }
     this.pendingRuns.clear();
@@ -427,6 +462,7 @@ export class WorkerReplExecutor implements ReplExecutor {
     // half-alive (rejected pending but accepting new runs).
     this.disposed = true;
     for (const [, pending] of this.pendingRuns) {
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error(`worker exited unexpectedly with code ${code} (likely memory limit)`));
     }
     this.pendingRuns.clear();

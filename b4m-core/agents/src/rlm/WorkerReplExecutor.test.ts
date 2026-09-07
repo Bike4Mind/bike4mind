@@ -170,3 +170,32 @@ describe('WorkerReplExecutor', () => {
     }
   });
 });
+
+describe('WorkerReplExecutor - the main thread enforces its own deadline', () => {
+  it('does not wait forever on a busy loop that starts after an await', async () => {
+    // The worker's inner vm timeout only bounds the synchronous head of the
+    // run, so this continuation never lets the worker post a runResult. Before
+    // the main-thread deadline existed, this call never returned.
+    const ex = new WorkerReplExecutor({ timeoutMs: 400 });
+    const t0 = Date.now();
+    await expect(ex.runCode('await 0; while (true) {}')).rejects.toThrow(/cap|terminated/i);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    await ex.dispose();
+  }, 20_000);
+
+  it('does not wait forever on a run that is merely pending', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 400 });
+    const t0 = Date.now();
+    await expect(ex.runCode('await new Promise(() => {});')).rejects.toThrow(/cap|terminated/i);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    await ex.dispose();
+  }, 20_000);
+
+  it('leaves a normal run untouched (the deadline is not a latency tax)', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 5000 });
+    const r = await ex.runCode('await 0; console.log("done");');
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('done');
+    await ex.dispose();
+  }, 20_000);
+});

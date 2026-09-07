@@ -37,13 +37,28 @@ export interface DataLakeToolDeps {
 }
 
 const HAIKU_MODEL_ID = 'claude-haiku-4-5-20251001';
-// Approx Haiku 4.5 pricing (per token). Update when Anthropic changes prices.
-const HAIKU_INPUT_PER_TOKEN = 0.8e-6;
-const HAIKU_OUTPUT_PER_TOKEN = 4e-6;
 
-// Track which sessions have already seen the non-Haiku-rate warning so a
-// trajectory with N subAgentQuery calls only logs once.
-const nonHaikuWarnedFor = new Set<string>();
+/**
+ * The models `subAgentQuery` may dispatch to, and the per-token rates their
+ * spend is charged at. Membership and pricing are the same fact on purpose:
+ * the session cost cap is only a cap if every model it can reach is priced,
+ * so a model that is not in this table cannot be called.
+ *
+ * `model` reaches this from LLM-authored code inside the REPL, so treat an
+ * unrecognised id as input to reject, not a value to pass through. It used to
+ * be forwarded to the provider verbatim and then billed at Haiku's rate, which
+ * under-counted an Opus call by ~19x and let one request quietly outspend its
+ * own cap.
+ *
+ * Rates are USD per token. Update alongside provider pricing changes.
+ */
+const SUB_LLM_PRICING: Record<string, { inputPerToken: number; outputPerToken: number }> = {
+  [HAIKU_MODEL_ID]: { inputPerToken: 0.8e-6, outputPerToken: 4e-6 },
+};
+
+/** Rough chars-per-token for the pre-flight cost estimate. Settled with real
+ *  usage as soon as the call returns, so it only has to be the right order. */
+const ESTIMATE_CHARS_PER_TOKEN = 4;
 
 interface SemanticSearchArgs {
   query: string;
@@ -74,7 +89,8 @@ interface GetArticleArgs {
 
 interface SubAgentQueryArgs {
   prompt: string;
-  model?: 'haiku' | string;
+  /** `'haiku'` or an id in SUB_LLM_PRICING. Anything else is refused. */
+  model?: string;
   max_tokens?: number;
 }
 
@@ -241,36 +257,48 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
   const subAgentQuery = async (...args: unknown[]) => {
     const a = (args[0] ?? {}) as SubAgentQueryArgs;
     if (!a.prompt) throw new Error('subAgentQuery: prompt is required');
-    const requestedModel = a.model && a.model !== 'haiku' ? a.model : HAIKU_MODEL_ID;
-    const maxTokens = Math.min(Math.max(a.max_tokens ?? 1500, 16), 8000);
-
-    const msg = await anthropic.messages.create({
-      model: requestedModel,
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: a.prompt }],
-    });
-    const text = msg.content.map(block => ('text' in block ? block.text : '')).join('');
-
-    // Cost accounting at Haiku rates. If the caller passed a non-Haiku
-    // model (e.g. an opus snapshot for a hard task), the budget tracker
-    // will UNDER-count the spend - warn once per session so the operator
-    // knows the recorded session cost is an underestimate.
-    if (requestedModel !== HAIKU_MODEL_ID && !nonHaikuWarnedFor.has(deps.session.sessionId)) {
-      nonHaikuWarnedFor.add(deps.session.sessionId);
-      console.warn(
-        `[subAgentQuery] session=${deps.session.sessionId} requested model="${requestedModel}" ` +
-          `but cost is being recorded at Haiku rates ($0.8/M in, $4/M out). ` +
-          `Actual bill will exceed the recorded session cost.`
+    const requestedModel = !a.model || a.model === 'haiku' ? HAIKU_MODEL_ID : a.model;
+    const pricing = SUB_LLM_PRICING[requestedModel];
+    if (!pricing) {
+      throw new Error(
+        `subAgentQuery: model "${requestedModel}" is not available. ` +
+          `Allowed models: ${Object.keys(SUB_LLM_PRICING).join(', ')} (or "haiku").`
       );
     }
-    const cost = msg.usage.input_tokens * HAIKU_INPUT_PER_TOKEN + msg.usage.output_tokens * HAIKU_OUTPUT_PER_TOKEN;
-    deps.session.recordSubLlm({
-      costUsd: cost,
-      promptTokens: msg.usage.input_tokens,
-      completionTokens: msg.usage.output_tokens,
+    const maxTokens = Math.min(Math.max(a.max_tokens ?? 1500, 16), 8000);
+
+    // Claim the budget BEFORE the request goes out. Booking on the way back
+    // cannot bound a fan-out: `await Promise.all(...)` over N calls would see
+    // every check pass while all N are in flight, and the cap would only fire
+    // once the provider had already billed all N. Worst-case pricing, since a
+    // reservation that under-estimates is a cap that under-enforces.
+    const reservation = deps.session.reserveSubLlm({
+      estimatedCostUsd:
+        Math.ceil(a.prompt.length / ESTIMATE_CHARS_PER_TOKEN) * pricing.inputPerToken +
+        maxTokens * pricing.outputPerToken,
     });
 
-    return text;
+    try {
+      const msg = await anthropic.messages.create({
+        model: requestedModel,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: a.prompt }],
+      });
+      // settle() throws BudgetExceededError when the real cost tips the
+      // ceiling. Let it propagate: that throw is how the agent finds out.
+      reservation.settle({
+        costUsd: msg.usage.input_tokens * pricing.inputPerToken + msg.usage.output_tokens * pricing.outputPerToken,
+        promptTokens: msg.usage.input_tokens,
+        completionTokens: msg.usage.output_tokens,
+      });
+      return msg.content.map(block => ('text' in block ? block.text : '')).join('');
+    } finally {
+      // No-op once settled. This is the backstop for a throw anywhere between
+      // the claim and the settle - a failed dispatch, a malformed usage
+      // payload - so a claim can never leak and permanently shrink the
+      // session's remaining budget.
+      reservation.release();
+    }
   };
 
   return {

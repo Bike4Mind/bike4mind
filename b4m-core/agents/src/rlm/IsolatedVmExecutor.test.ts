@@ -364,3 +364,95 @@ describe('IsolatedVmExecutor', () => {
     await expect(ex.runCode('console.log(1)')).rejects.toThrow(/disposed/);
   }, 20_000);
 });
+
+/**
+ * The escape the in-process backend is vulnerable to, run against the isolate.
+ *
+ * These assert the specific vectors an attacker reaches for: not just
+ * `Function`, but the `constructor` hanging off an *injected tool closure*,
+ * which is the one that used to hand back the host realm.
+ */
+describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
+  const created: IsolatedVmExecutor[] = [];
+
+  afterEach(async () => {
+    for (const ex of created) {
+      try {
+        await Promise.resolve(ex.dispose());
+      } catch {
+        // already disposed
+      }
+    }
+    created.length = 0;
+  });
+
+  function spawn(opts?: ConstructorParameters<typeof IsolatedVmExecutor>[0]): IsolatedVmExecutor {
+    const ex = new IsolatedVmExecutor(opts);
+    created.push(ex);
+    return ex;
+  }
+
+  it('blocks the escape through an injected tool closure', async () => {
+    const ex = spawn();
+    // A tool closure is a host-side function reference in the in-process
+    // backend, so `<tool>.constructor` was a live handle on the host realm's
+    // codegen. Across an isolate the stub is in-isolate and its constructor
+    // is neutered.
+    ex.setTools({ semanticSearch: async () => ({ results: [] }) });
+
+    const r = await ex.runCode('semanticSearch.constructor("return globalThis")()');
+    expect(r.error).toContain('disabled');
+  });
+
+  it('cannot reach process.env or a host fetch by any of the named vectors', async () => {
+    const ex = spawn();
+    ex.setTools({ semanticSearch: async () => ({ results: [] }) });
+
+    // Nothing ambient.
+    const ambient = await ex.runCode('console.log(typeof process, typeof fetch, typeof require);');
+    expect(ambient.error).toBeNull();
+    expect(ambient.stdout).toBe('undefined undefined undefined');
+
+    // Nothing reachable by construction either.
+    for (const vector of [
+      'Object.constructor("return process")()',
+      'semanticSearch.constructor("return process")()',
+      '({}).constructor.constructor("return process.env")()',
+      '[].constructor.constructor("return globalThis.fetch")()',
+    ]) {
+      const r = await ex.runCode(vector);
+      expect(r.error, `vector should be blocked: ${vector}`).toContain('disabled');
+    }
+  });
+
+  it('preempts a CPU-bound loop that runs AFTER an await, not just a sync one', async () => {
+    const ex = spawn({ timeoutMs: 300 });
+    const t0 = Date.now();
+    // The async IIFE wrapper means everything past the first `await` is a
+    // fresh task. The isolate's CPU timeout still covers it.
+    const r = await ex.runCode('await 0; while (true) {}');
+    expect(r.error).toMatch(/timed out|timeout|terminated/i);
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it('terminates a run that is pending rather than burning CPU', async () => {
+    const ex = spawn({ timeoutMs: 300 });
+    const t0 = Date.now();
+    // Nothing is executing, so there is no script for the isolate's own
+    // timeout to interrupt. Only the host deadline can end this.
+    const r = await ex.runCode('await new Promise(() => {});');
+    expect(r.error).toMatch(/cap|terminated|timed out/i);
+    expect(Date.now() - t0).toBeLessThan(3000);
+    // Ending it means killing the isolate, so the executor is spent.
+    await expect(ex.runCode('console.log(1)')).rejects.toThrow(/disposed/);
+  });
+
+  it('bounds a run whose tool call never settles', async () => {
+    const ex = spawn({ timeoutMs: 300 });
+    ex.setTools({ stalls: () => new Promise(() => {}) });
+    const t0 = Date.now();
+    const r = await ex.runCode('await stalls();');
+    expect(r.error).toMatch(/cap|terminated|timed out/i);
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+});

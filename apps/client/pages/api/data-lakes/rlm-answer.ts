@@ -37,10 +37,12 @@ import { resolveAccessibleLakes } from '@server/dataLakes';
  * (keyword + Sonnet synth) and MIDDLE (vector + Sonnet synth). No direct
  * agent tool calls would muddy the attribution story.
  *
- * Production hardening (Quest 3) replaces:
- * - HTTP loopback in tools.ts with in-process service calls
- * - Per-request session disposal with longer-lived agent sessions
- * - vm.runInContext with a real sandbox (isolated-vm or worker pool)
+ * Guest code runs in an isolated-vm isolate (`executor: 'isolated'`), which
+ * is what makes step 3 a sandbox rather than just a fresh global scope.
+ *
+ * Still open from the spike:
+ * - HTTP loopback in tools.ts should become in-process service calls
+ * - Per-request session disposal should become longer-lived agent sessions
  *
  * See: apps/client/server/tavern/docs/07-PERSISTENT-REPL-TOOL.md
  */
@@ -178,18 +180,37 @@ const handler = baseApi()
     }
 
     // --- Construct a per-request ReplSession ---
+    // `executor: 'isolated'` is load-bearing, not a preference. The code this
+    // session runs is written by an LLM steered by the caller's own prompt,
+    // and this process holds the platform's credentials. Under a shared-realm
+    // backend an injected intrinsic or tool closure hands the guest the host
+    // realm's Function constructor, and from there `process.env` and a host
+    // `fetch`. There is deliberately NO fallback backend: if the isolate
+    // cannot be built, this endpoint refuses to run rather than running the
+    // guest next to the secrets.
     const sessionId = `rlm-answer-${randomUUID()}`;
     const baseUrl = `http://localhost:${process.env.PORT ?? '3000'}`;
-    const session = new ReplSession({
-      sessionId,
-      label: 'rlm-answer',
-      perCallTimeoutMs: 60_000,
-      budget: {
-        maxExecutions: parsed.budget?.max_executions ?? 25,
-        maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
-        maxCostUsd: parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD,
-      },
-    });
+    let session: ReplSession;
+    try {
+      session = new ReplSession({
+        sessionId,
+        label: 'rlm-answer',
+        executor: 'isolated',
+        perCallTimeoutMs: 60_000,
+        budget: {
+          maxExecutions: parsed.budget?.max_executions ?? 25,
+          maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
+          maxCostUsd: parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD,
+        },
+      });
+    } catch (e) {
+      req.logger.error(
+        `[rlm-answer] refusing request: isolated REPL sandbox unavailable: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+      return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
+    }
 
     // Wire data-lake tools into the REPL (NOT into the agent's tool array)
     session.setTools(

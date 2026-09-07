@@ -6,7 +6,7 @@ describe('makeCodeExecuteTool', () => {
   let session: ReplSession;
 
   beforeEach(() => {
-    session = new ReplSession({ sessionId: 'code-tool-test' });
+    session = new ReplSession({ sessionId: 'code-tool-test', executor: 'in-process-unsafe' });
   });
 
   it('returns a tool with the right name and schema shape', () => {
@@ -54,6 +54,7 @@ describe('makeCodeExecuteTool', () => {
 
   it('reports budget exceeded distinctly so the agent knows to wrap up', async () => {
     const tightSession = new ReplSession({
+      executor: 'in-process-unsafe',
       sessionId: 'budget-test',
       budget: { maxExecutions: 1 },
     });

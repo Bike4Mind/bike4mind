@@ -1,14 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockResolveAccessibleLakes, mockBuildDataLakeTools, mockGetEffectiveLLMApiKeys, mockAgentRun } = vi.hoisted(
-  () => ({
-    mockResolveAccessibleLakes: vi.fn(),
-    mockBuildDataLakeTools: vi.fn(),
-    mockGetEffectiveLLMApiKeys: vi.fn(),
-    mockAgentRun: vi.fn(),
-  })
-);
+const {
+  mockResolveAccessibleLakes,
+  mockBuildDataLakeTools,
+  mockGetEffectiveLLMApiKeys,
+  mockAgentRun,
+  mockReplSessionCtor,
+} = vi.hoisted(() => ({
+  mockResolveAccessibleLakes: vi.fn(),
+  mockBuildDataLakeTools: vi.fn(),
+  mockGetEffectiveLLMApiKeys: vi.fn(),
+  mockAgentRun: vi.fn(),
+  // Captures the options the route asks for. The executor it picks is the
+  // whole security posture of this endpoint, so it has to be observable.
+  mockReplSessionCtor: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -37,6 +44,9 @@ vi.mock('@bike4mind/agents', () => ({
     run = mockAgentRun;
   },
   ReplSession: class {
+    constructor(opts: unknown) {
+      mockReplSessionCtor(opts);
+    }
     setTools = vi.fn();
     getUsage = () => ({ executions: 0, subLlmCalls: 0, totalCostUsd: 0 });
     dispose = vi.fn();
@@ -136,5 +146,49 @@ describe('POST /api/data-lakes/rlm-answer - in-REPL retrieval credential', () =>
     expect(jwtCaller.statusCode).toBe(200);
     expect(forwardedHeaders()).toEqual({ authorization: 'Bearer caller.jwt.token' });
     expect(JSON.stringify(forwardedHeaders())).not.toContain('b4m_shared_service_key');
+  });
+});
+
+/**
+ * The endpoint runs LLM-authored JavaScript in the process that holds the
+ * platform's credentials, so which executor it asks for IS its security
+ * posture. These pin that choice and the refusal behaviour when the sandbox
+ * cannot be built, both of which are otherwise invisible to every other test
+ * in this file.
+ */
+describe('POST /api/data-lakes/rlm-answer - REPL sandbox posture', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'sk-test' });
+    mockBuildDataLakeTools.mockReturnValue({});
+    mockAgentRun.mockResolvedValue({
+      finalAnswer: 'ok',
+      steps: [],
+      completionInfo: { iterations: 1, toolCalls: 0, reachedMaxIterations: false },
+    });
+  });
+
+  it('runs guest code in an isolated-vm isolate, never a shared-realm backend', async () => {
+    const res = await call({ authorization: 'Bearer caller.jwt.token' });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockReplSessionCtor).toHaveBeenCalledTimes(1);
+    expect(mockReplSessionCtor.mock.calls[0][0]).toMatchObject({ executor: 'isolated' });
+  });
+
+  it('refuses the request when the sandbox cannot be constructed, rather than falling back', async () => {
+    // A missing native addon is the realistic cause. The endpoint must fail
+    // closed: no agent run, no guest code next to the credentials.
+    mockReplSessionCtor.mockImplementationOnce(() => {
+      throw new Error('No native build was found for isolated-vm');
+    });
+
+    const res = await call({ authorization: 'Bearer caller.jwt.token' });
+
+    expect(res.statusCode).toBe(503);
+    expect(mockAgentRun).not.toHaveBeenCalled();
+    // The reason must not leak the internal error text to the caller.
+    expect(JSON.stringify(res.body)).not.toContain('native build');
   });
 });
