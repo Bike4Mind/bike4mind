@@ -361,7 +361,8 @@ You can run MCP servers in Docker containers for isolation and portability:
 
 **Docker Configuration Notes:**
 - The `-i` flag is required for stdin communication with the MCP server
-- Use `-e VAR_NAME` (without value) to pass environment variables from the host
+- Use `-e VAR_NAME` (without value) to pass a variable through to the container. It must be listed in this server's `env` block: the MCP child is started with those variables plus the MCP SDK's own defaults (`PATH`, `HOME`, `SHELL`, `TERM`, `USER`), never with your whole shell environment
+- Keys that configure the child's runtime rather than the server - `NODE_*`, `LD_*`, `DYLD_*`, `PATH`, and the `*_PROXY` variables - are refused and logged
 - The `--rm` flag ensures containers are cleaned up after use
 - Requires Docker to be installed and running
 
