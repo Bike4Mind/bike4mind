@@ -156,7 +156,10 @@ export async function ingestSlackFilesIntoLake(
     }
     accepted.push({
       fileName: validation.file.name,
-      mimeType: validation.file.mimetype,
+      // resolvedMimeType, not the client's claim - accept/reject already derives from the
+      // extension, so persisting the raw claim here would let the two paths sharing this
+      // validator agree on what to accept while disagreeing on what gets recorded.
+      mimeType: validation.resolvedMimeType,
       url: validation.file.url_private_download,
     });
   }
