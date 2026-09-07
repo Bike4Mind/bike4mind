@@ -67,6 +67,60 @@ describe('metric disagreements', () => {
   });
 });
 
+describe('metric disagreements with unitRequired', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings.map(f => f.kind);
+
+  it('still flags one metric stated at two values', () => {
+    expect(unitKinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 95%.')])).toEqual(['metric-disagreement']);
+  });
+
+  it('treats `percent` and `%` as the same unit, so the values still compare', () => {
+    expect(unitKinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 95 percent.')])).toEqual([
+      'metric-disagreement',
+    ]);
+  });
+
+  it.each([
+    ['a bare index, where `of` is the separator', 'Section 2 of 5 covers ingest.', 'Section 2 of 9 covers endpoints.'],
+    ['a unit outside the vocabulary', 'Retention is 30 days.', 'Retention is 90 days.'],
+    ['an unqualified count', 'Monthly active users: 1,200.', 'Monthly active users: 1,450.'],
+  ])('drops %s', (_label, a, b) => {
+    expect(unitKinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  it('does not compare one label measured in two different units', () => {
+    // 100 ms against 2 s is a unit change, not evidence that the documents disagree.
+    expect(unitKinds([doc('a', 'Latency is 100 ms.'), doc('b', 'Latency is 2 s.')])).toEqual([]);
+  });
+
+  it('leaves the default behaviour alone', () => {
+    expect(kinds([doc('a', 'Retention is 30 days.'), doc('b', 'Retention is 90 days.')])).toEqual([
+      'metric-disagreement',
+    ]);
+  });
+});
+
+describe('metric units', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings.map(f => f.kind);
+
+  // `%` is the only non-word member of the unit alternation, so a trailing `\b` could never close it:
+  // `99.9%.` has no boundary between `%` and `.`. Every percentage in a corpus was captured unitless,
+  // which is invisible by default and silently empties the unit-required mode.
+  it.each(['Uptime is 99.9%.', 'Uptime is 99.9% across all regions.', 'Uptime is 99.9%'])(
+    'captures `%` in %j',
+    text => {
+      expect(unitKinds([doc('a', text), doc('b', 'Uptime is 95%.')])).toEqual(['metric-disagreement']);
+    }
+  );
+
+  it('still declines to read a unit out of a longer word', () => {
+    // `1,200 gbps` is not 1,200 GB, exactly as under the old trailing `\b`.
+    expect(unitKinds([doc('a', 'Throughput is 1,200 gbps.'), doc('b', 'Throughput is 900 gbps.')])).toEqual([]);
+  });
+});
+
 describe('relationship conflicts', () => {
   it('flags an organization called a customer in one document and a prospect in another', () => {
     const report = run([

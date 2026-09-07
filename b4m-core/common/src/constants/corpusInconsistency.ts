@@ -49,6 +49,23 @@ export const INCONSISTENCY_KINDS = [
 export const UNIMPLEMENTED_INCONSISTENCY_CLASS = 'availability-vs-marketing' as const;
 export type InconsistencyKind = (typeof INCONSISTENCY_KINDS)[number];
 
+/**
+ * The kinds whose finding can support the claim that two DOCUMENTS disagree with each other, rather
+ * than only "worth a human's eye". Classified here, beside the rules, so a fifth rule has to place
+ * itself rather than default into whatever allowlist a caller happens to carry.
+ *
+ * Only `metric-disagreement` qualifies, and only because it is the one rule with a `distinguish`
+ * predicate over a comparable value. The other two cross-document kinds cannot show disagreement:
+ * `superlative-conflict` has no `distinguish` at all, so two documents that AGREE - including two
+ * carrying the identical sentence - group as a finding; `relationship-conflict` keys on `ORG`, a bare
+ * capitalization proxy, while CUSTOMER/PROSPECT carry generic technical vocabulary, so two sentences
+ * about the same capitalized product name satisfy it without describing a relationship at all.
+ *
+ * Both remain fully reported by `detectCorpusInconsistencies` - a human triaging a lake's health
+ * wants recall. This list is for the callers that ASSERT a finding rather than offer it.
+ */
+export const DISAGREEMENT_INCONSISTENCY_KINDS = ['metric-disagreement'] as const satisfies readonly InconsistencyKind[];
+
 export interface CorpusDocument {
   fabFileId: string;
   fileName?: string | null;
@@ -138,9 +155,22 @@ const SUPERLATIVE = /\b(only|sole|first|fastest|largest|highest|best|leading|num
 const SUPERLATIVE_SUBJECT =
   /\b(?:only|sole|first|fastest|largest|highest|best|leading)\s+([a-z0-9-]+(?:\s+[a-z0-9-]+)?)/i;
 
-/** `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms`. */
+/**
+ * `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms`.
+ *
+ * The unit is closed by a lookahead rather than `\b`, which could never match after `%` - the one
+ * non-word member of the alternation. `99.9%.` needs a boundary between `%` and `.`, and there is
+ * none, so the engine backtracked to no-unit and every percentage in the corpus was captured
+ * unitless. Equivalent to `\b` for the word-shaped units: `1,200 gbps` still declines to read `gb`.
+ */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9][0-9,.]*)\s*(%|percent|ms|s|gb|mb|tb|x)?\b/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9][0-9,.]*)\s*(%|percent|ms|s|gb|mb|tb|x)?(?![a-z0-9])/i;
+
+/** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
+function canonicalUnit(unit?: string): string {
+  const lower = unit?.toLowerCase() ?? '';
+  return lower === 'percent' ? '%' : lower;
+}
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
 const PROSPECT = /\b(prospect|pipeline|opportunity|evaluating|pilot|proof of concept|poc|trialling|trialing)\b/i;
@@ -252,13 +282,32 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
   );
 }
 
-function detectMetricDisagreements(documents: CorpusDocument[]): InconsistencyFinding[] {
+/**
+ * `unitRequired` narrows this rule to metrics carrying a unit from `METRIC`'s alternation, and groups
+ * by label AND unit so only same-unit values are ever compared.
+ *
+ * Off by default, because a triage reader can dismiss a weak finding in a second. It exists for the
+ * callers that assert disagreement (see `DISAGREEMENT_INCONSISTENCY_KINDS`), where the label alone is
+ * too loose: `\bof\b` plus an optional unit makes `Section 2 of 5` a metric, `30 days` a metric
+ * (`days` is not in the alternation), and a per-period series of `Monthly active users: 1,200` a
+ * disagreement with its own next quarter. Requiring a unit drops all three; requiring it to MATCH
+ * keeps `100 ms` from being read as disagreeing with `2 s` on evidence that is really a unit change.
+ *
+ * The unit rides in `subject` to do that grouping, so a caller enabling this and RENDERING `subject`
+ * gets `uptime %` rather than `uptime`.
+ */
+function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = false): InconsistencyFinding[] {
   return crossDocumentGroups(
     collect(documents, sentence => {
       const match = METRIC.exec(sentence);
       if (!match) return null;
       const [, label, value, unit] = match;
-      return { subject: normalizeSubject(label), detail: `${value.replace(/,/g, '')}${unit?.toLowerCase() ?? ''}` };
+      const canonical = canonicalUnit(unit);
+      if (unitRequired && !canonical) return null;
+      return {
+        subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
+        detail: `${value.replace(/,/g, '')}${canonical}`,
+      };
     }),
     'metric-disagreement',
     // Agreement is not a finding: two documents quoting the same figure are consistent.
@@ -375,11 +424,11 @@ export interface LakeInconsistencyReport extends CorpusInconsistencyReport {
  */
 export function detectCorpusInconsistencies(
   documents: CorpusDocument[],
-  options: { nowYear: number; sampled?: boolean; maxFindings?: number }
+  options: { nowYear: number; sampled?: boolean; maxFindings?: number; metricUnitRequired?: boolean }
 ): CorpusInconsistencyReport {
   const findings = [
     ...detectSuperlativeConflicts(documents),
-    ...detectMetricDisagreements(documents),
+    ...detectMetricDisagreements(documents, options.metricUnitRequired),
     ...detectRelationshipConflicts(documents),
     ...detectExpiredClaims(documents, options.nowYear),
   ];
