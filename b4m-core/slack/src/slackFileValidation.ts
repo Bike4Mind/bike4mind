@@ -77,19 +77,22 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
   // resolved value also decides the size cap below, so a claimed `image/png` on a non-image
   // file no longer gets the looser cap either.
   const ext = getFileExtension(file.name);
-  // `path.extname` reports no extension both for a bare name (LICENSE, Dockerfile) and for a
-  // dotfile (.env, .eslintrc, .exe-as-a-literal-filename) - both must fall back to plain text.
-  // A trailing dot ("payload.") also reports no extension via `getFileExtension`, but it's
-  // malformed rather than extension-less, so it stays refused below instead of being coerced.
-  const hasNoExtension = ext === '' && !file.name.endsWith('.');
+  // `path.extname` grabs a tail off ANY dot in the name, even one that isn't extension-shaped -
+  // a date ("2026.09.07") or a version ("v1.2") resolves to "07" or "2", which looks like it has
+  // an extension when the name actually has none. Checking the shape FIRST (rather than just
+  // "did path.extname find a dot") is what keeps those genuinely extension-less names on the
+  // same plain-text fallback as LICENSE/Dockerfile, instead of being judged against an extension
+  // that was never really there.
+  const looksLikeExtension = /^[a-z][a-z0-9]{0,7}$/.test(ext);
+  // A trailing dot ("payload.") also fails `looksLikeExtension`, but it's malformed rather than
+  // extension-less, so it stays refused below instead of being coerced to plain text.
+  const hasNoExtension = !looksLikeExtension && !file.name.endsWith('.');
   const resolvedMimeType = hasNoExtension ? SupportedFabFileMimeTypes.TXT_PLAIN : getMimeTypeByExtension(ext);
   if (!resolvedMimeType || !SUPPORTED_SLACK_FILE_MIME_TYPES.includes(resolvedMimeType)) {
     // Name what actually decided the rejection - the resolved (extension-based) type, or the
     // raw extension if it looks like one - never `file.mimetype` (only the client's claim, which
     // can name a type that IS on the allow-list) and never a bare digit fragment `path.extname`
-    // can grab out of a date or version suffix ("07" from "2026.09.07", "2" from "v1.2"), which
-    // reads as gibberish rather than a type.
-    const looksLikeExtension = /^[a-z][a-z0-9]{0,7}$/.test(ext);
+    // can grab out of a date or version suffix, which reads as gibberish rather than a type.
     const reportedType = resolvedMimeType || (looksLikeExtension ? ext : '');
     return {
       ok: false,
