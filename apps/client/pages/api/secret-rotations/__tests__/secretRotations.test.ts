@@ -79,6 +79,38 @@ describe('PUT /api/secret-rotations/:id', () => {
 
     expect(mockUpdate).toHaveBeenCalledWith({ id: 's1', rotationIntervalDays: 45 });
   });
+
+  it('returns the safe shape, never the raw document (no previousKey, no mongo internals)', async () => {
+    // The list and renew responses go through toSafeSecretRotation; this route must too,
+    // so a future secret-ish field on the schema does not leak here and nowhere else.
+    mockUpdate.mockResolvedValueOnce({
+      id: 's1',
+      keyName: 'JWT_SECRET',
+      previousKey: 'server-held-jwt-secret',
+      rotatedAt: new Date(),
+      nextRotation: new Date(),
+      rotationIntervalDays: 30,
+      isActive: true,
+      _id: 'mongo-id',
+      __v: 3,
+      deletedAt: null,
+    });
+    const { req, res } = request({ id: 's1', rotationIntervalDays: 30 });
+    await mockRefs.putHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body).not.toHaveProperty('previousKey');
+    expect(body).not.toHaveProperty('__v');
+    expect(body).not.toHaveProperty('_id');
+    expect(JSON.stringify(body)).not.toContain('server-held-jwt-secret');
+    expect(body.keyName).toBe('JWT_SECRET');
+  });
+
+  it('404s an unknown secret instead of serializing null', async () => {
+    mockUpdate.mockResolvedValueOnce(null);
+    const { req, res } = request({ id: 'nope' });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(/not found/i);
+  });
 });
 
 describe('POST /api/secret-rotations/renewed', () => {
