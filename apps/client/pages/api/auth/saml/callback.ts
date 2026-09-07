@@ -105,9 +105,12 @@ const handleSamlCallback = async (req: any, res: any) => {
       }
 
       if (!user) {
-        // `info.reason` is only ever set by our own verify callback (currently the
-        // IdP domain bind), so it is a safe, non-attacker-controlled discriminator.
-        const reason = (info && (info.reason as string)) || 'SAML authentication failed';
+        // Both shapes come from our own code, never from the assertion, so either is a
+        // safe non-attacker-controlled discriminator: `reason` from the IdP domain bind in
+        // auth.ts, `code` from the shared verifyCallback (duplicate key, system user, ...).
+        // Reading only `reason` logged those as a generic failure and lost the triage
+        // signal the OAuth path records.
+        const reason = (info && ((info.reason as string) || (info.code as string))) || 'SAML authentication failed';
         console.error('SAML authentication failed:', reason);
 
         try {

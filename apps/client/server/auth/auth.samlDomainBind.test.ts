@@ -12,7 +12,7 @@ vi.mock('@server/utils/auth/verifyCallback', () => ({
 // auth.ts wires every strategy at import time; none of those collaborators are exercised here.
 vi.mock('@bike4mind/database', () => ({
   User: { findOne: vi.fn(), updateOne: vi.fn(), create: vi.fn() },
-  SamlRequestId: { findOne: vi.fn(), create: vi.fn(), findOneAndDelete: vi.fn() },
+  SamlRequestId: { findOne: vi.fn(), updateOne: vi.fn(), findOneAndDelete: vi.fn() },
   authSessionRepository: { revokeAllByUserId: vi.fn() },
 }));
 vi.mock('@bike4mind/database/infra', () => ({
@@ -25,6 +25,7 @@ vi.mock('@server/utils/config', () => ({
 }));
 
 import { setupSamlStrategy } from './auth';
+import { samlRequestCache } from './samlRequestCache';
 
 const SAML_CONFIG = {
   entryPoint: 'https://idp.a.example/sso',
@@ -112,6 +113,10 @@ describe('setupSamlStrategy - signature and replay options', () => {
     expect(options.wantAuthnResponseSigned).toBe(true);
     expect(options.wantAssertionsSigned).toBe(true);
     // Replay guard: each AuthnRequest id is redeemed once, via the shared Mongo cache.
+    // Both halves are asserted - validateInResponseTo alone would stay green if the
+    // cacheProvider were dropped, and node-saml would silently fall back to an
+    // in-process map that rejects legitimate logins on Lambda.
     expect(options.validateInResponseTo).toBe('ifPresent');
+    expect(options.cacheProvider).toBe(samlRequestCache);
   });
 });

@@ -16,13 +16,20 @@ import type { CacheItem, CacheProvider } from '@node-saml/passport-saml';
 
 export const samlRequestCache: CacheProvider = {
   async saveAsync(key: string, value: string): Promise<CacheItem | null> {
-    // A duplicate id means node-saml generated a colliding request id, which it
-    // treats as "already cached" - return null so it surfaces rather than throwing.
-    const existing = await SamlRequestId.findOne({ requestId: key }).lean();
-    if (existing) return null;
-
-    const doc = await SamlRequestId.create({ requestId: key, value });
-    return { value, createdAt: doc.createdAt.getTime() };
+    // A duplicate id means node-saml generated a colliding request id, which it treats as
+    // "already cached" - return null so it surfaces rather than throwing. One upsert, not
+    // find-then-create: with requestId unique, the two-step version races into an E11000
+    // that escapes out of passport.authenticate instead of returning null here.
+    const result = await SamlRequestId.updateOne(
+      { requestId: key },
+      { $setOnInsert: { requestId: key, value } },
+      { upsert: true }
+    );
+    // Nothing inserted means the id was already cached.
+    if (!result.upsertedCount) return null;
+    // node-saml ignores this return (it only checks for a throw), so the insert instant is
+    // close enough not to warrant a second round trip to read the stored timestamp back.
+    return { value, createdAt: Date.now() };
   },
 
   async getAsync(key: string): Promise<string | null> {

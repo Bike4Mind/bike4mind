@@ -12,7 +12,7 @@ const ModelName = 'SamlRequestId';
  * the response, and a per-instance cache would reject legitimate logins.
  */
 export interface ISamlRequestIdDoc {
-  _id: string;
+  _id: mongoose.Types.ObjectId;
   requestId: string;
   /** The AuthnRequest's IssueInstant, as node-saml stores it. */
   value: string;
