@@ -85,7 +85,11 @@ vi.mock('@bike4mind/database/ai', () => ({
     findByMainModel: () => Promise.resolve(null),
     updateMapping: writeSpy,
   },
-  rapidReplyAuditLogRepository: { create: () => found() },
+  // `createLog`, not `create` -- the name the route actually calls. A mismatched mock name here
+  // does not fail loudly: the handler throws `createLog is not a function`, `run` captures that
+  // rejection in `outcome`, and an assertion that only checks "no 400 and something was written"
+  // still passes because the mapping write happened before the audit call.
+  rapidReplyAuditLogRepository: { createLog: () => found() },
   McpServer: {
     findById: () => found({ userId: 'u1' }),
     findOneAndUpdate: writeSpy,
@@ -203,7 +207,11 @@ const run = async (c: Case, body: Record<string, unknown>) => {
     url: `/api/${c.route}`,
     query: { id: '507f1f77bcf86cd799439011' },
     body,
-    user: { id: 'u1', isAdmin: c.admin },
+    user: { id: 'u1', isAdmin: c.admin, email: 'u1@example.test' },
+    // The rapid-reply route writes an audit log that reads both of these. A missing `headers`
+    // threw a TypeError mid-handler, which the accept-path assertions used to tolerate.
+    headers: { 'user-agent': 'vitest' },
+    ip: '127.0.0.1',
   } as any;
 
   const outcome = await Promise.resolve(handler!(req, res)).then(
@@ -259,7 +267,10 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
     });
 
     it('still accepts a value that is in the enum', async () => {
-      const { wrote } = await run(byRoute('admin/rapid-reply/mappings/[id]'), { responseStyle: 'casual' });
+      const { outcome, wrote } = await run(byRoute('admin/rapid-reply/mappings/[id]'), {
+        responseStyle: 'casual',
+      });
+      expect(outcome).toBeNull();
       expect(wrote).toBe(true);
     });
   });
@@ -284,6 +295,11 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
       expect(wrote).toBe(false);
     });
 
+    // Asserting acceptance, not that the write is non-destructive: a partial subtree in a `$set`
+    // replaces the whole subdocument, because mongoose does not dot-flatten it. That is this
+    // route's pre-existing behavior -- it spread `req.body` into the `$set` before this guard
+    // existed too -- and the app never hits it, since `AgentForm` round-trips the full subtree it
+    // loaded. Do not read the shape below as a blessed partial-update idiom.
     it('still writes a well-typed value on a path outside the originally-named set', async () => {
       const { wrote } = await run(byRoute('agents/[id]'), {
         turnTimeoutSeconds: 12,
@@ -299,14 +315,72 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
     // `$set` with no cast protection at all. Asserting on the payload, not the status, because a
     // forwarded key is not a validation error -- it is a silent write of an unvalidated value.
     it('strips a key the schema does not name instead of forwarding it to the $set', async () => {
-      const { payload, wrote } = await run(byRoute('agents/[id]'), {
+      const { outcome, payload, wrote } = await run(byRoute('agents/[id]'), {
         name: 'renamed',
         notAnAgentField: { nested: 'value' },
       });
 
+      expect(outcome).toBeNull();
       expect(wrote).toBe(true);
       expect(payload).toMatchObject({ name: 'renamed' });
       expect(payload).not.toHaveProperty('notAnAgentField');
+    });
+  });
+
+  // `capabilities` is the one path a named-fields guard is not enough for on its own. The handler
+  // converts a legacy object form to the stored array form, but that branch tests `!Array.isArray`,
+  // so an array of objects walks past it into a `[String]` cast.
+  describe('agents/[id] capabilities', () => {
+    it.each([
+      ['an array of objects (skips the legacy-object conversion)', { capabilities: [{ a: 1 }] }],
+      ['an array of numbers', { capabilities: [1, 2] }],
+      ['a bare string', { capabilities: 'not-an-array' }],
+    ])('rejects %s', async (_label, body) => {
+      const { outcome, status, wrote } = await run(byRoute('agents/[id]'), body as Record<string, unknown>);
+
+      const threw400 = outcome !== null && (outcome as { statusCode?: number }).statusCode === 400;
+      const sent400 = status.mock.calls.some(call => call[0] === 400);
+      expect(threw400 || sent400).toBe(true);
+      expect(wrote).toBe(false);
+    });
+
+    it('accepts the stored array-of-strings form', async () => {
+      const { outcome, wrote } = await run(byRoute('agents/[id]'), {
+        capabilities: ['{"triggerWords":["@help"],"responseStyle":"friendly","specialBehaviors":[]}'],
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+    });
+
+    it('accepts the legacy object form and converts it to the stored form', async () => {
+      const { outcome, payload, wrote } = await run(byRoute('agents/[id]'), {
+        capabilities: { triggerWords: ['@help'], responseStyle: 'formal', specialBehaviors: [] },
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+      const written = (payload as { capabilities?: unknown[] })?.capabilities;
+      expect(Array.isArray(written)).toBe(true);
+      expect(typeof written?.[0]).toBe('string');
+    });
+  });
+
+  // The scope discriminator is not in the accepted schema, so these are stripped rather than
+  // rejected -- asserting on the payload, because a 200 that quietly wrote `userId: ''` is exactly
+  // the failure being guarded. An empty string casts cleanly on a String path and leaves the agent
+  // with no owner, which the executor's authz treats as a system agent.
+  describe('agents/[id] does not let a body write the scope discriminator', () => {
+    it.each(['userId', 'organizationId', 'isSystem'])('strips %s', async field => {
+      const { outcome, payload, wrote } = await run(byRoute('agents/[id]'), {
+        name: 'renamed',
+        [field]: field === 'isSystem' ? true : '',
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+      expect(payload).toMatchObject({ name: 'renamed' });
+      expect(payload).not.toHaveProperty(field);
     });
   });
 
@@ -328,11 +402,12 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
   // the choice that keeps the update branch's working call working; pinned because it is a
   // behaviour decision, not a type-level detail.
   it('mcp-servers POST defaults enabled to true when creating', async () => {
-    const { created, wrote } = await run(byRoute('mcp-servers'), {
+    const { outcome, created, wrote } = await run(byRoute('mcp-servers'), {
       name: 'github',
       envVariables: [{ key: 'K', value: 'V' }],
     });
 
+    expect(outcome).toBeNull();
     expect(wrote).toBe(true);
     expect(created).toMatchObject({ name: 'github', enabled: true });
   });
@@ -349,7 +424,11 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
     };
 
     for (const c of cases) {
-      const { status, wrote } = await run(c, valid[c.route]);
+      const { outcome, status, wrote } = await run(c, valid[c.route]);
+      // Not just "no 400": the handler must run to completion. Without this a mock whose method
+      // name does not match the call site passes here, because the write it asserts on already
+      // happened before the throw.
+      expect(outcome, `${c.route} threw: ${(outcome as Error)?.message}`).toBeNull();
       expect(
         status.mock.calls.some(call => call[0] === 400),
         `${c.route} rejected a valid body`

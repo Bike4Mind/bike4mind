@@ -37,8 +37,12 @@ import { z } from 'zod';
 // Strict `z.object`, so every path of `AgentSchema` has to be named here: unknown keys are
 // stripped rather than forwarded, which is what keeps an unlisted future schema field from
 // reaching a `$set` uncast. That means this list must stay in sync with `AgentSchema` in
-// `packages/database/src/models/ai/AgentModel.ts` -- a field added there and not added here stops
-// being writable through this route.
+// `packages/database/src/models/ai/AgentModel.ts`, and the cost of drift differs by depth: a
+// missing *top-level* field merely stops being writable, but a missing *leaf inside a subtree*
+// is destructive. mongoose 8.24.1 does not dot-flatten a nested `$set` (verified: `{$set: {
+// personality: {tone: 'x'}}}` casts unchanged), so MongoDB replaces the whole subdocument and
+// any leaf this schema strips is deleted from the stored document. Every subtree below is
+// therefore spelled out leaf for leaf against `AgentSchema`.
 //
 // The subtrees are spelled out rather than left as `z.record`/`z.unknown` because their leaves
 // cast too: a dotted `$set` on `personality.energyLevel` or `tavernStats.xp` hits a String and a
@@ -73,9 +77,7 @@ const personalitySchema = z.object({
 });
 
 const identitySchema = z.object({
-  gender: z
-    .enum(['male', 'female', 'non-binary', 'agender', 'genderfluid', 'other', 'prefer-not-to-say'])
-    .optional(),
+  gender: z.enum(['male', 'female', 'non-binary', 'agender', 'genderfluid', 'other', 'prefer-not-to-say']).optional(),
   pronouns: z
     .object({
       subject: z.string().optional(),
@@ -133,14 +135,43 @@ const updateBodySchema = z.object({
   isDefaultVoiceAgent: z.boolean().optional(),
   turnEagerness: z.enum(['patient', 'normal', 'eager']).optional(),
   turnTimeoutSeconds: z.number().int().min(1).max(30).optional(),
-  userId: z.string().optional(),
-  organizationId: z.string().optional(),
-  isSystem: z.boolean().optional(),
+  // `userId`, `organizationId` and `isSystem` are deliberately absent, so a body carrying them has
+  // them stripped rather than written. They are the scope discriminator, and `AgentSchema`'s
+  // pre('validate') hook enforces "exactly one of" -- but that is document middleware, and this
+  // route writes through `findOneAndUpdate` without `runValidators`, so nothing checks them here.
+  // `userId` is a String path, so `{"userId": ""}` casts cleanly and lands: the agent keeps no
+  // owner, and the executor's authz reads `if (stored.userId && stored.userId !== ...) return null`
+  // (agentExecutor.ts), which short-circuits on the falsy side by design for system agents. The
+  // ownership test below already requires `agent.userId === req.user.id`, so a caller who reaches
+  // this point necessarily has `userId` set -- writing any of the three could only ever break the
+  // invariant, never establish a valid scope. No caller sends them.
   projectId: z.string().optional(),
   triggerWords: z.unknown().optional(),
   isPublic: z.boolean().optional(),
-  capabilities: z.unknown().optional(),
+  // Unlike the `z.unknown()` fields below, `capabilities` has no imperative validator behind it --
+  // only a legacy-format conversion, and that branch is guarded by `!Array.isArray`, so an array
+  // of objects skips it and reaches mongoose against the `[String]` path, throwing a `CastError`
+  // on `capabilities.0`. These are the two shapes the handler accepts: the stored form (an array
+  // of JSON blobs, which is what the POST route writes and re-parses) and the legacy object form,
+  // which the handler converts to the stored form. Leaves inside the legacy object are not typed
+  // further because the conversion stringifies the whole thing into one String element.
+  capabilities: z
+    .union([
+      z.array(z.string()),
+      z.object({
+        triggerWords: z.array(z.string()).optional(),
+        responseStyle: z.string().optional(),
+        specialBehaviors: z.array(z.string()).optional(),
+      }),
+    ])
+    .optional(),
   useOwnCredits: z.boolean().optional(),
+  // Kept writable only because `AgentForm` sends it on every save. It is a plain Number path here
+  // with no accounting: the debit from the owner's balance lives in
+  // `POST /api/agents/[id]/transfer-credits`, not in this route, so a PUT moves the agent's
+  // balance without a matching user debit or a `creditTransaction` row. Typing it is all this
+  // guard can do -- closing the gap means routing the form's credit field through
+  // transfer-credits, which changes the form's contract and is not a cast-safety fix.
   currentCredits: z.number().optional(),
   systemPrompt: z.string().optional(),
   lastSystemPromptGeneratedAt: dateParamSchema.optional(),
@@ -205,9 +236,7 @@ const updateBodySchema = z.object({
       })
     )
     .optional(),
-  conversationCooldowns: z
-    .array(z.object({ otherAgentId: z.string(), cooldownUntil: dateParamSchema }))
-    .optional(),
+  conversationCooldowns: z.array(z.object({ otherAgentId: z.string(), cooldownUntil: dateParamSchema })).optional(),
   tavernSessionId: z.string().optional(),
   currentFloorId: z.string().optional(),
   tavernStats: z
