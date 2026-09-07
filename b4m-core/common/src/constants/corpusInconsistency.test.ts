@@ -180,6 +180,48 @@ describe('metric units', () => {
 });
 
 /**
+ * The value has to be compared as a NUMBER, not as the digits that happened to be typed. `detail` is
+ * private to this module and every test can only see whether a finding APPEARED, so a fixture holding
+ * two NOTATIONS of one figure is the only way to observe value semantics at all - and without one, a
+ * formatting difference reads as a numeric one. Both modes: the unit is present and identical in
+ * every row below, so the unit requirement cannot help.
+ */
+describe('the same figure written two ways is not a disagreement', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings.map(f => f.kind);
+
+  it.each([
+    ['a trailing zero', 'Uptime is 99.90%.', 'Uptime is 99.9%.'],
+    ['two trailing zeros', 'Uptime is 99.900%.', 'Uptime is 99.9%.'],
+    ['a redundant decimal', 'Margin is 40.0%.', 'Margin is 40%.'],
+    ['a leading zero', 'Margin is 099%.', 'Margin is 99%.'],
+  ])('says nothing about %s', (_label, a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+    expect(unitKinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  it('still reports a real difference between two figures in the same unit', () => {
+    expect(kinds([doc('a', 'Uptime is 99.90%.'), doc('b', 'Uptime is 99.8%.')])).toEqual(['metric-disagreement']);
+  });
+
+  // The non-numeric guard, and it is load-bearing rather than defensive: the value group admits
+  // multiple separators, so a version string parses to NaN. Canonicalizing that away would make
+  // every version compare equal to every other and silence the kind wholesale.
+  it('compares a multi-separator value literally rather than as one number', () => {
+    expect(kinds([doc('a', 'Version is 3.4.5 ms.'), doc('b', 'Version is 3.4.6 ms.')])).toEqual([
+      'metric-disagreement',
+    ]);
+  });
+
+  // The documented cost, pinned so it is a decision rather than a surprise: past a double's
+  // precision two genuinely different figures canonicalize to one and stop being reported. It errs
+  // toward silence, which is the safe direction for a rule that asserts disagreement.
+  it('stops distinguishing two figures past a double precision', () => {
+    expect(kinds([doc('a', 'Total is 9007199254740993 ms.'), doc('b', 'Total is 9007199254740992 ms.')])).toEqual([]);
+  });
+});
+
+/**
  * The charter of `crossDocumentGroups`, for the two kinds that compare a value: a finding must mean
  * the DOCUMENTS hold different values. A document stating both values supplies both on its own, so a
  * comparison over the flat hit list reported two documents that agree - byte-identical ones included -

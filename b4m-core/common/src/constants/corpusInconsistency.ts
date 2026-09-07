@@ -90,8 +90,9 @@ export interface InconsistencyFinding {
    */
   subject: string;
   /**
-   * Bounded at `EVIDENCE_MAX` entries, one per document. Read `documentCount` for how many documents
-   * the finding actually spans - a finding capped here still reports its true reach.
+   * Bounded at `EVIDENCE_MAX` entries, one per document, led by a pair of documents that actually
+   * differ where the kind compares values (see `witnessOrder`). Read `documentCount` for how many
+   * documents the finding actually spans - a finding capped here still reports its true reach.
    */
   evidence: InconsistencyEvidence[];
   /**
@@ -161,9 +162,9 @@ const SUPERLATIVE_SUBJECT =
  * `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms` / `Label is 30 days` (no unit).
  *
  * Three boundaries, none of them optional, and both token guards are spelled `(?!\w)` on purpose:
- * `\w` IS the class `\b` uses, so a hand-written class cannot drift out of step with it again.
- * Two revisions of this rule shipped a false-positive class by guarding one branch with a class
- * narrower than `\w` and leaving the other unguarded.
+ * `\w` IS the class `\b` uses, so a hand-written class cannot drift out of step with it again. A
+ * guard narrower than `\w` on one branch, or missing on the other, each shipped a false-positive
+ * class that no test could see - which is why all three are pinned below.
  *
  * - The VALUE ends on a digit, so the greedy `[0-9,.]` run cannot read the sentence-final period of
  *   `Total revenue is 1,200.` into the figure and compare `1200.` against `1200`.
@@ -175,9 +176,11 @@ const SUPERLATIVE_SUBJECT =
  *   becomes the unitless metric `40` and disagrees with `Latency is 40 ms`, and `Instance is
  *   8xlarge` becomes a metric at all.
  *
- * Residual, and older than any of the three: a value carrying a `.` can still stop at it, so
- * `Latency is 99.9usec` reads as `99`. Closing that means refusing a match rather than shortening
- * one, which is a different change to a rule two surfaces already depend on.
+ * Two residuals, both pre-existing and both narrowing a value rather than inventing one: a value
+ * carrying a `.` can still stop at it, so `Latency is 99.9usec` reads as `99`; and a clip landing
+ * inside a unit WORD can shorten it into another valid unit, so `5 gbps` cut to `5 gb` reads as
+ * gigabytes. Closing either means refusing a match rather than shortening one, which is a different
+ * change to a rule two surfaces already depend on.
  */
 const METRIC =
   /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?!\w))|(?!\w))/i;
@@ -186,6 +189,26 @@ const METRIC =
 function canonicalUnit(unit?: string): string {
   const lower = unit?.toLowerCase() ?? '';
   return lower === 'percent' ? '%' : lower;
+}
+
+/**
+ * One FIGURE written two ways, compared as one: `99.90` and `99.9` are the same number, and reporting
+ * them as a disagreement is a formatting difference read as a numeric one.
+ *
+ * Non-numeric captures stay literal, which is load-bearing rather than defensive: `METRIC`'s value
+ * group admits multiple separators, so `Version is 3.4.5` captures `3.4.5` and `Number` gives `NaN` -
+ * every such version string would otherwise compare equal to every other.
+ *
+ * The trade, and it errs toward silence: past ~15 significant digits two genuinely different figures
+ * canonicalize to one double and stop being reported (`1e21` vs `1e21 + 1`, `2^53` vs `2^53 + 1`,
+ * `0.1000000000000000055` vs `0.1`). This value never leaves the module - `InconsistencyFinding`
+ * carries no `detail` - so the comparison changes but nothing rendered does, including the
+ * exponential form `String(Number(...))` gives at those magnitudes.
+ */
+function canonicalValue(value: string): string {
+  const bare = value.replace(/,/g, '');
+  const numeric = Number(bare);
+  return Number.isFinite(numeric) ? String(numeric) : bare;
 }
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
@@ -255,14 +278,19 @@ function detailSignature(position: Hit[]): string {
 }
 
 /**
- * One hit per document, ordered so the FIRST TWO excerpts actually differ.
+ * One hit per document, ordered so the FIRST TWO HITS actually differ.
+ *
+ * Hits, not rendered excerpts: `toEvidence` clips an excerpt at `EXCERPT_MAX`, so two sentences that
+ * diverge only past that bound still render identically. Anchoring the excerpt window on the match
+ * offset would close that, and needs a `matchIndex` threaded through `Hit` and every rule - a change
+ * to what the stored admin report quotes for all four kinds, so not this one.
  *
  * Evidence is what a reader is shown as proof, and "whatever each document matched first" need not
  * contain the hits that disagree: a document stating both values agrees with its sibling on whichever
  * it happens to state first, so a real finding rendered two IDENTICAL sentences as its proof. Anchor
  * instead on a detail that some other document does not carry at all - such a pair exists whenever
- * the per-document sets differ, which is the only case this is called in, so the tail return is a
- * totality guard rather than a reachable branch.
+ * the per-document sets differ, so the tail return is reached only by a rule that sets no `detail`
+ * and therefore has no witness pair to promote.
  */
 function witnessOrder(positions: Hit[][]): Hit[] {
   for (const [i, hits] of positions.entries()) {
@@ -313,7 +341,9 @@ function crossDocumentGroups(
 
     const positions = [...byDocument.values()];
     if (requireDisagreement && new Set(positions.map(detailSignature)).size < 2) continue;
-    const perDocument = requireDisagreement ? witnessOrder(positions) : positions.map(position => position[0]);
+    // Unconditional, so evidence order is one convention rather than one per kind. A rule that sets
+    // no `detail` cannot have a witness pair, and for those this degrades to first-hit-per-document.
+    const perDocument = witnessOrder(positions);
     findings.push({
       kind,
       subject,
@@ -365,7 +395,7 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
       if (unitRequired && !canonical) return null;
       return {
         subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
-        detail: `${value.replace(/,/g, '')}${canonical}`,
+        detail: `${canonicalValue(value)}${canonical}`,
       };
     }),
     'metric-disagreement',
