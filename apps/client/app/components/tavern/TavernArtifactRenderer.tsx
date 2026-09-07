@@ -20,7 +20,8 @@ const CompactMermaidPreview: React.FC<{ definition: string; title?: string }> = 
     mermaid.initialize({
       startOnLoad: false,
       theme: theme.palette.mode === 'dark' ? 'dark' : 'default',
-      securityLevel: 'loose',
+      // 'strict' sanitizes labels and disables click-handler/javascript: link injection.
+      securityLevel: 'strict',
     });
   }, [theme.palette.mode]);
 
