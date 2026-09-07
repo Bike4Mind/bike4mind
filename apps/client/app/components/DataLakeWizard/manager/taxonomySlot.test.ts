@@ -10,6 +10,20 @@ const batch = (overrides: Partial<IDataLakeBatchSummary> & { id: string }) =>
 const pick = (batches: IDataLakeBatchSummary[], lakeId = 'lake-a') =>
   selectTaxonomyBatchByLakeId(batches).get(lakeId)?.id;
 
+/** Every pair of attention statuses, higher-priority first. Kept whole by the count assertion below. */
+const ORDER_PAIRS = [
+  ['ready', 'failed'],
+  ['ready', 'analyzing'],
+  ['ready', 'queued'],
+  ['ready', 'applying'],
+  ['failed', 'analyzing'],
+  ['failed', 'queued'],
+  ['failed', 'applying'],
+  ['analyzing', 'queued'],
+  ['analyzing', 'applying'],
+  ['queued', 'applying'],
+] as const;
+
 describe('selectTaxonomyBatchByLakeId', () => {
   it('returns an empty map for an undefined list', () => {
     expect(selectTaxonomyBatchByLakeId(undefined).size).toBe(0);
@@ -45,27 +59,24 @@ describe('selectTaxonomyBatchByLakeId', () => {
     );
   });
 
-  // Every pair, both arrival orders. Each relation is argued in SLOT_PRIORITY's docblock from
-  // which consumer gate the status can render, so an unnoticed reshuffle is a real regression -
-  // e.g. 'analyzing' above 'failed' deletes the failed-review affordance. The 'w'/'l' ids are
+  // Both arrival orders per pair. Each relation is argued in SLOT_PRIORITY's docblock from which
+  // consumer gate the status can render, so an unnoticed reshuffle is a real regression - e.g.
+  // 'analyzing' above 'failed' deletes the failed-review affordance. The 'w'/'l' ids are
   // load-bearing: the id tie-break sorts ascending and would answer 'l', so a collapsed rank
   // cannot pass by accident.
-  it.each([
-    ['ready', 'failed'],
-    ['ready', 'analyzing'],
-    ['ready', 'queued'],
-    ['ready', 'applying'],
-    ['failed', 'analyzing'],
-    ['failed', 'queued'],
-    ['failed', 'applying'],
-    ['analyzing', 'queued'],
-    ['analyzing', 'applying'],
-    ['queued', 'applying'],
-  ] as const)('prefers %s over %s regardless of arrival order', (winner, loser) => {
+  it.each(ORDER_PAIRS)('prefers %s over %s regardless of arrival order', (winner, loser) => {
     const w = batch({ id: 'w', taxonomyStatus: winner });
     const l = batch({ id: 'l', taxonomyStatus: loser });
     expect(pick([w, l])).toBe('w');
     expect(pick([l, w])).toBe('w');
+  });
+
+  // The eligibility table above grows off the server constant on its own; this hand-written one
+  // does not, so a sixth attention status would stay eligible with its rank unpinned. Only the
+  // count notices, and dropping a row also silently drops a test from the suite total.
+  it('covers every pair of attention statuses', () => {
+    const n = TAXONOMY_ATTENTION_STATUSES.length;
+    expect(ORDER_PAIRS).toHaveLength((n * (n - 1)) / 2);
   });
 
   // Three-plus active batches on one lake is ordinary; every one has to be scanned, not just the
@@ -79,12 +90,24 @@ describe('selectTaxonomyBatchByLakeId', () => {
   });
 
   // Two ready siblings on one lake is legal; the winner must not depend on arrival order, and
-  // must not move when an unrelated ingest write touches the batch.
+  // must not move when an unrelated ingest write touches the batch. updatedAt runs OPPOSITE to
+  // the id order on purpose: it is the key the module docblock rules out, and with the two keys
+  // agreeing this test cannot tell one from the other.
   it('breaks a rank tie by id ascending, stably across input order', () => {
-    const a = batch({ id: 'aaa', taxonomyStatus: 'ready', updatedAt: new Date('2020-01-01') });
-    const z = batch({ id: 'zzz', taxonomyStatus: 'ready', updatedAt: new Date('2026-01-01') });
+    const a = batch({ id: 'aaa', taxonomyStatus: 'ready', updatedAt: new Date('2026-01-01') });
+    const z = batch({ id: 'zzz', taxonomyStatus: 'ready', updatedAt: new Date('2020-01-01') });
     expect(pick([z, a])).toBe('aaa');
     expect(pick([a, z])).toBe('aaa');
+  });
+
+  // The poll-stability property the id key exists for: ingest bumps updatedAt per file on a clock
+  // independent of taxonomy, so a winner that tracked it would swap the review chip's batch out
+  // from under the user between 10s polls.
+  it('keeps the same tie winner when an ingest write bumps only updatedAt', () => {
+    const a = batch({ id: 'aaa', taxonomyStatus: 'ready', updatedAt: new Date('2020-01-01') });
+    const z = batch({ id: 'zzz', taxonomyStatus: 'ready', updatedAt: new Date('2020-01-02') });
+    expect(pick([a, z])).toBe('aaa');
+    expect(pick([{ ...a, updatedAt: new Date('2026-01-01') }, z])).toBe('aaa');
   });
 
   // The server route dedupes by id, so this should not arrive - but `<` vs `<=` in outranks is a

@@ -14,7 +14,8 @@ import type { IDataLakeBatchSummary, TaxonomyStatus } from '@bike4mind/common';
  * Must stay a permutation of TAXONOMY_ATTENTION_STATUSES. taxonomySlot.test.ts pins the pairwise
  * relations among today's five statuses, that every attention status stays eligible, and that the
  * three TaxonomyStatus values outside the attention set stay out; those 5 + 3 exhaust the union
- * today, so a sixth attention status needs its own rows in that pairwise table.
+ * today, and a sixth attention status fails that file's pair-count assertion until it is given
+ * its own rows in the pairwise table.
  */
 const SLOT_PRIORITY: readonly TaxonomyStatus[] = ['ready', 'failed', 'analyzing', 'queued', 'applying'];
 
