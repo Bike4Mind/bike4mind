@@ -81,10 +81,12 @@ const handler = baseApi().post(
       },
       agentRepository,
       fileStorageService: {
-        getFileContent: async (filePath: string): Promise<string | null> => {
+        getFileContent: async (filePath: string): Promise<Buffer | null> => {
           try {
-            const data = await getFilesStorage().getContentAsBuffer(filePath);
-            return data.toString('utf-8');
+            // Returned as bytes on purpose. A UTF-8 decode here would replace every byte outside
+            // UTF-8 with U+FFFD before the service base64-encodes it, so every binary knowledge
+            // file (PDF, PNG, ...) would export as unusable mojibake that no consumer can recover.
+            return await getFilesStorage().getContentAsBuffer(filePath);
           } catch (error) {
             req.logger.error('Failed to read file content', { filePath, error });
             return null;
