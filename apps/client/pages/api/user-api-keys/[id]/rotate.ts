@@ -22,9 +22,12 @@ const handler = baseApi().post(
           userApiKeys: userApiKeyRepository,
           organizations: organizationRepository,
         },
-        // Undefined for a browser/JWT caller; set only when an API key is rotating,
-        // which is when the no-escalation rule applies.
-        callerScopes: req.apiKeyInfo?.scopes,
+        // Undefined for a browser/JWT caller (unrestricted: they hold the whole
+        // account); the actual held scopes when an API key is rotating, which is when
+        // the no-escalation rule applies. `?? []` on purpose: an api key whose scopes
+        // are absent holds NO scope and must deny, never fall through to the
+        // browser-caller (undefined) branch. See rotateUserApiKey's escalation guard.
+        callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
       }
     );
 
