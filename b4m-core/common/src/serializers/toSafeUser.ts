@@ -58,6 +58,7 @@ export const USER_SECRET_FIELDS = [
  * `USER_SECRET_FIELDS`.
  */
 export const USER_SUBFIELD_REDACTED_FIELDS = [
+  'authProviders',
   'mfa',
   'googleDrive',
   'atlassianConnect',
@@ -189,6 +190,15 @@ export function redactUserSecretsForSelf(
   if (user.slackSettings) {
     const { slackUserToken: _drop, ...rest } = user.slackSettings;
     u.slackSettings = rest;
+  }
+  // Auth providers -> keep the identity metadata the settings UI reads (it needs the
+  // linked strategies to show which accounts are connected), drop the OAuth/SAML
+  // tokens. An array, unlike every other entry here, so map rather than reshape once.
+  if (user.authProviders) {
+    u.authProviders = user.authProviders.map(provider => {
+      const { accessToken: _at, refreshToken: _rt, ...rest } = provider;
+      return rest;
+    });
   }
   // Blog -> keep display/config, drop the API key.
   if (user.blogIntegration) {
