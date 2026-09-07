@@ -51,6 +51,7 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: {},
   fabFileRepository: {},
   artifactRepository: {},
+  artifactContentRepository: {},
   agentRepository: {},
   Tool: { find: vi.fn(), findById: vi.fn() },
 }));
