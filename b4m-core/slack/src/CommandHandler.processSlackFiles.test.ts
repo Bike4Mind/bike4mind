@@ -26,6 +26,11 @@ import { SlackEvent } from './SlackEvent';
 const upload = vi.fn();
 const create = vi.fn();
 const downloadFile = vi.fn();
+// #1685: processSlackFiles now enforces MaxFileSize + the user's storage limit before create.
+// `undefined` here means "no admin setting configured", matching the pre-#1685 behavior for
+// every test below that isn't specifically exercising one of those two new refusals.
+const getSettingsValue = vi.fn();
+const organizationFindById = vi.fn();
 
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
@@ -49,8 +54,13 @@ beforeEach(() => {
   upload.mockResolvedValue(undefined);
   create.mockImplementation(async () => ({ _id: { toString: () => 'fab-1' } }));
   downloadFile.mockResolvedValue(Buffer.from('bytes'));
+  getSettingsValue.mockResolvedValue(undefined);
   getSlackDeps.mockReturnValue({ storage: { filesStorage: { upload } } });
-  getSlackDb.mockReturnValue({ FabFile: { create } });
+  getSlackDb.mockReturnValue({
+    FabFile: { create },
+    adminSettingsRepository: { getSettingsValue },
+    Organization: { findById: organizationFindById },
+  });
 });
 
 describe('processSlackFiles', () => {
@@ -182,5 +192,60 @@ describe('processSlackFiles origin stamp', () => {
     // A DM carries no `channel` on the raw event; the shape stays consistent so anything reading
     // sourceMetadata later does not have to handle a missing key as well as an empty one.
     expect(create.mock.calls[0][0].sourceMetadata).toEqual({ channel: '', messageTs: '1700000000.0002' });
+  });
+});
+
+/**
+ * #1685 - this path wrote the FabFile via a raw `FabFile.create`, never enforcing the `MaxFileSize`
+ * admin setting or the user's storage limit (both only ran inside `fabFilesService.createFabFile`,
+ * which this path never called). These pin the two new refusals added to close that gap.
+ */
+describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
+  it('refuses a file whose CLAIMED size already exceeds MaxFileSize, without downloading it', async () => {
+    // Claimed size alone is over the limit - refused before the wasted transfer.
+    getSettingsValue.mockResolvedValue(1); // MB
+    const result = await makeHandler().processSlackFiles([attachment({ size: 2 * 1024 * 1024 })] as never);
+
+    expect(result.fabFileIds).toEqual([]);
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(result.errors[0]).toContain('1MB limit');
+  });
+
+  it('refuses a file whose REAL size exceeds MaxFileSize even though the claimed size did not (lying client)', async () => {
+    getSettingsValue.mockResolvedValue(1); // MB
+    downloadFile.mockResolvedValue(Buffer.alloc(2 * 1024 * 1024));
+
+    // attachment()'s claimed size (1024 bytes) is well under the 1MB limit, but the real
+    // downloaded buffer is 2MB - the post-download check must not trust the claim.
+    const result = await makeHandler().processSlackFiles([attachment()] as never);
+
+    expect(result.fabFileIds).toEqual([]);
+    expect(downloadFile).toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    expect(result.errors[0]).toContain('1MB limit');
+  });
+
+  it('refuses a file for a user already at their storage limit, naming the limit, and creates no FabFile', async () => {
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', storageLimit: 1, currentStorageSize: 1_000_000 } as never; // 1MB, fully used
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const result = await handler.processSlackFiles([attachment()] as never);
+
+    expect(result.fabFileIds).toEqual([]);
+    expect(create).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    expect(result.errors[0]).toContain('storage limit');
+  });
+
+  it('still succeeds for a normal in-limit attachment once both new checks are wired in', async () => {
+    getSettingsValue.mockResolvedValue(30);
+
+    const result = await makeHandler().processSlackFiles([attachment()] as never);
+
+    expect(result.fabFileIds).toEqual(['fab-1']);
+    expect(result.errors).toEqual([]);
   });
 });
