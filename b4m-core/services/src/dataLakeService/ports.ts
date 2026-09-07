@@ -96,11 +96,19 @@ export async function strictIndexRemove(
 export type DriveConnectionEnablePort = (args: { dataLakeId: string }) => Promise<void>;
 
 /**
- * Archive/delete/unarchive/restore: a failure here is logged, not fatal. The ingest-level status
- * guard (driveLakeIngest.ts) already refuses to sync a lake that is not draft/active, so this port
- * is defense in depth against the poll cron enqueueing wasted work, not the only thing standing
- * between a non-active lake and its files - failing the whole lifecycle transition over a Drive
- * hiccup here would be a worse outcome than a connection briefly out of sync with its lake.
+ * Archive/delete/unarchive/restore: a failure here is logged, not fatal - failing a whole lifecycle
+ * transition over a Drive hiccup would be a worse outcome than a connection briefly out of sync with
+ * its lake. The two directions are swallowed for DIFFERENT reasons, and neither is "the ingest guard
+ * covers it":
+ *
+ * - A lost DISABLE is genuinely backstopped: the ingest-level status guard (driveLakeIngest.ts)
+ *   refuses to sync a lake that is not draft/active, so the poll keeps enqueueing work that is always
+ *   dropped. Wasteful, never incorrect.
+ * - A lost ENABLE has no backstop - `findDueForPoll` is the only reader of the flag - so it is
+ *   swallowed only because it is REPAIRABLE: the reconnect door re-stamps `enabled: true`
+ *   (OrgGoogleDriveConnection.updateCredential), which is where a user goes when sync looks broken,
+ *   and the per-lake GET reports `enabled` truthfully so the state is at least inspectable. Do not
+ *   remove that re-stamp without making this direction fatal instead.
  */
 export async function bestEffortSetDriveConnectionEnabled(
   port: DriveConnectionEnablePort | undefined,

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
+import { DATA_LAKE_STATUSES } from '@bike4mind/common';
 
 // Passthrough the wrapper so we drive the raw handler directly.
 vi.mock('@server/queueHandlers/utils', () => ({
@@ -1193,7 +1194,8 @@ describe('driveLakeIngest consumer', () => {
     });
   });
 
-  it.each(['archived', 'archiving', 'deleting', 'deleted', 'unarchiving', 'restoring', 'purging'])(
+  // Derived, not hand-listed, so a tenth DataLakeStatus cannot land here uncovered.
+  it.each(DATA_LAKE_STATUSES.filter(s => s !== 'draft' && s !== 'active'))(
     'is a no-op, not a failure, when the target data lake is %s',
     async status => {
       h.lakeFindById.mockResolvedValue({
@@ -1214,6 +1216,29 @@ describe('driveLakeIngest consumer', () => {
       expect(h.sendToQueue).not.toHaveBeenCalled();
     }
   );
+
+  it('ingests a draft lake (the first sync of a freshly connected folder)', async () => {
+    // The 'draft' arm of the guard is load-bearing and self-reinforcing: lakes are seeded 'draft'
+    // (createDataLake), the connect door never moves the status, and the draft -> active flip only
+    // happens once ingested files land and a recompute runs (recomputeLakeStats -> activateIfDraft).
+    // Drop the arm and a newly connected folder never ingests, ever - the first sync drops, nothing
+    // activates the lake, and every later poll drops for the same reason.
+    h.lakeFindById.mockResolvedValue({
+      id: 'lake1',
+      status: 'draft',
+      datalakeTag: 'lake-tag',
+      fileTagPrefix: 'demo:',
+      createdByUserId: 'creator1',
+    });
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.walkFolder).toHaveBeenCalled();
+    expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd1' }), expect.anything());
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
+  });
 
   it('releases the syncing claim (guarded) when the run throws mid-ingest', async () => {
     h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);

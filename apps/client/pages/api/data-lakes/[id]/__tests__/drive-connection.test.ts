@@ -150,12 +150,17 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(json.mock.calls[0][0].connection).toMatchObject({ id: 'conn1', enabled: false });
   });
 
-  it('404s a connection whose org does not match the lake, since the finder is global', async () => {
-    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgB' });
-    const { res } = makeRes();
-    await expect(run(makeReq('DELETE'), res)).rejects.toThrow(/not found/i);
-    expect(h.releaseDriveConnection).not.toHaveBeenCalled();
-  });
+  // Both verbs, because that check is the ONLY thing scoping a deliberately-global finder: with one
+  // arm untested it could be dropped from the other for free.
+  it.each(['GET', 'DELETE'] as const)(
+    '%s 404s a connection whose org does not match the lake, since the finder is global',
+    async method => {
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgB' });
+      const { res } = makeRes();
+      await expect(run(makeReq(method), res)).rejects.toThrow(/not found/i);
+      expect(h.releaseDriveConnection).not.toHaveBeenCalled();
+    }
+  );
 
   it('denies a caller who is not an org owner/manager', async () => {
     h.verifyOrgAccess.mockRejectedValue(new Error('Organization not found'));

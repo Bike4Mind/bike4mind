@@ -240,8 +240,7 @@ export const archiveDataLake = async (
       `This data lake moved to '${current.status}' while it was being archived; its files were archived but the archive did not complete`
     );
   }
-  // Stops the hourly poll from enqueueing this lake again - see ports.ts for why this is
-  // best-effort: the ingest-level status guard is the backstop if it fails.
+  // Stops the hourly poll from enqueueing this lake again - best-effort, see ports.ts.
   await bestEffortSetDriveConnectionEnabled(disableDriveConnection, dataLakeId, logger);
   // Recorded on the terminal transition alongside the stamp, for the same reason and with the same
   // scope: one operator action, one audit row. Placed BEFORE the stats recompute so the archive is

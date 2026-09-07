@@ -163,8 +163,7 @@ export const deleteDataLake = async (
       `This data lake moved to '${current.status}' while it was being deleted; its files were soft-deleted but the delete did not complete`
     );
   }
-  // Stops the hourly poll from enqueueing this lake again - see ports.ts for why this is
-  // best-effort: the ingest-level status guard is the backstop if it fails.
+  // Stops the hourly poll from enqueueing this lake again - best-effort, see ports.ts.
   await bestEffortSetDriveConnectionEnabled(disableDriveConnection, dataLakeId, logger);
   await recordLakeConfigChange(
     {

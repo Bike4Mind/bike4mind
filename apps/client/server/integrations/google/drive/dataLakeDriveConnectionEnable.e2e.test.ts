@@ -102,9 +102,22 @@ describe('disableDriveConnectionForLake / enableDriveConnectionForLake (real rep
     const result = await disableDriveConnectionForLake(lake.id);
 
     expect(result).toBe(true);
-    const updated = await OrgGoogleDriveConnection.findById(conn.id);
+    const updated = await OrgGoogleDriveConnection.findById(conn.id).select('+oauthRefreshToken');
     expect(updated?.enabled).toBe(false);
     expect(h.revokeToken).not.toHaveBeenCalled();
+    // The load-bearing half of "without deleting the row": everything unarchive needs to reverse this
+    // is still there, credential included, so the flip is genuinely a poll switch.
+    expect(updated).toMatchObject({
+      driveFolderId: conn.driveFolderId,
+      status: 'connected',
+      oauthRefreshToken: 'enc(org-refresh)',
+    });
+    // And a disabled row still holds the GLOBAL folder claim - the reason it must not be deleted.
+    // Claimed from a DIFFERENT lake, so the rejection can only come from the folder index.
+    const otherLake = await seedLake();
+    await expect(seedConnection(otherLake.id, { driveFolderId: conn.driveFolderId })).rejects.toThrow(
+      /duplicate key|E11000/i
+    );
   });
 
   it('re-enables a disabled connection, resolving it despite the enabled-only finder', async () => {

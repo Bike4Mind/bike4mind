@@ -152,9 +152,7 @@ export const restoreDeletedDataLake = async (
       },
       { db, logger }
     );
-    // Reverses archive/delete's disable - see ports.ts for why this is best-effort. A no-op when
-    // the manual purge cleanup already hard-released the connection, which is the ordinary case for
-    // a lake that sat 'deleted' long enough for that sweep to run.
+    // Reverses archive/delete's disable - best-effort, see ports.ts.
     await bestEffortSetDriveConnectionEnabled(enableDriveConnection, dataLakeId, logger);
   }
   // Logger forwarded for parity with every other recompute call, not because an audit row is

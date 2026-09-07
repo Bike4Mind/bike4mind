@@ -247,6 +247,14 @@ class OrgGoogleDriveConnectionRepository
    * is in flight must not flip 'syncing' -> 'connected', or claimForSync would let the re-triggered
    * run claim ON TOP of the live one and both would walk the folder (duplicate FabFiles). Leaving the
    * status 'syncing' makes the new run defer behind the running one instead.
+   *
+   * `enabled` is re-stamped true as well: the lifecycle transitions disable a connection when their
+   * lake is archived or soft-deleted and re-enable it on unarchive/restore, and a re-enable that was
+   * lost (the write failed, or the transition's process died after settling the lake) has no other
+   * repair path - `findDueForPoll` is the only reader and nothing else writes it back. The reconnect
+   * door is where a user goes when sync looks broken, so it heals `enabled` the same way it heals
+   * `status`. Safe only because that door refuses a non-draft/active lake up front (drive-sync.ts);
+   * without that gate this would re-enable an archived lake's connection.
    */
   async updateCredential(
     id: string,
@@ -261,6 +269,7 @@ class OrgGoogleDriveConnectionRepository
           $set: {
             oauthRefreshToken: encryptedRefreshToken,
             connectedBy,
+            enabled: true,
             status: { $cond: [{ $eq: ['$status', 'syncing'] }, '$status', 'connected'] },
             lastError: { $cond: [{ $eq: ['$status', 'syncing'] }, '$lastError', null] },
           },

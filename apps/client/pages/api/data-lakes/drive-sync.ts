@@ -82,6 +82,15 @@ const handler = baseApi()
     // Org owner/manager (or platform admin) only - not the lake creator (see the handler note).
     await verifyOrgAccess(req.user, lake.organizationId);
 
+    // Same rule as the batch-create and presign doors: only a draft (first sync) or active lake takes
+    // new files. Gated AFTER verifyOrgAccess so the status is not readable by a non-member, and before
+    // the credential capture so a refused connect costs no Drive calls. Without this the connect door
+    // would hand an archived lake an `enabled: true` connection - the poll would enqueue it forever
+    // (dropped every time by the ingest guard) and the UI would toast a sync that never happens.
+    if (lake.status !== 'draft' && lake.status !== 'active') {
+      throw new BadRequestError(`Cannot connect a Drive folder to a data lake in '${lake.status}' status`);
+    }
+
     const oauthRefreshToken = await captureOrgCredential(req.user.id);
 
     // Verify the connecting user can actually READ the folder before claiming it. The claim is GLOBAL

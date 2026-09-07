@@ -1835,6 +1835,34 @@ describe('unarchiveDataLake - Drive connection re-enable', () => {
     expect(enableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
   });
 
+  it('survives a rejecting port when the caller passed no logger at all', async () => {
+    // The port's logger is doubly optional (`logger?.warn?.`) because unarchive/restore inherit an
+    // audit logger whose own `warn` is optional - a required-shape call would throw here instead.
+    const adapters = makeAdapters();
+    const enableDriveConnection = vi.fn().mockRejectedValue(new Error('drive down'));
+
+    await expect(
+      unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection })
+    ).resolves.toBeTruthy();
+    expect(enableDriveConnection).toHaveBeenCalled();
+  });
+
+  it('does not re-enable when the lake vanished mid-unarchive (lenient path, no throw)', async () => {
+    // The vanished branch returns normally rather than throwing, so without this a lost settle over a
+    // deleted lake would still look like a completed unarchive AND re-enable its poll.
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockResolvedValue(null);
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockResolvedValueOnce(lake({ status: 'archived' }))
+      .mockResolvedValue(null);
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection });
+
+    expect(enableDriveConnection).not.toHaveBeenCalled();
+  });
+
   it('does not re-enable when the settle is lost (lake moved mid-restore)', async () => {
     const adapters = makeAdapters();
     adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockResolvedValue(null);
@@ -1940,6 +1968,48 @@ describe('restoreDeletedDataLake - Drive connection re-enable', () => {
     });
 
     expect(enableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it.each([
+    ['moved', 'purging', /moved to 'purging'/i],
+    ['vanished', null, null],
+  ])('does not re-enable when the settle is lost and the lake %s', async (_label, movedTo, throws) => {
+    // The flip must follow the settle: a restore that lost the race leaves the lake soft-deleted (or
+    // gone), so re-enabling its poll there is blocker-2's dead-poll state reached from the other side.
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    let settled = false;
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockImplementation(async () =>
+          settled
+            ? movedTo
+              ? lake({ status: movedTo as IDataLakeDocument['status'] })
+              : null
+            : lake({ status: 'deleted' })
+        ),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi.fn().mockImplementation(async () => ((settled = true), null)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+    const call = () =>
+      restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        db: { dataLakes, fabFiles },
+        enableDriveConnection,
+      });
+
+    if (throws) await expect(call()).rejects.toThrow(throws);
+    else await call();
+
+    expect(enableDriveConnection).not.toHaveBeenCalled();
   });
 });
 
@@ -2255,6 +2325,29 @@ describe('archiveDataLake - Drive connection disable', () => {
       status: 'archived',
     });
   });
+
+  it.each([
+    ['moved', 'deleted', /moved to 'deleted'/i],
+    ['vanished', null, /not found after archive/i],
+  ])('does not disable when the settle is lost and the lake %s', async (_label, movedTo, throws) => {
+    // The flip must follow the settle. Flip first and an archive that loses the race (a concurrent
+    // delete or purge won) leaves the lake live with a dead Drive connection, and no later lifecycle
+    // transition ever re-enables it.
+    const adapters = makeAdapters();
+    let settled = false;
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockImplementation(async () => ((settled = true), null));
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockImplementation(async () =>
+        settled ? (movedTo ? lake({ status: movedTo as IDataLakeDocument['status'] }) : null) : lake()
+      );
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection })
+    ).rejects.toThrow(throws);
+    expect(disableDriveConnection).not.toHaveBeenCalled();
+  });
 });
 
 describe('deleteDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
@@ -2371,6 +2464,28 @@ describe('deleteDataLake - Drive connection disable', () => {
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection });
 
     expect(disableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it.each([
+    ['moved', 'archived', /moved to 'archived'/i],
+    ['vanished', null, /not found after delete/i],
+  ])('does not disable when the settle is lost and the lake %s', async (_label, movedTo, throws) => {
+    // Same ordering rule as archive: a phase-1 delete that lost the race must not leave a live lake
+    // with a disabled Drive connection nothing will re-enable.
+    const adapters = makeAdapters();
+    let settled = false;
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockImplementation(async () => ((settled = true), null));
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockImplementation(async () =>
+        settled ? (movedTo ? lake({ status: movedTo as IDataLakeDocument['status'] }) : null) : lake()
+      );
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection })
+    ).rejects.toThrow(throws);
+    expect(disableDriveConnection).not.toHaveBeenCalled();
   });
 });
 

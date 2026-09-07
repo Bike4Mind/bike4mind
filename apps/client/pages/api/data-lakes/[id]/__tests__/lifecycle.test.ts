@@ -305,21 +305,18 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
   // disableDriveConnectionForLake's own doc. Assert the wiring, not just that the key is present:
   // a port passed but never invoking the real function is the same gap as an unwired one.
   it.each([
-    ['archive', 'archiveDataLake', 'disableDriveConnectionForLake'],
-    ['delete', 'deleteDataLake', 'disableDriveConnectionForLake'],
-    ['unarchive', 'unarchiveDataLake', 'enableDriveConnectionForLake'],
-    ['restore', 'restoreDeletedDataLake', 'enableDriveConnectionForLake'],
-  ] as const)('%s wires the Drive connection %s port', async (action, serviceName, portName) => {
+    ['archive', 'archiveDataLake', 'disableDriveConnection', 'disableDriveConnectionForLake'],
+    ['delete', 'deleteDataLake', 'disableDriveConnection', 'disableDriveConnectionForLake'],
+    ['unarchive', 'unarchiveDataLake', 'enableDriveConnection', 'enableDriveConnectionForLake'],
+    ['restore', 'restoreDeletedDataLake', 'enableDriveConnection', 'enableDriveConnectionForLake'],
+  ] as const)('%s wires the Drive connection %s port', async (action, serviceName, portKey, portName) => {
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
 
-    const call = h[serviceName].mock.calls[0][2] as {
-      disableDriveConnection?: unknown;
-      enableDriveConnection?: unknown;
-    };
-    const port = (call.disableDriveConnection ?? call.enableDriveConnection) as (args: {
-      dataLakeId: string;
-    }) => Promise<void>;
+    // Indexed by the expected KEY, not `disable ?? enable`: a port wired under the other key would
+    // satisfy the fallback while the service it was handed never calls it.
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    const port = call[portKey] as (args: { dataLakeId: string }) => Promise<void>;
     await port({ dataLakeId: 'lake1' });
     expect(h[portName]).toHaveBeenCalledWith('lake1');
   });
