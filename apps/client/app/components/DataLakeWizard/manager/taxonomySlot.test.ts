@@ -10,7 +10,7 @@ const batch = (overrides: Partial<IDataLakeBatchSummary> & { id: string }) =>
 const pick = (batches: IDataLakeBatchSummary[], lakeId = 'lake-a') =>
   selectTaxonomyBatchByLakeId(batches).get(lakeId)?.id;
 
-/** Every pair of attention statuses, higher-priority first. Kept whole by the count assertion below. */
+/** Every pair of attention statuses, higher-priority first. Row count asserted below against the server constant. */
 const ORDER_PAIRS = [
   ['ready', 'failed'],
   ['ready', 'analyzing'],
