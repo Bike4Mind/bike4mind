@@ -176,8 +176,12 @@ handler.delete(async (req, res) => {
     // admin) may shred what the whole org reads. A reader who isn't the creator gets a 403, not a
     // 404 - assertLakeAccess already confirmed they can see the lake. Mirrors the lifecycle guards
     // (data-lakes/[id]/lifecycle.ts).
+    // The SAME predicate the list surface hands the UI as `canManageMemory`. Previously this was
+    // `canManageLake` called with neither grants nor `organizationId`, which happens to reduce to
+    // creator-or-admin - so the gate was right but expressed as a coincidence, and the button that
+    // fronts it was gated on the grant-aware flag instead. Named, both sides read the same rule.
     if (
-      !dataLakeService.canManageLake(
+      !dataLakeService.canShredLakeMemory(
         { createdByUserId: target.ownerUserId },
         { userId: ownerUserId, isAdmin: !!req.user?.isAdmin }
       )
@@ -211,16 +215,54 @@ handler.delete(async (req, res) => {
     // Fence AFTER the shred, never before: a run that stops on the fence while the old facts are
     // still readable is merely a build cut short, whereas shredding after the fence rose would let a
     // window exist in which the run has stopped but the profile is still live.
-    await dataLakeRepository.stampLakeMemoryPurge(target.dataLakeId, new Date());
+    //
+    // Guarded, and the audit event below does NOT depend on it. The shred is already irreversible by
+    // this point, so letting a failed fence write throw out of the handler would destroy a key and
+    // leave no record that it happened. The stamp is idempotent (`$max` plus a constant `$set`), so
+    // one retry is free.
+    let fenceRaised = true;
+    try {
+      await dataLakeRepository.stampLakeMemoryPurge(target.dataLakeId, new Date());
+    } catch (first) {
+      try {
+        await dataLakeRepository.stampLakeMemoryPurge(target.dataLakeId, new Date());
+      } catch (second) {
+        fenceRaised = false;
+        req.logger.error(
+          `[lakeMemory] lake ${target.dataLakeId}: the memory key was destroyed but the purge fence could not ` +
+            `be raised: ${second instanceof Error ? second.message : String(second)}. A concurrent build is ` +
+            `still refused by the key tombstone, but the continuation cursor was not cleared, so the next ` +
+            `build resumes mid-lake until a re-scan. Retrying the purge is safe and fixes both.`
+        );
+      }
+    }
 
+    // Outside the guard on purpose: an irreversible destruction must be recorded even when the fence
+    // write failed, and `fenceRaised` is what tells an auditor which of the two halves landed.
     await logAuditEvent(
       {
         userId: ownerUserId,
         action: DataLakeAuditEvents.LAKE_MEMORY_PURGED,
-        metadata: { dataLakeId: target.dataLakeId, shredded, ...resolveAuditPrincipal(req.user!, req.apiKeyInfo) },
+        metadata: {
+          dataLakeId: target.dataLakeId,
+          shredded,
+          fenceRaised,
+          ...resolveAuditPrincipal(req.user!, req.apiKeyInfo),
+        },
       },
       req.logger
     );
+
+    if (!fenceRaised) {
+      // 500, but with the truth: the erase DID happen. Reporting plain success would hide a lake left
+      // with a stale cursor, and reporting plain failure would invite a caller to think their data
+      // survived. A retry is safe and idempotent.
+      return res.status(500).json({
+        error: 'Memory was erased, but the purge fence could not be raised. Please retry to complete the purge.',
+        shredded,
+        fenceRaised,
+      });
+    }
 
     return res.status(200).json({ ok: true, shredded });
   }

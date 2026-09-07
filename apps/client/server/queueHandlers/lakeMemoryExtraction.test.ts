@@ -72,6 +72,30 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
     expect(sendToQueueMock).toHaveBeenCalledWith('https://sqs.example/lake-memory', { ...PAYLOAD, slice: 1 });
   });
 
+  /**
+   * The manual build door asks for a restart instead of clearing the cursor itself, so the clear
+   * happens inside the run, under the lease that serializes it. The flag must reach the producer, and
+   * must NOT ride along on the continuations: a chain that re-cleared the cursor at every slice would
+   * restart the lake from the top on each one and never finish.
+   */
+  it('forwards restart to the producer, and drops it from the continuation it enqueues', async () => {
+    getSettingsValueMock.mockResolvedValue(true);
+    extractMock.mockResolvedValue({ docsProcessed: 100, factsWritten: 250, hasMore: true });
+
+    await dispatch(event({ ...PAYLOAD, restart: true }), context());
+
+    expect(extractMock.mock.calls[0][0]).toEqual(expect.objectContaining({ restart: true }));
+    expect(sendToQueueMock).toHaveBeenCalledWith('https://sqs.example/lake-memory', { ...PAYLOAD, slice: 1 });
+  });
+
+  it('defaults restart to false for the automatic (batch-finalize) path', async () => {
+    getSettingsValueMock.mockResolvedValue(true);
+
+    await dispatch(event(PAYLOAD), context());
+
+    expect(extractMock.mock.calls[0][0]).toEqual(expect.objectContaining({ restart: false }));
+  });
+
   it('stops the continuation chain at the slice ceiling instead of re-enqueuing unbounded', async () => {
     // A pathologically large lake keeps returning hasMore. The chain must not grow without limit: once
     // the slice count reaches LAKE_MEMORY_MAX_CONTINUATION_SLICES the handler stops re-enqueuing and logs,

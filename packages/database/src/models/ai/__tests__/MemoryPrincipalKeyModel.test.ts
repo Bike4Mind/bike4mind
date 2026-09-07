@@ -69,9 +69,74 @@ describe('MemoryPrincipalKeyRepository', () => {
 
       const fresh = await getOrCreate('user', 'u1', 'u1', 'dek-B', new Date(Date.now() + 60_000));
       expect(fresh).toBe('dek-B');
-      // The tombstone is lifted, not left beside a live key - the invariant is one or the other.
+      // The stamp is RETAINED beside the new key. Clearing it erased the only evidence a shred had
+      // happened, so the fence went blind to that shred the moment the principal legitimately wrote
+      // again - see the fast-path test below, which is the interleaving that exploited it. A row
+      // carrying both a live dek and a set destroyedAt is the normal steady state after any
+      // erase-then-rebuild, not a malformed row.
       const row = await MemoryPrincipalKeyModel.findOne({ principalKind: 'user', principalId: 'u1' }).lean();
-      expect(row?.destroyedAt).toBeUndefined();
+      expect(row?.destroyedAt).toBeInstanceOf(Date);
+      expect(row?.dek).toBe('dek-B');
+    });
+
+    it('refuses a key RE-MINTED after this work began, not just a standing tombstone', async () => {
+      // The fast path was an unfenced read: a caller whose work predates the shred found a live key
+      // (re-minted by a legitimate later rebuild) and was handed it, so the erased principal's facts
+      // were written back under a readable key. No exotic concurrency is needed - an ordinary
+      // erase-then-rebuild, or a redelivered background job, produces exactly this interleaving.
+      const oldWork = new Date(Date.now() - 60_000);
+      await getOrCreate('user', 'u1', 'u1', 'dek-A');
+      await memoryPrincipalKeyRepository.destroy('user', 'u1');
+      // A later, legitimate rebuild lifts the tombstone and mints a fresh key.
+      expect(await getOrCreate('user', 'u1', 'u1', 'dek-B', new Date(Date.now() + 60_000))).toBe('dek-B');
+
+      // The stale caller must still be refused, even though there is now a perfectly live key to read.
+      expect(await getOrCreate('user', 'u1', 'u1', 'dek-C', oldWork)).toBeNull();
+      // ...and refusing must not disturb the key the legitimate rebuild is using.
+      expect(await memoryPrincipalKeyRepository.findDek('user', 'u1')).toBe('dek-B');
+    });
+
+    it('leaves a tombstone for a principal that had no row yet, so a first mint in flight is refused', async () => {
+      // `destroy` was a plain update, a silent no-op on a missing row - so an erase issued before the
+      // principal's first-ever key left nothing for the in-flight first mint to be refused by, and it
+      // inserted its key and wrote under it after the erase.
+      const oldWork = new Date(Date.now() - 60_000);
+      await memoryPrincipalKeyRepository.destroy('user', 'never-keyed');
+
+      const row = await MemoryPrincipalKeyModel.findOne({ principalKind: 'user', principalId: 'never-keyed' }).lean();
+      expect(row?.destroyedAt).toBeInstanceOf(Date);
+      expect(row?.dek).toBeUndefined();
+
+      expect(await getOrCreate('user', 'never-keyed', 'never-keyed', 'dek-X', oldWork)).toBeNull();
+      // A fresh unit of work may still legitimately key the principal, and its mint sets the
+      // ownerUserId the tombstone row never carried.
+      expect(await getOrCreate('user', 'never-keyed', 'never-keyed', 'dek-Y', new Date(Date.now() + 60_000))).toBe(
+        'dek-Y'
+      );
+      const rekeyed = await MemoryPrincipalKeyModel.findOne({
+        principalKind: 'user',
+        principalId: 'never-keyed',
+      }).lean();
+      expect(rekeyed?.ownerUserId).toBe('never-keyed');
+    });
+
+    it('findKeyState reports the key and the retained stamp; findDek stays fence-free for decrypt', async () => {
+      await getOrCreate('user', 'u1', 'u1', 'dek-A');
+      expect(await memoryPrincipalKeyRepository.findKeyState('user', 'u1')).toEqual({
+        dek: 'dek-A',
+        destroyedAt: null,
+      });
+      expect(await memoryPrincipalKeyRepository.findKeyState('user', 'absent')).toBeNull();
+
+      await memoryPrincipalKeyRepository.destroy('user', 'u1');
+      const tombstoned = await memoryPrincipalKeyRepository.findKeyState('user', 'u1');
+      expect(tombstoned?.dek).toBeNull();
+      expect(tombstoned?.destroyedAt).toBeInstanceOf(Date);
+
+      // The DECRYPT path deliberately does not consult the fence: reading a key that exists
+      // resurrects nothing, so only the write path pays for the wider projection.
+      expect(await getOrCreate('user', 'u1', 'u1', 'dek-B', new Date(Date.now() + 60_000))).toBe('dek-B');
+      expect(await memoryPrincipalKeyRepository.findDek('user', 'u1')).toBe('dek-B');
     });
 
     it('refuses a shred stamped in the SAME millisecond as the work started', async () => {

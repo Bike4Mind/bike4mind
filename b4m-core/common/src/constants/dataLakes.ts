@@ -506,6 +506,18 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * (fails closed) rather than surfacing a compile error at the one spot that forgot it.
    */
   canManageSettings: boolean;
+  /**
+   * Whether the requesting caller may ERASE this lake's extracted memory profile - an irreversible
+   * crypto-shred. Strictly narrower than `canManage`: creator or platform admin only, with no grant
+   * or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the one
+   * `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the erase
+   * affordance on `canManage` instead offered it to curators and org admins the endpoint then 403'd.
+   *
+   * REQUIRED for the same reason as `canRebuild` and `canManageSettings`: an absent field reads as
+   * falsy and hides the affordance silently instead of failing the build at the producer that forgot
+   * it. A fallback (built-in) lake has no document and no memory profile, so it is always `false`.
+   */
+  canManageMemory: boolean;
 }
 
 /**

@@ -56,6 +56,15 @@ const MAX_DOC_CHARS = 24_000;
  */
 const MAX_DOCS_PER_RUN = 100;
 /**
+ * Abort a run once this many documents have failed BACK-TO-BACK.
+ *
+ * One bad document must not abort the lake (see the per-document catch below), but an unbounded skip
+ * turns a systemic downstream failure - an extractor 5xx, an expired credential, a chunk-store outage
+ * - into a full-cost run that writes nothing and still records coverage for every document it walked
+ * over. Consecutive, so an ordinary sprinkling of individually-bad documents never trips it.
+ */
+const MAX_CONSECUTIVE_DOC_FAILURES = 5;
+/**
  * Stop starting new documents once the Lambda has less than this left, so a run ends by LOGGING its
  * remainder instead of being killed mid-document.
  *
@@ -99,6 +108,16 @@ const CHUNK_PAGE_LIMIT = 1_000;
 export async function extractLakeMemoryForBatch(
   params: {
     dataLakeId: string;
+    /**
+     * Discard any parked continuation cursor and scan from the top of the lake.
+     *
+     * Honoured HERE rather than at the trigger because this is the first point that holds the
+     * extraction lease. The manual door sees a RELEASED lease in the gap between two slices of a live
+     * chain (the lease is per-slice, the cursor is not), so clearing the cursor there reset an
+     * in-flight chain to the start of the lake and re-billed the LLM pass over everything it had
+     * already covered. Under the lease, no other slice can be reading or advancing the cursor.
+     */
+    restart?: boolean;
     /**
      * The Lambda's `context.getRemainingTimeInMillis`. Supplied by the queue handler so the deadline
      * tracks the real invocation (including cold start and time already spent) rather than a guess;
@@ -170,7 +189,19 @@ export async function extractLakeMemoryForBatch(
     // already-covered slice - the ledger de-dup keeps it correct, but the wasted cost is exactly what the
     // lease exists to prevent. Falls back to the pre-claim value if the re-read fails.
     const claimedLake = await dataLakeRepository.findById(lake.id).catch(() => null);
-    const cursor = (claimedLake ?? lake).lakeMemoryCursor ?? null;
+    let cursor = (claimedLake ?? lake).lakeMemoryCursor ?? null;
+    if (params.restart && cursor) {
+      // Best-effort: the scan below starts from the top regardless, and a stale cursor left in place
+      // is overwritten by this run's own bookkeeping.
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, null).catch((err: unknown) => {
+        logger.warn(
+          `[lakeMemory] lake ${datalakeTag}: could not clear the parked cursor for a manual rebuild: ` +
+            `${err instanceof Error ? err.message : String(err)}. Scanning from the top anyway.`
+        );
+      });
+      logger.info(`[lakeMemory] lake ${datalakeTag}: manual rebuild, discarding the parked continuation cursor`);
+      cursor = null;
+    }
 
     // Purge fence (see IDataLake.lakeMemoryPurgedAt). Snapshotted from the same post-claim read as the
     // cursor, and used ONLY as the compare-and-set baseline for the durable cursor write below - never
@@ -235,6 +266,11 @@ export async function extractLakeMemoryForBatch(
     let factsRefused = 0;
     let docsAttempted = 0;
     let lastAttemptedId: string | null = null;
+    // Coverage is what was COMPLETED, which is not what was attempted once documents can throw. The
+    // cursor may only ever advance to the former.
+    let lastCoveredId: string | null = null;
+    let consecutiveFailures = 0;
+    let aborted = false;
     for (const doc of docs) {
       // Yield rather than get killed. Checked BEFORE starting a doc, since the expensive, unresumable
       // part (the LLM call) is at the start of one. Unlike before, the uncovered docs are NOT lost: the
@@ -274,7 +310,13 @@ export async function extractLakeMemoryForBatch(
           .map(c => c.text)
           .join('\n')
           .slice(0, MAX_DOC_CHARS);
-        if (!text.trim()) continue;
+        if (!text.trim()) {
+          // Nothing to extract, so this document is covered rather than skipped - and it must reset
+          // the failure streak, or a run of empty docs would read as a systemic outage.
+          lastCoveredId = doc.fabFileId;
+          consecutiveFailures = 0;
+          continue;
+        }
 
         docsProcessed++;
         const facts = await extractor.evaluate({
@@ -307,6 +349,8 @@ export async function extractLakeMemoryForBatch(
           }
           factsWritten++;
         }
+        lastCoveredId = doc.fabFileId;
+        consecutiveFailures = 0;
       } catch (err) {
         // One bad document must not abort the whole lake. Without this, a doc that reliably throws in
         // extractor.evaluate aborts the run, SQS redelivers, every earlier doc is re-billed (the LLM call
@@ -315,6 +359,19 @@ export async function extractLakeMemoryForBatch(
         logger.warn(
           `[lakeMemory] doc ${doc.fabFileId} failed; skipping it this run: ${err instanceof Error ? err.message : String(err)}`
         );
+        // ...but an unbounded skip is how a systemic failure spends a whole continuation chain writing
+        // nothing. Past the threshold this is no longer "a bad document", so stop and let the cursor
+        // stay behind the failing tail.
+        consecutiveFailures++;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_DOC_FAILURES) {
+          aborted = true;
+          logger.error(
+            `[lakeMemory] lake ${datalakeTag}: ${consecutiveFailures} documents failed back-to-back after ` +
+              `${docsAttempted}/${docs.length} docs; aborting this run. The cursor stays at the last document ` +
+              `that completed, so the failing tail is retried rather than recorded as covered.`
+          );
+          break;
+        }
       }
       // A shred-fence refusal is a purge by another name: the key this run seals its facts under is
       // gone. Treat it exactly like a moved stamp so the bookkeeping below writes no cursor and chains
@@ -355,6 +412,27 @@ export async function extractLakeMemoryForBatch(
       // Nothing durable: the purge already cleared the cursor as part of raising the fence, and
       // `hasMore` stays false so the handler does not chain a continuation of a scan that no longer
       // has a profile to continue into.
+    } else if (aborted) {
+      // Advance only through the last document that COMPLETED. The defect this guards is a run that
+      // wrote nothing yet still claimed the ground it walked over, so the failing tail must stay
+      // uncovered and be retried; the successful prefix stays durable so its LLM spend is not repeated.
+      //
+      // Deliberately not folded into `purged`: that branch writes nothing because the purge already
+      // cleared the cursor as part of raising the fence. Nothing cleared it here, so aliasing the two
+      // would leave the cursor at its stale pre-run value and log a purge that never happened.
+      //
+      // `hasMore` stays false: chaining a continuation would re-enter the same failing dependency
+      // immediately. The next batch finalize is the retry trigger.
+      if (lastCoveredId) {
+        try {
+          await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, lastCoveredId, fenceAt);
+        } catch (err) {
+          logger.warn(
+            `[lakeMemory] lake ${datalakeTag}: could not record partial coverage for an aborted run: ` +
+              `${err instanceof Error ? err.message : String(err)}. The next run re-scans from the previous cursor.`
+          );
+        }
+      }
     } else if (docsAttempted > 0 && hasUncovered && lastAttemptedId) {
       try {
         // Resume from what was ATTEMPTED, not the cap: persist the last attempted id as the cursor.

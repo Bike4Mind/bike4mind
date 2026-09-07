@@ -103,17 +103,18 @@ export async function createLedgerAppendSession(params: {
   /**
    * When the caller's work began, for the crypto-shred fence (see appendMemoryEvent).
    *
-   * Defaults to the moment the session opens, which is right only when the work itself starts here -
-   * a single-fact write, which opens a session per call. It is WRONG for a batch run: a lake
-   * extraction claims its lease and then awaits the key table, a cursor re-read and a member page
-   * before opening a session, so a shred landing in that window would be stamped BEFORE the default
-   * and would lift its own tombstone. Any caller whose work began earlier than the session MUST pass
-   * this explicitly; extractLakeMemory passes its lease-claim time.
+   * Required, with NO default, for the same reason `appendMemoryEvent` refuses one: defaulting it to
+   * the moment the session opens silently disables the fence for every caller whose work began
+   * earlier, which is most of them. A lake extraction claims its lease and then awaits the key table,
+   * a cursor re-read and a member page; a memento job runs an LLM extraction and an embedding call.
+   * A shred landing in either window is stamped BEFORE a session-open default and would lift its own
+   * tombstone, so the erased fact lands anyway. Pass the instant the UNIT OF WORK started - a run's
+   * lease claim, a job's arrival, a request's arrival - not the instant you happen to write.
    */
-  startedAt?: Date;
+  startedAt: Date;
 }): Promise<LedgerAppendSession> {
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
-  const startedAt = params.startedAt ?? new Date();
+  const startedAt = params.startedAt;
   const entries: DedupEntry[] = [];
   let profileLoaded = false;
 
@@ -204,8 +205,18 @@ export async function appendFactToLedger(params: {
   evidenceTier: EvidenceTier;
   sources?: string[];
   embedding?: number[];
+  /**
+   * When the caller's work began - NOT when it calls this. A single-fact write still has a unit of
+   * work around it: the extraction that produced `summary` ran first, and a shred landing during it
+   * must refuse this write. See `createLedgerAppendSession`.
+   */
+  startedAt: Date;
 }): Promise<boolean> {
-  const session = await createLedgerAppendSession({ principal: params.principal, ownerUserId: params.ownerUserId });
+  const session = await createLedgerAppendSession({
+    principal: params.principal,
+    ownerUserId: params.ownerUserId,
+    startedAt: params.startedAt,
+  });
   return session.append({
     summary: params.summary,
     evidenceTier: params.evidenceTier,
@@ -228,6 +239,8 @@ export async function writeFactToLedger(params: {
   summary: string;
   sources?: string[];
   embedding?: number[];
+  /** When the extraction that produced this fact began - see `appendFactToLedger`. */
+  startedAt: Date;
 }): Promise<boolean> {
   return appendFactToLedger({
     principal: { kind: 'user', id: params.userId },
@@ -236,5 +249,6 @@ export async function writeFactToLedger(params: {
     evidenceTier: 'engineering-proxy',
     sources: params.sources,
     embedding: params.embedding,
+    startedAt: params.startedAt,
   });
 }

@@ -87,6 +87,7 @@ const baseLake: ManagerLake = {
   isPublic: false,
   canManage: true,
   canRebuild: true,
+  canManageMemory: true,
   isOwn: true,
 } as ManagerLake;
 
@@ -263,6 +264,23 @@ describe('LakeInfoPanel - erase memory (purge)', () => {
     });
     renderPanel();
 
+    expect(screen.queryByTestId('datalake-purge-memory-btn-lake-1')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The erase door is narrower than the panel that hosts it. `canManage` admits a curator and an
+   * org-admin who can edit the lake's settings; a crypto-shred is irreversible and destroys facts
+   * derived from other people's documents, so the API restricts it to the lake's creator (or a
+   * superuser). Rendering the button off `canManage` offered it to callers the API answers 403 to.
+   */
+  it('is absent for a manager who may configure the lake but not shred its memory', () => {
+    useGetLakeMemoryHealth.mockReturnValue({
+      data: { state: 'current', factCount: 8, sourceDocumentCount: 2, lastBuiltAt: null, memberCount: 4 },
+    });
+    renderPanel({ ...baseLake, canManageMemory: false });
+
+    // The rest of the panel is unaffected: they still see the state and, when stale, the build door.
+    expect(screen.getByTestId('datalake-memory-state-chip-lake-1')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-purge-memory-btn-lake-1')).not.toBeInTheDocument();
   });
 

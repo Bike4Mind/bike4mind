@@ -1,18 +1,13 @@
-import type { IFabFileDocument, IFabFileRepository } from '@bike4mind/common';
+import type { CitableFabFileFields, IFabFileRepository } from '@bike4mind/common';
 import { isRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 
-/** The FabFile fields the citability predicate reads - a projection, so callers can fetch only these. */
-export type CitableFileFields = Pick<
-  IFabFileDocument,
-  | 'id'
-  | 'deletedAt'
-  | 'archivedAt'
-  | 'chunkCount'
-  | 'vectorizedChunkCount'
-  | 'embeddingModel'
-  | 'fileName'
-  | 'vectorized'
->;
+/**
+ * The FabFile fields the citability predicate reads - a projection, so callers fetch only these.
+ *
+ * Aliases the repository-side type so the read and the predicate cannot drift apart: the resolvers
+ * below call `findCitableFieldsByIds`, which projects exactly this set.
+ */
+export type CitableFileFields = CitableFabFileFields;
 
 /**
  * Is this source document still retrievable for citation by the knowledge tool RIGHT NOW?
@@ -60,12 +55,14 @@ export function isFabFileCitable(
  * callers must not use an empty source list as evidence of anything.
  */
 export function createSurvivingSourcesResolver(deps: {
-  fabfiles: Pick<IFabFileRepository, 'findAllByIds'>;
+  fabfiles: Pick<IFabFileRepository, 'findExistingIdsByIds'>;
 }): (sourceIds: string[]) => Promise<Set<string>> {
   return async sourceIds => {
     if (sourceIds.length === 0) return new Set();
-    const files = await deps.fabfiles.findAllByIds(sourceIds);
-    return new Set(files.map(f => f.id));
+    // Existence only, so nothing is hydrated. A lake profile can cite one source per belief with no
+    // cap, so this set converges on every document in the lake - and the unprojected read it replaces
+    // built a full mongoose document for each of them on every profile render.
+    return new Set(await deps.fabfiles.findExistingIdsByIds(sourceIds));
   };
 }
 
@@ -76,13 +73,14 @@ export function createSurvivingSourcesResolver(deps: {
  * this returns exactly the reachable set.
  */
 export function createReachableSourcesResolver(deps: {
-  fabfiles: Pick<IFabFileRepository, 'findAllByIds'>;
+  fabfiles: Pick<IFabFileRepository, 'findCitableFieldsByIds'>;
   queryEmbeddingModel?: string;
   retrievalFilter?: RetrievalExclusionOptions;
 }): (sourceIds: string[]) => Promise<Set<string>> {
   return async sourceIds => {
     if (sourceIds.length === 0) return new Set();
-    const files = await deps.fabfiles.findAllByIds(sourceIds);
+    // Projected: this runs on the recall path, once per chat turn that touches a lake.
+    const files = await deps.fabfiles.findCitableFieldsByIds(sourceIds);
     const reachable = new Set<string>();
     for (const file of files) {
       if (

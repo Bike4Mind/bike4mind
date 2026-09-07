@@ -624,7 +624,7 @@ export function LakeInfoPanel({
                 Delete
               </Button>
             </Tooltip>
-            {hasLakeMemoryProfile && (
+            {hasLakeMemoryProfile && lake.canManageMemory && (
               <Tooltip
                 title="Permanently erase this lake's extracted memory profile. The lake itself and its files are untouched."
                 size="sm"

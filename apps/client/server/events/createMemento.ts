@@ -13,6 +13,11 @@ const { findMostSimilarMemento } = mementoService;
 type EmbeddingService = ReturnType<EmbeddingFactory['createEmbeddingService']>;
 
 export const handler = withEventContext(async (event, logger) => {
+  // The crypto-shred fence for the V2 write, captured HERE rather than at the write. Everything
+  // between this line and the ledger append - the fact extraction LLM call, the embedding call - is
+  // work this job owns, and an erase landing inside that window must refuse the write. Stamping it at
+  // the write instead would put the fence AFTER the erase and let the fact land anyway.
+  const jobStartedAt = new Date();
   const { userId, prompt, model, sessionId, questId, ...flags } = LLMEvents.CompletionCompleted.schema.parse(
     event.properties
   );
@@ -84,7 +89,7 @@ export const handler = withEventContext(async (event, logger) => {
       // extraction was already in flight, so declining to write is the correct outcome. It must not
       // take the throw path below - doing so would fail this background job (and eventually DLQ it)
       // for behaving correctly, and would report an erase as an outage.
-      const written = await writeFactToLedger({ userId, summary, sources, embedding });
+      const written = await writeFactToLedger({ userId, summary, sources, embedding, startedAt: jobStartedAt });
       if (!written) {
         logger.info('Mementos V2: ledger write declined - memory was erased after this extraction began');
       }

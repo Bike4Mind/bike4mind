@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -39,15 +40,43 @@ import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
  *  3. an extraction lease already held (`isLeaseHeld`) -> 409, so two clicks can't double-run
  *  4. the SAME per-lake daily cap the automatic path enforces (`lakeMemoryRateLimitKey`) -> 429, no
  *     bypass for a manual trigger
+ *  5. a per-CALLER daily cap on top of it (`lakeMemoryCallerRateLimit`) -> 429. Precondition 4 is
+ *     keyed by lake, so on its own it bounds one lake and not "loop over every lake I manage".
  *
  * Manage-gated (`assertLakeRebuildAccess`), matching /converge and /rechunk: this repairs/rebuilds
  * derived state rather than lake content, so it needs no lake-scoped write grant.
  */
 
+/**
+ * Builds per day per CALLER, on top of the per-lake cap.
+ *
+ * The per-lake cap (`LAKE_MEMORY_DAILY_CAP`) is keyed by lake id, so it bounds one lake's spend and
+ * says nothing about one caller looping over every lake they manage - and a manual build is the most
+ * expensive thing this subsystem does (a chain of up to LAKE_MEMORY_MAX_CONTINUATION_SLICES slices,
+ * each running the extractor over up to MAX_DOCS_PER_RUN documents, with the LLM call ahead of the
+ * ledger de-dup so a re-scan genuinely re-bills). Set to four lakes' worth of the per-lake cap: a
+ * manager rebuilding a handful of lakes never notices it, a loop stops.
+ *
+ * NOT exempted for admins, and for the same reason /converge is not: this meters SPEND rather than
+ * gating an action, and the operator most able to loop the button is exactly the one it must bound.
+ */
+const LAKE_MEMORY_CALLER_DAILY_CAP = 4 * LAKE_MEMORY_DAILY_CAP;
+
+const lakeMemoryCallerRateLimit = rateLimit({
+  limit: () => LAKE_MEMORY_CALLER_DAILY_CAP,
+  windowMs: LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
+  // Required: the raw pathname embeds the lake id, which would make this per-lake and duplicate the
+  // cap above instead of bounding the caller across lakes.
+  bucket: 'data-lakes/lake-memory',
+});
+
 const gateDeps = { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } };
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
+  // POST-scoped: the GET is the state poll the manager panel drives while a build runs, and capping
+  // it would throttle reading state rather than starting work. Same shape as /converge.
+  .use((req, res, next) => (req.method === 'POST' ? lakeMemoryCallerRateLimit(req, res, next) : next()))
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
     const ctx = await toAccessContext(req);
@@ -94,12 +123,11 @@ const handler = baseApi()
       throw new TooManyRequestsError('Daily lake memory build limit reached for this lake.');
     }
 
-    // Clears any continuation watermark left over from a prior chain (one that hit the slice
-    // ceiling, or was interrupted) so a manual rebuild scans the lake from the start rather than
-    // silently resuming mid-lake. Safe here specifically because precondition 3 above already
-    // confirmed no lease is held, so nothing is concurrently reading or writing this cursor.
-    await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
-
+    // The continuation watermark is NOT cleared here. Precondition 3 only proves no lease is held at
+    // this instant, and the lease is per-slice while the cursor is not - so between two slices of a
+    // live chain this door sees a released lease and a valid cursor, and clearing it reset that chain
+    // to the start of the lake and re-billed the LLM pass over every document it had covered. The
+    // `restart` flag below moves the clear into the run, which does hold the lease.
     await sendToQueue(queueUrl, {
       // No real batch backs a manual trigger; batchId is carried through only for log correlation
       // (extractLakeMemory.ts never reads it back), so a synthetic, self-describing id is enough.
@@ -107,6 +135,9 @@ const handler = baseApi()
       dataLakeId: lake.id,
       userId: ctx.userId,
       slice: 0,
+      // A manual build means "start over", which is why the door does not need to clear the cursor
+      // itself. Continuation slices re-enqueue without this and resume normally.
+      restart: true,
     });
 
     await logAuditEvent(

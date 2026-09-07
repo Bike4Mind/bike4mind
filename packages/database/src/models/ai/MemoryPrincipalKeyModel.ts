@@ -21,14 +21,19 @@ export interface IMemoryPrincipalKey extends IMongoDocument {
   /**
    * The (possibly envelope-wrapped) data-encryption key, base64. Opaque here.
    *
-   * ABSENT means this row is a TOMBSTONE, not that the row is malformed - see `destroy`. Exactly one
-   * of `dek` / `destroyedAt` is set on any row.
+   * ABSENT means this row is a TOMBSTONE, not that the row is malformed - see `destroy`.
    */
   dek?: string;
   /**
-   * When the key was destroyed. Present only on a tombstone. This is the fence `getOrCreate` compares
-   * a caller's start time against, so that work already in flight when a shred landed cannot mint its
-   * way back into a live key.
+   * When the key was LAST destroyed, retained for the life of the row - a lift mints a new `dek`
+   * beside it rather than clearing it. This is the fence `getOrCreate` compares a caller's start time
+   * against, so work already in flight when a shred landed cannot mint OR read its way back into a
+   * live key.
+   *
+   * Retention is load-bearing, not bookkeeping. Clearing it on a lift erased the only evidence that a
+   * shred had happened, so the fence went blind to that shred the moment the principal legitimately
+   * wrote again. A live `dek` alongside a set `destroyedAt` is therefore the NORMAL steady state
+   * after any erase-then-rewrite, and a row with both is not malformed.
    */
   destroyedAt?: Date;
 }
@@ -72,13 +77,12 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
    * ordinary already-erased principal that a fresh rebuild may legitimately re-key, so the tombstone
    * lifts. One rule covers both, and it needs no separate authorization path.
    *
-   * LIMITATION - the fast path below does NOT apply the fence. A key that is live at the moment of
-   * the read is returned without consulting `startedAt`, so a caller whose work began before a shred
-   * can still be handed a key a third party re-minted after it. Reaching that needs two concurrent
-   * writers on one principal with a purge interleaved between them, which the lake path cannot
-   * produce (its extraction lease outlives the maximum function execution time, so a second
-   * concurrent run cannot exist). Closing it means returning `destroyedAt` alongside the key, which
-   * changes `findDek`'s shape and the KeyProvider interface - deliberately not done.
+   * The fence applies on BOTH paths. The fast path reads `destroyedAt` alongside the key and refuses
+   * a live key whose last shred is not strictly older than `startedAt`, so a caller whose work began
+   * before a shred cannot be handed a key that something else re-minted after it. That interleaving
+   * needs no exotic concurrency - an ordinary erase-then-write, or a redelivered background job whose
+   * work predates the erase, produces it - which is exactly why the stamp is retained rather than
+   * cleared.
    *
    * Race-safe in three ways, all of which matter on one principal's row:
    *  - the fast path is a plain read, so the steady state costs no write;
@@ -98,7 +102,16 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
     candidateDek: string,
     startedAt: Date
   ): Promise<string | null> {
-    const live = await this.findDek(principalKind, principalId);
+    // Both reads below go through the fence, not just the first: the E11000 re-read can land after a
+    // concurrent lift, and an unfenced read there would hand back the same re-minted key.
+    const fencedRead = async (): Promise<string | null> => {
+      const state = await this.findKeyState(principalKind, principalId);
+      if (!state) return null;
+      if (state.destroyedAt && state.destroyedAt.getTime() >= startedAt.getTime()) return null;
+      return state.dek;
+    };
+
+    const live = await fencedRead();
     if (live) return live;
 
     try {
@@ -121,7 +134,9 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
           // only costs one run that writes nothing and is retried. Fail closed.
           $or: [{ destroyedAt: { $exists: false } }, { destroyedAt: { $lt: startedAt } }],
         },
-        { $set: { principalKind, principalId, ownerUserId, dek: candidateDek }, $unset: { destroyedAt: 1 } },
+        // `destroyedAt` is deliberately NOT unset: it stays as the monotone record of the last shred
+        // so the fenced read above keeps working after this lift.
+        { $set: { principalKind, principalId, ownerUserId, dek: candidateDek } },
         // runValidators so the principalKind enum actually gates this upsert - the only production
         // write path for a key. Without it an unknown kind would mint a key the ledger enum rejects.
         { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
@@ -130,9 +145,10 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
     } catch (err) {
       if ((err as { code?: number }).code !== 11000) throw err;
       // Either a concurrent first-write won the insert race - read its key - or the row exists and the
-      // filter refused it, which is a fence block and the correct answer is null. findDek reports a
-      // tombstone as null already, so both collapse to one re-read.
-      return this.findDek(principalKind, principalId);
+      // filter refused it, which is a fence block and the correct answer is null. A fenced read
+      // reports a tombstone - and a key re-minted after this work began - as null, so both collapse
+      // to one re-read.
+      return fencedRead();
     }
   }
 
@@ -145,6 +161,26 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
   async findDek(principalKind: IMemoryPrincipalKey['principalKind'], principalId: string): Promise<string | null> {
     const doc = await this.model.findOne({ principalKind, principalId }).select('dek').lean<{ dek?: string } | null>();
     return doc?.dek ?? null;
+  }
+
+  /**
+   * The principal's key AND the stamp of its last shred - what `getOrCreate` fences against.
+   *
+   * Kept separate from `findDek` deliberately. `findDek` answers "is there a readable key" for the
+   * DECRYPT path, which needs no fence: reading a key that exists resurrects nothing. Only the WRITE
+   * path has to know whether a shred has landed since its work began, so only it pays for the wider
+   * projection and the extra branch.
+   */
+  async findKeyState(
+    principalKind: IMemoryPrincipalKey['principalKind'],
+    principalId: string
+  ): Promise<{ dek: string | null; destroyedAt: Date | null } | null> {
+    const doc = await this.model
+      .findOne({ principalKind, principalId })
+      .select('dek destroyedAt')
+      .lean<{ dek?: string; destroyedAt?: Date } | null>();
+    if (!doc) return null;
+    return { dek: doc.dek ?? null, destroyedAt: doc.destroyedAt ?? null };
   }
 
   /**
@@ -166,10 +202,21 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
    */
   async destroy(principalKind: IMemoryPrincipalKey['principalKind'], principalId: string): Promise<void> {
     if (!principalId) throw new Error('destroy requires a principalId - refusing an unscoped key destroy');
-    await this.model.updateOne(
-      { principalKind, principalId },
-      { $unset: { dek: 1 }, $set: { destroyedAt: new Date() } }
-    );
+    const tombstone = { $unset: { dek: 1 }, $set: { destroyedAt: new Date() } };
+    try {
+      // Upsert, so an erase issued before the principal's first-ever key still leaves a fence. As a
+      // plain update this was a silent no-op on a missing row, and a first mint already in flight had
+      // nothing to be refused by - it inserted its key and wrote under it after the erase.
+      //
+      // The inserted row carries no `ownerUserId` (this method is not told one, and a tombstone does
+      // not need it); the next legitimate mint `$set`s it alongside the new key.
+      await this.model.updateOne({ principalKind, principalId }, tombstone, { upsert: true });
+    } catch (err) {
+      if ((err as { code?: number }).code !== 11000) throw err;
+      // A concurrent first-write won the insert race. The row exists now, so stamp it in place -
+      // never leave without a tombstone, or the shred is unfenced.
+      await this.model.updateOne({ principalKind, principalId }, tombstone);
+    }
   }
 }
 

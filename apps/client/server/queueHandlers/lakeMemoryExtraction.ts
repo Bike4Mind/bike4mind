@@ -15,6 +15,11 @@ const LakeMemoryPayload = z.object({
   // the chain length (LAKE_MEMORY_MAX_CONTINUATION_SLICES) so a huge lake cannot chain unbounded. Absent
   // on the finalize enqueue, so it defaults to 0.
   slice: z.number().int().nonnegative().default(0),
+  /**
+   * Start this chain from the top of the lake, discarding any parked continuation cursor. Set only by
+   * the manual build door; continuations below re-enqueue without it and so resume normally.
+   */
+  restart: z.boolean().default(false),
 });
 
 /**
@@ -100,7 +105,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     const { hasMore } = await extractLakeMemoryForBatch(
       // Real Lambda clock, so the deadline guard accounts for cold start and time already spent.
-      { dataLakeId: payload.dataLakeId, getRemainingTimeInMillis: () => context.getRemainingTimeInMillis() },
+      {
+        dataLakeId: payload.dataLakeId,
+        restart: payload.restart,
+        getRemainingTimeInMillis: () => context.getRemainingTimeInMillis(),
+      },
       logger
     );
 

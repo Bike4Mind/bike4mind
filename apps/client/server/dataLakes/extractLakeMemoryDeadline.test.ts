@@ -281,6 +281,45 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     expect(findLakeMemoryExtractionMembersMock).toHaveBeenCalledWith('datalake:test', { after: 'doc-004', limit: 101 });
   });
 
+  /**
+   * A manual rebuild discards the parked cursor and starts from the top - but it does so HERE, under
+   * the lease, not at the API door. The door used to clear the cursor and then enqueue, which both
+   * made an in-flight build read as idle (the health state derives `building` from a lease OR a
+   * non-null cursor) and, if the enqueue then failed, threw away a continuation's position with
+   * nothing queued to redo it.
+   */
+  it('discards a parked cursor and scans from the top when restart is set', async () => {
+    seedLake(150);
+    findByIdMock.mockResolvedValue({
+      id: 'lake-1',
+      createdByUserId: 'owner-1',
+      datalakeTag: 'datalake:test',
+      lakeMemoryCursor: 'doc-004',
+    });
+
+    await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', restart: true, getRemainingTimeInMillis: () => 10 * 60_000 },
+      makeLogger() as never
+    );
+
+    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', null);
+    expect(findLakeMemoryExtractionMembersMock).toHaveBeenCalledWith('datalake:test', { after: null, limit: 101 });
+  });
+
+  it('leaves the cursor alone when restart is set but nothing is parked', async () => {
+    seedLake(5);
+    const logger = makeLogger();
+
+    await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', restart: true, getRemainingTimeInMillis: () => 10 * 60_000 },
+      logger as never
+    );
+
+    // No parked cursor to discard, and the whole-scan-covered branch only clears one that exists - so
+    // a restart on an idle lake must not issue a pointless write.
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+  });
+
   it('does not ask for a continuation when the slice fills the cap exactly and the lake ends there', async () => {
     // The probe row is what tells these apart. Without it, a lake of exactly 100 live docs would look
     // identical to a truncated one and chain a continuation run that finds nothing - and, because the

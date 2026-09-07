@@ -30,14 +30,18 @@ vi.mock('./ledgerMemoryStore', () => ({
 }));
 vi.mock('./factCipher', () => ({ createKeyProvider: () => ({}) }));
 
-const { createLedgerAppendSession } = await import('./mementoLedgerMirror');
+const { createLedgerAppendSession, writeFactToLedger } = await import('./mementoLedgerMirror');
 const { resolveSubject } = await import('@bike4mind/memory');
 
 // The subject/options a captured appendMemoryEvent call was made with.
 const callSubject = (i: number) => appendMemoryEventMock.mock.calls[i][3].subject as string;
 const callHashed = (i: number) => appendMemoryEventMock.mock.calls[i][4].subjectIsHashed as boolean;
 
-const LAKE = { principal: { kind: 'lake' as const, id: 'datalake:test' }, ownerUserId: 'owner-1' };
+const LAKE = {
+  principal: { kind: 'lake' as const, id: 'datalake:test' },
+  ownerUserId: 'owner-1',
+  startedAt: new Date('2026-01-01T00:00:00.000Z'),
+};
 
 describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
   beforeEach(() => {
@@ -153,5 +157,46 @@ describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
     expect(appendMemoryEventMock).toHaveBeenCalledTimes(1);
     expect(callSubject(0)).toBe(resolveSubject({ fact: summary }));
     expect(callHashed(0)).toBe(false);
+  });
+});
+
+/**
+ * The single-fact user path and the crypto-shred fence.
+ *
+ * `writeFactToLedger` used to open its session with no `startedAt`, so the fence defaulted to the
+ * moment of the WRITE. Its only caller is a background memento job that runs an LLM extraction and an
+ * embedding call first, so an erase landing in that window was stamped BEFORE the default, lifted its
+ * own tombstone, and the fact landed after the erase - while the job logged that the fence had
+ * declined it. The fence instant must be the caller's, and must survive all the way to
+ * `appendMemoryEvent`.
+ */
+describe('writeFactToLedger - shred fence instant', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readProfileMock.mockResolvedValue(null);
+    appendMemoryEventMock.mockResolvedValue({ id: 'evt-1' });
+  });
+
+  it('forwards the CALLER work-start, not the moment of the write', async () => {
+    // Deliberately far in the past: a reintroduced `?? new Date()` default cannot coincide with it,
+    // so this assertion fails the moment the fence stops being the caller's clock.
+    const jobStartedAt = new Date('2026-03-01T00:00:00.000Z');
+
+    await writeFactToLedger({ userId: 'u1', summary: 'the user prefers dark mode', startedAt: jobStartedAt });
+
+    expect(appendMemoryEventMock).toHaveBeenCalledTimes(1);
+    expect(appendMemoryEventMock.mock.calls[0][4].startedAt).toEqual(jobStartedAt);
+  });
+
+  it('reports a refusal as false rather than throwing, so the job is not failed for behaving', async () => {
+    appendMemoryEventMock.mockResolvedValue(null);
+
+    const written = await writeFactToLedger({
+      userId: 'u1',
+      summary: 'a fact extracted before the erase',
+      startedAt: new Date('2026-03-01T00:00:00.000Z'),
+    });
+
+    expect(written).toBe(false);
   });
 });
