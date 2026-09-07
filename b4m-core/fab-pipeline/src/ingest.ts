@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
+import type { CheerioAPI } from 'cheerio';
 import mime from 'mime-types';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
 
@@ -169,6 +170,46 @@ async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   });
 }
 
+// Block-level elements after which we force a line break, since cheerio's `.text()` on the whole
+// body otherwise concatenates every text node with no separator at all - a heading, a list item
+// and the next paragraph would run together as one word-jammed line.
+const BLOCK_LEVEL_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, tr, div';
+
+/**
+ * Extract readable text from the WHOLE document, not just `<p>` elements. The single collector
+ * this replaced was `<p>`-only and fell back to the raw HTML when it found none: on a page whose
+ * content isn't inside `<p>` (an RFC page using `<pre>`) that meant the fallback fired and stored
+ * markup verbatim; on a page with real substance in headings, list items, table cells or code
+ * blocks alongside its `<p>`s, that content was silently dropped.
+ *
+ * `head` (title/meta/script/style all live there, and the caller already reads `<title>`
+ * separately) plus any stray `script`/`style`/`noscript` outside it are removed before extraction,
+ * so none of that reaches what gets embedded. Table cells get a trailing space (still the same
+ * row, but no longer jammed into the next cell's word); every other block-level element gets a
+ * trailing newline; runs of whitespace and blank lines are then collapsed. Returns `''` when
+ * nothing extractable was found, so the caller stores nothing rather than falling back to raw
+ * HTML.
+ */
+function extractReadableText($: CheerioAPI): string {
+  $('head, script, style, noscript').remove();
+  $('br').replaceWith('\n');
+  $('td, th').each((_index, cell) => {
+    $(cell).after(' ');
+  });
+  $(BLOCK_LEVEL_SELECTOR).each((_index, element) => {
+    $(element).after('\n');
+  });
+
+  // `$.root()` covers the whole remaining document in one call - no need to special-case a
+  // missing `<body>` (malformed HTML with no body tag still has its text picked up).
+  return $.root()
+    .text()
+    .split('\n')
+    .map(line => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
 // Fetch and parse HTML content from a URL; returns the page title and text.
 export async function fetchAndParseURL(url: string, { logger }: { logger: Logger }): Promise<ParsedContent> {
   logger.updateMetadata({ failedUrl: null });
@@ -261,13 +302,7 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       // Fallback names the page from the FINAL url rather than the pasted one - after a redirect the
       // caller's last path segment describes a different document than the one actually fetched.
       title = $('title').text() || lastPathSegment(currentUrl);
-      let textContent = '';
-      $('body')
-        .find('p')
-        .each((index, element) => {
-          textContent += $(element).text() + '\n';
-        });
-      urlContent = textContent || htmlContent;
+      urlContent = extractReadableText($);
     }
 
     // Both URLs when they differ: the pasted one is what the user recognises, the final one is what
