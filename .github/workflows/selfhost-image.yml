@@ -19,6 +19,9 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      # .dockerignore now decides whether docs-site/docs reaches the builder, and the
+      # client prebuild fails without it - an edit there can break the image on its own.
+      - '.dockerignore'
       - 'pnpm-lock.yaml'
       - '.github/workflows/selfhost-image.yml'
   pull_request:
@@ -27,6 +30,9 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      # .dockerignore now decides whether docs-site/docs reaches the builder, and the
+      # client prebuild fails without it - an edit there can break the image on its own.
+      - '.dockerignore'
       - 'pnpm-lock.yaml'
       - '.github/workflows/selfhost-image.yml'
   workflow_dispatch:
