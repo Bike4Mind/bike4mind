@@ -56,6 +56,21 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
     expect(result.find(l => l.id === 'mine')?.canPreauthorize).toBe(true);
   });
 
+  it('is FALSE for a DRAFT lake the caller created, while canManage stays true', async () => {
+    // session-create 404s any non-active lake, so the affordance must go dark until the lake's first
+    // upload lands - otherwise "test this lake" is offered on exactly the lake it cannot serve.
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', status: 'draft' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeAccessGrants: grantRepo(),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const row = result.find(l => l.id === 'mine');
+    expect(row?.canManage).toBe(true);
+    expect(row?.canPreauthorize).toBe(false);
+  });
+
   it('is TRUE for a platform admin who ALSO holds a curator grant - the no-code unblock', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'someone-else' });
     const db = {

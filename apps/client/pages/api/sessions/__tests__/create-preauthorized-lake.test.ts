@@ -98,6 +98,19 @@ describe('POST /api/sessions/create - preauthorizedLakeIds', () => {
     expect(h.sessionUpdate).toHaveBeenCalledWith({ id: 's1', preauthorizedLakeIds: [LAKE_ID] });
   });
 
+  it('rejects a lake that resolves but is not active', async () => {
+    h.findById.mockResolvedValue({ id: LAKE_ID, status: 'draft', createdByUserId: 'other', organizationId: 'org1' });
+    h.resolveCanManageLake.mockResolvedValue(true);
+    const { res } = makeRes();
+
+    await expect(run(post({ name: 'N', preauthorizedLakeIds: [LAKE_ID] }), res)).rejects.toThrow(
+      `Data lake ${LAKE_ID} not found`
+    );
+    // The manage check runs after the status test and is mocked to PASS here, so the refusal can
+    // only have come from the status guard - not from a manage failure wearing the same message.
+    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+  });
+
   it('rejects the request when the caller does not manage the lake, rather than dropping the id', async () => {
     h.resolveCanManageLake.mockResolvedValue(false);
     const { res } = makeRes();

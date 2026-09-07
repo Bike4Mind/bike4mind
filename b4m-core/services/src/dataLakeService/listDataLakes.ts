@@ -228,8 +228,10 @@ const toManageableConfig = (
   ...toConfig(dl),
   canManage: manageable,
   // Deliberately NOT `manageable`: resolved without the platform-admin rung, mirroring the
-  // session-create route. See the field's doc comment for why the two must differ.
-  canPreauthorize,
+  // session-create route. See the field's doc comment for why the two must differ. The status test
+  // mirrors that route too - it 404s a non-active lake, so a draft offered here would advertise an
+  // admission the server is guaranteed to refuse.
+  canPreauthorize: canPreauthorize && dl.status === 'active',
   // A DB lake HAS a document, so rebuild and manage are the same decision - only a fallback
   // (built-in) lake needs the narrower `canRebuild`; see toFallbackConfig and the field's comment.
   canRebuild: manageable,
