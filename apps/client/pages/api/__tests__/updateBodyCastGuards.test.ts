@@ -19,6 +19,12 @@ const handlers = vi.hoisted(() => ({
   put: null as null | ((req: any, res: any) => unknown),
   post: null as null | ((req: any, res: any) => unknown),
   wrote: false,
+  // First argument the write received, so a test can assert on what actually reached the `$set`
+  // rather than only on the status code. `payload` is the LAST write, and the mcp-servers POST
+  // writes twice (create, then an update storing the discovered tools), so a test about what was
+  // created has to read `created` instead.
+  payload: undefined as unknown,
+  created: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -40,8 +46,15 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const found = (extra: Record<string, unknown> = {}) => Promise.resolve({ id: 'x', ...extra });
-const writeSpy = () => {
+const writeSpy = (...args: unknown[]) => {
   handlers.wrote = true;
+  handlers.payload = args[0];
+  return found();
+};
+const createSpy = (...args: unknown[]) => {
+  handlers.wrote = true;
+  handlers.payload = args[0];
+  handlers.created = args[0];
   return found();
 };
 
@@ -55,7 +68,7 @@ vi.mock('@bike4mind/database', () => ({
   // `userId` matches the request user below, so the ownership check passes and the body
   // validation is what decides the outcome.
   agentRepository: { findById: () => found({ userId: 'u1', triggerWords: [] }), update: writeSpy },
-  mcpServerRepository: { findOne: () => Promise.resolve(null), create: writeSpy, update: writeSpy },
+  mcpServerRepository: { findOne: () => Promise.resolve(null), create: createSpy, update: writeSpy },
   fabFileRepository: { findById: () => Promise.resolve(null) },
   userRepository: { findById: () => found() },
   creditTransactionRepository: { create: () => found() },
@@ -176,6 +189,8 @@ const run = async (c: Case, body: Record<string, unknown>) => {
   handlers.put = null;
   handlers.post = null;
   handlers.wrote = false;
+  handlers.payload = undefined;
+  handlers.created = undefined;
   vi.resetModules();
   await c.load();
   const handler = method === 'POST' ? handlers.post : handlers.put;
@@ -195,7 +210,7 @@ const run = async (c: Case, body: Record<string, unknown>) => {
     () => null,
     (e: unknown) => e
   );
-  return { outcome, status, wrote: handlers.wrote };
+  return { outcome, status, wrote: handlers.wrote, payload: handlers.payload, created: handlers.created };
 };
 
 describe('update-payload cast guards - a wrong-typed body value is a client error, not a 500', () => {
@@ -247,6 +262,79 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
       const { wrote } = await run(byRoute('admin/rapid-reply/mappings/[id]'), { responseStyle: 'casual' });
       expect(wrote).toBe(true);
     });
+  });
+
+  // The first guard on this route used `z.looseObject`, which typed the 12 fields it named and
+  // forwarded every other `AgentSchema` path to the `$set` uncast -- so the cases below were
+  // still 500s. The schema is strict now, and these pin the paths a named-fields-only guard
+  // misses: a top-level scalar it did not list, and a leaf inside a subtree.
+  describe('agents/[id] rejects wrong types on paths beyond the ones a partial guard named', () => {
+    it.each([
+      ['a top-level Number path', { turnTimeoutSeconds: 'abc' }],
+      ['a Boolean path from the shareable-document spread', { isGlobalRead: 'yes' }],
+      ['a String leaf inside the personality subtree', { personality: { energyLevel: { a: 1 } } }],
+      ['a Number leaf inside the tavernStats subtree', { tavernStats: { xp: 'abc' } }],
+      ['a Date path', { lastSystemPromptGeneratedAt: 'not-a-date' }],
+    ])('%s', async (_label, body) => {
+      const { outcome, status, wrote } = await run(byRoute('agents/[id]'), body as Record<string, unknown>);
+
+      const threw400 = outcome !== null && (outcome as { statusCode?: number }).statusCode === 400;
+      const sent400 = status.mock.calls.some(call => call[0] === 400);
+      expect(threw400 || sent400).toBe(true);
+      expect(wrote).toBe(false);
+    });
+
+    it('still writes a well-typed value on a path outside the originally-named set', async () => {
+      const { wrote } = await run(byRoute('agents/[id]'), {
+        turnTimeoutSeconds: 12,
+        personality: { energyLevel: 'high' },
+        tavernStats: { xp: 40 },
+      });
+      expect(wrote).toBe(true);
+    });
+
+    // The cases above only prove the named paths are typed; a passthrough schema that happens to
+    // name them would pass too. This is the one that separates strict from passthrough: a key no
+    // schema mentions must be STRIPPED rather than forwarded, because a forwarded one reaches the
+    // `$set` with no cast protection at all. Asserting on the payload, not the status, because a
+    // forwarded key is not a validation error -- it is a silent write of an unvalidated value.
+    it('strips a key the schema does not name instead of forwarding it to the $set', async () => {
+      const { payload, wrote } = await run(byRoute('agents/[id]'), {
+        name: 'renamed',
+        notAnAgentField: { nested: 'value' },
+      });
+
+      expect(wrote).toBe(true);
+      expect(payload).toMatchObject({ name: 'renamed' });
+      expect(payload).not.toHaveProperty('notAnAgentField');
+    });
+  });
+
+  // `_castUpdate` strips `enabled: undefined` from the `$set` before casting, so omitting it
+  // against an existing server is a working 200 and must not become a 400. Only the create
+  // branch needs it, and mongoose already enforces that.
+  it('mcp-servers POST accepts a body that omits enabled', async () => {
+    const { outcome, status } = await run(byRoute('mcp-servers'), {
+      name: 'github',
+      envVariables: [{ key: 'K', value: 'V' }],
+    });
+    const threw400 = outcome !== null && (outcome as { statusCode?: number }).statusCode === 400;
+    const sent400 = status.mock.calls.some(call => call[0] === 400);
+    expect(threw400 || sent400).toBe(false);
+  });
+
+  // `enabled` is `required: true` in the schema, so the create branch cannot pass `undefined`
+  // through the way the update branch can. Defaulting rather than requiring it in the schema is
+  // the choice that keeps the update branch's working call working; pinned because it is a
+  // behaviour decision, not a type-level detail.
+  it('mcp-servers POST defaults enabled to true when creating', async () => {
+    const { created, wrote } = await run(byRoute('mcp-servers'), {
+      name: 'github',
+      envVariables: [{ key: 'K', value: 'V' }],
+    });
+
+    expect(wrote).toBe(true);
+    expect(created).toMatchObject({ name: 'github', enabled: true });
   });
 
   it('still accepts a well-typed body on every route', async () => {

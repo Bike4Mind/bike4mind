@@ -82,11 +82,17 @@ const handler = baseApi()
         enabled,
       });
     } else {
+      // `enabled` is optional in the request but `required: true` in the schema, and the two
+      // branches differ on what that means: the update above drops `enabled: undefined` from the
+      // `$set` and leaves the stored value alone, while a create has to supply one. Defaulting to
+      // true here matches what the create used to persist -- an omitted `enabled` reached
+      // mongoose as `undefined`, so a request that omitted it failed validation with a 500 rather
+      // than creating a disabled server. Nothing was relying on that.
       server = await mcpServerRepository.create({
         userId: req.user.id,
         name,
         envVariables: encryptedVars,
-        enabled,
+        enabled: enabled ?? true,
         tools: [],
       });
     }

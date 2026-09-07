@@ -11,12 +11,12 @@ import { z } from 'zod';
 // z.boolean() rather than a coercion, deliberately: coercing would accept 2 and hand it to
 // mongoose, which is the thing being guarded against.
 const mcpServerFields = {
-  // Validated against the enum, not merely typed as a string, because the two write paths
-  // disagree about whether the schema's `enum: Object.values(McpServerName)` is enforced at all.
-  // `Model.create` runs validators, so POST's create branch answers 500 on an unknown name; both
-  // update branches reach `findOneAndUpdate` without `runValidators`, and mongoose skips
-  // validators on update queries by default, so there an unknown name is simply written with a
-  // 200. Checking it here makes both a 400.
+  // Validated against the enum rather than merely typed as a string. The schema declares
+  // `enum: Object.values(McpServerName)`, and every write path here does enforce it -- the PUT
+  // passes `runValidators: true`, and `Model.create` runs validators by default -- but each one
+  // enforces it as a 500 (a ValidationError out of mongoose), where a rejected body value should
+  // be a 400. The POST's update-existing branch goes through `BaseModel.update`, which does not
+  // pass `runValidators`, so there it is not enforced at all.
   name: z.enum(McpServerName),
   // Required because encryptEnvVariables() maps over it unconditionally: a body without it
   // throws a TypeError today, so declaring it required turns that 500 into a 400 and breaks
@@ -32,11 +32,15 @@ export const mcpServerUpdateBodySchema = z.object({
 });
 
 /**
- * POST: `name` is both the upsert lookup key and required by the schema, and `enabled` is
- * `required: true` as well -- omitting either fails validation on the create branch with a 500
- * today, so requiring them here turns that into a 400 and breaks no working call.
+ * POST: `name` is required because it is the upsert lookup key -- the route's first statement
+ * filters on it, so a missing name is not a create, it is a `findOne({ name: undefined })`.
+ *
+ * `enabled` stays optional even though the schema marks it `required: true`, because the two
+ * branches behind this route disagree. On the create branch, omitting it is already a 500 from
+ * mongoose. On the update-existing branch it is a working call today: `_castUpdate` strips
+ * `enabled: undefined` out of the `$set` before casting (verified on mongoose 8.24.1), so
+ * `POST {name, envVariables}` against an existing server leaves the stored value alone and
+ * answers 200. Requiring it here would turn that into a 400 -- a regression for any API-key
+ * caller that omits it, even though both in-app callers send the full triple.
  */
-export const mcpServerCreateBodySchema = z.object({
-  ...mcpServerFields,
-  enabled: z.boolean(),
-});
+export const mcpServerCreateBodySchema = z.object(mcpServerFields);

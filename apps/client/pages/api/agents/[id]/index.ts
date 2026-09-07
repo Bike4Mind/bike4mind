@@ -29,31 +29,201 @@ import {
 import { z } from 'zod';
 
 // The whole body is spread into `agentRepository.update`, i.e. a `$set`, and update payloads cast
-// before validators run -- so a wrong-typed scalar throws a `CastError` on a path that is not
-// `_id`, which is a 500 logged at `error` rather than the 404 it answered before. This route is
-// not admin-gated (the only check is the ownership test below), so the body is caller-controlled.
+// before validators run -- so a wrong-typed value on ANY casting path throws a `CastError` whose
+// path is not `_id`, which is a 500 logged at `error` rather than the 404 it answered before.
+// This route is not admin-gated (the only check is the ownership test below) and the PUT handler
+// has no `try`, so the body is caller-controlled all the way to mongoose.
 //
-// looseObject, not object: the handler forwards fields this schema does not name (`capabilities`,
-// `preferredModel`, the orchestration lists validated by the helpers above), and a strict
-// z.object would silently strip them and turn a working edit into a no-op. Only the scalar paths
-// are typed here; the complex ones keep the imperative validators they already had.
+// Strict `z.object`, so every path of `AgentSchema` has to be named here: unknown keys are
+// stripped rather than forwarded, which is what keeps an unlisted future schema field from
+// reaching a `$set` uncast. That means this list must stay in sync with `AgentSchema` in
+// `packages/database/src/models/ai/AgentModel.ts` -- a field added there and not added here stops
+// being writable through this route.
 //
-// The range checks further down stay as they are, and are only sound because of this: they read
-// `agentData.temperature < 0 || agentData.temperature > 2`, and both comparisons are false for a
-// string, so 'abc' passed straight through to mongoose before this guard existed.
-const updateBodySchema = z.looseObject({
+// The subtrees are spelled out rather than left as `z.record`/`z.unknown` because their leaves
+// cast too: a dotted `$set` on `personality.energyLevel` or `tavernStats.xp` hits a String and a
+// Number path respectively.
+//
+// The range checks further down are why a *named* Number path was not enough on its own: they
+// read `agentData.temperature < 0 || agentData.temperature > 2`, and both comparisons are false
+// for a string, so 'abc' passed them and reached mongoose before this guard existed.
+const personalitySchema = z.object({
+  majorMotivation: z.string().optional(),
+  minorMotivation: z.string().optional(),
+  flaw: z.string().optional(),
+  quirk: z.string().optional(),
+  description: z.string().optional(),
+  emotionalIntelligence: z.string().optional(),
+  communicationPattern: z.string().optional(),
+  memoryStyle: z.string().optional(),
+  culturalFlavor: z.string().optional(),
+  energyLevel: z.string().optional(),
+  humorStyle: z.string().optional(),
+  backstoryElement: z.string().optional(),
+  problemSolvingApproach: z.string().optional(),
+  personalMission: z.string().optional(),
+  activeProject: z.string().optional(),
+  secretAmbition: z.string().optional(),
+  coreValues: z.string().optional(),
+  legacyAspiration: z.string().optional(),
+  growthChallenge: z.string().optional(),
+  personalityComplexity: z.enum(['simple', 'moderate', 'complex', 'maximum']).optional(),
+  generationTimestamp: z.string().optional(),
+  uniqueId: z.string().optional(),
+});
+
+const identitySchema = z.object({
+  gender: z
+    .enum(['male', 'female', 'non-binary', 'agender', 'genderfluid', 'other', 'prefer-not-to-say'])
+    .optional(),
+  pronouns: z
+    .object({
+      subject: z.string().optional(),
+      object: z.string().optional(),
+      possessive: z.string().optional(),
+      possessiveAdjective: z.string().optional(),
+      reflexive: z.string().optional(),
+    })
+    .optional(),
+  customPronouns: z.string().optional(),
+});
+
+// `z.coerce.date()` accepts the ISO strings a JSON body carries as well as a Date, and rejects
+// anything unparseable -- which is exactly the Date-path cast this guard exists to prevent.
+const dateParamSchema = z.coerce.date();
+
+const memoryJournalEntrySchema = z.object({
+  id: z.string(),
+  timestamp: dateParamSchema,
+  source: z.enum(['conversation', 'heartbeat', 'consolidation', 'manual']),
+  content: z.string().max(500),
+  importance: z.number().min(1).max(5),
+  tags: z.array(z.string()).optional(),
+  relatedEntityIds: z.array(z.string()).optional(),
+  expiresAt: dateParamSchema.optional(),
+});
+
+const worldMemoryEntrySchema = z.object({
+  id: z.string(),
+  timestamp: dateParamSchema,
+  action: z.enum(['placed', 'removed', 'moved', 'built_room', 'cleared']),
+  catalogKey: z.string().optional(),
+  description: z.string().max(500),
+  floorId: z.string(),
+  location: z.object({ col: z.number(), row: z.number() }),
+  area: z.object({ width: z.number().optional(), height: z.number().optional() }).optional(),
+});
+
+const shareEntrySchema = z.object({
+  groupId: z.string().optional(),
+  userId: z.string().optional(),
+  permissions: z.array(z.string()),
+  projectId: z.string().optional(),
+  extraData: z.record(z.string(), z.unknown()).optional(),
+});
+
+const updateBodySchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
-  systemPrompt: z.string().optional(),
+  type: z.enum(['persona', 'voice']).optional(),
+  provider: z.enum(['elevenlabs']).optional(),
+  elevenLabsAgentId: z.string().optional(),
+  elevenLabsVoiceId: z.string().optional(),
   firstMessage: z.string().optional(),
-  projectId: z.string().optional(),
-  isPublic: z.boolean().optional(),
-  isSystem: z.boolean().optional(),
-  useOwnCredits: z.boolean().optional(),
   isDefaultVoiceAgent: z.boolean().optional(),
+  turnEagerness: z.enum(['patient', 'normal', 'eager']).optional(),
+  turnTimeoutSeconds: z.number().int().min(1).max(30).optional(),
+  userId: z.string().optional(),
+  organizationId: z.string().optional(),
+  isSystem: z.boolean().optional(),
+  projectId: z.string().optional(),
+  triggerWords: z.unknown().optional(),
+  isPublic: z.boolean().optional(),
+  capabilities: z.unknown().optional(),
+  useOwnCredits: z.boolean().optional(),
+  currentCredits: z.number().optional(),
+  systemPrompt: z.string().optional(),
+  lastSystemPromptGeneratedAt: dateParamSchema.optional(),
+  // The seven fields below keep the imperative validators in `agentValidation.ts`, which already
+  // reject a wrong type with a 400 and additionally bound length and range. `z.unknown()` here
+  // means "this key is known, leave it for the validator" rather than "anything goes" -- dropping
+  // them from this schema would strip them instead.
+  allowedTools: z.unknown().optional(),
+  deniedTools: z.unknown().optional(),
+  maxIterations: z.unknown().optional(),
+  defaultThoroughness: z.unknown().optional(),
+  defaultVariables: z.unknown().optional(),
+  exclusiveMcpServers: z.unknown().optional(),
+  fallbackModels: z.unknown().optional(),
+  preferredModel: z.string().optional(),
+  preferredImageModel: z.string().optional(),
   temperature: z.number().optional(),
   maxTokens: z.number().optional(),
-  currentCredits: z.number().optional(),
+  personality: personalitySchema.optional(),
+  visual: z
+    .object({
+      portraitUrl: z.string().optional(),
+      style: z.string().optional(),
+      generationPrompt: z.string().optional(),
+    })
+    .optional(),
+  identity: identitySchema.optional(),
+  memoryJournal: z.array(memoryJournalEntrySchema).optional(),
+  memoryConfig: z
+    .object({
+      maxEntries: z.number().optional(),
+      summarizeThreshold: z.number().optional(),
+      lastConsolidatedAt: dateParamSchema.optional(),
+    })
+    .optional(),
+  worldMemory: z.array(worldMemoryEntrySchema).optional(),
+  heartbeatConfig: z
+    .object({
+      enabled: z.boolean().optional(),
+      intervalMinutes: z.number().optional(),
+      lastHeartbeatAt: dateParamSchema.optional(),
+      heartbeatStartedAt: dateParamSchema.optional(),
+      mood: z
+        .object({
+          energy: z.number().min(0).max(100).optional(),
+          curiosity: z.number().min(0).max(100).optional(),
+          updatedAt: dateParamSchema.optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  pendingMessages: z
+    .array(
+      z.object({
+        id: z.string(),
+        fromAgentId: z.string(),
+        fromAgentName: z.string(),
+        text: z.string().max(100),
+        threadId: z.string(),
+        exchangeNumber: z.number(),
+        createdAt: dateParamSchema,
+      })
+    )
+    .optional(),
+  conversationCooldowns: z
+    .array(z.object({ otherAgentId: z.string(), cooldownUntil: dateParamSchema }))
+    .optional(),
+  tavernSessionId: z.string().optional(),
+  currentFloorId: z.string().optional(),
+  tavernStats: z
+    .object({
+      xp: z.number().optional(),
+      questsCompleted: z.number().optional(),
+      questsPosted: z.number().optional(),
+      reputation: z.number().optional(),
+      level: z.number().optional(),
+    })
+    .optional(),
+  // Spread into `AgentSchema` from `ShareableDocumentSchema`.
+  isGlobalRead: z.boolean().optional(),
+  isGlobalWrite: z.boolean().optional(),
+  groups: z.array(shareEntrySchema).optional(),
+  users: z.array(shareEntrySchema).optional(),
 });
 
 // Helper function to refresh avatar URL for a single agent
