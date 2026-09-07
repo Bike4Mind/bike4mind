@@ -108,10 +108,10 @@ export interface CreateFabFileAdapters {
   administeredOrgIds?: string[];
 }
 
-// Matches the `MaxFileSize` settings schema's own `defaultValue` (settings.ts) - this constant
-// only applies when the settings map has no entry at all, and it used to diverge from the
-// schema default (20 vs 30), so the same missing-row case answered differently depending on
-// which of the two MaxFileSize resolution paths a caller used (#2025).
+// Only reached when the `MaxFileSize` settings row exists but fails the schema's `z.coerce`
+// (e.g. a non-numeric stored value) - a missing row never gets here, since the schema's own
+// `.prefault(30)` already resolves `getSettingsValue` to 30 before this default arg is
+// consulted. Matches that prefault value so the two cases can't diverge if the schema changes.
 const DEFAULT_MAX_FILE_SIZE = 30;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
