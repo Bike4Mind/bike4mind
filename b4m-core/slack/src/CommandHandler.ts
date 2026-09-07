@@ -16,7 +16,7 @@ import { updateUserSlackSettings } from './handlers/notebook-manager';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import { notebookNew } from './tools/notebookNew';
 import { notebookStatus } from './tools/notebookStatus';
-import { IUserDocument, type IAdminSettingsRepository } from '@bike4mind/common';
+import { IUserDocument, type IAdminSettingsRepository, type IOrganizationDocument } from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
 
 const HISTORY_COUNT = 20;
@@ -469,7 +469,21 @@ export class CommandHandler {
     // the web upload path (#1685): this path writes the FabFile directly and never called that
     // service, so neither limit applied here before. Resolved once per message, not per
     // attachment - neither the admin setting nor the org lookup below can change mid-call.
-    const { adminSettingsRepository, Organization, FabFile } = getSlackDb();
+    const { adminSettingsRepository, FabFile } = getSlackDb();
+    // Typed once here, at the DI boundary, instead of `any`-cast at each use below: dropping the
+    // `.exec()` on the memoized lookup then becomes a compile error rather than a runtime
+    // "Query was already executed" throw on an org-affiliated user's second attachment (the
+    // exact bug the round-2 fix caught). `.select(...)` narrows the round-trip to the two fields
+    // checkStorageLimitForFile actually reads, instead of pulling the whole organization doc.
+    const { Organization } = getSlackDb() as unknown as {
+      Organization: {
+        findById(id: string): {
+          select(fields: string): {
+            lean(): { exec(): Promise<Pick<IOrganizationDocument, 'storageLimit' | 'currentStorageSize'> | null> };
+          };
+        };
+      };
+    };
     const { storage } = getSlackDeps();
     // Resolved outside the per-file try/catch below, so a lookup failure here is caught on its
     // own (mirroring resolveModelConfig's DB-failure fallback above) instead of propagating out
@@ -491,20 +505,20 @@ export class CommandHandler {
     }
     // Memoized rather than resolved eagerly: most messages carry no attachment that actually
     // needs the storage check, so this only pays for the lookup the first time it is used.
-    // any: same DI-boundary reason as adminSettingsRepository above - Organization is typed
-    // `unknown` at the DI boundary, so the memoized promise stays `any` rather than fighting
-    // checkStorageLimitForFile's real `Promise<IOrganizationDocument | null>` signature.
-    let organizationLookup: Promise<any> | undefined;
+    let organizationLookup:
+      Promise<Pick<IOrganizationDocument, 'storageLimit' | 'currentStorageSize'> | null> | undefined;
     const findOrganizationOnce = (id: string) => {
-      // `.exec()` is load-bearing: `Organization.findById(id)` returns an un-executed Mongoose
-      // Query, not a Promise - memoizing the Query itself and awaiting it more than once throws
-      // "Query was already executed" on the second await, which is exactly what happens for an
+      // `.exec()` is load-bearing: `.lean()` alone returns a thenable Mongoose Query, not a
+      // Promise - memoizing the Query itself and awaiting it more than once throws "Query was
+      // already executed" on the second await, which is exactly what happens for an
       // org-affiliated user with 2+ attachments in one message (checkStorageLimitForFile awaits
-      // this once per accepted attachment).
-      organizationLookup ??= (Organization as any).findById(id).exec();
+      // this once per accepted attachment). Typed on `Organization` above, so removing `.exec()`
+      // is now a compile error instead of a runtime throw.
+      organizationLookup ??= Organization.findById(id).select('storageLimit currentStorageSize').lean().exec();
       // TS can't narrow a closed-over variable past `??=` on its own - it is always assigned
-      // by this point.
-      return organizationLookup as Promise<any>;
+      // by this point. checkStorageLimitForFile only reads the two selected fields, so the lean
+      // projection satisfies it despite not being a full Mongoose document.
+      return organizationLookup as Promise<IOrganizationDocument | null>;
     };
     // `this.user`/the org doc's `currentStorageSize` is a snapshot taken once for this whole
     // call - it is only updated asynchronously later via the S3 `objectCreated` event, not as
@@ -580,7 +594,6 @@ export class CommandHandler {
           errors.push(error);
           continue;
         }
-        acceptedBytesThisMessage += fileBuffer.length;
 
         if (statusCallback) {
           await statusCallback(`Processing file: ${file.name}...`);
@@ -616,6 +629,11 @@ export class CommandHandler {
           // `channel` is '' on an event that carries none; the field is Mixed, so it round-trips.
           sourceMetadata: { channel: this.slackEvent.channel, messageTs: this.slackEvent.ts },
         });
+
+        // Only charged against quota once the file is actually persisted - a file that fails
+        // upload or create must not eat into the headroom the next attachment in this same
+        // message is checked against.
+        acceptedBytesThisMessage += fileBuffer.length;
 
         const fabFileIdStr = fabFile._id.toString();
         fabFileIds.push(fabFileIdStr);
