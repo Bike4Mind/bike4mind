@@ -1026,7 +1026,9 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
   });
 
   // The nastier variant: an in-progress sibling DOES render, so the ready batch was masked
-  // behind a plausible-looking "AI tagging..." state rather than showing nothing.
+  // behind a plausible-looking "AI tagging..." state rather than showing nothing. As in the
+  // test above, the sibling's id sorts before the winner's on purpose - rename it after 'b1'
+  // and a selector that ranked nothing would pass here on the id tie-break alone.
   it('does not let an in-progress sibling mask the batch awaiting review', async () => {
     useActiveDataLakeBatches.mockReturnValue({
       data: [batch({ id: 'analyzing', taxonomyStatus: 'analyzing' }), batch({ id: 'b1', taxonomyStatus: 'ready' })],
