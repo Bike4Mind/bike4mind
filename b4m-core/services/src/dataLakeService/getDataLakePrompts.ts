@@ -113,15 +113,17 @@ function isTrustedForInjection(
  * that legitimately wants every trusted lake's prompt regardless of retrieval; injection sites must
  * always pass it, or they reintroduce the org-wide over-injection this scope exists to close.
  *
- * PRE-AUTHORIZED LAKES (manager-but-not-member admission): `options.preauthorizedLakeIds` names DB
- * lake ids a manager was admitted to at session-create time (canManageLake, never re-derived here -
- * see pages/api/sessions/create.ts). Such a lake is unioned into the DB candidate query below (it
- * would otherwise never match `findActiveByUserTagsAndEntitlements`'s tag/entitlement/org predicate
- * at all) and short-circuits `isTrustedForInjection` in the in-memory filter - but `restrictTags`
- * stays an UNCONDITIONAL separate conjunct, so a pre-authorized lake still only contributes when the
- * turn actually retrieved it. Deliberately DB-lake-only: the registry/fallback-lake candidate
- * gathering and its own trust check below are retrieval-only and must never be pierced here - a
- * fallback lake's prompt keeps requiring its ordinary org-trust arm regardless of pre-authorization.
+ * PRE-AUTHORIZED LAKES (manager-but-not-member admission): `options.preauthorizedLakeIds` names DB lake ids a
+ * manager was admitted to at session-create time (canManageLake - see pages/api/sessions/create.ts) and
+ * RE-DERIVED here per turn via filterStillManagedLakes, so revoking someone's manage rights revokes the
+ * sessions they already created; the session's list is a record of what was admitted, never the authority for
+ * it. Such a lake is unioned into the DB candidate query below (it would otherwise never match
+ * `findActiveByUserTagsAndEntitlements`'s tag/entitlement/org predicate at all) and short-circuits
+ * `isTrustedForInjection` in the in-memory filter - but `restrictTags` stays an UNCONDITIONAL separate
+ * conjunct, so a pre-authorized lake still only contributes when the turn actually retrieved it. Deliberately
+ * DB-lake-only: the registry/fallback-lake candidate gathering and its own trust check below are
+ * retrieval-only and must never be pierced here - a fallback lake's prompt keeps requiring its ordinary
+ * org-trust arm regardless of pre-authorization.
  */
 export async function getAccessibleDataLakePrompts(
   // The re-check slice is intersected here rather than added to DataLakeAccessContext because only
