@@ -662,6 +662,21 @@ export function deriveLakeMemoryState(input: {
  */
 export type LakeMemoryHealth = {
   state: LakeMemoryState;
+  /**
+   * Whether a run holds the extraction lease RIGHT NOW - the strict half of `state === 'building'`,
+   * which is also true for a parked continuation cursor.
+   *
+   * Needed because those two halves want opposite affordances and `state` alone cannot separate them.
+   * A held lease means "wait, something is working". A parked cursor with no lease means the chain
+   * ended without finishing - the slice ceiling was hit, the platform or lake flag went off mid-chain,
+   * or a run died - and the only way forward is for someone to build again. Without this, every one of
+   * those reads as `building` forever, and a UI that hides its build control while building offers no
+   * way out of a state nothing will leave on its own.
+   *
+   * A boolean, never the lease timestamp: `redactLakeForActor` withholds `lakeMemoryExtractionAt` from
+   * readers on purpose, and this keeps the derived signal on the same footing as `building` itself.
+   */
+  running: boolean;
   /** Newest surviving ledger event's timestamp for this lake's principal, or null if none exists. */
   lastBuiltAt: Date | null;
   /**

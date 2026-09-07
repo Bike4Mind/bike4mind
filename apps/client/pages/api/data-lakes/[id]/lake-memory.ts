@@ -74,6 +74,14 @@ const handler = baseApi()
       throw new ConflictError('A lake memory build is already running for this lake.');
     }
 
+    // Resolved BEFORE the cap is consumed: a missing queue URL is a deployment misconfiguration, so it
+    // throws on every attempt - and consuming a cap slot first would burn the lake's whole daily
+    // allowance on a fault that never enqueued a thing, leaving a 429 to explain a 500. Order alone
+    // fixes the deterministic case; a transient SQS failure below can still cost a slot, which is
+    // acceptable because it clears on its own and the counter is a spend ceiling, not an entitlement.
+    const queueUrl = getSourceQueueUrl('lakeMemoryQueue');
+    if (!queueUrl) throw new Error('Lake memory queue URL not found');
+
     // Same bucket the automatic per-batch trigger increments (`enqueueLakeMemoryExtractionIfWanted`)
     // - a manual click and a burst of batch finalizes draw from ONE cap, not two, so this door is not
     // a way around the ceiling that exists to bound LLM spend.
@@ -92,8 +100,6 @@ const handler = baseApi()
     // confirmed no lease is held, so nothing is concurrently reading or writing this cursor.
     await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
 
-    const queueUrl = getSourceQueueUrl('lakeMemoryQueue');
-    if (!queueUrl) throw new Error('Lake memory queue URL not found');
     await sendToQueue(queueUrl, {
       // No real batch backs a manual trigger; batchId is carried through only for log correlation
       // (extractLakeMemory.ts never reads it back), so a synthetic, self-describing id is enough.

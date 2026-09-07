@@ -111,6 +111,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // derived state leaks only a boolean, never the raw timestamp this field withholds.
   lakeMemoryExtractionAt: 'withheld',
   lakeMemoryCursor: 'withheld',
+  // Purge fence: same class of internal bookkeeping, and it would tell a reader when a manager wiped
+  // what the lake had learned - a management action, not a property of the corpus they can search.
+  lakeMemoryPurgedAt: 'withheld',
   // Withheld: the report carries EXCERPTS of the lake's documents, and a reader who can see the lake
   // is not necessarily entitled to read every member's prose. It is also an editorial-quality signal
   // for whoever curates the lake, not information a consumer of it acts on.

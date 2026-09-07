@@ -28,6 +28,9 @@ vi.mock('@bike4mind/database', () => ({
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
     releaseLakeMemoryExtraction: (...a: unknown[]) => releaseLakeMemoryExtractionMock(...a),
     setLakeMemoryCursor: (...a: unknown[]) => setLakeMemoryCursorMock(...a),
+    // Never-purged, never-deleted: the purge fence is inert for these tests, which are about the
+    // clock. Its own behaviour lives in extractLakeMemoryPurgeFence.test.ts.
+    getLakeMemoryFence: async () => ({ exists: true, purgedAt: null }),
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
   fabFileRepository: {

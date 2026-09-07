@@ -91,6 +91,10 @@ const CHUNK_PAGE_LIMIT = 1_000;
  *
  * Best-effort throughout: a doc that will not read or extract simply contributes no beliefs. Embeddings
  * are best-effort too - a vectorless write stays lexically recallable and can be re-embedded later.
+ *
+ * Interruptible by an erase: the run re-reads the lake's purge fence (IDataLake.lakeMemoryPurgedAt)
+ * at every document boundary and stops without recording a continuation, so a purge issued while a
+ * build is in flight is not undone by the rest of that build.
  */
 export async function extractLakeMemoryForBatch(
   params: {
@@ -168,6 +172,23 @@ export async function extractLakeMemoryForBatch(
     const claimedLake = await dataLakeRepository.findById(lake.id).catch(() => null);
     const cursor = (claimedLake ?? lake).lakeMemoryCursor ?? null;
 
+    // Purge fence (see IDataLake.lakeMemoryPurgedAt). Snapshot it from the same post-claim read as the
+    // cursor: everything this run writes is conditional on the lake not having been erased since.
+    const fenceAt = (claimedLake ?? lake).lakeMemoryPurgedAt ?? null;
+    // Trips on a moved stamp (an explicit erase) or on the lake document disappearing (the deletion
+    // sweep shreds the profile and then deletes the record). A failed READ is treated as unmoved,
+    // deliberately: a transient DB blip must not abort a legitimate extraction, and the next document
+    // re-reads it anyway - which is why the failure path returns the snapshot rather than `null`,
+    // since `null` would read as a fence that had been cleared.
+    const fenceMoved = async () => {
+      const fence = await dataLakeRepository
+        .getLakeMemoryFence(lake.id)
+        .catch(() => ({ exists: true, purgedAt: fenceAt }));
+      if (!fence.exists) return true;
+      return (fence.purgedAt?.getTime() ?? null) !== (fenceAt?.getTime() ?? null);
+    };
+    let purged = false;
+
     // One bounded, projected, keyset-paged read of the slice this run will work on. LIVE-only because a
     // tombstone reaching the loop below would consume a cap slot (its lifecycle sibling
     // `findIdsByDataLakeTag` reports tombstones on purpose), and the cap has to bound real work.
@@ -211,6 +232,21 @@ export async function extractLakeMemoryForBatch(
           `[lakeMemory] lake ${datalakeTag} ran out of time after ${docsAttempted}/${docs.length} docs; ` +
             `${docs.length - docsAttempted} not extracted this run. Beliefs already written are kept; stopping ` +
             `here avoids a redelivery re-billing the whole lake, and a continuation run covers the rest.`
+        );
+        break;
+      }
+      // An explicit erase that lands mid-run has to actually stick. Re-read the fence per document -
+      // one projected field, negligible next to a document's LLM call - and stop the moment it moves,
+      // both so no fact the user just erased is re-appended and so the bookkeeping below leaves the
+      // cursor the purge cleared alone. Checked at a document boundary, so at most the facts of the
+      // one document already in flight when the purge landed can survive it; the next build discards
+      // them anyway, since a purge destroys the key they were written under.
+      if (await fenceMoved()) {
+        purged = true;
+        logger.warn(
+          `[lakeMemory] lake ${datalakeTag}: memory was purged (or the lake deleted) after ` +
+            `${docsAttempted}/${docs.length} docs; stopping and recording no continuation, so the next build ` +
+            `starts from a clean slate`
         );
         break;
       }
@@ -264,7 +300,22 @@ export async function extractLakeMemoryForBatch(
     // at each of them.
     const atLeastUncovered = unattemptedInSlice + (moreBeyondThisSlice ? 1 : 0);
     let hasMore = false;
-    if (docsAttempted > 0 && hasUncovered && lastAttemptedId) {
+    // One last fence read before anything durable is written. A purge landing in the window between
+    // the final per-document check and the cursor write below would otherwise have its cursor clear
+    // immediately undone, and the next build would resume mid-lake - skipping every document the
+    // purged scan had already passed, which is the failure the fence exists to prevent.
+    if (!purged && (await fenceMoved())) {
+      purged = true;
+      logger.warn(
+        `[lakeMemory] lake ${datalakeTag}: memory was purged (or the lake deleted) as this run finished; ` +
+          `recording no continuation so the next build starts from a clean slate`
+      );
+    }
+    if (purged) {
+      // Nothing durable: the purge already cleared the cursor as part of raising the fence, and
+      // `hasMore` stays false so the handler does not chain a continuation of a scan that no longer
+      // has a profile to continue into.
+    } else if (docsAttempted > 0 && hasUncovered && lastAttemptedId) {
       try {
         // Resume from what was ATTEMPTED, not the cap: persist the last attempted id as the cursor.
         await dataLakeRepository.setLakeMemoryCursor(lake.id, lastAttemptedId);
@@ -318,6 +369,9 @@ export async function extractLakeMemoryForBatch(
       docsAttempted,
       docsAvailableThisRun: docs.length,
       hasMore,
+      // A run that stopped on the fence looks identical to a completed one in every other field, so
+      // without this a purge mid-build is invisible in the logs.
+      purgedMidRun: purged,
       elapsedMs: Date.now() - startedAt,
     });
     return { docsProcessed, factsWritten, hasMore };

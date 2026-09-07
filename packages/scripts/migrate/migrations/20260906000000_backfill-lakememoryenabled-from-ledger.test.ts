@@ -50,20 +50,27 @@ describe('backfill-lakememoryenabled-from-ledger', () => {
       expect(output()).toContain('no surviving lake ledger chains found, nothing to do');
     });
 
-    it('does not re-enable a lake whose profile was purged (all ledger events shredded)', async () => {
-      // distinctSurvivingPrincipalIds itself excludes fully-shredded chains (shredded: {$ne: true}),
-      // so a purged lake's tag never reaches the $in list, and updateMany cannot touch it.
-      mockDistinctSurvivingPrincipalIds.mockResolvedValue(['datalake:has-facts']);
-      mockUpdateMany.mockResolvedValue({ modifiedCount: 1 });
+    it('targets exactly the tags the ledger reported, adding none of its own', async () => {
+      // What this file CAN check: the migration's population is whatever
+      // `distinctSurvivingPrincipalIds` returned, unwidened. It cannot check that a purged lake is
+      // absent from that list, because the repository is mocked here - the `shredded: { $ne: true }`
+      // guard that decides it lives in MemoryLedgerEventModel and is covered against a real Mongo in
+      // its own tests. A version of this test that mocked a purged tag out of the return value and
+      // then asserted its absence would have been asserting the mock.
+      mockDistinctSurvivingPrincipalIds.mockResolvedValue(['datalake:has-facts', 'datalake:also']);
+      mockUpdateMany.mockResolvedValue({ modifiedCount: 2 });
 
       await migration.up();
 
       const [filter] = mockUpdateMany.mock.calls[0];
-      expect((filter.datalakeTag as { $in: string[] }).$in).toEqual(['datalake:has-facts']);
-      expect((filter.datalakeTag as { $in: string[] }).$in).not.toContain('datalake:purged');
+      expect(filter.datalakeTag).toEqual({ $in: ['datalake:has-facts', 'datalake:also'] });
+      expect(Object.keys(filter).sort()).toEqual(['datalakeTag', 'lakeMemoryEnabled']);
     });
 
-    it('running up twice is idempotent: the second run finds nothing left to flip', async () => {
+    it('carries the already-enabled guard on every run, so a re-run flips nothing', async () => {
+      // The guard IS the idempotency: `lakeMemoryEnabled: { $ne: true }` is what makes the second
+      // run's write a no-op. Asserted on both calls, because a call count and a `modifiedCount: 0`
+      // the mock was told to return prove nothing about the filter that produced it.
       mockDistinctSurvivingPrincipalIds.mockResolvedValue(['datalake:acme']);
       mockUpdateMany.mockResolvedValueOnce({ modifiedCount: 1 });
       await migration.up();
@@ -72,6 +79,10 @@ describe('backfill-lakememoryenabled-from-ledger', () => {
       await migration.up();
 
       expect(mockUpdateMany).toHaveBeenCalledTimes(2);
+      for (const [filter, update] of mockUpdateMany.mock.calls) {
+        expect(filter.lakeMemoryEnabled).toEqual({ $ne: true });
+        expect(update).toEqual({ $set: { lakeMemoryEnabled: true } });
+      }
       expect(output()).toContain('1 lake(s) with a surviving profile; 0 enabled');
     });
   });

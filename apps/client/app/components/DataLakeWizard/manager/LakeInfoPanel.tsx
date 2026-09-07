@@ -128,12 +128,20 @@ export function LakeInfoPanel({
   const purgeLakeMemory = usePurgeLakeMemory(lake.id);
   const [purgeMemoryConfirmOpen, setPurgeMemoryConfirmOpen] = useState(false);
   const lakeMemoryBuilding = lakeMemory?.state === 'building';
-  const canBuildLakeMemory = lakeMemory?.state === 'never-built' || lakeMemory?.state === 'stale';
+  // `building` covers two situations, and only one of them is waiting for a run: a held lease means a
+  // run is working, while `building` with no lease is a chain that ENDED unfinished (slice ceiling,
+  // a flag flipped mid-chain, a dead run) and its parked cursor. Offering the build control in the
+  // second case is the only way out of it - gating on `building` alone made the state a dead end,
+  // since nothing clears a parked cursor on its own.
+  const lakeMemoryStalledMidBuild = lakeMemoryBuilding && lakeMemory?.running === false;
+  const canBuildLakeMemory =
+    lakeMemory?.state === 'never-built' || lakeMemory?.state === 'stale' || lakeMemoryStalledMidBuild;
   const hasLakeMemoryProfile = (lakeMemory?.factCount ?? 0) > 0;
   const LAKE_MEMORY_STATE_LABEL: Record<string, string> = {
     'platform-off': 'Lake memory is off platform-wide',
     'lake-off': 'Lake memory is off for this lake',
     building: "Building this lake's memory profile...",
+    'building-stalled': 'Build stopped before finishing - build again to pick it up',
     'never-built': 'No memory profile yet',
     stale: 'Memory profile is out of date',
     current: 'Memory profile is up to date',
@@ -446,7 +454,13 @@ export function LakeInfoPanel({
               retrievability badge above - a different axis of "can this lake answer well" (extracted
               facts vs raw passages). Hidden entirely while off (no chip for a state nobody can act on). */}
           {lake.canManage && lakeMemory && lakeMemory.state !== 'lake-off' && (
-            <Tooltip title={LAKE_MEMORY_STATE_LABEL[lakeMemory.state] ?? lakeMemory.state} size="sm">
+            <Tooltip
+              title={
+                LAKE_MEMORY_STATE_LABEL[lakeMemoryStalledMidBuild ? 'building-stalled' : lakeMemory.state] ??
+                lakeMemory.state
+              }
+              size="sm"
+            >
               <Chip
                 size="sm"
                 variant="soft"
@@ -475,9 +489,11 @@ export function LakeInfoPanel({
           {lake.canManage && canBuildLakeMemory && (
             <Tooltip
               title={
-                lakeMemory?.state === 'stale'
-                  ? "Re-extract this lake's memory profile from its current documents."
-                  : "Extract a reusable fact profile from this lake's documents."
+                lakeMemoryStalledMidBuild
+                  ? 'The last build stopped before it finished. Build again to re-scan the lake.'
+                  : lakeMemory?.state === 'stale'
+                    ? "Re-extract this lake's memory profile from its current documents."
+                    : "Extract a reusable fact profile from this lake's documents."
               }
               size="sm"
             >
@@ -495,7 +511,7 @@ export function LakeInfoPanel({
               </Button>
             </Tooltip>
           )}
-          {lake.canManage && lakeMemoryBuilding && (
+          {lake.canManage && lakeMemory?.running === true && (
             <Chip
               size="sm"
               variant="soft"

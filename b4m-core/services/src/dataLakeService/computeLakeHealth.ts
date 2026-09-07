@@ -235,7 +235,10 @@ export async function computeLakeMemoryHealth(
   const now = new Date();
   const platformEnabled = (await db.adminSettings.getSettingsValue('EnableLakeMemory').catch(() => undefined)) === true;
   const lakeEnabled = lake.lakeMemoryEnabled === true;
-  const building = isLeaseHeld(lake.lakeMemoryExtractionAt, now) || lake.lakeMemoryCursor != null;
+  // Split deliberately: `running` is a live lease, `building` widens that to a parked continuation
+  // cursor. Only the first means someone should wait (see LakeMemoryHealth.running).
+  const running = isLeaseHeld(lake.lakeMemoryExtractionAt, now);
+  const building = running || lake.lakeMemoryCursor != null;
 
   const coverage =
     lake.datalakeTag && lake.createdByUserId
@@ -248,6 +251,7 @@ export async function computeLakeMemoryHealth(
 
   return {
     state: deriveLakeMemoryState({ platformEnabled, lakeEnabled, building, everBuilt, stale }),
+    running,
     lastBuiltAt: coverage.lastBuiltAt ? new Date(coverage.lastBuiltAt) : null,
     factCount: coverage.factCount,
     sourceDocumentCount: coverage.sourceDocumentCount,

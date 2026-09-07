@@ -35,7 +35,17 @@ const buildHookSpy = vi.fn();
 const purgeHookSpy = vi.fn();
 
 type LakeMemoryHealthMock =
-  | { state: string; factCount: number; sourceDocumentCount: number; lastBuiltAt: string | null; memberCount: number }
+  | {
+      state: string;
+      // The strict half of `state === 'building'`: a live extraction lease. `building` also covers a
+      // PARKED continuation cursor, which nothing will move on its own - so only `running` may drive
+      // "wait", and the two cases want opposite affordances (see the pair of tests below).
+      running?: boolean;
+      factCount: number;
+      sourceDocumentCount: number;
+      lastBuiltAt: string | null;
+      memberCount: number;
+    }
   | undefined;
 const useGetLakeMemoryHealth = vi.fn<[], { data: LakeMemoryHealthMock }>(() => ({ data: undefined }));
 
@@ -144,14 +154,43 @@ describe('LakeInfoPanel - lake memory build/rebuild', () => {
     expect(screen.getByTestId('datalake-build-memory-btn-lake-1')).toHaveTextContent('Rebuild memory');
   });
 
-  it('hides the build button and shows the "Building..." chip while building', () => {
+  it('hides the build button and shows the "Building..." chip while a run actually holds the lease', () => {
     useGetLakeMemoryHealth.mockReturnValue({
-      data: { state: 'building', factCount: 0, sourceDocumentCount: 0, lastBuiltAt: null, memberCount: 0 },
+      data: {
+        state: 'building',
+        running: true,
+        factCount: 0,
+        sourceDocumentCount: 0,
+        lastBuiltAt: null,
+        memberCount: 0,
+      },
     });
     renderPanel();
 
     expect(screen.queryByTestId('datalake-build-memory-btn-lake-1')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-memory-building-chip-lake-1')).toHaveTextContent('Building memory');
+  });
+
+  it('offers a build again for a run that stopped part-way, instead of "Building..." forever', () => {
+    // `building` with NO live lease means a continuation cursor was parked and its chain is gone -
+    // the platform flag went off mid-chain, the lake opted out, or the slice ceiling was hit. Nothing
+    // will move that on its own, so showing "Building..." is a dead end the manager cannot leave.
+    // This is the pairing the `running` split exists for, and it is why the chip may not read
+    // `state === 'building'`.
+    useGetLakeMemoryHealth.mockReturnValue({
+      data: {
+        state: 'building',
+        running: false,
+        factCount: 0,
+        sourceDocumentCount: 0,
+        lastBuiltAt: null,
+        memberCount: 0,
+      },
+    });
+    renderPanel();
+
+    expect(screen.queryByTestId('datalake-memory-building-chip-lake-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-build-memory-btn-lake-1')).toHaveTextContent('Build memory');
   });
 
   it('offers no build button for a "current" (up to date) lake, only the state chip', () => {

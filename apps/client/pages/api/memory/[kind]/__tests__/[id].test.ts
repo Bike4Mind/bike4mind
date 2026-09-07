@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   shredBelief: vi.fn(),
   purgeUserMemory: vi.fn(),
   setLakeMemoryCursor: vi.fn(),
+  stampLakeMemoryPurge: vi.fn(),
   logAuditEvent: vi.fn(),
 }));
 
@@ -30,7 +31,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
-  dataLakeRepository: { setLakeMemoryCursor: h.setLakeMemoryCursor },
+  dataLakeRepository: {
+    setLakeMemoryCursor: h.setLakeMemoryCursor,
+    stampLakeMemoryPurge: h.stampLakeMemoryPurge,
+  },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -104,6 +108,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.toAccessContext.mockResolvedValue({ userId: 'caller-1', isAdmin: false });
   h.setLakeMemoryCursor.mockResolvedValue(undefined);
+  h.stampLakeMemoryPurge.mockResolvedValue(undefined);
   h.logAuditEvent.mockResolvedValue(undefined);
 });
 
@@ -186,9 +191,13 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
       { kind: 'lake', id: 'tag-abc' },
       'creator-1'
     );
-    // Clears any in-flight/interrupted continuation cursor so a later rebuild scans from the
-    // start rather than silently resuming mid-lake.
-    expect(h.setLakeMemoryCursor).toHaveBeenCalledWith('lake-1', null);
+    // Raises the purge FENCE, which both clears any interrupted continuation cursor and stops a build
+    // that is running right now (the chain re-reads the stamp per document). Stamped AFTER the shred,
+    // so a run that stops on the fence never does so while the old profile is still readable.
+    expect(h.stampLakeMemoryPurge).toHaveBeenCalledWith('lake-1', expect.any(Date));
+    expect(h.stampLakeMemoryPurge.mock.invocationCallOrder[0]).toBeGreaterThan(
+      h.shredPrincipalMemory.mock.invocationCallOrder[0]
+    );
     expect(h.logAuditEvent).toHaveBeenCalledTimes(1);
     expect(h.logAuditEvent.mock.calls[0][0]).toEqual(
       expect.objectContaining({
@@ -220,7 +229,7 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
     );
     expect(h.shredPrincipalMemory).not.toHaveBeenCalled();
     // A single-subject shred is NOT a whole-lake purge: no cursor reset, no purge audit event.
-    expect(h.setLakeMemoryCursor).not.toHaveBeenCalled();
+    expect(h.stampLakeMemoryPurge).not.toHaveBeenCalled();
     expect(h.logAuditEvent).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith({ ok: true, shredded: 1, deleted: 1 });
@@ -254,6 +263,21 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
       { userId: 'admin-1', isAdmin: true }
     );
     expect(status).toHaveBeenCalledWith(200);
+  });
+
+  it('returns 404 for a lake with no datalakeTag, before any shred runs', async () => {
+    // The principal id IS the datalakeTag, and mongoose drops an `undefined` value out of a query
+    // filter instead of matching on it - so an unguarded tag would turn this keyed crypto-shred into
+    // `{ principalKind: 'lake' }` with no id, destroying every lake's key in the collection, other
+    // tenants' included. extractLakeMemory and recallLakeMemoryForSession guard the same pair.
+    h.assertLakeAccess.mockResolvedValue({ ...LAKE, datalakeTag: undefined });
+    const { res, status } = makeRes();
+
+    await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'creator-1' } }), res);
+
+    expect(status).toHaveBeenCalledWith(404);
+    expect(h.shredPrincipalMemory).not.toHaveBeenCalled();
+    expect(h.canManageLake).not.toHaveBeenCalled();
   });
 
   it('returns 404 for a fallback lake before any manage check runs', async () => {

@@ -58,7 +58,13 @@ async function resolveLakeMemoryTarget(
   const lake = await dataLakeService.assertLakeAccess(id, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
-  if (!lake.createdByUserId) return null;
+  // BOTH halves of the ledger key must be present, and the tag half is not optional paranoia: the
+  // principal id below IS `datalakeTag`, and mongoose strips an `undefined` value out of a query
+  // filter rather than matching on it. So a tag-less lake would turn the DELETE path's keyed shred
+  // into an UNKEYED one - `{ principalKind: 'lake' }` with no id, i.e. every lake's key in the
+  // collection, including other tenants'. `extractLakeMemory` and `recallLakeMemoryForSession` guard
+  // the same pair for the same reason; a lake with no tag simply has no keyed ledger to serve.
+  if (!lake.createdByUserId || !lake.datalakeTag) return null;
   return { principal: { kind: 'lake', id: lake.datalakeTag }, ownerUserId: lake.createdByUserId, dataLakeId: lake.id };
 }
 
@@ -195,10 +201,15 @@ handler.delete(async (req, res) => {
       target.ownerUserId
     );
 
-    // Clears a continuation watermark left over from an in-flight (or interrupted) build - without
-    // this a purge followed by a fresh build could resume mid-lake instead of starting the scan
-    // over, silently skipping the documents the old cursor had already passed.
-    await dataLakeRepository.setLakeMemoryCursor(target.dataLakeId, null);
+    // Raise the purge FENCE, which is what makes the shred above durable against a build that is
+    // running right now. A concurrent extraction re-reads this stamp per document and stops when it
+    // moves; the same write clears the continuation watermark, so the next build re-scans the lake
+    // from the top instead of resuming past documents the purged scan had already passed.
+    //
+    // Fence AFTER the shred, never before: a run that stops on the fence while the old facts are
+    // still readable is merely a build cut short, whereas shredding after the fence rose would let a
+    // window exist in which the run has stopped but the profile is still live.
+    await dataLakeRepository.stampLakeMemoryPurge(target.dataLakeId, new Date());
 
     await logAuditEvent(
       {

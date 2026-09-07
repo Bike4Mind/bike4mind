@@ -835,6 +835,69 @@ describe('DataLakeRepository - lake-memory extraction lease + continuation curso
     await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
     expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
   });
+
+  describe('purge fence', () => {
+    it('stamps the fence and clears the continuation cursor in one write', async () => {
+      // Both halves matter: the stamp stops an in-flight run, and the cleared cursor is what makes
+      // the NEXT build start from the beginning instead of resuming past documents whose facts the
+      // purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+
+      const at = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, at);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(at.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('moves the fence forward on a later purge', async () => {
+      const lake = await makeLake();
+      const first = new Date('2026-03-01T00:00:00Z');
+      const second = new Date('2026-03-02T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, first);
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, second);
+
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryPurgedAt?.getTime()).toBe(second.getTime());
+    });
+
+    it('never moves the fence backwards, so a late write cannot undo a newer purge', async () => {
+      // The write is `$max`, not `$set`. Two purges racing on one lake would otherwise let the later
+      // WRITE land the earlier TIMESTAMP, and the field is the honest answer to "when was this last
+      // purged". The cursor clear is unconditional either way - it is not part of the comparison.
+      const lake = await makeLake();
+      const newer = new Date('2026-03-02T00:00:00Z');
+      const older = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, newer);
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-7');
+
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, older);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(newer.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('reads back a never-purged lake as existing with no stamp', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: true, purgedAt: null });
+    });
+
+    it('reports a deleted lake as absent, which the extractor treats as a purge', async () => {
+      // A vanished document and a never-purged one both have no stamp, and they mean opposite things
+      // to a running extraction: the deletion sweep shreds the profile before it deletes the record,
+      // so `exists: false` has to stop the run rather than read as "nothing has happened".
+      const lake = await makeLake();
+      await dataLakeRepository.delete(lake.id);
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: false, purgedAt: null });
+    });
+
+    it('reports a fence read for an id that never existed as absent, not a throw', async () => {
+      const gone = new mongoose.Types.ObjectId().toString();
+      expect(await dataLakeRepository.getLakeMemoryFence(gone)).toEqual({ exists: false, purgedAt: null });
+    });
+  });
 });
 
 describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {

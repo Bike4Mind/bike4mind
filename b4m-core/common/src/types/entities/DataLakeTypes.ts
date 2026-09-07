@@ -339,6 +339,21 @@ export interface IDataLake {
    * re-asserts existing facts and keeps them hot). Absent/null = start from the beginning.
    */
   lakeMemoryCursor?: string | null;
+  /**
+   * Purge FENCE for the lake-memory producer - server-managed, never client input. Stamped by an
+   * explicit memory purge, and monotonic (a later purge always moves it forward).
+   *
+   * An extraction run snapshots this at claim time and re-reads it before each document; a value that
+   * has MOVED means a purge landed mid-run, so the run stops writing and does not persist a
+   * continuation cursor. Without the fence a purge is not durable: the in-flight run keeps appending
+   * facts under a fresh key after the shred (so "erased" facts reappear), and its end-of-slice
+   * bookkeeping rewrites the very cursor the purge cleared, leaving the next build to resume mid-lake
+   * and skip every document the purged scan had already passed.
+   *
+   * Absent/null = never purged. It is NOT a completion stamp and says nothing about what the lake
+   * currently knows - the ledger is the only source for that.
+   */
+  lakeMemoryPurgedAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}

@@ -1967,7 +1967,7 @@ export const settingsMap = {
     name: 'Data Lakes: Lake memory profile (extraction)',
     defaultValue: false,
     description:
-      "Server-side gate for the lake memory producer - LLM extraction of a data lake's documents into a durable memory profile on ingest. Off by default (measurement rollout); the consumer that injects the profile is inert until this is on and a lake has been extracted.",
+      "Master gate for lake memory, on all three sides: LLM extraction of a data lake's documents into a durable memory profile, recall of that profile into chats grounded in the lake, and whether the per-lake opt-in is offered at all. Off by default (measurement rollout). Turning it off stops extraction and recall immediately but is NOT destructive - each lake keeps its own opt-in and its built profile, so flipping this back on resumes where it left off. Erasing a profile is a separate, explicit per-lake action.",
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 91,

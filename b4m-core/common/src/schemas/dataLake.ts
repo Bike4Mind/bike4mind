@@ -110,8 +110,9 @@ export const UpdateDataLakeRequestInput = z.object({
     .optional(),
   // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled).
   auditQueryTextEnabled: z.boolean().optional(),
-  // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Refused server-side while the
-  // platform `EnableLakeMemory` setting is off - see updateDataLake.
+  // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Recorded whatever the platform
+  // `EnableLakeMemory` setting says: that flag gates behaviour at each consumer, not the stored
+  // preference - see updateDataLake.
   lakeMemoryEnabled: z.boolean().optional(),
   // The chunk passage target (TOKENS) this lake REQUIRES of its member files (#1662). A
   // CONSTRAINT the chunk handler checks, never an override of the file-owner-altitude policy: a
