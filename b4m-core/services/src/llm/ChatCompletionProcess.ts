@@ -157,6 +157,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import {
@@ -2930,6 +2931,11 @@ export class ChatCompletionProcess {
             : [],
         urls: urlMessages,
         attachedFiles: fabMessages,
+        // Caller-supplied systemPrompt, reachable from both POST /api/chat and /api/ai/llm.
+        // Appended last so it sits at the tail of the stack - after even the caller's own
+        // attached files/URLs above. Note this is assembly order only: in the retention table
+        // it outranks lake grounding, so it defers by prose, not by budget priority.
+        callerPrompt: renderCallerPromptMessages(parsedBody.systemPrompt),
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
       // Close the deployment-wide shareable prefix with a cache breakpoint. Applied after the
