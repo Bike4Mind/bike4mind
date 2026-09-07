@@ -24,9 +24,9 @@ const NO_LAKES: ResolvedLakeAccessSet = {
 export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   if (context.suppressLakeArms) return NO_LAKES;
   const resolved = await getDynamicDataLakeAccess(context);
-  // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds - the field
-  // is only populated after vetPreauthorizedLakeIds matches the session owner to the request's
-  // authenticated principal, and is left unset where there is no principal to vet against.
+  // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds:
+  // vetPreauthorizedLakeIds blanks the field unless the session's own userId equals the acting
+  // user, and the identity-substituting worker paths never reach that call at all.
   const unioned = await unionPreauthorizedLakeAccess(
     resolved,
     context.sessionPreauthorizedLakeIds,
