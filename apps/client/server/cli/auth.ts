@@ -126,6 +126,14 @@ export interface VerifyApiKeyOptions {
   requiredScopes?: ApiKeyScope[];
 }
 
+/**
+ * This file is the SECOND place API-key scopes are decided; the first is
+ * `server/middlewares/apiKeyScopeGate.ts`, which the baseApi chain uses. Requests
+ * arriving here (CLI, Fargate, WebSocket, embed) never traverse that gate, so
+ * CONFINED_SCOPES is not applied to them - safe only because none of these defaults
+ * name a confined scope. Adding one here, or widening this list, needs the
+ * confinement rule brought across too.
+ */
 const DEFAULT_COMPLETION_SCOPES: ApiKeyScope[] = [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT];
 
 /**
