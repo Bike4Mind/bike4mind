@@ -158,13 +158,22 @@ const SUPERLATIVE_SUBJECT =
 /**
  * `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms`.
  *
- * The unit is closed by a lookahead rather than `\b`, which could never match after `%` - the one
- * non-word member of the alternation. `99.9%.` needs a boundary between `%` and `.`, and there is
- * none, so the engine backtracked to no-unit and every percentage in the corpus was captured
- * unitless. Equivalent to `\b` for the word-shaped units: `1,200 gbps` still declines to read `gb`.
+ * Two boundaries, and they are not interchangeable - an earlier version used a single trailing
+ * `(?![a-z0-9])` for both and each half broke the other:
+ *
+ * - The VALUE must end on a digit. `[0-9][0-9,.]*` is greedy over `.`, so with nothing pushing it
+ *   back it reads the sentence-final period of `Total revenue is 1,200.` into the value. `1200.` and
+ *   `1200` then compare as different figures, and chunked prose puts numbers at the end of sentences
+ *   constantly.
+ * - The UNIT guard belongs INSIDE the alternation, so it applies only to the word-shaped members.
+ *   `1,200 gbps` still declines to read `gb`, while `50%off` - a routine PDF/OCR extraction artifact
+ *   - still yields `%`. A guard placed after the whole optional group instead applies to the
+ *   unit-ABSENT branch too, where it forces the engine to give the value back rather than accept no
+ *   unit; that is what silently captured every percentage in the corpus as unitless, since `%.` has
+ *   no `\b` between it and the period either.
  */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9][0-9,.]*)\s*(%|percent|ms|s|gb|mb|tb|x)?(?![a-z0-9])/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?![a-z0-9]))?/i;
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {

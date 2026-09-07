@@ -119,6 +119,29 @@ describe('metric units', () => {
     // `1,200 gbps` is not 1,200 GB, exactly as under the old trailing `\b`.
     expect(unitKinds([doc('a', 'Throughput is 1,200 gbps.'), doc('b', 'Throughput is 900 gbps.')])).toEqual([]);
   });
+
+  // A guard placed AFTER the whole optional unit group also applies to the unit-absent branch, where
+  // it makes `%` unreachable. Inside the alternation it guards only the word-shaped units, so a
+  // de-spaced `%` - a routine PDF/OCR extraction artifact - still carries its unit and the conflict
+  // survives the unit requirement.
+  it('captures `%` even when the next character is a letter', () => {
+    expect(
+      unitKinds([doc('a', 'Discount is 50%off list price.'), doc('b', 'Discount is 30% off list price.')])
+    ).toEqual(['metric-disagreement']);
+  });
+
+  // DEFAULT mode, which is what the whole-lake health scan runs: the value group is greedy over `.`,
+  // so without an anchor forcing it to end on a digit it swallows the sentence-final period and the
+  // same figure compares as `1200.` against `1200`. Chunked prose ends sentences on numbers
+  // constantly, so this is a systematic false positive rather than an edge case.
+  it.each([
+    ['Total revenue is 1,200.', 'Total revenue is 1,200 USD.'],
+    ['Monthly active users: 1,200.', 'Monthly active users: 1,200 in Q1.'],
+    ['Score is 7.', 'Score is 7 out of 10.'],
+    ['Version is 3.4.5.', 'Version is 3.4.5 today.'],
+  ])('does not read a sentence-final period as part of the value: %j', (a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
 });
 
 describe('relationship conflicts', () => {
