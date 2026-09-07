@@ -1,4 +1,5 @@
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { getFileExtension, getMimeTypeByExtension } from '@bike4mind/utils';
 import type { SlackEventData } from './SlackEvent';
 
 export type SlackAttachment = NonNullable<SlackEventData['files']>[number];
@@ -63,7 +64,18 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  if (!SUPPORTED_SLACK_FILE_MIME_TYPES.includes(file.mimetype)) {
+  // Gate on the extension's OWN mimetype, not `file.mimetype` - that field is whatever the
+  // Slack client reported, and Slack labels most plain-text files `text/plain` regardless of
+  // extension, so a `.sh`/`.srt`/`.yaml` file claiming `text/plain` used to sail through. The
+  // resolved value also decides the size cap below, so a claimed `image/png` on a non-image
+  // file no longer gets the looser cap either.
+  const ext = getFileExtension(file.name);
+  // Only assume plain text for a genuinely extension-less file (e.g. LICENSE, Dockerfile),
+  // matching fabFileService/create.ts's own fallback - otherwise those previously-accepted
+  // attachments would start being rejected outright, since an empty extension resolves no
+  // mimetype at all.
+  const resolvedMimeType = ext ? getMimeTypeByExtension(ext) : SupportedFabFileMimeTypes.TXT_PLAIN;
+  if (!resolvedMimeType || !SUPPORTED_SLACK_FILE_MIME_TYPES.includes(resolvedMimeType)) {
     return {
       ok: false,
       reason: 'unsupported_type',
@@ -71,7 +83,7 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  const maxSize = file.mimetype.startsWith('image/') ? SLACK_MAX_IMAGE_SIZE_BYTES : SLACK_MAX_FILE_SIZE_BYTES;
+  const maxSize = resolvedMimeType.startsWith('image/') ? SLACK_MAX_IMAGE_SIZE_BYTES : SLACK_MAX_FILE_SIZE_BYTES;
   if (file.size > maxSize) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
     const maxMB = (maxSize / (1024 * 1024)).toFixed(0);
