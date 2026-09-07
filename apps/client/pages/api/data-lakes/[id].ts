@@ -16,6 +16,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
 // call is wired with the settings repo + a logger, so a persisted reader grant that WOULD change
@@ -128,6 +129,12 @@ const handler = baseApi()
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         ...lakeConfigAuditDb,
+      },
+      // The SECOND archive door (the lifecycle route is the other) - it has to disable the lake's
+      // Drive connection too, or archiving through here leaves the hourly re-sync poll enqueueing
+      // ingest for a lake nobody can see. Must stay wired at both doors; see ports.ts.
+      disableDriveConnection: async ({ dataLakeId }) => {
+        await disableDriveConnectionForLake(dataLakeId);
       },
       logger: req.logger,
     });

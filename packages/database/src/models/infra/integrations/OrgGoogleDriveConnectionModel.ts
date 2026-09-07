@@ -153,7 +153,12 @@ class OrgGoogleDriveConnectionRepository
     return this.find({ organizationId });
   }
 
-  /** The enabled connection feeding a given lake in a given org, if any. */
+  /**
+   * The ENABLED connection feeding a given lake in a given org, if any. `enabled: false` is a real
+   * state now that archiving/soft-deleting a lake disables its connection, so a caller that must
+   * still reach the row - anything that revokes the grant, releases the folder claim, or re-enables
+   * - wants findByDataLakeIdAny plus its own org check instead of this one.
+   */
   async findByDataLakeId(
     targetDataLakeId: string,
     organizationId: string
