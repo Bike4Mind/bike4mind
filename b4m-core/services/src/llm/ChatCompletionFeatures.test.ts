@@ -1609,7 +1609,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
   const makeCtx = (
     files: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>,
     lakes?: Array<Record<string, unknown>>,
-    opts: { dataLakesThrows?: boolean } = {}
+    opts: {
+      dataLakesThrows?: boolean;
+      activeGrants?: Array<{ dataLakeId: string; principalType: string; principalId: string; role: string }>;
+    } = {}
   ) => {
     const chunksByFile = Object.fromEntries(
       files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.fileName}`, vector: [1, 0] }]])
@@ -1628,7 +1631,20 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
         ...(lakes !== undefined || opts.dataLakesThrows
-          ? { dataLakes: { findActiveByUserTags: vi.fn(), findActiveByUserTagsAndEntitlements: findLakes } }
+          ? {
+              dataLakes: {
+                findActiveByUserTags: vi.fn(),
+                findActiveByUserTagsAndEntitlements: findLakes,
+                // getAccessibleDataLakePrompts' pre-authorized branch is guarded on findById, so an
+                // adapter without it skips the manage re-check and admits nothing at all.
+                findById: vi.fn((id: string) => Promise.resolve((lakes ?? []).find(l => String(l.id) === id) ?? null)),
+              },
+            }
+          : {}),
+        // Wiring the grant reader is what lets the re-check trust a rung other than the creator's -
+        // see filterStillManagedLakes, which blanks the creator when this is absent.
+        ...(opts.activeGrants
+          ? { dataLakeAccessGrants: { listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants) } }
           : {}),
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
@@ -1753,7 +1769,12 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
   });
 
-  it('records preauthorizedLakeIdsUsed when the injected lake came from the pre-authorized set', async () => {
+  // The field measures MEMBERSHIP in the admitted set, not causation: a lake the caller could
+  // already reach is listed too. This case is the sharpest form of that - no grant reader is wired,
+  // so the per-turn re-check blanks the creator rung and admits NOTHING, yet the id is still
+  // recorded because the creator arm injected the prompt on its own. A reader who treats a non-empty
+  // value as proof the admission did work would be wrong here.
+  it('records preauthorizedLakeIdsUsed for an admitted lake the caller could already reach anyway', async () => {
     const quest = makeQuest();
     const feature = new KnowledgeRetrievalFeature(
       makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
@@ -1770,6 +1791,52 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       'anything'
     );
     expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toEqual(['lakeX']);
+  });
+
+  // The causation case the one above cannot show: the caller neither created the lake nor belongs
+  // to its org, so isTrustedForInjection is false and the ordinary arm injects nothing. Only the
+  // admission - re-derived here through a live curator grant - puts the prompt on the turn.
+  it('records preauthorizedLakeIdsUsed when ONLY the admission could have injected the prompt', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake({ createdByUserId: 'someone-else' })], {
+        activeGrants: [{ dataLakeId: 'lakeX', principalType: 'user', principalId: OWNER, role: 'curator' }],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+  });
+
+  // Same untrusted lake, same admission, but the curator grant is gone: the re-check refuses, the
+  // ordinary trust arm was never available, and nothing is injected. This is what pins the previous
+  // test to the admission rather than to some other arm firing incidentally.
+  it('injects nothing when the admitted lake is untrusted and the manage grant is gone', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake({ createdByUserId: 'someone-else' })], {
+        activeGrants: [],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
   });
 
   it('leaves preauthorizedLakeIdsUsed absent when the injected lake was not pre-authorized', async () => {
