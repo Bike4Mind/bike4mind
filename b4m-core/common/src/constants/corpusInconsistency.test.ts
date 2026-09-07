@@ -142,6 +142,28 @@ describe('metric units', () => {
   ])('does not read a sentence-final period as part of the value: %j', (a, b) => {
     expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
   });
+
+  // DEFAULT mode again. The unit-absent branch needs its own boundary, or the value ends mid-token:
+  // the glued suffix is dropped and the same quantity in two notations compares as `40` against
+  // `40ms`. It also turns identifier-shaped prose into metrics, which the module charter rules out.
+  it.each([
+    ['a unit outside the vocabulary', 'Latency is 40usec.', 'Latency is 40 ms.'],
+    ['an alphanumeric identifier', 'Instance is 8xlarge.', 'Instance is 16xlarge.'],
+    ['a version suffix', 'Version is 3beta.', 'Version is 7beta.'],
+  ])('does not read a value out of the middle of a token: %s', (_label, a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  // Making `%` capturable also changed what DEFAULT mode reports, because `detail` is value+unit:
+  // `99.9%` and `99.9 percent` now canonicalize to one unit and agree, while `40%` and a bare `40`
+  // now differ. Pinned in both directions - the whole-lake scan is the surface that sees this.
+  it('reads a percentage and the same figure spelled out as agreeing', () => {
+    expect(kinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 99.9 percent.')])).toEqual([]);
+  });
+
+  it('reads a percentage and the same bare figure as disagreeing', () => {
+    expect(kinds([doc('a', 'Margin is 40%.'), doc('b', 'Margin is 40 in Q1.')])).toEqual(['metric-disagreement']);
+  });
 });
 
 describe('relationship conflicts', () => {

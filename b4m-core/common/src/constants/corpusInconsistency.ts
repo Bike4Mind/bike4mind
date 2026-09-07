@@ -158,24 +158,21 @@ const SUPERLATIVE_SUBJECT =
   /\b(?:only|sole|first|fastest|largest|highest|best|leading)\s+([a-z0-9-]+(?:\s+[a-z0-9-]+)?)/i;
 
 /**
- * `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms`.
+ * `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms` / `Label is 30 days` (no unit).
  *
- * Two boundaries, and they are not interchangeable - an earlier version used a single trailing
- * `(?![a-z0-9])` for both and each half broke the other:
+ * Three boundaries, one per branch, and none of them is optional:
  *
- * - The VALUE must end on a digit. `[0-9][0-9,.]*` is greedy over `.`, so with nothing pushing it
- *   back it reads the sentence-final period of `Total revenue is 1,200.` into the value. `1200.` and
- *   `1200` then compare as different figures, and chunked prose puts numbers at the end of sentences
- *   constantly.
- * - The UNIT guard belongs INSIDE the alternation, so it applies only to the word-shaped members.
- *   `1,200 gbps` still declines to read `gb`, while `50%off` - a routine PDF/OCR extraction artifact
- *   - still yields `%`. A guard placed after the whole optional group instead applies to the
- *   unit-ABSENT branch too, where it forces the engine to give the value back rather than accept no
- *   unit; that is what silently captured every percentage in the corpus as unitless, since `%.` has
- *   no `\b` between it and the period either.
+ * - The VALUE ends on a digit, so the greedy `[0-9,.]` run cannot read the sentence-final period of
+ *   `Total revenue is 1,200.` into the figure and compare `1200.` against `1200`.
+ * - A WORD-shaped unit is followed by a non-word char, so `1,200 gbps` declines to read `gb`. `%` is
+ *   exempt: it has no `\b` after it, so a guard covering the whole group would make `99.9%.` and
+ *   `50%off` - a routine extraction artifact - capture unitless.
+ * - The unit-ABSENT branch carries its OWN guard. Without it the value can end mid-token, so
+ *   `Latency is 40usec` becomes the unitless metric `40` and disagrees with `Latency is 40 ms`, and
+ *   `Instance is 8xlarge` becomes a metric at all.
  */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?![a-z0-9]))?/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?![a-z0-9]))|(?![A-Za-z0-9]))/i;
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
