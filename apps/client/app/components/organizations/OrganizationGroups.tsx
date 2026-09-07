@@ -1,6 +1,6 @@
 import { FC, useMemo, useState } from 'react';
 import { Autocomplete, Box, Button, Card, FormControl, FormHelperText, FormLabel, Stack, Typography } from '@mui/joy';
-import { IOrganizationDocument, IUserDocument, WithId } from '@bike4mind/common';
+import { IOrganizationDocument, IUserDocument, WithId, orgAclRowConfersMembership } from '@bike4mind/common';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
@@ -30,8 +30,17 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
   // The admins route validates against organization.users alone (the billing owner is never a
   // member row), so the picker must offer only real members or the owner would 400. Mirrors the
   // filter the shared list applies to its assign picker.
+  //
+  // `orgAclRowConfersMembership`, not a bare userId match: the route requires a row that actually
+  // grants membership, so a row with no read/write permission is NOT appointable. Offering one
+  // anyway would surface a member in the picker whose save then 400s "not organization members" -
+  // an error the user cannot act on, about someone they can see in the member list. Both sides read
+  // the same predicate for that reason (#2005).
   const assignableMembers = useMemo(
-    () => members.filter(member => (organization.users ?? []).some(row => row.userId === member.id)),
+    () =>
+      members.filter(member =>
+        (organization.users ?? []).some(row => row.userId === member.id && orgAclRowConfersMembership(row))
+      ),
     [members, organization.users]
   );
 

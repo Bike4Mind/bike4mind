@@ -441,7 +441,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
   /**
    * Datastore-side accessibility filter mirroring the single access gate:
-   * owner OR (org-constraint AND requirement-constraint AND not-private). The org and
+   * owner OR org-admin OR (org-constraint AND requirement-constraint AND not-private). The org and
    * requirement arms are ANDed for non-owners, so a tag/entitlement-holder in a different
    * org never receives the lake. The requirement arm is the Mongo mirror of the in-memory
    * `lakeMatchesAccess` any-of (shared with findActiveByUserTagsAndEntitlements).
@@ -450,6 +450,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * blank). Such a lake is owner/admin-only - it is NOT world-readable. A non-owner reaches
    * a lake only when it grants them something: their org (org-scoped lake) or a gate they
    * hold. This is the Private-by-default rule; the owner still matches via the separate arm.
+   *
+   * The unconstrained arms (owner, org-admin, grant) are unconstrained because the gate this
+   * mirrors resolves MANAGE first (`classifyLakeAccess` -> `canManageLake`, before its own
+   * org prerequisite) and manage grants read - so ANDing the org/requirement constraints onto
+   * them would hide a lake the gate then opens. Keeping the mirror faithful is the whole
+   * contract of this method, and the failure is quiet when it breaks: a lake missing here is
+   * still reachable by direct id, so the caller keeps every right they had and simply loses
+   * the only surface that would have told them the lake exists (#2005).
    */
   async findAccessible(
     ctx: AccessContext,
@@ -499,6 +507,20 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // (dropped for management views via includePublic - see the note at the top of this method).
     const nonOwnerArms: Record<string, unknown>[] = [{ $and: [orgConstraint, requirement, notPrivate] }];
     if (includePublic) nonOwnerArms.unshift(publicArm);
+
+    // Org-admin arm (#2005): a lake in an org the caller holds ADMIN rights in, reachable by those
+    // rights alone - the analog of the owner arm, for the same reason (the gate admits them via
+    // canManageLake before it ever reaches the org prerequisite). Keyed off `administeredOrgIds`
+    // (billing owner OR managerId OR adminUserIds), deliberately a DIFFERENT set from the
+    // `organizationIds` membership the org arm above uses: membership also decides what the account
+    // switcher offers as a write target (see `orgMembershipFilter`), so widening membership to fix
+    // this would have handed a team manager the org as somewhere to write as. The two sets are meant
+    // to differ; what was wrong was that only one of them reached this query. Applies to the
+    // management views too (includePublic:false): restore/cleanup are owner/admin-only and an org
+    // admin is in that class - `redactLakesForActor` agrees, keying off the same `canManageLake`.
+    // Served by the existing { organizationId: 1, status: 1 } index.
+    const administeredOrgIds = ctx.administeredOrgIds ?? [];
+    if (administeredOrgIds.length > 0) nonOwnerArms.push({ organizationId: { $in: administeredOrgIds } });
 
     // Explicit-grant arm (#1668): a lake the caller holds an active access grant on is reachable by
     // that grant alone - the grant IS the authorization, so it needs none of the org/gate constraints

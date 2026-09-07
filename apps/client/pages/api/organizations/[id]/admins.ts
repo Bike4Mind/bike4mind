@@ -6,6 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { z } from 'zod';
 
@@ -28,11 +29,18 @@ const handler = baseApi().put(
       throw new ForbiddenError('Only the billing owner or a platform admin can set org admins');
     }
 
-    // An appointed admin must be a member of the org - don't reference outsiders.
-    const memberIds = new Set(organization.users.map(member => member.userId));
+    // An appointed admin must be a member of the org - don't reference outsiders. Membership means
+    // an ACL row that actually CONFERS it, not merely a row that exists: checking `userId` alone
+    // admitted a row carrying no permissions, which `findMembershipOrgIds` then refused to count as
+    // membership, so the appointment silently created a principal that held admin rights over the
+    // org while the org was unselectable in their own account switcher (#2005). Same predicate as
+    // the read gate, from the shared constant, so the two cannot drift apart again.
+    const memberIds = new Set(
+      organization.users.filter(member => orgAclRowConfersMembership(member)).map(member => member.userId)
+    );
     const notMembers = adminUserIds.filter(userId => !memberIds.has(userId));
     if (notMembers.length > 0) {
-      throw new BadRequestError(`Not organization members: ${notMembers.join(', ')}`);
+      throw new BadRequestError(`Not organization members with read access: ${notMembers.join(', ')}`);
     }
 
     const updated = await organizationRepository.update({ id: organizationId, adminUserIds });

@@ -46,13 +46,21 @@ const renderGroups = (org: WithId<IOrganizationDocument>, canSetAdmins: boolean)
 
 // `users` carries the real member rows. The billing owner is deliberately NOT among them (the
 // server never puts the owner in users[]), which is what the picker filter keys on.
+//
+// `permissions: ['read']` is load-bearing, not decoration: the admins picker offers only rows that
+// CONFER membership, matching what the appointment route accepts (#2005). Every app write path
+// persists ['read'], so this is the realistic row - a bare `{ userId }` is the out-of-band shape
+// covered on its own below.
 const org = {
   id: 'org1',
   name: 'Acme',
   personal: false,
   adminUserIds: [],
   userId: 'owner1',
-  users: [{ userId: 'u1' }, { userId: 'u2' }],
+  users: [
+    { userId: 'u1', permissions: ['read'] },
+    { userId: 'u2', permissions: ['read'] },
+  ],
 } as unknown as WithId<IOrganizationDocument>;
 
 describe('OrganizationGroups', () => {
@@ -157,6 +165,29 @@ describe('OrganizationGroups', () => {
     expect(options).toContain('Alice');
     expect(options).toContain('Bob');
     expect(options).not.toContain('Olivia Owner');
+  });
+
+  // A row that exists but confers no membership is not appointable server-side (#2005), so offering
+  // it here would surface a save that 400s "not organization members with read access" about
+  // someone the operator can see in the member list - an error they cannot act on.
+  it('excludes a member whose ACL row confers no membership from the admins picker', async () => {
+    const withPermissionlessRow = {
+      ...org,
+      users: [{ userId: 'u1', permissions: ['read'] }, { userId: 'u2' }],
+    } as typeof org;
+    renderGroups(withPermissionlessRow, true);
+
+    const admins = await screen.findByTestId('org-admins-input');
+    const input = admins.querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0));
+
+    const options = screen.getAllByRole('option').map(o => o.textContent);
+    // Alice is the positive control: without her, an empty listbox would satisfy the negative
+    // assertion whether or not the filter keys off permissions at all.
+    expect(options).toContain('Alice');
+    expect(options).not.toContain('Bob');
   });
 
   // The admins roster must follow the persisted set. PUT /admins is a full replace, so a stale

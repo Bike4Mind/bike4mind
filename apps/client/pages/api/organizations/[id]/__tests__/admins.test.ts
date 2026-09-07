@@ -1,0 +1,139 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+
+/**
+ * PUT /api/organizations/[id]/admins sets `adminUserIds`, gated to the billing owner or a platform
+ * admin. The eligibility half is the interesting one: an appointee must hold an ACL row that
+ * actually CONFERS membership, not merely a row that exists.
+ *
+ * That is the write-time half of #2005. Checking `userId` alone let a permission-less row pass
+ * appointment and then fail `findMembershipOrgIds`, minting a principal with admin rights over an
+ * org that was unselectable in their own account switcher. The read-time half - such a principal
+ * still being able to DISCOVER the org's lakes - is pinned in
+ * `DataLakeModel.orgScopeAgreement.test.ts`.
+ */
+
+const mockRefs = vi.hoisted(() => ({
+  putHandler: null as null | ((req: any, res: any) => unknown),
+}));
+
+vi.mock('@server/middlewares/baseApi', () => {
+  const chain: any = {
+    use: () => chain,
+    get: () => chain,
+    post: () => chain,
+    delete: () => chain,
+    put: (fn: any) => {
+      mockRefs.putHandler = fn;
+      return chain;
+    },
+  };
+  return { baseApi: () => chain };
+});
+
+const findById = vi.hoisted(() => vi.fn());
+const update = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById, update } }));
+vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
+vi.mock('@server/utils/auditLog', () => ({
+  AdminOrgAuditEvents: { ORG_ADMINS_UPDATED: 'ORG_ADMINS_UPDATED' },
+  logAuditEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+import '@pages/api/organizations/[id]/admins';
+
+/** An org owned by `owner1`, whose `users[]` roster is supplied per test. */
+const org = (users: { userId: string; permissions?: string[] }[]) => ({
+  id: 'org1',
+  userId: 'owner1',
+  users,
+});
+
+const put = (adminUserIds: string[], user = { id: 'owner1', isAdmin: false }) => {
+  const { req, res } = createMocks({ method: 'PUT', query: { id: 'org1' }, body: { adminUserIds } });
+  (req as any).user = user;
+  return { req: req as any, res, run: () => mockRefs.putHandler!(req, res) };
+};
+
+describe('PUT /api/organizations/[id]/admins - appointee eligibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    update.mockImplementation(async ({ adminUserIds }: { adminUserIds: string[] }) => ({ adminUserIds }));
+  });
+
+  it('appoints a member whose ACL row grants read', async () => {
+    findById.mockResolvedValue(org([{ userId: 'member1', permissions: ['read'] }]));
+
+    const { res, run } = put(['member1']);
+    await run();
+
+    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'] });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  // The #2005 write-time gap. The appointment route is the only way to reach `adminUserIds`, so
+  // refusing here is what stops the divergent state from being created at all.
+  it('refuses a member whose ACL row carries no permissions, and does not write', async () => {
+    findById.mockResolvedValue(org([{ userId: 'member1' }]));
+
+    const { run } = put(['member1']);
+
+    await expect(run()).rejects.toThrow(BadRequestError);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // A share-only row is not membership either - `orgMembershipFilter` excludes it, and this route
+  // has to agree or the same divergence reappears through a different permission value.
+  it('refuses a member whose ACL row grants only share', async () => {
+    findById.mockResolvedValue(org([{ userId: 'member1', permissions: ['share'] }]));
+
+    const { run } = put(['member1']);
+
+    await expect(run()).rejects.toThrow(BadRequestError);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('names only the ineligible appointees in the error, and rejects the whole batch', async () => {
+    findById.mockResolvedValue(
+      org([
+        { userId: 'good1', permissions: ['read'] },
+        { userId: 'bad1', permissions: [] },
+      ])
+    );
+
+    const { run } = put(['good1', 'bad1']);
+
+    // Whole-batch refusal, not a partial write: the route is a full REPLACE of adminUserIds, so
+    // persisting the eligible half would silently de-appoint whoever the caller did not resend.
+    await expect(run()).rejects.toThrow(/bad1/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('still refuses a user with no ACL row at all (the pre-existing outsider check)', async () => {
+    findById.mockResolvedValue(org([{ userId: 'member1', permissions: ['read'] }]));
+
+    const { run } = put(['outsider']);
+
+    await expect(run()).rejects.toThrow(BadRequestError);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-owner, non-admin before reading the roster', async () => {
+    findById.mockResolvedValue(org([{ userId: 'member1', permissions: ['read'] }]));
+
+    const { run } = put(['member1'], { id: 'intruder', isAdmin: false });
+
+    await expect(run()).rejects.toThrow(ForbiddenError);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('lets a platform admin appoint an eligible member', async () => {
+    findById.mockResolvedValue(org([{ userId: 'member1', permissions: ['read'] }]));
+
+    const { run } = put(['member1'], { id: 'someone-else', isAdmin: true });
+    await run();
+
+    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'] });
+  });
+});
