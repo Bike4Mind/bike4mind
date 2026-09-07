@@ -56,9 +56,9 @@ export type InconsistencyKind = (typeof INCONSISTENCY_KINDS)[number];
  * compiles with this list untouched and defaults to not-asserted. That is the safe default, but it
  * is a default and not an enforcement - classify a new rule here deliberately.
  *
- * Only `metric-disagreement` qualifies, and only because it is the one rule with a `distinguish`
- * predicate over a comparable value. The other two cross-document kinds cannot show disagreement:
- * `superlative-conflict` has no `distinguish` at all, so two documents that AGREE - including two
+ * Only `metric-disagreement` qualifies, and only because it is the one rule comparing a parsed VALUE
+ * across documents. The other two cross-document kinds cannot show disagreement:
+ * `superlative-conflict` compares nothing at all, so two documents that AGREE - including two
  * carrying the identical sentence - group as a finding; `relationship-conflict` keys on `ORG`, a bare
  * capitalization proxy, while CUSTOMER/PROSPECT carry generic technical vocabulary, so two sentences
  * about the same capitalized product name satisfy it without describing a relationship at all.
@@ -160,24 +160,27 @@ const SUPERLATIVE_SUBJECT =
 /**
  * `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms` / `Label is 30 days` (no unit).
  *
- * Three boundaries, one per branch, and none of them is optional:
+ * Three boundaries, none of them optional, and both token guards are spelled `(?!\w)` on purpose:
+ * `\w` IS the class `\b` uses, so a hand-written class cannot drift out of step with it again.
+ * Two revisions of this rule shipped a false-positive class by guarding one branch with a class
+ * narrower than `\w` and leaving the other unguarded.
  *
  * - The VALUE ends on a digit, so the greedy `[0-9,.]` run cannot read the sentence-final period of
  *   `Total revenue is 1,200.` into the figure and compare `1200.` against `1200`.
- * - A WORD-shaped unit is followed by a non-word char, so `1,200 gbps` declines to read `gb`. `%` is
- *   exempt: it has no `\b` after it, so a guard covering the whole group would make `99.9%.` and
- *   `50%off` - a routine extraction artifact - capture unitless.
- * - The unit-ABSENT branch carries its OWN guard, over the same character class `\b` treats as a
- *   word - `_` included, or `Version is 1_2` matches where it never did before. Without the guard
- *   the value can end mid-token, so `Latency is 40usec` becomes the unitless metric `40` and
- *   disagrees with `Latency is 40 ms`, and `Instance is 8xlarge` becomes a metric at all.
+ * - A WORD-shaped unit is followed by a non-word char, so `1,200 gbps` declines to read `gb` and
+ *   `5 gb_x` declines to read `gb`. `%` is exempt and outside the guard: it has no `\b` after it, so
+ *   a guard covering the whole group would make `99.9%.` and `50%off` - a routine extraction
+ *   artifact - capture unitless.
+ * - The unit-ABSENT branch carries its OWN guard, or the value ends mid-token: `Latency is 40usec`
+ *   becomes the unitless metric `40` and disagrees with `Latency is 40 ms`, and `Instance is
+ *   8xlarge` becomes a metric at all.
  *
  * Residual, and older than any of the three: a value carrying a `.` can still stop at it, so
  * `Latency is 99.9usec` reads as `99`. Closing that means refusing a match rather than shortening
  * one, which is a different change to a rule two surfaces already depend on.
  */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?![a-z0-9]))|(?![A-Za-z0-9_]))/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?!\w))|(?!\w))/i;
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
@@ -246,18 +249,49 @@ function toEvidence(hit: Hit): InconsistencyEvidence {
   return { fabFileId: hit.doc.fabFileId, fileName: hit.doc.fileName ?? null, excerpt: excerpt(hit.sentence) };
 }
 
+/** Sorted distinct details, so two documents holding the same values agree however they order them. */
+function detailSignature(position: Hit[]): string {
+  return [...new Set(position.map(h => h.detail))].sort().join('|');
+}
+
+/**
+ * One hit per document, ordered so the FIRST TWO excerpts actually differ.
+ *
+ * Evidence is what a reader is shown as proof, and "whatever each document matched first" need not
+ * contain the hits that disagree: a document stating both values agrees with its sibling on whichever
+ * it happens to state first, so a real finding rendered two IDENTICAL sentences as its proof. Anchor
+ * instead on a detail that some other document does not carry at all - such a pair exists whenever
+ * the per-document sets differ, which is the only case this is called in, so the tail return is a
+ * totality guard rather than a reachable branch.
+ */
+function witnessOrder(positions: Hit[][]): Hit[] {
+  for (const [i, hits] of positions.entries()) {
+    for (const hit of hits) {
+      const j = positions.findIndex((other, k) => k !== i && !other.some(h => h.detail === hit.detail));
+      if (j === -1) continue;
+      return [hit, positions[j][0], ...positions.filter((_, k) => k !== i && k !== j).map(p => p[0])];
+    }
+  }
+  return positions.map(hits => hits[0]);
+}
+
 /**
  * Group hits by subject and keep only groups spanning MORE THAN ONE document.
  *
  * The cross-document requirement is the whole point: one document restating its own superlative in
- * three sections is not an inconsistency, and flagging it would bury the real findings. `distinguish`
- * additionally requires the grouped hits to actually DISAGREE - two documents stating the same metric
- * at the same value agree, and agreement is not a finding.
+ * three sections is not an inconsistency, and flagging it would bury the real findings.
+ *
+ * `requireDisagreement` additionally requires the DOCUMENTS to hold different SETS of values, since
+ * agreement is not a finding. Per-document sets rather than the flat hit list, which is the
+ * distinction the rule turns on: a document stating both values contributes two differing details on
+ * its own, so a flat comparison reported two byte-identical documents as contradicting each other -
+ * naming a document that agrees. Sets still keep the case where one document holds both values and a
+ * sibling holds only one of them: those documents really do disagree.
  */
 function crossDocumentGroups(
   hits: Hit[],
   kind: InconsistencyKind,
-  distinguish?: (hits: Hit[]) => boolean
+  requireDisagreement = false
 ): InconsistencyFinding[] {
   const bySubject = new Map<string, Hit[]>();
   for (const hit of hits) {
@@ -268,12 +302,18 @@ function crossDocumentGroups(
 
   const findings: InconsistencyFinding[] = [];
   for (const [subject, group] of bySubject) {
-    const docIds = new Set(group.map(h => h.doc.fabFileId));
-    if (docIds.size < 2) continue;
-    if (distinguish && !distinguish(group)) continue;
-    // One excerpt per document: three sentences from the same file are one document's position.
-    const seen = new Set<string>();
-    const perDocument = group.filter(h => !seen.has(h.doc.fabFileId) && (seen.add(h.doc.fabFileId), true));
+    // One position per document: three sentences from the same file are one document's position.
+    const byDocument = new Map<string, Hit[]>();
+    for (const hit of group) {
+      const existing = byDocument.get(hit.doc.fabFileId);
+      if (existing) existing.push(hit);
+      else byDocument.set(hit.doc.fabFileId, [hit]);
+    }
+    if (byDocument.size < 2) continue;
+
+    const positions = [...byDocument.values()];
+    if (requireDisagreement && new Set(positions.map(detailSignature)).size < 2) continue;
+    const perDocument = requireDisagreement ? witnessOrder(positions) : positions.map(position => position[0]);
     findings.push({
       kind,
       subject,
@@ -329,8 +369,7 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
       };
     }),
     'metric-disagreement',
-    // Agreement is not a finding: two documents quoting the same figure are consistent.
-    group => new Set(group.map(h => h.detail)).size > 1
+    true
   );
 }
 
@@ -348,7 +387,7 @@ function detectRelationshipConflicts(documents: CorpusDocument[]): Inconsistency
       }
     }
   }
-  return crossDocumentGroups(hits, 'relationship-conflict', group => new Set(group.map(h => h.detail)).size > 1);
+  return crossDocumentGroups(hits, 'relationship-conflict', true);
 }
 
 /**

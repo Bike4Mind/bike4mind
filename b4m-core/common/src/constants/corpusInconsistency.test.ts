@@ -156,6 +156,17 @@ describe('metric units', () => {
     expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
   });
 
+  // DEFAULT mode. The UNIT-side guard has to cover the same class, or a unit word glued to an
+  // identifier is read as a bare unit and the same quantity compares as `5` against `5gb`. Both
+  // guards are `(?!\w)` for this reason: a hand-written class drifted out of step with `\b` twice.
+  it.each([
+    ['a unit word glued to an identifier', 'Memory is 5 gb_x.', 'Memory is 5.'],
+    ['a spelled-out unit glued to an identifier', 'Uptime is 99.9 percent_x.', 'Uptime is 99.9.'],
+    ['a bare unit letter glued to an identifier', 'Rate is 3 x_factor.', 'Rate is 3.'],
+  ])('does not read a unit out of the middle of a token: %s', (_label, a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
   // Making `%` capturable also changed what DEFAULT mode reports, because `detail` is value+unit:
   // `99.9%` and `99.9 percent` now canonicalize to one unit and agree, while `40%` and a bare `40`
   // now differ. Pinned in both directions - the whole-lake scan is the surface that sees this.
@@ -165,6 +176,49 @@ describe('metric units', () => {
 
   it('reads a percentage and the same bare figure as disagreeing', () => {
     expect(kinds([doc('a', 'Margin is 40%.'), doc('b', 'Margin is 40 in Q1.')])).toEqual(['metric-disagreement']);
+  });
+});
+
+/**
+ * The charter of `crossDocumentGroups`, for the two kinds that compare a value: a finding must mean
+ * the DOCUMENTS hold different values. A document stating both values supplies both on its own, so a
+ * comparison over the flat hit list reported two documents that agree - byte-identical ones included -
+ * as contradicting each other, and named a document whose only claim matched its sibling's.
+ */
+describe('agreement across documents is not a finding', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings;
+
+  const BOTH = 'Uptime is 99.9%.\nUptime is 95%.';
+
+  it('says nothing about two byte-identical documents', () => {
+    expect(unitKinds([doc('a', BOTH), doc('b', BOTH)])).toEqual([]);
+  });
+
+  it('says nothing when a document states both values and the other states both too', () => {
+    expect(unitKinds([doc('a', BOTH), doc('b', 'Uptime is 95%.\nUptime is 99.9%.')])).toEqual([]);
+  });
+
+  it('says nothing when each document states one value and they match', () => {
+    expect(unitKinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 99.9%.')])).toEqual([]);
+  });
+
+  // The row that separates comparing per-document SETS from simply deferring the comparison until
+  // after the one-hit-per-document dedup. `file-b`'s only figure contradicts one of `file-a`'s, so
+  // these documents do disagree - and a dedup-first comparison drops it, because both documents
+  // happen to state 99.9% first.
+  it('still flags a document holding both values against one holding only the other', () => {
+    const findings = unitKinds([doc('a', BOTH), doc('b', 'Uptime is 99.9%.')]);
+    expect(findings.map(f => f.kind)).toEqual(['metric-disagreement']);
+    // And the evidence has to WITNESS the disagreement. Quoting whatever each document matched
+    // first offers two identical sentences as proof that the two documents differ.
+    expect(findings[0].evidence.map(e => e.excerpt)).toEqual(['Uptime is 95%.', 'Uptime is 99.9%.']);
+  });
+
+  it('applies the same rule to relationship conflicts', () => {
+    const both = 'Northwind Logistics is a customer.\nNorthwind Logistics is a prospect.';
+    expect(kinds([doc('a', both), doc('b', both)])).toEqual([]);
+    expect(kinds([doc('a', both), doc('b', 'Northwind Logistics is a customer.')])).toEqual(['relationship-conflict']);
   });
 });
 
