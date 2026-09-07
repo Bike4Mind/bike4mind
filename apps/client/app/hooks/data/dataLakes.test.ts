@@ -17,6 +17,19 @@ import { toast } from 'sonner';
 const apiGet = vi.fn();
 const apiDelete = vi.fn();
 const apiPost = vi.fn();
+
+/**
+ * A rejection shaped the way axios actually rejects: `.message` is the generic status line and the
+ * server's own reason lives at `response.data.error` (server/middlewares/errorHandler.ts). The
+ * `isAxiosError` guard the hooks use keys off the `isAxiosError` flag, so this is the minimum
+ * faithful shape. Mocking a bare `Error` whose `.message` is already the server text is what let an
+ * earlier round of these tests pass with the extraction absent.
+ */
+const axiosRefusal = (status: number, serverMessage: string) =>
+  Object.assign(new Error(`Request failed with status code ${status}`), {
+    isAxiosError: true,
+    response: { status, data: { error: serverMessage } },
+  });
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: {
     get: (...args: unknown[]) => apiGet(...args),
@@ -46,9 +59,14 @@ import {
   useDataLakeSpend,
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
+  useAddFileToDataLake,
   useRemoveFileFromDataLake,
+  useApplyTaxonomySuggestions,
   useRechunkDataLake,
+  useSetLakeVisibility,
+  useArchiveDataLake,
   useTransferLakeOwnership,
+  usePurgeDataLakeDocument,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -198,6 +216,225 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     // fileCount derived from the files holding each tag, and invalidating only the longer
     // key leaves that list stale. Prefix matching covers the counts endpoint too.
     expect(keys).toContain(JSON.stringify(['file-tags']));
+  });
+
+  it('offers Undo on the success toast, with an explicit long duration', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(
+      'File removed from data lake.',
+      expect.objectContaining({ duration: 15000, action: expect.objectContaining({ label: 'Undo' }) })
+    );
+  });
+
+  it('posts Undo against the lake removed FROM, not the hook prop at click time (#2248)', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    // Mirrors DataLakeExplorer.tsx: the hook is built from a target that gets cleared (nulled) on
+    // remove success, well before the toast's Undo is ever clicked.
+    const { result, rerender } = renderHook(({ lakeId }) => useRemoveFileFromDataLake(lakeId), {
+      wrapper,
+      initialProps: { lakeId: 'lake1' as string | null },
+    });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+    rerender({ lakeId: null }); // simulates the confirm dialog clearing its target
+
+    const call = (toast.success as ReturnType<typeof vi.fn>).mock.calls.find(c => c[1]?.action?.label === 'Undo') as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    act(() => {
+      call[1].action.onClick();
+    });
+
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1'));
+  });
+
+  it('hands the Undo click the toast id, so the restore can replace that toast in place', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    // This describe block has no beforeEach, so toast.success' call history accumulates and the
+    // sibling tests above have already raised Undo toasts of their own. Reset the three mocks this
+    // test reads so the toast it picks up is unambiguously the one it just caused.
+    const successMock = toast.success as ReturnType<typeof vi.fn>;
+    successMock.mockReset();
+    apiDelete.mockReset();
+    apiPost.mockReset();
+    successMock.mockReturnValue('removal-toast');
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    const call = successMock.mock.calls.find(c => c[1]?.action?.label === 'Undo') as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    act(() => {
+      call[1].action.onClick();
+    });
+
+    await waitFor(() =>
+      expect(successMock).toHaveBeenCalledWith('File restored to data lake.', { id: 'removal-toast' })
+    );
+  });
+
+  it("surfaces the server's refusal on a failed removal, not axios' status line", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiDelete.mockReset();
+    apiDelete.mockRejectedValueOnce(axiosRefusal(403, 'Only the creator can remove files from this data lake'));
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1').catch(() => {});
+    });
+
+    // Removal and restore fire from the same confirmation dialog, so this must not degrade to a
+    // status code while the restore door reports the real reason.
+    expect(toast.error).toHaveBeenCalledWith('Only the creator can remove files from this data lake');
+  });
+
+  it('does nothing extra when there is no dataLakeId to build an Undo affordance from', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake(null), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('File removed from data lake.');
+  });
+});
+
+describe('useAddFileToDataLake', () => {
+  it('posts against the lake id given per call, not a hook-level one', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+
+    const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fabFileId: 'f1' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1');
+    // No `toastId` means no toast to replace, so the success handler must stay silent. Without this
+    // control, deleting the `toastId !== undefined` guard would make a cold add announce "File
+    // restored to data lake." - wrong copy - with every test still green.
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('invalidates the same membership-derived queries a removal does', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fabFileId: 'f1' });
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+  });
+
+  /**
+   * The Undo toast OUTLIVES the component that raised it: confirming a removal unmounts the shared
+   * dialog on both wizard surfaces (DataLakeManagerPanel stops rendering DataLakeArticlePanel;
+   * DataLakeViewer's ArticlePanel early-returns on a null file), while the toast sits on screen for
+   * 15s. TanStack v5 dispatches per-`mutate()` callbacks only while the observer still has
+   * listeners, so anything registered there fires for nobody once the hook unmounts - which is
+   * exactly how a failed restore went completely silent. These two tests fail if the toast handling
+   * moves back to per-call `mutate` options, and `renderHook` alone cannot catch that class: it
+   * never unmounts.
+   */
+  it('surfaces SUCCESS from a mutation-level callback after the calling component unmounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    const { result, unmount } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    const restore = result.current.mutate;
+    unmount();
+
+    act(() => {
+      restore({ dataLakeId: 'lake1', fabFileId: 'f1', toastId: 'undo-toast' });
+    });
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('File restored to data lake.', { id: 'undo-toast' })
+    );
+  });
+
+  it('surfaces FAILURE from a mutation-level callback after the calling component unmounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    // An AxiosError, not a bare Error: axios sets `.message` to "Request failed with status code
+    // N" and puts the server's reason at `response.data.error`, so a plain-Error mock would assert
+    // a shape production never produces and would pass with the extraction removed.
+    apiPost.mockRejectedValueOnce(axiosRefusal(403, 'Restore window has closed'));
+
+    const { result, unmount } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    const restore = result.current.mutate;
+    unmount();
+
+    act(() => {
+      restore({ dataLakeId: 'lake1', fabFileId: 'f1', toastId: 'undo-toast' });
+    });
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Restore window has closed', { id: 'undo-toast' }));
+  });
+
+  it('still reports an error when there is no toast to replace (the cold-add caller)', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, 'You do not have permission to add files to this data lake'));
+
+    const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fabFileId: 'f1' }).catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('You do not have permission to add files to this data lake', undefined);
   });
 });
 
@@ -537,6 +774,83 @@ describe('nextRebuildPoll', () => {
   });
 });
 
+/**
+ * A config write adds a history row, and the History tab renders in the same modal that submitted
+ * it. `useUpdateDataLake` invalidated that key from the start; these two did not, and only got away
+ * with it because the history query pairs `staleTime: 0` with an `enabled` toggle that flips on tab
+ * switch. That is an incidental refetch, not a guarantee - raising staleTime or dropping the toggle
+ * would strand the row the owner just created. These pin the invalidation itself.
+ *
+ * The key is asserted as the literal `['dataLakeConfigHistory', 'lake1']` prefix rather than through
+ * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
+ * still pass if that helper's shape drifted away from what the query is actually keyed under.
+ */
+describe('config-history invalidation on the non-update config writes', () => {
+  const mountWith = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { wrapper, invalidate };
+  };
+  const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
+    invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
+
+  it("useSetLakeVisibility invalidates the changed lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+
+    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', visibility: 'public' });
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it("a lifecycle action invalidates the acted-on lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it("a file removal invalidates that lake's history too - it can trigger the auto-activate row", async () => {
+    // Inert in today's UI (this hook fires from the file wizard, where the History observer is
+    // unmounted), so this pins the CONSISTENCY rather than a visible bug: every client path whose
+    // write can record a config-history row invalidates that lake's history, with no per-path
+    // reasoning about which ones currently matter.
+    const { wrapper, invalidate } = mountWith();
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 4 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it('scopes the invalidation to that one lake, never the whole history root', async () => {
+    // configHistory sits outside the `list` prefix precisely so a rename does not refetch every
+    // lake's history (see dataLakeKeys.ts). Invalidating the bare root here would undo that.
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+
+    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', visibility: 'private' });
+    });
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeConfigHistory']));
+  });
+});
+
 describe('useRechunkDataLake cache invalidation', () => {
   it('refreshes lake HEALTH too, not just the rebuild badge', async () => {
     // A rebuild mass-mutates the exact per-file rollups health is computed from. The health query has
@@ -559,6 +873,51 @@ describe('useRechunkDataLake cache invalidation', () => {
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+  });
+});
+
+describe('useRechunkDataLake paused refusal (#2223)', () => {
+  // The toast spies are module-level and shared across this file, so both assertions below
+  // ("the other toast was NOT called") need a clean slate.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+  };
+
+  it('warns that nothing was rebuilt, instead of a green success claiming the opposite', async () => {
+    // The paused arm also returns enqueued: 0, so on the counts alone it is indistinguishable from
+    // "nothing to do" - and it fell through to toast.success('All files are already chunked into
+    // passages.'). That claim is not merely uninformative but FALSE: the server-side gate only runs
+    // when at least one file was detected, so `detected` is always >= 1 here.
+    apiPost.mockResolvedValueOnce({ data: { detected: 12, enqueued: 0, remaining: 12, outcome: 'paused' } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('paused'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('still reports a genuine nothing-to-do as a success', async () => {
+    // The arm the paused case used to be confused with must keep its own wording.
+    apiPost.mockResolvedValueOnce({ data: { detected: 0, enqueued: 0, remaining: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('All files are already chunked into passages.');
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 });
 
@@ -605,5 +964,181 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
+  });
+});
+
+describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
+  // These branches produce the only sentence the user ever sees about an apply, and the batch is
+  // 'applied' afterwards - apply requires 'ready' and re-analyze requires 'ready'|'failed', so
+  // there is no in-product route back. A wrong message here is the user's last word on the batch.
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useApplyTaxonomySuggestions('b1'), { wrapper });
+  };
+
+  // toast.* are module-level spies shared across this file, so calls accumulate without this.
+  // apiPost is reset too, matching the sibling describes: every case here queues a
+  // mockResolvedValueOnce, and one left unconsumed would shift the queue into an unrelated test.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+    apiPost.mockReset();
+  });
+
+  it('does not claim "already up to date" when files silently lost their CAS check', async () => {
+    // The review defect: 7 files already carried the tags and 3 needed them, but a concurrent tag
+    // edit made all 3 miss. Reading only filesUpdated/unchanged renders a green "Tags already up to
+    // date on 7 files" - an affirmative claim of completeness on a batch where 3 files were never
+    // tagged, and the user cannot retry.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 7, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.warning).mock.calls[0][0]).toBe(
+      'Tags already up to date on 7 files. 3 files could not be updated - changed while applying.'
+    );
+  });
+
+  it('still reports a clean idempotent re-apply as a plain success', async () => {
+    // The guard on the fix above: suppressing the false completeness claim must not turn the
+    // genuine "nothing needed changing" case into a warning.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 3, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags already up to date on 3 files');
+  });
+
+  it('reports the split when some files were tagged and others already had them', async () => {
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 2, unchanged: 1, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 2 files, 1 file already up to date');
+  });
+
+  it('falls through to the plain success arm when the server omits skipped (rolling deploy)', async () => {
+    // A client on this build against a server that has not shipped these fields yet. BOTH are
+    // absent, because `unchanged` and `skipped` shipped in the same service commit - a fixture
+    // keeping `unchanged: 0` models a payload no server ever sends, which is what made this case
+    // pass for the wrong reason.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 4 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 4 files');
+  });
+
+  it('survives an old server that omits the fields and matched nothing', async () => {
+    // `filesUpdated: 0` is the one old-server shape where the `?? 0` defaulting is observable at
+    // all: without it, `unchanged === 0` is false against undefined, the first arm is skipped, and
+    // the next one formats undefined. The fixture above uses `filesUpdated: 4`, which takes the
+    // last arm and never touches either field.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
+  });
+
+  it('does not claim nothing matched when every emitted op lost its race', async () => {
+    // Files matched - all of them lost the CAS check. Gating only the first arm on `skipped` moves
+    // the false claim to the second one ("already up to date on 0 files"), so this pins the message
+    // rather than the arm.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith('3 files could not be updated - changed while applying.');
+  });
+
+  it('says nothing matched rather than "applied to 0 files" when the batch produced no ops', async () => {
+    // A batch where no file matches any accepted tag emits no ops and counts no `unchanged`, so the
+    // old plain arm claimed an application that did not happen.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
+  });
+});
+
+describe('usePurgeDataLakeDocument', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { invalidate, ...renderHook(() => usePurgeDataLakeDocument('lake1'), { wrapper }) };
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it('invalidates by ROOT prefix, because the destruction is not lake-scoped', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: { verified: true, chunksBefore: 3, chunksRemaining: 0 },
+    });
+    const { invalidate, result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    // Not ['dataLakeFiles','lake1'] / ['dataLakeHealth','lake1']: every OTHER lake that held the
+    // document loses a file and the chunk rollups health is computed from, not just this one.
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles']));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth']));
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
+    expect(keys).toContain(JSON.stringify(['file-tags']));
+    // The document leaves the owner's Files list too, so that cache is stale as well.
+    expect(keys).toContain(JSON.stringify(['fabFiles']));
+    // Scoped to the purged-FROM lake: a purge can move its rebuild badge and, via
+    // recomputeLakeStats' draft -> active flip, write a config-history row.
+    expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it("surfaces the server's refusal, not axios' status line, on the irreversible door", async () => {
+    // A mid-sweep failure is exactly where "Request failed with status code 500" cannot tell the
+    // owner whether their document is half destroyed.
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, "Only the file's owner can permanently delete this document"));
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync('f1').catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith("Only the file's owner can permanently delete this document");
   });
 });

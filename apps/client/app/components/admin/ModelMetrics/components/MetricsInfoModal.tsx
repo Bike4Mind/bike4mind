@@ -55,7 +55,14 @@ export const MetricsInfoModal: React.FC<MetricsInfoModalProps> = ({ open, onClos
                 </Typography>
                 <Typography level="body-sm">
                   Critical UX metric: How long until the user sees the first content from the AI. Lower is better for
-                  perceived responsiveness. This is measured server-side from when processing starts.
+                  perceived responsiveness. This is measured server-side from when processing starts. Counts only text
+                  the transcript actually renders, so extended-thinking models do not look fast on the strength of
+                  hidden reasoning.
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 0.5 }}>
+                  Shows <strong>never rendered</strong> when the turn streamed but never produced visible text. Those
+                  turns are excluded from the First Token trend chart rather than averaged in as fast responses, so scan
+                  the Raw Data tab for them instead of reading the chart alone.
                 </Typography>
               </Box>
               <Box>

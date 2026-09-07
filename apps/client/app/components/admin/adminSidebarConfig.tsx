@@ -40,7 +40,7 @@ import SummarizeIcon from '@mui/icons-material/Summarize';
 export enum AdminTab {
   Users = 0,
   AdminSettings = 1,
-  Feedbacks = 2,
+  Feedback = 2,
   Analytics = 3,
   Accounts = 4,
   RegistrationInvites = 5,
@@ -96,6 +96,8 @@ export enum AdminTab {
   EmbedKeys = 57,
   ModelLifecycle = 58,
   PrReport = 59,
+  RetrievalRate = 60,
+  ApiKeyScopePreflight = 61,
 }
 
 /**
@@ -138,7 +140,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: PeopleIcon, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: EmailIcon, tab: AdminTab.EmailVerification, label: 'Email Verification' },
-      { Icon: ContactSupportIcon, tab: AdminTab.Feedbacks, label: 'Feedbacks' },
+      { Icon: ContactSupportIcon, tab: AdminTab.Feedback, label: 'Feedback' },
       { Icon: PersonAddIcon, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
       { Icon: QueryStatsIcon, tab: AdminTab.Analytics, label: 'Analytics' },
       {
@@ -188,6 +190,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: BugReportIcon, tab: AdminTab.SreAgent, label: 'SRE Agent', testid: 'admin-sre-agent-btn' },
       { Icon: QueueIcon, tab: AdminTab.DlqReplay, label: 'DLQ Management', testid: 'admin-dlq-replay-btn' },
       { Icon: SpeedIcon, tab: AdminTab.RateLimits, label: 'Rate Limits', testid: 'admin-rate-limits-btn' },
+      {
+        Icon: SecurityIcon,
+        tab: AdminTab.ApiKeyScopePreflight,
+        label: 'API Key Scope Preflight',
+        testid: 'admin-scope-preflight-btn',
+      },
       { Icon: MonitorHeartIcon, tab: AdminTab.SystemHealth, label: 'System Health' },
       { Icon: QueryStatsIcon, tab: AdminTab.EventMetrics, label: 'Event Metrics' },
     ],
@@ -218,6 +226,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.ContextInspector,
         label: 'Context Inspector',
         testid: 'admin-context-inspector-btn',
+      },
+      {
+        Icon: QueryStatsIcon,
+        tab: AdminTab.RetrievalRate,
+        label: 'Retrieval Rate',
+        testid: 'admin-retrieval-rate-btn',
       },
     ],
   },

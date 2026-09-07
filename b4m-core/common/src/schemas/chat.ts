@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ApiErrorCode } from '../apiErrorCodes';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -88,10 +89,24 @@ export const ChatAckSchema = z.object({
 
 export type ChatAck = z.infer<typeof ChatAckSchema>;
 
-/** Reusable JSON error envelope (plain; the OpenAPI layer annotates it). */
+/**
+ * Reusable JSON error envelope (plain; the OpenAPI layer annotates it).
+ *
+ * Must stay in sync with the published `ErrorResponse` component
+ * (../openapi/schemas.ts) - `openapi/errorEnvelopeParity.test.ts` pins the two
+ * together, and apps/client's errorHandler test uses this shape as the stand-in for
+ * the component, which is generate-time only and cannot be imported at runtime.
+ */
 export const ApiErrorSchema = z.object({
   error: z.string(),
   request_id: z.string().optional(),
+  /**
+   * Deprecated, sunset 2026-12-01. The `name` of whatever was thrown - our own error
+   * classes usually, a library/driver class name on an unhandled 500 - added to every
+   * body by apps/client's errorHandler. Documented here so the runtime and the spec
+   * agree while it is still served; do not build on it. See CONVENTIONS.md section 1.
+   */
+  name: z.string().optional(),
 });
 
 /**
@@ -99,9 +114,14 @@ export const ApiErrorSchema = z.object({
  * reasons: "your body is invalid" and "you cannot afford this". `errorCode` is
  * what separates them - `insufficientCreditsError` (see insufficientCredits.ts)
  * tags the credit case, so its absence means an ordinary validation failure.
+ *
+ * Derived from `ApiErrorSchema` rather than re-declaring `error`/`request_id`:
+ * both of those 422s are *thrown*, so errorHandler serves the body and adds
+ * `name`. Extending is what keeps that documented here (and what drops it again
+ * on the sunset date) instead of leaving a bespoke copy behind to drift.
  */
-export const InsufficientCreditsErrorSchema = z.object({
-  error: z.string(),
-  errorCode: z.literal('insufficient_credits').optional(),
-  request_id: z.string().optional(),
+export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
+  // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts,
+  // so a rename there breaks this rather than silently publishing a dead code.
+  errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
 });

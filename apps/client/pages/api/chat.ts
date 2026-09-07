@@ -10,7 +10,13 @@ import {
   resolveDefaultChatModel,
 } from '@server/utils/chatCompletionDefaults';
 import { adminSettingsRepository, User, Session } from '@bike4mind/database';
-import { B4MLLMTools, chatContract, filterKnownTools, type SimplifiedChatRequest } from '@bike4mind/common';
+import {
+  B4MLLMTools,
+  chatContract,
+  filterKnownTools,
+  toToolPayloads,
+  type SimplifiedChatRequest,
+} from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -183,6 +189,10 @@ const handler = nextRouteForContract(chatContract, {
       model: internalRequest.params.model,
       response: completedQuest.reply,
       responses: completedQuest.replies,
+      // Additive twin of `response`: the machine-readable state the turn's tools produced, which
+      // otherwise survives only on the quest (the model sees a terse displayMessage instead). The
+      // prose above is unchanged - a caller reads one, the other, or both.
+      toolPayloads: toToolPayloads(completedQuest.uiSideEffects),
       createdAt: completedQuest.createdAt,
       ...(simplifiedRequest.includePromptDetails && completedQuest.promptMeta?.context?.systemPromptDetails
         ? { promptDetails: completedQuest.promptMeta.context.systemPromptDetails }

@@ -126,12 +126,20 @@ describe('POST /api/ai/tts', () => {
     expect(res._getJSONData()).toMatchObject({ error: 'no key', errorCode: 'provider_not_configured' });
   });
 
-  it('returns 402 and never calls the provider when credits are exhausted', async () => {
+  // 422 + `insufficient_credits`, matching every other credit-metered endpoint.
+  // The classifier is the load-bearing half: this 422 shares its status with an
+  // ordinary validation failure, so a caller that matched on the status alone
+  // would treat "out of credits" as "bad request".
+  it('returns a classified 422 and never calls the provider when credits are exhausted', async () => {
     mocks.assertTtsCreditsAvailable.mockRejectedValue(new InsufficientTtsCreditsError('broke'));
     const { res, promise } = run({ text: 'hi' });
     await promise;
-    expect(res._getStatusCode()).toBe(402);
-    expect(res._getJSONData()).toMatchObject({ provider: 'openai' });
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({
+      error: 'broke',
+      provider: 'openai',
+      errorCode: 'insufficient_credits',
+    });
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 

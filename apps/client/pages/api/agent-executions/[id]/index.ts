@@ -6,16 +6,16 @@
  * disclosure expand, and the returned steps are hydrated into the Zustand
  * store so an `IterationStream` can be mounted read-only.
  *
- * Ownership is verified through the AgentExecution's session - the same
- * pattern as `/api/quests/[id]`. We do not return billing details (token
- * counts, credits) since they're not relevant to the user-facing trace.
+ * SPA-internal. The public twin is `GET /api/v1/agent-executions/{id}`; both load and
+ * authorize through `loadAgentExecutionTrace`, and this one additionally returns child
+ * snapshots for nested rendering. We do not return billing details (token counts,
+ * credits) since they're not relevant to the user-facing trace.
  */
 
 import type { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
-import { agentExecutionRepository, sessionRepository } from '@bike4mind/database';
-import type { IAgentStep } from '@bike4mind/common';
+import { BadRequestError, NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { loadAgentExecutionTrace } from '@server/utils/loadAgentExecutionTrace';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 
 const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
@@ -25,45 +25,14 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
   if (!id) {
     throw new BadRequestError('Execution ID is required');
   }
-
-  const execution = await agentExecutionRepository.findById(id);
-  if (!execution) {
-    throw new NotFoundError('Execution not found');
+  if (!userId) {
+    throw new UnauthorizedError('Authentication required');
   }
 
-  // Ownership via the session - mirrors the access check on /api/quests/[id].
-  // The execution.userId field would also work but session-based check stays
-  // consistent with shared-session semantics if that ever applies here.
-  if (execution.sessionId) {
-    const session = await sessionRepository.findById(execution.sessionId);
-    if (!session) {
-      throw new NotFoundError('Execution not found');
-    }
-    const userHasAccess = session.userId === userId || session.users?.some(share => share.userId === userId);
-    if (!userHasAccess) {
-      throw new NotFoundError('Execution not found');
-    }
-  } else if (execution.userId !== userId) {
-    // Fallback: no session linkage (legacy/edge cases) - fall back to direct
-    // owner check so we never leak another user's reasoning trace.
+  const trace = await loadAgentExecutionTrace(id, userId);
+  if (!trace) {
     throw new NotFoundError('Execution not found');
   }
-
-  // `result` is stored as Mongoose Mixed; `markComplete` writes
-  // `{ answer, steps, totalTokens, totalIterations, reachedMaxIterations }`.
-  // We only surface the fields the client needs to render the trace.
-  const result = execution.result as
-    | { answer?: string; steps?: IAgentStep[]; totalIterations?: number }
-    | null
-    | undefined;
-
-  // Fall back to the live checkpoint for non-terminal executions: `result` is
-  // only populated on `markComplete`, so an in-flight run reconnect reads empty
-  // steps without this. The checkpoint carries the same shape (AgentStep[]) and
-  // is the source `markComplete` itself snapshots.
-  const checkpoint = execution.checkpoint as { steps?: IAgentStep[]; iteration?: number } | null | undefined;
-  const steps = result?.steps ?? checkpoint?.steps ?? [];
-  const totalIterations = result?.totalIterations ?? checkpoint?.iteration ?? null;
 
   // Child subagent snapshots for the "Show reasoning" disclosure to re-render
   // nested step traces under their parent's `delegate_to_agent` action. Also
@@ -75,10 +44,10 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
 
   return res.json({
     id,
-    status: execution.status,
-    answer: result?.answer ?? null,
-    steps,
-    totalIterations,
+    status: trace.status,
+    answer: trace.answer,
+    steps: trace.steps,
+    totalIterations: trace.totalIterations,
     children,
   });
 });

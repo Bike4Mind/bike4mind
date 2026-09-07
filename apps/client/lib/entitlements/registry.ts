@@ -16,7 +16,7 @@
  */
 import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
-import { parseInternalStaffDomains } from '@bike4mind/common';
+import { parseInternalStaffDomains, DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -320,12 +320,11 @@ export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEnt
  * work (dataLakes epic #1658 lane C, #1673), not this pattern-registration step.
  */
 const DATALAKE_ENTITLEMENT_PREFIX = 'datalake:';
-const DATALAKE_ENTITLEMENT_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
-// Mirrors slug.max(60) on CreateDataLakeRequestInput (schemas/dataLake.ts) - a longer slug
-// can't belong to a real lake, so accepting it here would reopen the exact silent-no-op-grant
-// risk `unknownEntitlementKeys` exists to close. (min(2) is already implied by the regex shape:
-// first char + last char, with the middle `*` allowed to match zero characters.)
-const DATALAKE_ENTITLEMENT_MAX_SLUG_LENGTH = 60;
+// The shape and max come from the same constants CreateDataLakeRequestInput validates against,
+// so this gate cannot drift from what a lake slug is allowed to be. A longer slug can't belong
+// to a real lake, so accepting it here would reopen the exact silent-no-op-grant risk
+// `unknownEntitlementKeys` exists to close. (The 2-char minimum is already implied by the regex
+// shape: first char + last char, with the middle `*` allowed to match zero characters.)
 
 /**
  * Whether `key` is a `datalake:<slug>` entitlement. Normalizes internally (matches
@@ -336,7 +335,7 @@ export function isDatalakeEntitlementKey(key: string): boolean {
   const normalized = normalizeTag(key);
   if (!normalized.startsWith(DATALAKE_ENTITLEMENT_PREFIX)) return false;
   const slug = normalized.slice(DATALAKE_ENTITLEMENT_PREFIX.length);
-  return slug.length <= DATALAKE_ENTITLEMENT_MAX_SLUG_LENGTH && DATALAKE_ENTITLEMENT_SLUG_REGEX.test(slug);
+  return slug.length <= MAX_DATA_LAKE_SLUG_LENGTH && DATA_LAKE_SLUG_REGEX.test(slug);
 }
 
 /**

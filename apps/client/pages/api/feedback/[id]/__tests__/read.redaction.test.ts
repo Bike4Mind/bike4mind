@@ -43,6 +43,7 @@ const { feedbackDoc } = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: { findById: vi.fn().mockResolvedValue(feedbackDoc) },
+  FeedbackTextModel: { find: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }) },
 }));
 
 import '../read';

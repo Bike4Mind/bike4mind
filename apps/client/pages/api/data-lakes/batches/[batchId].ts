@@ -78,18 +78,25 @@ const handler = baseApi()
 
     const data = UpdateBatchInput.parse(req.body);
 
-    await dataLakeBatchRepository.update({
-      id: batchId,
+    // Guarded, like every other status write on this collection (markTerminalIfActive in the DELETE
+    // below, setStatusIfActive in upload-complete, setTaxonomyStatusIfActive in the taxonomy job).
+    // A plain update here could write a batch the queue finalizer had already settled back to a
+    // non-terminal status: it would reappear in findActiveByUserId and reconcileStuckBatches would
+    // later force-fail a batch that actually succeeded. The ownership check above still runs first,
+    // so this only ever narrows what an authorized caller may do.
+    const updated = await dataLakeBatchRepository.updateIfActive(batchId, {
       status: data.status,
       ...(data.failedFiles !== undefined && { failedFiles: data.failedFiles }),
       ...(data.failedFileNames !== undefined && { failedFileNames: data.failedFileNames }),
       ...((data.status === 'completed' || data.status === 'completed_with_errors') && { completedAt: new Date() }),
     });
 
-    // Only on the transition INTO terminal. Re-PUTting a status the batch already holds would
-    // otherwise run a fresh whole-lake aggregation per call, and the normal completed path is
-    // already recomputed by the queue finalizer.
-    if (!BATCH_TERMINAL_STATUSES.includes(batch.status)) {
+    // Only on the transition INTO terminal, and now decided by the CLAIM rather than by the status
+    // read above - a finalization landing between that read and this write used to be both
+    // overwritten and mis-classified here, triggering a second whole-lake aggregation. Losing is a
+    // benign no-op (the batch is already settled, so the caller's intent is moot), matching how
+    // upload-complete treats a lost setStatusIfActive.
+    if (updated) {
       await recomputeLakeAfterTerminal(data.status, batch.dataLakeId, req.logger, {
         userId: req.user.id,
         isAdmin: !!req.user.isAdmin,

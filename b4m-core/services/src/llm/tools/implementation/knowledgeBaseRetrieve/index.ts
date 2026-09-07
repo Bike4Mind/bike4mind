@@ -2,10 +2,17 @@ import { ToolDefinition } from '../../base/types';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+} from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMembership';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -76,6 +83,13 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
         if (!context.db.fabfiles) {
           context.logger.error('❌ Knowledge Retrieve: fabfiles repository not available');
+          // Nothing below this line can run without fabfiles, so this is a genuine failure,
+          // not an abstain (mirrors the same guard in knowledgeBaseSearch).
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+            },
+          } as any);
           return 'Knowledge base retrieval is not available at this time.';
         }
 
@@ -84,6 +98,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         const chunkRepo = context.db.fabfilechunks;
         if (!chunkRepo?.findTextsByFabFileId || !chunkRepo?.countByFabFileId) {
           context.logger.error('❌ Knowledge Retrieve: fabfilechunks paged text reader not available');
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+            },
+          } as any);
           return 'Knowledge base retrieval is not available at this time (chunk reader unavailable).';
         }
 
@@ -101,6 +120,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         const notFoundMsg = (id: string) =>
           `No document found with ID "${id}". The file may not exist or you may not have access to it. Try using search_knowledge_base to find the correct file ID.`;
         if (scope && scope.fileIds.length === 0) {
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: {
+                attempted: true,
+                outcome: 'no_lakes',
+                surfaces: ['knowledgeBaseRetrieve'],
+                dataLakeTags: [],
+              },
+            },
+          } as any);
           return file_id ? notFoundMsg(file_id) : 'No documents found matching your request in your knowledge base.';
         }
 
@@ -111,7 +140,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // makes whichever one runs first, plus the attribution step, share a single round trip
           // instead of each re-resolving it.
           let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
-          const dynamicAccess = () => (dynamicAccessPromise ??= getDynamicDataLakeAccess(context));
+          // Narrowed INSIDE the chain so the memo stays a Promise (it is shared by several later
+          // awaits) and so every consumer sees the session-scoped set, not the owner-wide one.
+          const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context));
 
           let files: IFabFileDocument[] = [];
 
@@ -123,6 +154,19 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               // getDynamicDataLakeAccess) is unreachable on this branch. Scope membership IS
               // the authorization - the agent owner curated these files for this audience.
               if (!scope.fileIds.includes(file_id)) {
+                // 'ok' not 'no_lakes': this is a single-file miss, not a "no lakes in scope"
+                // surface-wide state - the notFoundMsg wording is unchanged either way, so
+                // recording this server-side telemetry write creates no existence-oracle leak.
+                await context.statusUpdate({
+                  promptMeta: {
+                    retrieval: {
+                      attempted: true,
+                      outcome: 'ok',
+                      surfaces: ['knowledgeBaseRetrieve'],
+                      dataLakeTags: [],
+                    },
+                  },
+                } as any);
                 return notFoundMsg(file_id);
               }
               const scopedFile = await context.db.fabfiles.findById(file_id);
@@ -143,10 +187,18 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
                 const sharedFile = await context.db.fabfiles.findById(file_id);
                 if (isLiveVisibleFile(sharedFile, retrievalFilter)) {
-                  const { dataLakeTags, dataLakeTagPrefixes } = await dynamicAccess();
+                  const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
                   const fileTags = sharedFile.tags?.map(t => t.name) || [];
                   const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
                   const hasPrefixAccess = dataLakeTagPrefixes.some(p => fileTags.some(t => t.startsWith(p)));
+                  // A dynamic lake's prefix arm, mirroring what search now matches (#2243): without
+                  // this, a prefix-only member the caller reached through search_knowledge_base
+                  // could not be opened by retrieve_knowledge_content - a file returned by search
+                  // but then denied. Anchored to that lake's creator, never the caller, matching
+                  // buildDataLakeMembershipFilter exactly (see satisfiesMembershipScope).
+                  const hasMembershipAccess = lakeMembershipsFrom(lakes).some(m =>
+                    satisfiesMembershipScope(m, sharedFile)
+                  );
                   const hasShareAccess = sharedFile.users?.some(
                     (u: { userId: string; permissions: string[] }) =>
                       u.userId === context.userId && u.permissions?.some(p => p === 'read' || p === 'write')
@@ -158,7 +210,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                       (g: { groupId: string; permissions: string[] }) =>
                         userGroups.includes(g.groupId) && g.permissions?.some(p => p === 'read' || p === 'write')
                     );
-                  if (hasMetaTagAccess || hasPrefixAccess || hasShareAccess || hasGroupAccess) {
+                  if (hasMetaTagAccess || hasPrefixAccess || hasMembershipAccess || hasShareAccess || hasGroupAccess) {
                     files = [sharedFile];
                   }
                 }
@@ -166,6 +218,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             }
 
             if (files.length === 0) {
+              // Ran to completion (owned/shared/scoped access checks all executed) and legitimately
+              // resolved to nothing - the mirror-image of the Path B zero-match case below, not a
+              // "never attempted" state (#1971 review).
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+                },
+              } as any);
               return notFoundMsg(file_id);
             }
           }
@@ -194,7 +254,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 }
               );
             } else {
-              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await dynamicAccess();
+              const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
+              const lakeMemberships = lakeMembershipsFrom(lakes);
+              warnIfManyLakeMemberships(lakeMemberships, context.logger, 'retrieve_knowledge_content');
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -207,7 +269,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   userGroups: context.user.groups || [],
                   dataLakeTags,
                   dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-                  scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
+                  lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                   excludeContent: true, // Content fetched via chunks below, not the document field
                   // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                   ...retrievalFilter,
@@ -230,6 +292,13 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               const inlinedNote = inlinedCount
                 ? ` ${inlinedCount} file(s) attached to this conversation may not be indexed for search yet - if so, their content was already included directly in the conversation above; answer from that instead of reporting them as inaccessible.`
                 : '';
+              // Ran to completion (the search itself succeeded) and legitimately found no
+              // matching documents - must be distinguishable from "never asked" (#1867 review).
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+                },
+              } as any);
               return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.${inlinedNote}`;
             }
           }
@@ -332,9 +401,15 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             // Untrusted on every part that comes from the document, not just the body: the file
             // name and tag list are attacker-influenced too, and a newline in either would carry a
-            // forged marker into the header lines. See renderRetrievedContentBlock.
+            // forged marker into the header lines. See renderRetrievedContentBlock. The date is the
+            // one part that needs no wrap - documentDateClause emits digits and separators only.
+            //
+            // Placed on the `###` line rather than in the metadata block below so all THREE
+            // retrieval channels carry it in the same relative position (#2236 names only the
+            // other two; a dateless channel here would let one turn cite the same document dated
+            // via search and undated via retrieve).
             sections.push(
-              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.createdAt)}\n` +
                 `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
@@ -349,6 +424,21 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           }
 
           if (retrievedFiles.length === 0) {
+            // Ran to completion (documents were located) and legitimately found no stored text -
+            // must be distinguishable from "never asked" (#1867). No prior statusUpdate call
+            // exists on this branch; dataLakeTags is left empty rather than resolved synchronously
+            // - see the audit-write comment below on why dynamicAccess() is deliberately deferred
+            // off this path.
+            await context.statusUpdate({
+              promptMeta: {
+                retrieval: {
+                  attempted: true,
+                  outcome: 'ok',
+                  surfaces: ['knowledgeBaseRetrieve'],
+                  dataLakeTags: [],
+                },
+              },
+            } as any);
             // A file already inlined into this turn's prompt (attached but still chunking) has its
             // content in front of the model regardless of this zero-chunk result - say so explicitly
             // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
@@ -408,6 +498,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             fileIds: retrievedFiles.map(f => f.id),
             surface: 'chat-kb-retrieve' as const,
             ...(query ? { queryText: query } : {}),
+            questId: context.questId,
+            sessionId: context.sessionId,
           };
           if (scope) {
             // Scoped branch has no lake concept at all (resolvedLakeIds is always []) but is
@@ -421,7 +513,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           } else if (context.db.lakeAccessEvents) {
             const fileTagLists = retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []);
-            dynamicAccess()
+            // Deliberately NOT dynamicAccess(): that is the session-narrowed set, and attribution
+            // asks a different question - "what lake was this content", not "what may this session
+            // search". A file served by the ownership fast path consults no lake state, so under a
+            // narrowed or suppressed session it attributes to zero lakes and the row is dropped by
+            // the guard below - losing the audit trail for access that still happened.
+            getDynamicDataLakeAccess(context)
               .then(({ lakes }) => {
                 // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
                 // Path B's search is owner+shared+org+lake too), so a retrieved file with no
@@ -464,17 +561,24 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             };
           });
 
-          if (citables.length > 0) {
-            await context.statusUpdate(
-              {
-                promptMeta: {
-                  citables,
+          // citables mirrors retrievedFiles 1:1 and is therefore always non-empty here (the
+          // retrievedFiles.length === 0 case returns above, before this point). retrieval is
+          // recorded unconditionally rather than gated on citables.length for that reason.
+          await context.statusUpdate(
+            {
+              promptMeta: {
+                citables,
+                retrieval: {
+                  attempted: true,
+                  outcome: 'ok',
+                  surfaces: ['knowledgeBaseRetrieve'],
+                  dataLakeTags: [],
                 },
-              } as any,
-              'Knowledge base content retrieved'
-            );
-            context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
-          }
+              },
+            } as any,
+            'Knowledge base content retrieved'
+          );
+          context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
 
           // This channel returns WHOLE documents (up to ABSOLUTE_MAX_CHARS) and is reachable
           // without a prior search, so the delimiter matters more here than on the search path.
@@ -495,6 +599,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           return prependRetrievedLakePrompts(context, result, datalakeTags, injectedLakeTags);
         } catch (error) {
           context.logger.error('❌ Knowledge Retrieve: Error during retrieval:', error);
+          // A retrieval that threw must not be byte-identical to one never attempted (#1867).
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+            },
+          } as any);
           return 'An error occurred while retrieving document content. Please try again.';
         }
       },

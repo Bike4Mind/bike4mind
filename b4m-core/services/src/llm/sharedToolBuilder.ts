@@ -47,6 +47,10 @@ export interface ToolBuilderDeps {
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
+  suppressLakeArms?: ToolContext['suppressLakeArms'];
+  /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
+  sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
   /**
    * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
    * executor wires this to fold nested tool generation into iteration billing (#630);
@@ -186,6 +190,10 @@ export interface ToolBuilderCallbacks {
   /** Session ID for entity extraction from tool results */
   sessionId?: string;
 
+  /** Quest (turn) id, for lake-access audit rows to join back to their turn - see
+   * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
+  questId?: string;
+
   /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
   onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
 
@@ -283,6 +291,8 @@ export function buildSharedTools(
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
+    suppressLakeArms,
+    sessionRetrievalTags,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -292,7 +302,17 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter, kbScope, inlinedAttachmentIds, fullyInlinedAttachmentIds },
+    {
+      db,
+      retrievalFilter,
+      kbScope,
+      inlinedAttachmentIds,
+      fullyInlinedAttachmentIds,
+      suppressLakeArms,
+      sessionRetrievalTags,
+      questId: callbacks.questId,
+      getAbortSignal,
+    },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,

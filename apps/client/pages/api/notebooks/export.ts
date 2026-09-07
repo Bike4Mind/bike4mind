@@ -14,7 +14,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { z } from 'zod';
 import { NotebookExportRequestSchema } from '../../../types/api';
 
-const { NotebookExportService } = notebookExportService;
+const { NotebookExportService, NotebookExportError } = notebookExportService;
 type NotebookExportOptions = Parameters<typeof NotebookExportService.prototype.exportNotebooks>[1];
 
 const handler = baseApi().post(
@@ -32,6 +32,12 @@ const handler = baseApi().post(
       validatedBody = NotebookExportRequestSchema.parse(req.body);
     } catch (error) {
       if (error instanceof z.ZodError) {
+        // The service is never reached on this path, so without this line the most common caller
+        // fault - a malformed notebook id - would 400 and leave no trace anywhere.
+        req.logger.warn('Notebook export rejected at the schema', {
+          userId,
+          fields: error.issues.map(err => err.path.join('.')),
+        });
         return res.status(400).json({
           success: false,
           message: 'Invalid request body',
@@ -115,6 +121,16 @@ const handler = baseApi().post(
         },
       });
     } catch (error) {
+      // Status comes off the error, which is where the service already put it. Answering 500 for
+      // everything is what paged LiveOps for a caller condition, since a 5xx-level log line is what
+      // trips the CloudWatch filter. Anything carrying 500 falls through and stays loud. No log
+      // line here: the service already wrote one at warn, through this same req.logger.
+      if (error instanceof NotebookExportError && error.statusCode < 500) {
+        return res.status(error.statusCode).json({ success: false, message: error.message, code: error.code });
+      }
+
+      // Deliberately a second error line: the service already logged this one at error, so a
+      // genuine 500 totals two. The 4xx branch above adds none, so a rejection stays at one.
       req.logger.error('Notebook export failed', { userId, error });
 
       return res.status(500).json({

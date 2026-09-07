@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Box, CircularProgress, Input, List, Skeleton, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
 import SearchIcon from '@mui/icons-material/Search';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { getNodeAtPath, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
-import type { TreeSortMode } from './treeChrome';
 import { useGetDataLakeArticles, type DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -15,10 +14,15 @@ const MIN_SEARCH_LENGTH = 2;
 const SEARCH_DEBOUNCE_MS = 300;
 
 /**
- * Synthetic breadcrumb key for the Viewer's "files with no prefix-matching tag" bucket.
- * Kept identical to the manager's constant so both surfaces mean the same bucket.
+ * Synthetic breadcrumb key for the "files with no prefix-matching tag" bucket. TreeView owns
+ * the constant; every surface that navigates the bucket (the Viewer, the manager nav) imports
+ * it from here so the two can never drift.
  */
 export const UNCATEGORIZED_KEY = '__uncategorized__';
+
+/** How the tree lists order their rows. Declared here (the source of truth); treeChrome.ts
+ *  re-exports it so a third mode is added in one place, alongside its icon. */
+export type TreeSortMode = 'count' | 'alpha';
 
 /** Splits "[Category] Title.ext" into [category, title] so files sharing a bracketed source
  *  prefix sort by the group then the title instead of piling up on the shared leading "[". */
@@ -36,11 +40,11 @@ function compareByCategoryThenTitle(a: IFabFileDocument, b: IFabFileDocument): n
 
 /**
  * Everything visual about a tree surface, injected by the shell that owns the look:
- * the page tree derives its chrome from surfaceTokens, the chat tree from treeChrome,
- * the discover viewer keeps its neutral look. TreeView itself owns only logic and
- * structure - if a knob here starts encoding BEHAVIOR, it belongs in TreeView instead.
+ * the chat tree derives its chrome from treeChrome, the discover viewer keeps its neutral
+ * look. TreeView itself owns only logic and structure - if a knob here starts encoding
+ * BEHAVIOR, it belongs in TreeView instead.
  */
-export interface DataLakeTreeChrome {
+export type DataLakeTreeChrome = {
   /** Outer column: width, borders, background - the surface's visual identity. */
   containerSx: SxProps;
   /** Search + sort toolbar wrapper. */
@@ -52,13 +56,12 @@ export interface DataLakeTreeChrome {
   renderSortButton: (sortBy: TreeSortMode, toggle: () => void) => ReactNode;
   /** Back row (chrome carries data-testid="datalake-back"). */
   renderBackRow: (label: string, onBack: () => void) => ReactNode;
-  /** When set, the back row renders INSIDE the scroll pane wrapped in this sx (the chat
-   *  tree's pinned back row); when absent it renders as a sibling above the scroll pane. */
-  stickyBackSx?: SxProps;
   scrollSx: SxProps;
   nodeListSx: SxProps;
   fileListSx: SxProps;
+  /** Must NOT set a React `key` - TreeView wraps each row in a keyed Fragment and owns list identity. */
   renderNodeRow: (node: TagNode, depth: number, onOpen: () => void) => ReactNode;
+  /** Must NOT set a React `key` - TreeView wraps each row in a keyed Fragment and owns list identity. */
   renderFileRow: (file: IFabFileDocument, selected: boolean, onSelect: () => void) => ReactNode;
   /** Human label for a raw tag segment at a depth (taxonomy-aware per surface). */
   humanize: (segment: string, depth: number) => string;
@@ -66,7 +69,19 @@ export interface DataLakeTreeChrome {
   allCategoriesLabel: string;
   emptyFilesLabel: string;
   errorLabel: string;
-}
+} & (
+  | {
+      /** The back row renders as a sibling before the scroll pane. */
+      backRowPlacement: 'above';
+      stickyBackSx?: never;
+    }
+  | {
+      /** The back row renders INSIDE the scroll pane, pinned by this sx - the union makes the
+       *  pairing unrepresentable to forget (a sticky placement with no sx silently unpins). */
+      backRowPlacement: 'sticky';
+      stickyBackSx: SxProps;
+    }
+);
 
 export interface DataLakeTreeViewProps {
   tree: TagNode[];
@@ -79,8 +94,8 @@ export interface DataLakeTreeViewProps {
    *  Omit to disable cross-tree search (e.g. a single-lake browser where "across the tree" would
    *  incorrectly reach every accessible lake) - local search within the loaded scope still works. */
   source?: DataLakeBrowseSource;
-  /** File ids to render highlighted - "attached to the prompt" in chat mode, or the single
-   *  file open in the reader in page mode. Not just the most recently clicked file, so an
+  /** File ids to render highlighted - "attached to the prompt" on the chat surface, or the
+   *  single file open in the Viewer's reader. Not just the most recently clicked file, so an
    *  earlier pick stays highlighted after a later one is added. */
   selectedFileIds: ReadonlySet<string>;
   onSelectFile: (file: IFabFileDocument) => void;
@@ -94,11 +109,59 @@ export interface DataLakeTreeViewProps {
    */
   uncategorized?: {
     files: IFabFileDocument[];
+    /**
+     * How many files the bucket holds, when the host knows that before it holds them. Hosts
+     * that already have the lake's whole file list omit it and `files.length` stands in; the
+     * chat tree fetches `files` only once the bucket is OPENED, so without this the row would
+     * advertise 0 and hide itself - the very "counted but unreachable" gap the bucket exists
+     * to close. Drives the row's number and whether it renders at all.
+     */
+    count?: number;
     renderRow: (count: number, onOpen: () => void) => ReactNode;
   };
   /** Slots above the toolbar / below the scroll pane (the chat tree's header and footer). */
   header?: ReactNode;
   footer?: ReactNode;
+  /**
+   * Stands in for the plain "No categories" line when the host knows WHY the tree is empty
+   * (no lakes, a failed lake read, an empty lake). Never used while searching - "no matches"
+   * is a fact about the query, not about the scope.
+   */
+  emptySlot?: ReactNode;
+  /** Controlled search query; falls back to internal state when omitted. */
+  search?: string;
+  /**
+   * Called on every search change regardless of control mode. When `search` is omitted
+   * (uncontrolled), internal state still updates too, so a host that only wants to observe
+   * changes can pass this alone without breaking typing.
+   */
+  onSearchChange?: (q: string) => void;
+  /** Controlled sort mode; falls back to internal state when omitted. */
+  sort?: TreeSortMode;
+  /**
+   * Called on every sort change regardless of control mode. When `sort` is omitted
+   * (uncontrolled), internal state still updates too, so a host that only wants to observe
+   * changes can pass this alone without breaking the toggle.
+   */
+  onSortChange?: (s: TreeSortMode) => void;
+  /** Skips the search/sort toolbar entirely (a host that supplies its own). */
+  hideToolbar?: boolean;
+  /**
+   * Depth at which the seeded `breadcrumb` root is treated as depth 0 for leaf/bucket gating,
+   * so a host (e.g. the manager, seeded at a lake's own root) can nest TreeView below its own
+   * navigation without the seeded root itself being mistaken for a leaf. The seeded root's
+   * back SEMANTICS stay the host's concern: its chrome's renderBackRow may ignore TreeView's
+   * label/onBack and bind its own (ManagerNav's exits the lake at the seeded root); TreeView
+   * still owns placement and only requires `breadcrumb.length > 0` (or `alwaysShowBackRow`).
+   */
+  leafMinDepth?: number;
+  /**
+   * Render the back row even at an empty breadcrumb - for hosts whose back affordance doubles
+   * as an exit control (the chrome's renderBackRow typically supplies its own label/handler then).
+   */
+  alwaysShowBackRow?: boolean;
+  /** Renamed test ids for hosts embedding more than one TreeView instance. */
+  testIds?: { container?: string; error?: string };
 }
 
 export default function DataLakeTreeView({
@@ -115,9 +178,30 @@ export default function DataLakeTreeView({
   uncategorized,
   header,
   footer,
+  emptySlot,
+  search,
+  onSearchChange,
+  sort,
+  onSortChange,
+  hideToolbar,
+  leafMinDepth = 0,
+  alwaysShowBackRow,
+  testIds,
 }: DataLakeTreeViewProps) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<TreeSortMode>('count');
+  const [internalSearch, setInternalSearch] = useState('');
+  const [internalSort, setInternalSort] = useState<TreeSortMode>('count');
+  const searchQuery = search ?? internalSearch;
+  const sortBy = sort ?? internalSort;
+  const setSearch = (q: string) => {
+    if (search === undefined) setInternalSearch(q);
+    onSearchChange?.(q);
+  };
+  const setSort = (s: TreeSortMode) => {
+    if (sort === undefined) setInternalSort(s);
+    onSortChange?.(s);
+  };
+  const containerTestId = testIds?.container ?? 'datalake-tree';
+  const errorTestId = testIds?.error ?? 'datalake-error';
 
   // Debounced so cross-tree article search (below) doesn't fire on every keystroke; folder
   // filtering stays on the raw query since it's already-loaded local data.
@@ -134,9 +218,6 @@ export default function DataLakeTreeView({
   // qualifies for a search at all.
   const effectiveSearch = searchQuery.trim().length >= MIN_SEARCH_LENGTH ? debouncedSearch : '';
 
-  // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag.
-  const isUncategorized = !!uncategorized && breadcrumb.length === 1 && breadcrumb[0] === UNCATEGORIZED_KEY;
-
   const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
   const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
 
@@ -151,10 +232,19 @@ export default function DataLakeTreeView({
     );
   }, [currentNodes, searchQuery, sortBy]);
 
-  // At a leaf node (no children), files are filtered locally by the leaf tag.
-  const leafTag = !isUncategorized && breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
+  // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag. It
+  // lives one level below the seeded root, and the depth bound is a ceiling rather than an
+  // equality so a host that renders a breadcrumb SHORTER than leafMinDepth (the manager's
+  // deep-link opens a lake at an empty path) still reaches its bucket.
+  const isUncategorized =
+    !!uncategorized && breadcrumb.length <= leafMinDepth + 1 && breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
+
+  // At a leaf node (no children) below the seeded root, files are filtered locally by the leaf tag.
+  const leafTag =
+    !isUncategorized && breadcrumb.length > leafMinDepth && currentNodes.length === 0 ? breadcrumb.join(':') : null;
   const showFiles = isUncategorized || !!leafTag;
   const bucketFiles = uncategorized?.files;
+  const bucketCount = uncategorized ? (uncategorized.count ?? uncategorized.files.length) : 0;
   const files = useMemo(() => {
     const scoped = isUncategorized
       ? bucketFiles!
@@ -168,8 +258,19 @@ export default function DataLakeTreeView({
 
   // Cross-tree article search (#1693): while browsing folders, a query also reaches article
   // titles/tags/notes across EVERY lake/tag the caller can access - not scoped to the current
-  // breadcrumb or folder, since the server search takes no tags/path filter. Intentional: the
-  // Explorer already merges multiple lakes into one tag tree, so this matches that merged scope.
+  // breadcrumb, and NOT to the host's lake scope either. That was once justified by the tree
+  // always showing every lake merged, which the in-chat picker (#1943) made false: with a lake
+  // scoped, the folders above narrow but these results still span every reachable lake.
+  //
+  // Left wide rather than filtered because lake membership is not expressible as a tag filter.
+  // `filters.tags` would AND against tag names, but a lake's members are "carries the lake's
+  // meta-tag OR carries its prefix and is owned by the lake's creator" (see
+  // countDataLakeFilesByMembership) - so filtering on datalakeTag alone would silently drop the
+  // prefix-only files, and a search that quietly omits matches is worse than one that is
+  // honestly account-wide. Narrowing this wants a lake-scope parameter on the articles endpoint.
+  // For the same reason the query is not reset on a scope change: it is an account-wide article
+  // search that happens to be typed here, not a filter over the current scope.
+  //
   // Skipped at a leaf/bucket since `files` above already searches the (already-loaded) scope.
   const treeSearchActive = !showFiles && !!source && effectiveSearch.length >= MIN_SEARCH_LENGTH;
   const { data: treeSearchResult, isLoading: treeSearchLoading } = useGetDataLakeArticles(
@@ -182,7 +283,7 @@ export default function DataLakeTreeView({
   // a deeper child tag. Render those as file rows mixed into the folder list below, so the view
   // reads like a normal file browser (folders + files together) instead of hiding them behind a
   // folder that only ever contains itself.
-  const ownTag = !isUncategorized && !leafTag && breadcrumb.length > 0 ? breadcrumb.join(':') : null;
+  const ownTag = !isUncategorized && !leafTag && breadcrumb.length > leafMinDepth ? breadcrumb.join(':') : null;
   const ownFiles = useMemo(() => {
     if (!ownTag || !currentNode?.ownFileCount) return [];
     return articles.filter(f => (f.tags ?? []).some(t => t.name === ownTag)).sort(compareByCategoryThenTitle);
@@ -191,7 +292,9 @@ export default function DataLakeTreeView({
   // not files, so a folder's own files are not "search results" either.
   const showOwnFiles = !searchQuery && ownFiles.length > 0;
 
-  const showBucketRow = !!uncategorized && breadcrumb.length === 0 && !searchQuery && uncategorized.files.length > 0;
+  // A ceiling, matching isUncategorized above: the bucket belongs at the seeded root, and a
+  // breadcrumb shallower than leafMinDepth is still that root as far as the host is concerned.
+  const showBucketRow = !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketCount > 0;
   // The bucket / own-files rows standing in for an empty node list are still content, and a
   // pending/matched article search might still fill the pane - none of that should flash
   // "No categories"/"No matches" while it's about to be superseded.
@@ -201,10 +304,14 @@ export default function DataLakeTreeView({
     !showOwnFiles &&
     !(treeSearchActive && (treeSearchLoading || treeSearchArticles.length > 0));
 
+  // The seeded-root back row (if any) is normally the host's concern (e.g. ManagerNav renders
+  // its own); TreeView's own back row cares whether it has somewhere to go back to, OR whether
+  // the host opted into `alwaysShowBackRow` because its back affordance doubles as an exit
+  // control (a degenerate seeded root can otherwise silently remove the only way out).
   const backRow =
-    breadcrumb.length > 0
+    breadcrumb.length > 0 || alwaysShowBackRow
       ? chrome.renderBackRow(
-          breadcrumb.length === 1
+          breadcrumb.length <= 1
             ? chrome.allCategoriesLabel
             : chrome.humanize(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2),
           () => onNavigate(breadcrumb.slice(0, -1))
@@ -212,34 +319,36 @@ export default function DataLakeTreeView({
       : null;
 
   return (
-    <Box data-testid="datalake-tree" sx={chrome.containerSx}>
+    <Box data-testid={containerTestId} sx={chrome.containerSx}>
       {header}
 
       {/* Search bar + sort toggle */}
-      <Box sx={chrome.toolbarSx}>
-        <Input
-          size="sm"
-          placeholder={chrome.searchPlaceholder}
-          startDecorator={<SearchIcon sx={{ fontSize: 18 }} />}
-          endDecorator={treeSearchActive && treeSearchLoading ? <CircularProgress size="sm" /> : undefined}
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          data-testid="datalake-search"
-          sx={chrome.searchSx}
-        />
-        {/* The toggle only ever reorders the folder list below - a pure file view (leaf or the
-            uncategorized bucket) always sorts by category then title, so showing an interactive
-            control that visibly does nothing there would read as broken. */}
-        {!showFiles && chrome.renderSortButton(sortBy, () => setSortBy(prev => (prev === 'count' ? 'alpha' : 'count')))}
-      </Box>
+      {!hideToolbar && (
+        <Box sx={chrome.toolbarSx}>
+          <Input
+            size="sm"
+            placeholder={chrome.searchPlaceholder}
+            startDecorator={<SearchIcon sx={{ fontSize: 18 }} />}
+            endDecorator={treeSearchActive && treeSearchLoading ? <CircularProgress size="sm" /> : undefined}
+            value={searchQuery}
+            onChange={e => setSearch(e.target.value)}
+            data-testid="datalake-search"
+            sx={chrome.searchSx}
+          />
+          {/* The toggle only ever reorders the folder list below - a pure file view (leaf or the
+              uncategorized bucket) always sorts by category then title, so showing an interactive
+              control that visibly does nothing there would read as broken. */}
+          {!showFiles && chrome.renderSortButton(sortBy, () => setSort(sortBy === 'count' ? 'alpha' : 'count'))}
+        </Box>
+      )}
 
       {/* Back row above the scroll pane unless the chrome pins it inside (chat tree). */}
-      {!chrome.stickyBackSx && backRow}
+      {chrome.backRowPlacement === 'above' && backRow}
 
       <Box sx={chrome.scrollSx}>
-        {chrome.stickyBackSx && backRow && <Box sx={chrome.stickyBackSx}>{backRow}</Box>}
+        {chrome.backRowPlacement === 'sticky' && backRow && <Box sx={chrome.stickyBackSx}>{backRow}</Box>}
         {isError ? (
-          <Box sx={{ p: 2, textAlign: 'center' }} data-testid="datalake-error">
+          <Box sx={{ p: 2, textAlign: 'center' }} data-testid={errorTestId}>
             <Typography level="body-xs" sx={{ color: 'danger.400' }}>
               {chrome.errorLabel}
             </Typography>
@@ -252,37 +361,58 @@ export default function DataLakeTreeView({
           </Box>
         ) : showFiles ? (
           /* File list at a leaf (or the uncategorized bucket) */
-          <List size="sm" sx={chrome.fileListSx}>
-            {files.length === 0 ? (
-              <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  {chrome.emptyFilesLabel}
-                </Typography>
-              </Box>
-            ) : (
-              files.map(f => chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f)))
-            )}
-          </List>
+          files.length === 0 ? (
+            /* Outside the List: Joy's List is a <ul>, whose only valid children are <li>. */
+            <Box sx={{ p: 2, textAlign: 'center' }}>
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                {chrome.emptyFilesLabel}
+              </Typography>
+            </Box>
+          ) : (
+            <List size="sm" sx={chrome.fileListSx}>
+              {files.map(f => (
+                <Fragment key={f.id}>
+                  {chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f))}
+                </Fragment>
+              ))}
+            </List>
+          )
         ) : (
           /* Folder tree, own-tagged files mixed in, plus (while searching) articles matched
              anywhere in scope below it. */
           <>
-            <List size="sm" sx={chrome.nodeListSx}>
-              {filteredNodes.map(node =>
-                chrome.renderNodeRow(node, breadcrumb.length, () => onNavigate([...breadcrumb, node.segment]))
-              )}
-              {showBucketRow &&
-                uncategorized!.renderRow(uncategorized!.files.length, () => onNavigate([UNCATEGORIZED_KEY]))}
-              {showOwnFiles &&
-                ownFiles.map(f => chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f)))}
-              {showNodeEmpty && (
+            {/* The empty state renders INSTEAD of the List, not inside it: Joy's List is a
+                <ul>, and an emptySlot carrying an action button would put a <button> straight
+                into it. showNodeEmpty already excludes every case where the List has content,
+                so this is a swap rather than a hidden branch. */}
+            {showNodeEmpty ? (
+              !searchQuery && emptySlot ? (
+                emptySlot
+              ) : (
                 <Box sx={{ p: 2, textAlign: 'center' }}>
                   <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
                     {searchQuery ? 'No matches' : 'No categories'}
                   </Typography>
                 </Box>
-              )}
-            </List>
+              )
+            ) : (
+              <List size="sm" sx={chrome.nodeListSx}>
+                {filteredNodes.map(node => (
+                  <Fragment key={node.segment}>
+                    {chrome.renderNodeRow(node, breadcrumb.length, () => onNavigate([...breadcrumb, node.segment]))}
+                  </Fragment>
+                ))}
+                {/* Single conditional child, not a .map element - a key here would be inert. */}
+                {showBucketRow &&
+                  uncategorized!.renderRow(bucketCount, () => onNavigate([...breadcrumb, UNCATEGORIZED_KEY]))}
+                {showOwnFiles &&
+                  ownFiles.map(f => (
+                    <Fragment key={f.id}>
+                      {chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f))}
+                    </Fragment>
+                  ))}
+              </List>
+            )}
             {treeSearchActive && treeSearchArticles.length > 0 && (
               <>
                 <Typography
@@ -292,9 +422,11 @@ export default function DataLakeTreeView({
                   Articles
                 </Typography>
                 <List size="sm" sx={chrome.fileListSx} data-testid="datalake-search-articles">
-                  {treeSearchArticles.map(f =>
-                    chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f))
-                  )}
+                  {treeSearchArticles.map(f => (
+                    <Fragment key={f.id}>
+                      {chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f))}
+                    </Fragment>
+                  ))}
                 </List>
               </>
             )}

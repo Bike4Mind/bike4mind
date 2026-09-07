@@ -7,9 +7,17 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, User, UserActivityCounter, Organization, CounterLog } from '@bike4mind/database';
+import {
+  FeedbackModel,
+  FeedbackTextModel,
+  User,
+  UserActivityCounter,
+  Organization,
+  CounterLog,
+} from '@bike4mind/database';
 import { FeedbackEvents } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
+import { getSettingsMap } from '@bike4mind/utils';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -142,7 +150,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'it broke' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved).not.toBeNull();
     // The saved document and the analytics call must agree on the same resolved id -- the
     // authenticated user's real id, not the untrusted body value.
@@ -215,7 +223,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'org mismatch check' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved!.organization).toBe('Real Org');
   });
 
@@ -258,7 +266,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     // duplicate retry.
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'email outage should not mask this save' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved).not.toBeNull();
   });
 
@@ -298,9 +306,72 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'analytics write failure should not mask this save' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved).not.toBeNull();
 
     createSpy.mockRestore();
+  });
+
+  it('still returns 201 with the feedback saved when the admin settings read fails', async () => {
+    // getSettingsMap is the only post-save await left that can propagate out of the handler; a
+    // settings-store outage there used to turn an already-durable submission into a 5xx.
+    vi.mocked(getSettingsMap).mockRejectedValueOnce(new Error('settings store unavailable'));
+
+    const realUser = await User.create({
+      username: 'e2e-settings-failure-user',
+      name: 'Settings Failure User',
+      email: 'settings-failure-user@example.com',
+    });
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: realUser.id,
+        content: 'settings outage should not mask this save',
+        tags: [],
+        username: 'reporter',
+        userEmail: 'reporter@example.com',
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => true;
+    (req as unknown as { user: { id: string; username: string; email: string } }).user = {
+      id: realUser.id,
+      username: realUser.username,
+      email: realUser.email,
+    };
+    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    (req as unknown as { logger: unknown }).logger = stubLogger();
+    (req as unknown as { requestId: string }).requestId = 'test-request-id';
+
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
+    expect(saved).not.toBeNull();
+    // The free text lives on the TTL'd sibling, so a durable submission means both rows landed.
+    expect(await FeedbackTextModel.findById(saved!.id)).not.toBeNull();
+
+    // The analytics write does not depend on settings, so a settings outage must not cost us the
+    // event: the early return that answers 201 has to happen after logEvent, not before it.
+    const counter = await UserActivityCounter.findOne({
+      userId: realUser.id,
+      action: FeedbackEvents.CREATE_FEEDBACK,
+    });
+    expect(counter?.count).toBe(1);
+
+    // Neither channel's configuration is knowable without settings, so both must report a failure
+    // the alarm can see rather than the silent 'disabled' an empty settings fallback would give.
+    const body = JSON.parse(res._getData());
+    // This early return has to echo the same body shape as the success path, content included.
+    expect(body.content).toBe('settings outage should not mask this save');
+    expect(body.contentTruncated).toBe(false);
+    const { delivery } = body;
+    expect(delivery).toEqual({
+      delivered: false,
+      channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'failed', reason: 'error' } },
+    });
+    expect(mockPostFeedbackToSlack).not.toHaveBeenCalled();
+    expect(mockEmailPublish).not.toHaveBeenCalled();
   });
 });

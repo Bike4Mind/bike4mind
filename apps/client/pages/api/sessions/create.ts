@@ -5,6 +5,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
+  fallbackLakeSettingsRepository,
   projectRepository,
   sessionRepository,
   userRepository,
@@ -47,7 +48,13 @@ const handler = baseApi().post(
     if (body.dataLakeId) {
       const ctx = await toAccessContext(req);
       const lake = await dataLakeService.assertLakeAccess(String(body.dataLakeId), ctx, {
-        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          // Merges a static lake's admin-set groundingMode override in, so resolveLakeSessionDefaults
+          // below (which reads `lake.groundingMode` off this return value) actually sees it.
+          fallbackLakeSettings: fallbackLakeSettingsRepository,
+        },
       });
       const lakeDefaults = sessionService.resolveLakeSessionDefaults(lake);
       createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;
@@ -59,6 +66,16 @@ const handler = baseApi().post(
         projects: projectRepository,
         fabFiles: fabFileRepository,
       },
+      logger: req.logger,
+      // See the update route: the ownership reader cannot see a lake-membership file, so without
+      // this a session started from a teammate's org-lake file derives no scope at all.
+      //
+      // Imported at CALL time, not module load: the resolver's dependency graph reaches the Mongoose
+      // models, which pulls schema construction into the import graph of every consumer of this
+      // route. It is only needed when files are actually attached, so paying for it lazily keeps the
+      // route's static imports as they were.
+      resolveLakeAccess: async () =>
+        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
     });
 
     await User.findByIdAndUpdate(userId, { lastNotebookId: newSession.id });

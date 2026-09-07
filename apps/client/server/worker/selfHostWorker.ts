@@ -86,8 +86,12 @@ export class SelfHostWorker {
     for (const t of this.scheduled) {
       this.timers.push(setInterval(() => this.startScheduledTask(t), t.intervalMs));
     }
+    // Names, not just counts: a queue whose env var is unset is skipped at registration, and the
+    // only way to tell that from the outside is to see which consumers this line does NOT list.
     this.logger.info(
-      `[selfHostWorker] started: ${this.queues.length} queue(s), ${this.scheduled.length} scheduled task(s)`
+      `[selfHostWorker] started: polling ${this.queues.length} queue(s) [${this.queues
+        .map(q => q.name)
+        .join(', ')}], ${this.scheduled.length} scheduled task(s) [${this.scheduled.map(t => t.name).join(', ')}]`
     );
   }
 

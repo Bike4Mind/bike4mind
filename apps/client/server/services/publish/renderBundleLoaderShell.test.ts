@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { renderBundleLoaderShell } from './renderBundleLoaderShell';
+import { VIEWER_SANDBOX } from './viewerSecurity';
 
 describe('renderBundleLoaderShell', () => {
   const shell = renderBundleLoaderShell();
 
-  it('uses a sandbox="allow-scripts" iframe with NO allow-same-origin', () => {
-    expect(shell).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+  it('uses the shared viewer sandbox with NO allow-same-origin', () => {
+    expect(shell).toContain(`<iframe id="b4m-frame" sandbox="${VIEWER_SANDBOX}"`);
+    expect(shell).toContain('allow-scripts');
     expect(shell).not.toContain('allow-same-origin'); // CRITICAL opaque-origin invariant
   });
 

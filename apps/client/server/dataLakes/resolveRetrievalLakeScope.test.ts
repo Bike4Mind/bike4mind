@@ -2,23 +2,42 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { DataLakeConfig } from '@bike4mind/common';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockGetDynamicDataLakeAccess, mockGetRequestEntitlements } = vi.hoisted(() => ({
-  mockGetDynamicDataLakeAccess: vi.fn(),
-  mockGetRequestEntitlements: vi.fn(),
-}));
+const { mockGetDynamicDataLakeAccess, mockGetRequestEntitlements, mockGetUserEntitlements, mockFindMembershipOrgIds } =
+  vi.hoisted(() => ({
+    mockGetDynamicDataLakeAccess: vi.fn(),
+    mockGetRequestEntitlements: vi.fn(),
+    mockGetUserEntitlements: vi.fn(),
+    mockFindMembershipOrgIds: vi.fn().mockResolvedValue([]),
+  }));
 
 // The services barrel is mocked with a factory rather than vi.spyOn: under ESM a spy on a
 // re-exported binding does not reliably intercept the consumer's reference.
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { getDynamicDataLakeAccess: mockGetDynamicDataLakeAccess },
-}));
+//
+// Only `getDynamicDataLakeAccess` is replaced; the rest of `dataLakeService` comes from the real
+// module. `withStaticRegistryBypass` calls `registryMembershipScope`, and a hand-written stand-in
+// for it here would be a second copy of the very predicate this file's assertions claim parity
+// with - the drift #2265 removed. Keep new helpers coming from importOriginal, not from a literal.
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = (await importOriginal()) as typeof import('@bike4mind/services');
+  return {
+    ...actual,
+    dataLakeService: { ...actual.dataLakeService, getDynamicDataLakeAccess: mockGetDynamicDataLakeAccess },
+  };
+});
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { __marker: 'dataLakeRepository' },
-  organizationRepository: { __marker: 'organizationRepository' },
+  organizationRepository: { __marker: 'organizationRepository', findMembershipOrgIds: mockFindMembershipOrgIds },
 }));
-vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
+vi.mock('@server/entitlements', () => ({
+  getRequestEntitlements: mockGetRequestEntitlements,
+  getUserEntitlements: mockGetUserEntitlements,
+}));
 
-import { resolveRetrievalLakeScope, withStaticRegistryBypass } from './resolveRetrievalLakeScope';
+import {
+  resolveRetrievalLakeScope,
+  resolveRetrievalLakeScopeForUser,
+  withStaticRegistryBypass,
+} from './resolveRetrievalLakeScope';
 import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 
@@ -44,6 +63,16 @@ const asReq = (user: { id: string; tags?: string[] | null; organizationId?: stri
   ({ user }) as unknown as EntitlementRequest;
 
 describe('withStaticRegistryBypass', () => {
+  /**
+   * The bypass rebuilds the scope object, so the completeness flag needs carrying across. Losing it
+   * here would report an incomplete lake view for ADMINS ONLY - turning off the session-scope
+   * narrowing that keys on it for exactly the accounts that reach the most lakes.
+   */
+  it('carries lakeViewComplete through the widening, in both states', () => {
+    expect(withStaticRegistryBypass(scopeOf({ lakeViewComplete: false }), REGISTRY).lakeViewComplete).toBe(false);
+    expect(withStaticRegistryBypass(scopeOf({ lakeViewComplete: true }), REGISTRY).lakeViewComplete).toBe(true);
+  });
+
   it('returns scopedTagPrefixes byte-identical - privilege never promotes a dynamic prefix', () => {
     const scoped = ['tenantx:'];
     const out = withStaticRegistryBypass(scopeOf({ scopedTagPrefixes: scoped }), REGISTRY);
@@ -113,8 +142,18 @@ describe('withStaticRegistryBypass', () => {
     const out = withStaticRegistryBypass(scopeOf(), REGISTRY);
 
     expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:opti-knowledge', 'datalake:house-kb']);
-    // Registry-sourced entries carry no membership scope - they have no creator to anchor one to.
-    expect(out.lakes.every(l => l.source === 'registry' && !l.membership)).toBe(true);
+    // Each injected entry carries a REGISTRY membership scope, built off the registry config
+    // (property 1 above): the whole-lake count needs a scope for these lakes, or a privileged
+    // caller can search a registry lake and not count it.
+    expect(out.lakes.map(l => l.membership)).toEqual([
+      { kind: 'registry', datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:' },
+      { kind: 'registry', datalakeTag: 'datalake:house-kb', fileTagPrefix: 'house:' },
+    ]);
+    // The property #2243 actually needs, restated now that presence proves nothing: an unanchored
+    // arm must not reach a MULTI-lake retrieval query. `lakeMembershipsFrom` allow-lists `owned`,
+    // so the injected lakes still contribute no retrieval arm - which is what this asserts
+    // directly rather than via the absence of the field.
+    expect(out.lakes.every(l => l.source === 'registry' && l.membership.kind === 'registry')).toBe(true);
   });
 
   it('keeps a lake the scope already resolved, rather than replacing it with a registry entry', () => {
@@ -126,7 +165,12 @@ describe('withStaticRegistryBypass', () => {
       slug: 'opti-knowledge',
       datalakeTag: 'datalake:opti-knowledge',
       fileTagPrefix: 'opti:',
-      membership: { datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:', creatorUserId: 'owner1' },
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:opti-knowledge',
+        fileTagPrefix: 'opti:',
+        creatorUserId: 'owner1',
+      },
       source: 'dynamic' as const,
     };
 
@@ -273,5 +317,52 @@ describe('resolveRetrievalLakeScope', () => {
     req.membershipOrgIds = ['memoized-org'];
     await expect(db.organizations.findMembershipOrgIds('other-user')).resolves.toEqual(['other-org']);
     expect(organizationRepository.findMembershipOrgIds).toHaveBeenCalledWith('other-user');
+  });
+});
+
+/**
+ * The request-free entry point. It exists because most session-creation call sites are not
+ * request-scoped (a manager taking { user, logger }, a queue handler, an overlay service), and
+ * deriving a session's lake scope only where a `req` happened to be in hand meant the lake-aware
+ * derivation ran on one of ten createSession call sites.
+ */
+describe('resolveRetrievalLakeScopeForUser', () => {
+  beforeEach(() => {
+    // Re-attached per test: an earlier describe in this file deletes this method off the shared
+    // mock object as part of its own setup, and that mutation persists across tests.
+    (organizationRepository as unknown as { findMembershipOrgIds: unknown }).findMembershipOrgIds =
+      mockFindMembershipOrgIds;
+    mockFindMembershipOrgIds.mockClear().mockResolvedValue([]);
+    mockGetUserEntitlements.mockClear().mockResolvedValue([]);
+    mockGetDynamicDataLakeAccess.mockClear().mockResolvedValue({
+      dataLakeTags: ['datalake:acme'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [],
+    });
+  });
+
+  it('resolves entitlements from the USER when no request memo is supplied', async () => {
+    await resolveRetrievalLakeScopeForUser({ id: 'u1', tags: [] } as never);
+    expect(mockGetUserEntitlements).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
+  });
+
+  it('prefers a caller-supplied memo over re-resolving - the request path must not pay twice', async () => {
+    await resolveRetrievalLakeScopeForUser({ id: 'u1', tags: [] } as never, { entitlementKeys: ['k'] });
+    expect(mockGetUserEntitlements).not.toHaveBeenCalled();
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith(expect.objectContaining({ entitlementKeys: ['k'] }));
+  });
+
+  it('falls back to the organization repository for membership when given no memo', async () => {
+    await resolveRetrievalLakeScopeForUser({ id: 'u1', tags: [] } as never);
+    const arg = mockGetDynamicDataLakeAccess.mock.calls[0][0];
+    await arg.db.organizations.findMembershipOrgIds('u1');
+    expect(mockFindMembershipOrgIds).toHaveBeenCalledWith('u1');
+  });
+
+  it('applies the same static-registry bypass for a privileged caller as the request path', async () => {
+    const out = await resolveRetrievalLakeScopeForUser({ id: 'u1', tags: [], isAdmin: true } as never);
+    // Non-privileged callers get the resolved set verbatim; an admin additionally gets the registry.
+    expect(out.dataLakeTags).toContain('datalake:acme');
   });
 });

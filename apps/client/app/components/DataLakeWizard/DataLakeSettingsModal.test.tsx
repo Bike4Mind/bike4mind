@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 
@@ -21,10 +22,52 @@ const useDataLakeSpendMock = vi.fn(() => ({
   refetch: vi.fn(),
 }));
 
+// Steady state for the tests that don't care about the history tab. The history suite below
+// overrides it per test.
+const useLakeConfigHistoryMock = vi.fn(() => ({
+  data: undefined,
+  isLoading: false,
+  isFetching: false,
+  isForbidden: false,
+  error: null,
+  refetch: vi.fn(),
+}));
+// Steady state for the tests that don't care about the acquisition queue: an empty queue, which
+// keeps the Proposals tab hidden. The proposals suite below overrides it per test.
+const useDataLakeProposalsMock = vi.fn(() => ({
+  data: [] as unknown[],
+  isLoading: false,
+  isForbidden: false,
+  error: null,
+}));
+const reviewProposalMutate = vi.fn();
+
+// Steady state for tests that don't exercise the "Test this lake" picker: two reachable lakes,
+// loaded. The Test-scope suite below overrides this per test.
+type MockPickerLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean };
+const useGetDataLakesMock = vi.fn(() => ({
+  data: [
+    { id: 'lake-1', name: 'Test Lake', datalakeTag: 'datalake:test-lake' },
+    { id: 'lake-2', name: 'Open Lake', datalakeTag: 'datalake:open-lake' },
+  ] as MockPickerLake[],
+  isLoading: false,
+  isError: false,
+  refetch: vi.fn(),
+}));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
   useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
   useDataLakeSpend: (...args: unknown[]) => useDataLakeSpendMock(...args),
+  useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
+  useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
+  useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
+  useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),
+}));
+
+const startChatWithLakesMock = vi.fn();
+vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
+  useStartChatWithLakes: () => startChatWithLakesMock,
 }));
 
 // The picker's options come from an async react-query hook. Mock it so the modal renders
@@ -68,8 +111,28 @@ beforeEach(() => {
   activatablePrompts = [TRIAGE_ROUTER];
   activatableLoading = false;
   activatableError = false;
+  startChatWithLakesMock.mockReset();
+  useGetDataLakesMock.mockClear();
+  useGetDataLakesMock.mockReturnValue({
+    data: [
+      { id: 'lake-1', name: 'Test Lake', datalakeTag: 'datalake:test-lake' },
+      { id: 'lake-2', name: 'Open Lake', datalakeTag: 'datalake:open-lake' },
+    ],
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  });
   useDataLakeSpendMock.mockClear();
   useDataLakeSpendMock.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isForbidden: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  useLakeConfigHistoryMock.mockClear();
+  useLakeConfigHistoryMock.mockReturnValue({
     data: undefined,
     isLoading: false,
     isFetching: false,
@@ -721,6 +784,123 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
   });
 });
 
+describe('DataLakeSettingsModal - History tab', () => {
+  const managerLake = { ...openLake, id: 'lake-hist-1', canManage: true };
+  const readerLake = { ...openLake, id: 'lake-hist-2', canManage: false, embeddingSpendMicroUsd: undefined };
+
+  const historyView = {
+    lakeId: 'lake-hist-1',
+    lakeName: 'Open Lake',
+    truncated: false,
+    generatedAt: new Date('2026-08-18T12:00:00Z'),
+    entries: [
+      {
+        eventId: 'evt-1',
+        changedAt: new Date('2026-08-17T10:30:00Z'),
+        principalKind: 'user' as const,
+        principalId: '000000000000000000000001',
+        principalName: 'Ada Lovelace',
+        manageRung: 'grant-owner' as const,
+        action: 'update' as const,
+        changes: [{ field: 'name' as const, kind: 'literal' as const, before: 'Old', after: 'New' }],
+      },
+    ],
+  };
+
+  it('shows the History tab for a manager', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-history')).toBeInTheDocument();
+  });
+
+  it('shows NO History tab to a non-manager - the history is editor-only, like the fields it describes', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-history')).not.toBeInTheDocument();
+  });
+
+  it('does not fetch the history until the tab is actually clicked (lazy)', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(useLakeConfigHistoryMock).toHaveBeenCalledWith('lake-hist-1', false);
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+
+    expect(useLakeConfigHistoryMock).toHaveBeenCalledWith('lake-hist-1', true);
+  });
+
+  it('removes the tab retroactively on a 403 and shows no error paint', () => {
+    useLakeConfigHistoryMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: true,
+      error: { message: 'Forbidden' },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-history')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-config-history-error')).not.toBeInTheDocument();
+  });
+
+  it('renders the recorded changes once the tab is open', async () => {
+    const user = userEvent.setup();
+    useLakeConfigHistoryMock.mockReturnValue({
+      data: historyView,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+
+    expect(screen.getByTestId('datalake-config-history-table')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Old -> New')).toBeInTheDocument();
+  });
+
+  it('hides Save/Cancel on the read-only History tab, and restores them on Settings', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+  });
+});
 
 // An EXPLICIT target is the sole trigger for convergence (isConvergeablePolicy), so without a
 // control for it the whole feature is unreachable from the app - which is how it shipped to QA.
@@ -777,5 +957,197 @@ describe('DataLakeSettingsModal - required passage size', () => {
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
     expect(screen.getByTestId('datalake-passage-target-help').textContent).toContain('between 64 and 1500');
     expect(updateMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('DataLakeSettingsModal - Proposals tab visibility', () => {
+  const manageableLake = { ...openLake, id: 'lake-prop-1' };
+  const readerLake = { ...openLake, id: 'lake-prop-2', canManage: false };
+
+  const queued = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'prop-1',
+      dataLakeId: 'lake-prop-1',
+      status: 'pending',
+      sourceUrl: 'https://example.com/report',
+      canonicalSourceKey: 'https://example.com/report',
+      title: 'Quarterly report',
+      proposedTags: [],
+      provenance: { producer: 'research_run', retrievedAt: new Date('2026-08-01') },
+      ...over,
+    }) as never;
+
+  const withQueue = (proposals: unknown[], over: Record<string, unknown> = {}) =>
+    useDataLakeProposalsMock.mockReturnValue({
+      data: proposals,
+      isLoading: false,
+      isForbidden: false,
+      error: null,
+      ...over,
+    });
+
+  beforeEach(() => {
+    useDataLakeProposalsMock.mockClear();
+    reviewProposalMutate.mockClear();
+    withQueue([]);
+  });
+
+  it('hides the tab while the queue is empty - a permanently empty tab reads as broken', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-proposals')).not.toBeInTheDocument();
+  });
+
+  it('shows the tab with a count once something is waiting', () => {
+    withQueue([queued(), queued({ id: 'prop-2' })]);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (2)');
+  });
+
+  // Ruling on the last proposal used to make the tab vanish under the reviewer mid-action, silently
+  // relocating them to the Settings form - it read as the app losing their place, and hid the
+  // confirmation that they had finished the queue.
+  it('keeps the tab for the rest of the session once the queue empties', () => {
+    withQueue([queued()]);
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (1)');
+
+    withQueue([]);
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (0)');
+  });
+
+  it('never fetches the queue for a caller who cannot manage the lake', () => {
+    withQueue([queued()]);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(useDataLakeProposalsMock).toHaveBeenCalledWith('lake-prop-2', 'pending', { enabled: false });
+    expect(screen.queryByTestId('datalake-settings-tab-proposals')).not.toBeInTheDocument();
+  });
+
+  it('removes the tab retroactively on a 403 and shows no error paint', () => {
+    withQueue([queued()], { isForbidden: true, error: new Error('403') });
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-proposals')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-proposals-error')).not.toBeInTheDocument();
+  });
+
+  it('records an approval through the review mutation', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-approve-btn'));
+
+    expect(reviewProposalMutate).toHaveBeenCalledWith({ proposalId: 'prop-1', decision: 'approve' });
+  });
+
+  it('hides the Settings form actions while the Proposals tab is open (nothing to save there)', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeSettingsModal - Test this lake', () => {
+  it('hides the action for a reader (canManage: false)', () => {
+    const readerLake = { ...openLake, id: 'lake-11', canManage: false };
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId(`datalake-settings-test-btn-${readerLake.id}`)).not.toBeInTheDocument();
+  });
+
+  it('opens the scope dialog pre-selecting the lake under test, and starts a scoped chat on confirm', async () => {
+    startChatWithLakesMock.mockResolvedValue({ id: 'session-1' });
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId(`datalake-settings-test-btn-${openLake.id}`));
+    expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
+    // openLake.id === 'lake-2', so its checkbox starts checked; the other lake does not.
+    expect(screen.getByTestId('test-lake-scope-checkbox-lake-2').querySelector('input')).toBeChecked();
+    expect(screen.getByTestId('test-lake-scope-checkbox-lake-1').querySelector('input')).not.toBeChecked();
+
+    await user.click(screen.getByTestId('test-lake-scope-checkbox-lake-1').querySelector('input')!);
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    // Tags come back in the fetched-lakes list order, not selection order. The fixture tags are
+    // deliberately unequal to the lake ids and carry the `datalake:` prefix, so this discriminates
+    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that no
+    // `corpusGroundingMode` rides along: /api/sessions/create strips it off any request without a
+    // `dataLakeId`, so sending one would be a silent no-op.
+    expect(startChatWithLakesMock).toHaveBeenCalledWith({
+      retrievalTags: ['datalake:test-lake', 'datalake:open-lake'],
+    });
+    // The scope dialog is a separate flow from the settings form - confirming it must not also
+    // close the settings modal out from under the caller.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a toast and keeps the dialog open when the session create fails', async () => {
+    startChatWithLakesMock.mockRejectedValue(new Error('boom'));
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId(`datalake-settings-test-btn-${openLake.id}`));
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not start a test chat for this lake'));
+    expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
   });
 });

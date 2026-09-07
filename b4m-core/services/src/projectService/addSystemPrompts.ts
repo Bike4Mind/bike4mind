@@ -3,6 +3,8 @@ import { pushShareable } from '../sharingService';
 import { IFabFileRepository, IProjectRepository, IUserDocument, Permission } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { canonicalId, distinctIdCount } from '../utils/objectIds';
+import uniq from 'lodash/uniq.js';
 
 const addSystemPromptsSchema = z.object({
   projectId: z.string(),
@@ -30,10 +32,17 @@ export const addSystemPrompts = async (
   if (!project) throw new Error('Project not found');
 
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
-  if (files.length !== fileIds.length) throw new BadRequestError('Some files are not accessible');
+  if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
 
-  // Filter out files that are already system prompts
-  const newFileIds = fileIds.filter(fileId => !project.systemPrompts.some(prompt => prompt.fileId === fileId));
+  // Resolved ids, in REQUEST order: a doubled id - or the same id in two hex cases - would push two
+  // systemPrompts entries for one file, but `files` comes back in Mongo's order, and this array's
+  // order is the order the prompts compose in (ChatCompletionFeatures).
+  const resolvedById = new Map(files.map(f => [canonicalId(f.id), f.id]));
+  const resolvedIds = uniq(fileIds.map(id => resolvedById.get(canonicalId(id))).filter((id): id is string => !!id));
+  // Canonical on both sides: a legacy systemPrompts row stored with an uppercase hex fileId names
+  // the same file, and comparing raw would add a second prompt for it.
+  const existingPromptIds = new Set(project.systemPrompts.map(prompt => canonicalId(prompt.fileId)));
+  const newFileIds = resolvedIds.filter(fileId => !existingPromptIds.has(canonicalId(fileId)));
 
   if (newFileIds.length === 0) {
     throw new BadRequestError('All files are already added as system prompts');

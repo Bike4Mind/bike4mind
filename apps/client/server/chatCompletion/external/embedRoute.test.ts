@@ -89,7 +89,9 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   fabFileChunkRepository: {},
   dataLakeRepository: {},
+  fallbackLakeSettingsRepository: {},
   lakeAccessEventRepository: {},
+  scopedSettingsRepository: {},
 }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());

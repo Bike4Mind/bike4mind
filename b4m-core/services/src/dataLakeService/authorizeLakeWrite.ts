@@ -4,11 +4,13 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
 } from '@bike4mind/common';
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
+import { type LakeAccessLogger } from './resolveLakeReadAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
@@ -83,6 +85,53 @@ export const assertLakeRebuildAccess = async (
   const allowed = isFallbackLake(lake) ? ctx.isAdmin : await resolveCanManageLake(lake, ctx, { db });
   if (!allowed) {
     throw new BadRequestError("You do not have permission to rebuild this data lake's passages");
+  }
+  return lake;
+};
+
+/**
+ * Resolve a lake by id-or-slug and assert the caller may edit its FALLBACK SETTINGS OVERLAY (see
+ * IFallbackLakeSetting) - currently `groundingMode` only. Exists only for a static registry lake: a
+ * DB lake's settings live on its document and go through the ordinary `updateDataLake` write path
+ * (PUT /api/data-lakes/:id), which this gate deliberately refuses so the two paths cannot both
+ * claim to own a persisted lake's settings.
+ *
+ * Gates on `ctx.isAdmin` DIRECTLY, not `resolveCanManageLake` - same reasoning as
+ * `assertLakeRebuildAccess`: a fallback lake's synthetic document (`resolveFallbackLake`) spreads
+ * the registry config's `organizationId` onto it, so an org-scoped lake would let a customer-side
+ * org admin (not a platform admin) pass `canManageLake`'s org-admin rung if this used it. Must stay
+ * in sync with `canManageSettings` in `listDataLakes.ts`, which computes the identical predicate for
+ * the UI affordance this gate enforces server-side.
+ */
+export const assertFallbackLakeSettingsWriteAccess = async (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  {
+    db,
+    logger,
+  }: {
+    db: {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      /**
+       * Declared, and non-optional, so the overlay merge cannot be lost by a caller that builds
+       * exactly this type. It previously worked only by structural typing - the one route passes a
+       * wider object - so a second caller assembling the minimal declared shape would have
+       * typechecked green while every overlay field silently read as unset.
+       */
+      fallbackLakeSettings: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>;
+    };
+    // Forwarded so resolveFallbackLake's overlay-read failure is logged on the WRITE path too;
+    // without it that catch is reachable here but permanently silent.
+    logger?: LakeAccessLogger;
+  }
+): Promise<IDataLakeDocument> => {
+  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db, logger });
+  if (!isFallbackLake(lake)) {
+    throw new BadRequestError('This data lake has its own settings editor; use the standard update endpoint');
+  }
+  if (!ctx.isAdmin) {
+    throw new BadRequestError("You do not have permission to change this data lake's settings");
   }
   return lake;
 };

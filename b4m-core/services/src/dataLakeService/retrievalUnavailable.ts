@@ -1,5 +1,12 @@
-import { isConvergencePausedNote, isMemberIndexingInFlight } from '@bike4mind/common';
+import {
+  isChunkRebuildPending,
+  isChunkStalledFile,
+  isMemberIndexingInFlight,
+  type ChunkStallReason,
+} from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
+import { toSingleLine } from './renderDataLakePromptBlock';
+import { describeSupersession, type SupersessionReport } from './supersession';
 
 /**
  * Content that is in scope and authorized but temporarily UNSERVABLE, because it is mid-(re)index.
@@ -45,9 +52,11 @@ export interface RetrievalUnavailableReport {
   };
   /**
    * True when content was withheld here - the single flag a consumer branches on, alongside
-   * `EmbeddingMismatchReport.partial`. For the `indexing` bucket it is TRANSIENT and clears on its
-   * own, which is why it is safe to raise on an ordinary in-progress ingest as well as on a
-   * convergence wave; for `paused` it does not. Both are the same fact for a reader - some of this
+   * `EmbeddingMismatchReport.partial`. For the `indexing` bucket it is transient in the ordinary
+   * case and clears on its own, which is why it is safe to raise on an in-progress ingest as well as
+   * on a convergence wave; for `paused` it never does. The one `indexing` member that does not clear
+   * by itself is a rebuild whose enqueue was lost (#1939) - rare, and the prose names the action for
+   * it rather than promising only time. Both buckets are the same fact for a reader - some of this
    * lake is not searchable right now - so they share the flag, and the prose says which is which.
    */
   partial: boolean;
@@ -64,7 +73,16 @@ export type IndexStateFile = {
   chunkCount?: number;
   vectorizedChunkCount?: number | null;
   error?: string | null;
+  /** Set when the convergence kill switch stalled the file (`FabFile.chunkStallReason`). */
+  chunkStallReason?: ChunkStallReason | null;
+  /**
+   * The owner's own note. Read ONLY through `isChunkStalledFile`, as the transitional fallback for
+   * rows #2016's migration has not reached yet - see its docblock in `common`. Nothing else here
+   * may key on it, and it goes away with that arm.
+   */
   notes?: string | null;
+  /** A requested-but-uncommitted passage rebuild (#1939) - see the partition below. */
+  chunkRebuildRequestedAt?: Date | string | null;
 };
 
 /**
@@ -74,15 +92,19 @@ export type IndexStateFile = {
  * flagging every image and every still-uploading row would fire the partial signal on healthy
  * lakes forever - the failure mode that teaches a reader to ignore the flag.
  *
- * That `chunkCount > 0` guard looks like a hole for convergence and is not one, but only because of
- * an invariant elsewhere - stated here because nothing local would fail if it changed. Convergence's
- * `resetChunkStateByIds` sets `chunkCount: 0`, which routes a member being repaired to `servable`;
- * it is not silently absent, because that reset touches FabFile DOCUMENT fields only. The chunk rows
- * are deleted much later, inside `commitFabFileChunks`. So across the whole reset -> queue -> claim
- * -> tokenize span the member's previous vectorized chunks still exist and still rank normally: it
- * serves stale-but-real passages, and becomes withheld only once the commit lands and `chunkCount`
- * is positive with `vectorizedChunkCount` behind it. That is the better outcome, and it depends on
- * the reset never deleting chunk rows - keep the two in sync.
+ * The `chunkCount > 0` guard is what keeps images and pending uploads out, and it USED to route a
+ * member being repaired to `servable` as well: `resetChunkStateByIds` sets `chunkCount: 0`, and that
+ * reset touches FabFile DOCUMENT fields only - the chunk rows are deleted much later, inside
+ * `commitFabFileChunks` - so across the reset -> queue -> claim -> tokenize span the member's old
+ * vectorized chunks still existed and still ranked. That reading was defensible while the window was
+ * short, and wrong in the case that matters: it is indistinguishable from a rebuild that was reset
+ * and never enqueued, which never ends, and on a `vectorizedOnly` surface the file was dropped
+ * upstream of this partition entirely, so the hole was not even served-stale - it was silent.
+ *
+ * So the pending stamp (#1939) overrides the guard: a member with a rebuild outstanding is withheld
+ * and REPORTED as re-indexing. The cost is naming a file whose stale passages could still have been
+ * ranked for the minutes between reset and commit; the prose below is worded to be true of that
+ * member too. Refuse-and-report over degrade-silently, the same rule as everywhere else here.
  */
 export function partitionByIndexAvailability<T extends IndexStateFile>(
   files: readonly T[]
@@ -99,18 +121,18 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
     // The condition is EITHER marker AND zero vectorized chunks, i.e. "marked stalled and nothing of
     // it is retrievable right now". Both halves are load-bearing, and each was a live defect:
     //
-    // - Keying on the CHUNK marker alone served the vectorize arm, on the false premise that such a
+    // - Keying on the CHUNK arm alone served the vectorize arm, on the false premise that such a
     //   file "is served" and is "permanent". Neither holds. The search read path filters
     //   `vector: {$exists: true, $ne: []}`, so a file with 45 chunks and 0 vectors returns nothing
     //   while its neighbours are re-ranked into the top-K - measured live, the answer confidently
     //   contradicted the missing document. And reprocess repairs it in seconds, so it is repairable
     //   by the same prose the chunk arm already prints.
-    // - Keying on a marker alone, with no vector condition, withheld a REPAIRED file forever: the
-    //   rescue sweep enqueues without a reset, and nothing on that success path used to clear
-    //   `notes`, so a fully re-chunked and re-vectorized file kept its marker and stayed
-    //   permanently unsearchable while every search on the lake reported partial.
+    // - Keying on the marker alone, with no vector condition, withheld a REPAIRED file forever: the
+    //   rescue sweep enqueues without a reset, and nothing on that success path used to clear the
+    //   marker, so a fully re-chunked and re-vectorized file kept it and stayed permanently
+    //   unsearchable while every search on the lake reported partial.
     //
-    // Splitting on the VECTOR COUNT rather than on which marker was written is what makes both
+    // Splitting on the VECTOR COUNT rather than on which arm was stamped is what makes both
     // correct at once, and it keeps the one case that genuinely is servable servable: a partially
     // vectorized file (40 of 90) really does return its embedded passages, so it ranks normally.
     //
@@ -119,8 +141,14 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
     // degrade-silently. `commitFabFileChunks` clearing the marker on a successful rebuild is the
     // other half of this - see the note there; this guard is what holds if that write is lost.
     const hasNoRetrievablePassage = (file.vectorizedChunkCount ?? 0) === 0;
-    if (isConvergencePausedNote(file.notes) && hasNoRetrievablePassage) withheld.push(file);
-    else if (chunkCount > 0 && isMemberIndexingInFlight({ ...file, chunkCount })) withheld.push(file);
+    // The pending stamp widens the `chunkCount > 0` guard rather than replacing it: it is the one
+    // in-flight signal that fires on a CHUNKLESS member, and `isMemberIndexingInFlight` is still what
+    // decides (so `error` and the stall reason keep their precedence there, and a stamp left behind by
+    // a rebuild that stopped does not read as one still running).
+    const rebuildPending = isChunkRebuildPending(file.chunkRebuildRequestedAt);
+    if (isChunkStalledFile(file) && hasNoRetrievablePassage) withheld.push(file);
+    else if ((chunkCount > 0 || rebuildPending) && isMemberIndexingInFlight({ ...file, chunkCount }))
+      withheld.push(file);
     else servable.push(file);
   }
   return { servable, withheld };
@@ -135,8 +163,8 @@ export function buildRetrievalUnavailableReport(withheld: readonly IndexStateFil
   // tells the reader to do. Both arms are alike on that point and neither auto-resumes - a dropped
   // vectorize message has no producer that will re-send it - so bucketing the vectorize arm as
   // `indexing` would print "they will return on their own" about a file that never will.
-  const paused = withheld.filter(f => isConvergencePausedNote(f.notes));
-  const indexing = withheld.filter(f => !isConvergencePausedNote(f.notes));
+  const paused = withheld.filter(f => isChunkStalledFile(f));
+  const indexing = withheld.filter(f => !isChunkStalledFile(f));
   return {
     indexing: { count: indexing.length, sample: nameSample(indexing) },
     paused: { count: paused.length, sample: nameSample(paused) },
@@ -148,19 +176,39 @@ export function buildRetrievalUnavailableReport(withheld: readonly IndexStateFil
 export function describeRetrievalUnavailable(report: RetrievalUnavailableReport | undefined): string | null {
   if (!report?.partial) return null;
 
+  // toSingleLine (toContentLabel at the prompt sinks) because these names are attacker-influenced
+  // and this prose lands in the column-0 `NOTE:` region of a tool result, OUTSIDE the untrusted
+  // block that defangRetrievedContent guards - so a name carrying a line break plus a forged marker
+  // would be read as our framing. Same defense the passage headers already apply to the same value.
   const namesOf = (bucket: { count: number; sample: { fileName?: string }[] }) => {
-    const names = bucket.sample.map(f => f.fileName).filter((n): n is string => typeof n === 'string' && n.length > 0);
+    const names = bucket.sample
+      .map(f => f.fileName)
+      .filter((n): n is string => typeof n === 'string' && n.length > 0)
+      .map(toSingleLine);
     return names.length > 0 ? ` (${names.join(', ')}${bucket.count > names.length ? ', ...' : ''})` : '';
   };
 
   const sentences: string[] = [];
   if (report.indexing.count > 0) {
     // States the remedy is TIME, not an action: the reader must not be sent to re-embed a file that
-    // is already re-embedding.
+    // is already re-embedding. Worded as "being replaced" rather than "no longer exist" because a
+    // member reset but not yet committed still has its old chunk rows (#1939) - the claim has to be
+    // true of the earliest point in the window as well as the rest of it.
+    //
+    // The trailing sentence is what keeps "returns on its own" from being a FALSE promise. A pending
+    // rebuild whose enqueue never landed (a producer killed between the reset and its sends) is
+    // withheld here indefinitely, and nothing brings it back until the rescue sweep runs or someone
+    // rebuilds the lake - so a bare "wait and re-run" would be exactly the wrong instruction, the
+    // same failure the `paused` bucket below exists to avoid. Stated as a CONDITIONAL escape hatch
+    // rather than by re-bucketing a stale stamp as `paused`: the two states differ in what a reader
+    // should do FIRST (wait vs act), which is what these buckets encode, and this keeps that split
+    // honest without giving a pure reporting function a clock or `paused` a cause it does not have.
     sentences.push(
       `Partial knowledge-base results: ${report.indexing.count} file(s)${namesOf(report.indexing)} are being ` +
-        're-indexed right now and were withheld - their previous passages no longer exist and their new ones are ' +
-        'not searchable yet. They will return on their own once indexing completes; re-run the search then.'
+        're-indexed right now and were withheld - their passages are being replaced and the replacements are ' +
+        'not searchable yet. They return on their own once indexing completes; re-run the search then. If they ' +
+        'are still missing much later, the rebuild did not finish - use the lake\'s "Rebuild passages" action, ' +
+        'or reprocess the files individually.'
     );
   }
   if (report.paused.count > 0) {
@@ -187,7 +235,7 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     sentences.push(
       `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: re-processing ` +
         'them was paused partway, so they were withheld. Unlike re-indexing files these do NOT return on ' +
-        "their own - use the lake's \"Rebuild passages\" action, or reprocess the files individually, to " +
+        'their own - use the lake\'s "Rebuild passages" action, or reprocess the files individually, to ' +
         'restore them. If background lake work is still paused, an administrator has to resume it first.'
     );
   }
@@ -202,16 +250,28 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
 export function describeSearchLimitations(search: {
   embeddingMismatch?: EmbeddingMismatchReport;
   retrievalUnavailable?: RetrievalUnavailableReport;
+  supersession?: SupersessionReport;
   embeddingModel: string;
 }): string | null {
   const sentences = [
     describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel),
     describeRetrievalUnavailable(search.retrievalUnavailable),
+    describeSupersession(search.supersession),
   ].filter((s): s is string => s !== null);
   return sentences.length > 0 ? sentences.join(' ') : null;
 }
 
-/** Whether a search returned a partial corpus for ANY reason - the flag a wire contract exposes. */
+/**
+ * Whether a search returned a partial corpus for ANY reason - the flag a wire contract exposes.
+ *
+ * Deliberately NOT widened to `supersession`, even though that report is part of the wording seam
+ * above. The two existing reasons mean "content that should have been comparable/servable was not",
+ * which is abnormal and repairable; a supersession means "we deliberately ranked one of two
+ * generations", which is permanent and is the steady state of any lake holding a re-uploaded
+ * document. Counting it here would raise `partial` on every search against a healthy lake forever,
+ * which is exactly how a reader learns to ignore the flag (see the module comment at the top). A
+ * reader who needs to KNOW still gets the prose from `describeSearchLimitations`.
+ */
 export function isPartialSearch(search: {
   embeddingMismatch?: EmbeddingMismatchReport;
   retrievalUnavailable?: RetrievalUnavailableReport;

@@ -101,6 +101,22 @@ Check these in order, all of them visible in the plan the button reads:
   as far as convergence is concerned even though none of it is searchable. Repair is the rebuild
   door's job, not the policy door's.
 
+  **A file being rebuilt right now is a different state, and reads differently.** From the moment a
+  rebuild is requested until it lands, the file is reported as *re-indexing*: withheld from search
+  with the note that it returns on its own, counted in lake health as not-yet-measured rather than
+  failing, and skipped by convergence as already indexing. That is deliberately not the same report
+  as the paused state above - telling someone to call an administrator about a file that will be
+  back in a minute is how a real warning stops being read. If a rebuild is somehow never carried out
+  (the request was recorded but the work never ran), the file keeps reporting as re-indexing rather
+  than vanishing, and **Rebuild passages** picks it up once the request is a couple of hours old.
+
+  **Rebuild passages is refused while the pause is on, and says so.** The rebuild door deletes and
+  re-embeds a whole wave, so it is gated the same way convergence is: starting it while background
+  lake work is paused changes nothing at all - no passages are removed and nothing is queued - and the
+  toast says the run was refused rather than reporting success. The "to rebuild" count beside the
+  button therefore stays where it was. This is the same pause described above, so the remedy is the
+  same: an administrator turns convergence back on, then run it again.
+
   **A rebuild restores searchability, not conformance.** "Rebuild passages" deliberately rebuilds at
   the owner's default passage size rather than the lake's declared target, because it has to work on
   any lake - including one with no policy at all - and because a file can belong to several lakes that
@@ -123,8 +139,24 @@ completes. The previous passages are deleted first, so there is nothing to fall 
 Retrieval does not hide this: while any in-scope file is being re-indexed, the result is explicitly
 marked **partial** rather than quietly answering from the rest of the lake. Searches - the knowledge
 tools and the semantic-search API - name the affected files; grounded chat turns report how many were
-withheld. The files return on their own once indexing completes - re-run the search then. Prefer to
-converge a lake outside the hours people are querying it.
+withheld. This starts the moment the rebuild is requested, not when the new passages are written, so
+there is no window in which a file is being rebuilt and nothing says so. The files return on their
+own once indexing completes - re-run the search then. Prefer to converge a lake outside the hours
+people are querying it.
+:::
+
+:::note A large repair is paced on purpose
+Rebuilding or converging a lake re-embeds every file it touches, and every embedding call in the
+platform shares one provider quota. Both doors therefore run against a platform-wide throughput cap -
+a limit on embedding calls per minute and on tokens per minute - so a big repair drains steadily
+instead of arriving all at once and crowding out ordinary uploads. Searches are deliberately outside
+that cap: querying a lake never waits behind a repair.
+
+What you may see while a large repair runs: files finishing in waves rather than all together, and
+occasionally a file that reports being throttled. Throttling resolves itself - the work retries
+automatically, and no action is needed unless it persists for hours. If indexing stops entirely and
+files report that a throughput limit is set to 0, that is a deliberate platform-admin setting rather
+than a fault; ask an administrator, since nothing you can change from the lake will restart it.
 :::
 
 ### Vector Embeddings
@@ -167,6 +199,13 @@ the reachable-content figure needs a per-chunk character measurement that older 
 This is not the same as unhealthy: it means the measurement, not the content, is missing. New and
 re-ingested content is measured automatically. If a lake stays unmeasured, re-run indexing (or ask an
 administrator to run the char-length backfill) to populate it.
+
+A **partially** measured lake is usually just work in progress: every file whose passages are being
+rebuilt counts toward "how complete the picture is" without contributing a percentage, because its
+old passages are gone and its new ones are not written yet. That share should shrink on its own as
+the rebuilds land. If it does not - a file sits reported as re-indexing for hours - the rebuild was
+requested but never carried out; **Rebuild passages** offers those files again once the request is a
+couple of hours old, and running it re-drives them.
 :::
 
 ### The admission contract (enforcement)
@@ -383,9 +422,15 @@ opens a compliance surface answering the two questions a lake owner is asked fir
     exists only for a retrieval surface that emits access events, the audit write is best-effort by
     design, and events age out on their own retention window. An empty history means "no reads
     recorded", not "nobody read this lake".
+  - **Candidate-cap pressure** - how many of those reads ran against a truncated candidate list,
+    because more documents matched than the retrieval candidate cap considers. Shown as a pair
+    ("N of M reported reads"), since only some retrieval surfaces report it at all: "not reported
+    for this window" means nothing measured it, not that every read saw the whole library. The cap
+    applies to a turn's entire candidate list, across every source that turn could read, so read
+    this as reads of this lake that hit the cap - not as this lake causing it.
 
 Use **Export CSV** for a downloadable artifact suitable for a compliance review; it contains the
-same three sections plus a note when the history was truncated.
+same four sections plus a note when the history was truncated.
 
 ### Transferring a data lake to someone else
 

@@ -11,7 +11,7 @@ import {
   NotebookExportError,
   CURRENT_EXPORT_VERSION,
 } from './types';
-import { isImageServeable } from '@bike4mind/common';
+import { dayjs, isImageServeable } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import type {
   IAgentDocument,
@@ -21,6 +21,12 @@ import type {
   ISession,
   IToolDocument,
 } from '@bike4mind/common';
+
+import { isObjectIdOrHexString } from 'mongoose';
+import { usableSessionIds } from '../utils/objectIds';
+
+/** Matches a bare "2026-01-15", as opposed to a full ISO datetime. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Mongo filter; stays loose because callers pass operator objects (`{ _id: { $in: [...] } }`). */
 type ExportQuery = Record<string, unknown>;
@@ -159,7 +165,7 @@ export class NotebookExportService {
 
       // Process each session
       for (const session of sessions) {
-        const exportedNotebook = await this.exportSession(session, options);
+        const exportedNotebook = await this.exportSession(session, options, userId);
         exportData.notebooks.push(exportedNotebook);
 
         totalMessages += exportedNotebook.chatHistory.length;
@@ -196,6 +202,25 @@ export class NotebookExportService {
         downloadUrl,
       };
     } catch (error) {
+      // Level chosen by code, not blanket `error`. A 5xx-level line is what trips the CloudWatch
+      // filter, so logging a caller condition here would page LiveOps even though the route
+      // answers 4xx - which is the whole fault this change exists to remove. This is the only
+      // line a rejection logs: the route rethrows to the caller without logging it again.
+      if (error instanceof NotebookExportError && error.statusCode < 500) {
+        // `reason` carries the offending ids: they live only in the message, and this is the sole
+        // line a rejection writes - the route answers the status without logging again.
+        this.adapters.logger.warn('Notebook export rejected', {
+          userId,
+          code: error.code,
+          status: error.statusCode,
+          reason: error.message,
+        });
+        throw error;
+      }
+
+      // Not de-duplicated, unlike the branch above: the route logs a genuine 500 again through the
+      // same logger. That feeds a fingerprint-deduplicating pipeline, so it costs one dropped queue
+      // message rather than a second page.
       this.adapters.logger.error('Notebook export failed', { userId, error });
 
       if (error instanceof NotebookExportError) {
@@ -211,31 +236,52 @@ export class NotebookExportService {
 
     // Filter by specific notebook IDs
     if (options.notebookIds && options.notebookIds.length > 0) {
+      // Rejected, never dropped: exporting fewer notebooks than were named, silently, is worse.
+      // Unreachable through the route, whose request schema rejects first; this guards any future
+      // caller of the exported service that has no schema in front of it.
+      const unusable = options.notebookIds.filter(id => !isObjectIdOrHexString(id));
+      if (unusable.length > 0) {
+        throw new NotebookExportError(
+          `notebookIds contains ids that cannot address a notebook: ${unusable.join(', ')}`,
+          'INVALID_NOTEBOOK_ID'
+        );
+      }
+
       query._id = { $in: options.notebookIds };
     }
 
-    // Date range filtering
+    // Date range filtering. A bare "2026-01-15" parses to that day's midnight, so an inclusive
+    // `$lte` on it would return nothing from the day the caller actually named. Reached by API
+    // callers, not the modal - that resolves the picked day in the viewer's zone before sending.
     if (options.fromDate || options.toDate) {
       query.lastUpdated = {};
       if (options.fromDate) {
         query.lastUpdated.$gte = new Date(options.fromDate);
       }
       if (options.toDate) {
-        query.lastUpdated.$lte = new Date(options.toDate);
+        query.lastUpdated.$lte = DATE_ONLY.test(options.toDate)
+          ? dayjs.utc(options.toDate).endOf('day').toDate()
+          : new Date(options.toDate);
       }
     }
 
     return await this.adapters.sessionRepository.find(query);
   }
 
-  private async exportSession(session: SessionRow, options: NotebookExportOptions): Promise<ExportedNotebook> {
+  private async exportSession(
+    session: SessionRow,
+    options: NotebookExportOptions,
+    userId: string
+  ): Promise<ExportedNotebook> {
     // Export chat history
     const chatHistory = await this.exportChatHistory(session.id, options);
 
     // Export attachments based on options
     const knowledge = options.includeKnowledge ? await this.exportKnowledge(session.knowledgeIds || [], options) : [];
 
-    const artifacts = options.includeArtifacts ? await this.exportArtifacts(session.artifactIds || [], options) : [];
+    const artifacts = options.includeArtifacts
+      ? await this.exportArtifacts(session.artifactIds || [], options, userId)
+      : [];
 
     const tools = options.includeTools ? await this.exportTools(session.toolIds || [], options) : [];
 
@@ -320,10 +366,11 @@ export class NotebookExportService {
     knowledgeIds: string[],
     options: NotebookExportOptions
   ): Promise<ExportedKnowledgeFile[]> {
-    if (knowledgeIds.length === 0) return [];
+    const usableIds = usableSessionIds(knowledgeIds, 'knowledge', this.adapters.logger);
+    if (usableIds.length === 0) return [];
 
     const knowledgeFiles = await this.adapters.knowledgeRepository.find({
-      _id: { $in: knowledgeIds },
+      _id: { $in: usableIds },
     });
 
     return Promise.all(
@@ -371,12 +418,46 @@ export class NotebookExportService {
     );
   }
 
-  private async exportArtifacts(artifactIds: string[], options: NotebookExportOptions): Promise<ExportedArtifact[]> {
+  private async exportArtifacts(
+    artifactIds: string[],
+    options: NotebookExportOptions,
+    userId: string
+  ): Promise<ExportedArtifact[]> {
     if (artifactIds.length === 0) return [];
 
+    // Artifact ids are `artifact_<ts>_<rand>`, not ObjectIds, so an `_id` query throws a CastError.
+    // `deletedAt: null` matches every read helper on ArtifactRepository - it only started to
+    // matter once the query above began resolving rows at all.
+    //
+    // The `$or` is the same predicate `ArtifactRepository.findByUserWithAccess` expresses and
+    // `artifactService/get` enforces via `canUserAccessArtifact`. It is needed HERE because
+    // `getSessionsToExport` scopes SESSIONS by userId and the scoping stops there:
+    // `session.artifactIds` is a client-supplied `z.array(z.string())` that `updateSession` writes
+    // through unvalidated, so an id arriving here is not necessarily the caller's. Reachable only
+    // since this query started resolving rows - before that it threw and returned nothing.
+    //
+    // Two consequences that are visible rather than hidden, both deliberate: neither this clause
+    // nor `canUserAccessArtifact` honours `visibility: 'project' | 'organization'`, so an
+    // org-shared artifact drops out of an export - this makes export exactly as strict as
+    // `GET /artifacts/:id` and no stricter, which is the right default but is a change. And in a
+    // collaborative session an artifact owned by another participant now leaves the owner's
+    // export. Widen both together with the normal read path, never here alone.
     const artifacts = await this.adapters.artifactRepository.find({
-      _id: { $in: artifactIds },
+      id: { $in: artifactIds },
+      deletedAt: null,
+      $or: [{ userId }, { 'permissions.canRead': userId }, { visibility: 'public' }, { 'permissions.isPublic': true }],
     });
+
+    // Covers three causes, and deliberately does not distinguish them: an artifact the user has
+    // since deleted (routine - the session keeps referencing it), a row that is genuinely gone
+    // (rare), and one the exporter cannot read. None is exportable, and telling them apart would
+    // cost a second query to sharpen a log line nothing alarms on - and for the third it would
+    // also confirm the id exists to someone with no access to it. Named because a partial export
+    // must not read as a complete one; fires once per notebook.
+    const notExported = artifactIds.filter(id => !artifacts.some((a: ArtifactRow) => a.id === id));
+    if (notExported.length > 0) {
+      this.adapters.logger.warn('Some artifacts were not exported', { notExported });
+    }
 
     return artifacts.map((artifact: ArtifactRow) => ({
       id: artifact.id,
@@ -390,10 +471,14 @@ export class NotebookExportService {
   }
 
   private async exportTools(toolIds: string[], options: NotebookExportOptions): Promise<ExportedTool[]> {
-    if (toolIds.length === 0) return [];
+    // `_id` is correct here, unlike artifacts: tools and agents are ObjectId-keyed. Sessions
+    // imported before the id fix can still hold uuids, which usableSessionIds drops rather than
+    // letting them cast-throw.
+    const usableIds = usableSessionIds(toolIds, 'tool', this.adapters.logger);
+    if (usableIds.length === 0) return [];
 
     const tools = await this.adapters.toolRepository.find({
-      _id: { $in: toolIds },
+      _id: { $in: usableIds },
     });
 
     return tools.map((tool: ToolRow) => ({
@@ -404,10 +489,11 @@ export class NotebookExportService {
   }
 
   private async exportAgents(agentIds: string[], options: NotebookExportOptions): Promise<ExportedAgent[]> {
-    if (agentIds.length === 0) return [];
+    const usableIds = usableSessionIds(agentIds, 'agent', this.adapters.logger);
+    if (usableIds.length === 0) return [];
 
     const agents = await this.adapters.agentRepository.find({
-      _id: { $in: agentIds },
+      _id: { $in: usableIds },
     });
 
     return agents.map((agent: AgentRow) => ({

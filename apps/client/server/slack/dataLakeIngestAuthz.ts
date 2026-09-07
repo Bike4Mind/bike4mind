@@ -17,10 +17,13 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
  * paths cannot drift - a gate that is correct for attachments and stale for links would be worse
  * than no sharing at all, and LINK ingest runs the identical resolve-gate-status-tag sequence.
  *
- * The gate is the SAME one the web doors use (`assertLakeWriteAccess` -> `canManageLake` =
- * admin-or-creator, plus `assertCanWriteDataLakeTags` as defense in depth). Slack gets no bypass:
- * reading a lake in the web app does not let you write to it, and reaching it from Slack must not
- * change that.
+ * The gate is the SAME one the web doors use (`assertLakeWriteAccess` -> `canManageLake`, plus
+ * `assertCanWriteDataLakeTags` as defense in depth). Slack gets no bypass: reading a lake in the web
+ * app does not let you write to it, and reaching it from Slack must not change that. "No bypass"
+ * cuts both ways, and the second half is the one that broke: both gates must be handed the FULL
+ * context and the grant repo, or Slack silently enforces a NARROWER rule than the web doors -
+ * `canManageLake` is five rungs (platform admin, creator, user grant, org admin, org grant), not the
+ * admin-or-creator this comment used to claim.
  */
 
 /** The resolved B4M user behind the Slack message. Never built from the Slack event body. */
@@ -49,8 +52,13 @@ export interface LakeAuthzDeps {
    * owner may ingest and not only the original creator. Declared on the shared prologue rather than
    * on one ingest path, so FILE and LINK cannot diverge on who is allowed to write - the same reason
    * this module exists at all.
+   *
+   * `listByLake` is the write gate's method; the other two are `listDataLakes`' (see `GrantLookup`
+   * there), so the `list` reply labels and reaches the same grant-held lakes `add` accepts. The
+   * three live on one member because a surface that gated on grants while listing without them
+   * reported lakes `add` takes as unavailable, which is what #2034 was.
    */
-  dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes' | 'listByPrincipal'>;
   /**
    * Settings stores the meta-tag write gate needs for the admission contract (#1680). This module
    * names no admission members - the Slack file does not exist yet and `createFabFile` runs the
@@ -58,10 +66,17 @@ export interface LakeAuthzDeps {
    * the check here.
    */
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-  /** Entitlement keys for the actor; admins skip resolution, mirroring `toAccessContext`. */
+  /** Entitlement keys for the actor; admins skip resolution unless the caller opts in (see below). */
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
   /** Authoritative org membership set for the actor, mirroring `toAccessContext` (#1674). */
   resolveMembershipOrgIds(userId: string): Promise<string[]>;
+  /**
+   * The orgs the actor holds ADMIN rights in, mirroring `toAccessContext`. Distinct from membership
+   * above and not derivable from it: membership grants read, admin rights feed the org rungs of
+   * `canManageLake`. `ManageActor` defaults the field to `[]` for callers that have not threaded it,
+   * so leaving it unresolved kills both rungs on this surface with no error and no log line.
+   */
+  resolveAdministeredOrgIds(userId: string): Promise<string[]>;
   logger: {
     info: (message: string, meta?: unknown) => void;
     warn: (message: string, ...args: unknown[]) => void;
@@ -76,15 +91,37 @@ export interface LakeAuthzDeps {
  */
 export async function buildSlackAccessContext(
   actor: SlackIngestActor,
-  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds'>
+  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds' | 'resolveAdministeredOrgIds'>,
+  opts?: { resolveEntitlementsForAdmin?: boolean }
 ): Promise<AccessContext> {
   const isAdmin = !!actor.isAdmin;
+
+  // All three reads are independent, so they go in parallel rather than in an object literal's
+  // sequential await order. Unlike toAccessContext, whose two heavy reads are memoized per request,
+  // nothing memoizes here and the prologue runs TWICE on a message carrying both a file and a link.
+  //
+  // Each skip below is a resolution the actor's role makes pointless, not an optimization:
+  //  - keys: the write gates grant an admin outright and never read them. `resolveEntitlementsForAdmin`
+  //    exists for the one caller that deliberately evaluates an admin through the NON-admin arms (the
+  //    `list` reply in handleDataLakeCommand), where the keys decide whether an entitlement-gated
+  //    lake is reachable.
+  //  - org-admin ids: canManageLake grants an admin on its platform rung and never reaches the org
+  //    rungs these ids feed. No opt-in twin to the flag above is needed - `handleList` does evaluate
+  //    an admin with isAdmin suppressed, but these ids only affect a per-row manage LABEL, which its
+  //    own `isWritable` restores from the unsuppressed context.
+  const [organizationIds, entitlementKeys, administeredOrgIds] = await Promise.all([
+    deps.resolveMembershipOrgIds(actor.id),
+    isAdmin && !opts?.resolveEntitlementsForAdmin ? [] : deps.resolveEntitlementKeys(actor),
+    isAdmin ? [] : deps.resolveAdministeredOrgIds(actor.id),
+  ]);
+
   return {
     userId: actor.id,
     isAdmin,
     userTags: actor.tags ?? [],
-    organizationIds: await deps.resolveMembershipOrgIds(actor.id),
-    entitlementKeys: isAdmin ? [] : await deps.resolveEntitlementKeys(actor),
+    organizationIds,
+    entitlementKeys,
+    administeredOrgIds,
   };
 }
 
@@ -146,7 +183,8 @@ export async function authorizeLakeForWrite(
 
     if (err instanceof BadRequestError) {
       // Surface the thrown message: it distinguishes "built into the platform and is read-only"
-      // from "only the creator can add files", which the generic sentence cannot.
+      // from "you do not have permission to add files to this data lake", which the generic
+      // sentence cannot.
       deps.logger.info('@datalake add refused by the lake write gate', { lakeSlug, message: err.message });
       return {
         ok: false,
@@ -183,9 +221,23 @@ export async function authorizeLakeForWrite(
   // mixed-case stored tag resolves to no lake. `createDataLake` now lowercases the slug at the mint
   // point, so no NEW lake can land in that state - the residual exposure is lakes persisted before
   // that change. A lake soft-deleted between this gate and the one above lands here too.
+  //
+  // MUST be given the SAME actor and the SAME grant repo as the gate above. Defense in depth means
+  // this gate re-resolves the lake (by meta-tag, not by slug) and re-decides - never that it decides
+  // on LESS. A hand-built `{ userId, isAdmin }` actor drops `administeredOrgIds`, and a db without
+  // `dataLakeAccessGrants` drops grant supersession, either of which collapses
+  // `resolveCanManageLake` to creator-or-platform-admin and refuses the org admin or curator gate 1
+  // just authorized - the lake would LIST as addable and then refuse the add. Nothing here fails
+  // loudly if it regresses: `ManageActor.administeredOrgIds` is optional for back-compat, so a
+  // narrowed actor typechecks green and the org rung silently stops firing. `createFabFile` and
+  // both presign doors pass their full `ctx` for this same reason.
   try {
-    await dataLakeService.assertCanWriteDataLakeTags({ userId: ctx.userId, isAdmin: ctx.isAdmin }, [datalakeTag], {
-      db: { dataLakes: deps.dataLakes, adminSettings: deps.adminSettings },
+    await dataLakeService.assertCanWriteDataLakeTags(ctx, [datalakeTag], {
+      db: {
+        dataLakes: deps.dataLakes,
+        dataLakeAccessGrants: deps.dataLakeAccessGrants,
+        adminSettings: deps.adminSettings,
+      },
     });
   } catch (err) {
     // Same class-based split as the gate above: only a refusal is reported as one, and anything
@@ -200,7 +252,7 @@ export async function authorizeLakeForWrite(
     return {
       ok: false,
       reason: 'not_authorized',
-      message: `You can only add files to a data lake you created. Ask an admin, or the creator of \`${lakeSlug}\`.`,
+      message: `You do not have permission to add files to \`${lakeSlug}\`. Ask an admin, or someone who manages it.`,
     };
   }
 

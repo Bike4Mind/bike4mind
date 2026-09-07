@@ -168,13 +168,36 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
   });
 
   describe('PUT', () => {
+    // The contract requires ObjectId-shaped knowledgeIds - they address FabFile._id.
+    const FAB_ID = '507f1f77bcf86cd799439011';
+
+    // Regression guard for the rename/tag paths: those PUT `{ ...session, name }`, so the stored
+    // list rides along. A 422 here would make a notebook holding a legacy id unrenameable.
+    it('accepts a body echoing an unusable stored knowledgeId, leaving the drop to the service', async () => {
+      keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
+      mockUpdateSession.mockResolvedValue({
+        id: 'sess-1',
+        name: 'renamed',
+        userId: 'user-1',
+        firstCreated: new Date('2026-01-01T00:00:00Z'),
+        lastUpdated: new Date('2026-01-02T00:00:00Z'),
+      });
+      const { req, res } = fire({
+        method: 'PUT',
+        body: { name: 'renamed', knowledgeIds: ['legacy-uuid-not-an-objectid'] },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockUpdateSession).toHaveBeenCalled();
+    });
+
     it('validates the body via sessionUpdateContract, updates with the path id, and redacts the response', async () => {
       keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
       mockUpdateSession.mockResolvedValue({
         id: 'sess-1',
         name: 'Untitled',
         userId: 'user-1',
-        knowledgeIds: ['fab-1'],
+        knowledgeIds: [FAB_ID],
         forceKnowledgeRetrieval: true,
         firstCreated: new Date('2026-01-01T00:00:00Z'),
         lastUpdated: new Date('2026-01-02T00:00:00Z'),
@@ -182,13 +205,13 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       });
       const { req, res } = fire({
         method: 'PUT',
-        body: { knowledgeIds: ['fab-1'], forceKnowledgeRetrieval: true },
+        body: { knowledgeIds: [FAB_ID], forceKnowledgeRetrieval: true },
       });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(mockUpdateSession).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'user-1' }),
-        expect.objectContaining({ id: 'sess-1', knowledgeIds: ['fab-1'], forceKnowledgeRetrieval: true }),
+        expect.objectContaining({ id: 'sess-1', knowledgeIds: [FAB_ID], forceKnowledgeRetrieval: true }),
         expect.anything()
       );
       expect(res._getJSONData()).not.toHaveProperty('systemPromptText');

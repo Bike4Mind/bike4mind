@@ -53,11 +53,6 @@ beforeEach(() => {
 });
 
 describe('DriveConnectAction', () => {
-  it('disables the action in create mode, before the lake exists', () => {
-    wrap(<DriveConnectAction lake={null} />);
-    expect(screen.getByTestId('drive-connect-disabled-btn')).toBeDisabled();
-  });
-
   it('offers an enabled Connect button when the lake has no connection yet', () => {
     wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('drive-connect-btn')).not.toBeDisabled();

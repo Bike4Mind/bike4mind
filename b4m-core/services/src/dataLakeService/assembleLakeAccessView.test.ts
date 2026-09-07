@@ -7,6 +7,7 @@ import type {
 } from '@bike4mind/common';
 import {
   aggregateAccessHistory,
+  aggregateCandidateCapPressure,
   assembleLakeAccessView,
   classifyGrantStatus,
   deriveAccessChannels,
@@ -118,6 +119,50 @@ describe('aggregateAccessHistory', () => {
 
   it('empty input yields no rows', () => {
     expect(aggregateAccessHistory([])).toEqual([]);
+  });
+});
+
+describe('aggregateCandidateCapPressure', () => {
+  it('counts only rows that report a cap state, in both directions', () => {
+    const t0 = new Date('2026-08-10T00:00:00Z');
+    const t1 = new Date('2026-08-11T00:00:00Z');
+    const t2 = new Date('2026-08-12T00:00:00Z');
+    // Ends on the MIDDLE timestamp so a dropped max guard on lastAtCapAt changes the result rather
+    // than passing by fixture coincidence.
+    const pressure = aggregateCandidateCapPressure([
+      event({ candidateCapReached: true, createdAt: t0 }),
+      event({ candidateCapReached: true, createdAt: t2 }),
+      event({ candidateCapReached: false, createdAt: t2 }),
+      event({ candidateCapReached: true, createdAt: t1 }),
+    ]);
+    expect(pressure).toEqual({ turnsWithSignal: 4, turnsAtCap: 3, lastAtCapAt: t2 });
+  });
+
+  it('a row that does not report the field raises neither counter', () => {
+    // The distinction the whole tri-state exists for: an unreported row is not evidence that the
+    // surface considered its whole candidate set, so it must not land in turnsWithSignal either.
+    const pressure = aggregateCandidateCapPressure([
+      event({}),
+      event({ candidateCapReached: false }),
+      event({ candidateCapReached: true }),
+    ]);
+    expect(pressure.turnsWithSignal).toBe(2);
+    expect(pressure.turnsAtCap).toBe(1);
+  });
+
+  it('an all-unreported window is zeroed with no lastAtCapAt, not reported as cap-free', () => {
+    const pressure = aggregateCandidateCapPressure([event({}), event({})]);
+    expect(pressure).toEqual({ turnsWithSignal: 0, turnsAtCap: 0 });
+    expect(pressure.lastAtCapAt).toBeUndefined();
+  });
+
+  it('reported-but-never-capped carries the signal count with no date', () => {
+    const pressure = aggregateCandidateCapPressure([event({ candidateCapReached: false })]);
+    expect(pressure).toEqual({ turnsWithSignal: 1, turnsAtCap: 0 });
+  });
+
+  it('empty input yields the zero pressure', () => {
+    expect(aggregateCandidateCapPressure([])).toEqual({ turnsWithSignal: 0, turnsAtCap: 0 });
   });
 });
 
@@ -264,20 +309,77 @@ describe('assembleLakeAccessView', () => {
 
   it('aggregates history, marks truncation, and carries the window start when the read hits the cap', async () => {
     const older = new Date('2026-08-12T00:00:00Z');
-    const newer = new Date('2026-08-13T00:00:00Z');
-    // Events arrive newest-first (as listByLake returns them), so the oldest fetched is the window start.
-    const events = [event({ principalId: 'u1', createdAt: newer }), event({ principalId: 'u1', createdAt: older })];
+    const middle = new Date('2026-08-13T00:00:00Z');
+    const newer = new Date('2026-08-14T00:00:00Z');
+    // Events arrive newest-first (as listByLake returns them), so the oldest RETURNED event is the
+    // window start. Three come back against a cap of 2: the third is the probe row, which proves
+    // truncation and must NOT reach the aggregates or the window date.
+    const events = [
+      event({ principalId: 'u1', createdAt: newer }),
+      event({ principalId: 'u1', createdAt: middle }),
+      event({ principalId: 'u1', createdAt: older }),
+    ];
     const { adapters, spies } = makeAdapters({ events, users: [{ id: 'u1', name: 'Alice' }] });
     const view = await assembleLakeAccessView(lakeDoc(), {
       ...(adapters as object),
       historyLimit: 2,
       now: NOW,
     } as never);
-    expect(spies.listByLakeEvents).toHaveBeenCalledWith('lake1', { limit: 2 });
+    // limit + 1: the probe. Asking for exactly the cap cannot tell a full window from a complete one.
+    expect(spies.listByLakeEvents).toHaveBeenCalledWith('lake1', { limit: 3 });
     expect(view.history).toHaveLength(1);
+    // 2, not 3: the probe row is sliced off before aggregation, so it cannot inflate readCount.
     expect(view.history[0]).toMatchObject({ principalName: 'Alice', readCount: 2 });
     expect(view.historyTruncated).toBe(true);
-    expect(view.windowStartsAt).toEqual(older);
+    expect(view.windowStartsAt).toEqual(middle);
+  });
+
+  it('projects candidate-cap pressure over the same sliced window as history, from one events read', async () => {
+    const older = new Date('2026-08-12T00:00:00Z');
+    const middle = new Date('2026-08-13T00:00:00Z');
+    const newer = new Date('2026-08-14T00:00:00Z');
+    // Same probe-row setup as above: the third event is at-cap and must NOT be counted, or the
+    // pressure would describe a wider window than the history rows beside it.
+    const events = [
+      event({ principalId: 'u1', createdAt: newer, candidateCapReached: true }),
+      event({ principalId: 'u1', createdAt: middle, candidateCapReached: false }),
+      event({ principalId: 'u1', createdAt: older, candidateCapReached: true }),
+    ];
+    const { adapters, spies } = makeAdapters({ events, users: [{ id: 'u1', name: 'Alice' }] });
+    const view = await assembleLakeAccessView(lakeDoc(), {
+      ...(adapters as object),
+      historyLimit: 2,
+      now: NOW,
+    } as never);
+
+    expect(view.candidateCapPressure).toEqual({ turnsWithSignal: 2, turnsAtCap: 1, lastAtCapAt: newer });
+    // A projection of rows already in hand: a second listByLake would double this lake's audit read
+    // cost on every view assembly for a field derivable from the events already fetched.
+    expect(spies.listByLakeEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a lake whose reads never measured the cap as unreported, not as cap-free', async () => {
+    const { adapters } = makeAdapters({ events: [event({ principalId: 'u1' })], users: [{ id: 'u1', name: 'Alice' }] });
+    const view = await assembleLakeAccessView(lakeDoc(), adapters);
+    expect(view.candidateCapPressure).toEqual({ turnsWithSignal: 0, turnsAtCap: 0 });
+  });
+
+  it('reports a complete trail of exactly the cap as untruncated, with no window start (#2092)', async () => {
+    // The boundary the old `events.length >= historyLimit` got wrong. listByLake applies the limit,
+    // so a lake with exactly `historyLimit` reads used to report truncated with a windowStartsAt -
+    // captioning its ENTIRE audit trail as "reads since <date>" and implying older reads were dropped.
+    const older = new Date('2026-08-12T00:00:00Z');
+    const newer = new Date('2026-08-13T00:00:00Z');
+    const events = [event({ principalId: 'u1', createdAt: newer }), event({ principalId: 'u1', createdAt: older })];
+    const { adapters } = makeAdapters({ events, users: [{ id: 'u1', name: 'Alice' }] });
+    const view = await assembleLakeAccessView(lakeDoc(), {
+      ...(adapters as object),
+      historyLimit: 2,
+      now: NOW,
+    } as never);
+    expect(view.history[0]).toMatchObject({ readCount: 2 });
+    expect(view.historyTruncated).toBe(false);
+    expect(view.windowStartsAt).toBeUndefined();
   });
 
   it('does not mark truncation, and omits the window start, when fewer events than the cap come back', async () => {

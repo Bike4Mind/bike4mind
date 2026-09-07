@@ -17,7 +17,10 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'claimRestoring'>;
+    dataLakes: Pick<
+      IDataLakeRepository,
+      'findById' | 'settleLifecycleStatus' | 'setStats' | 'activateIfDraft' | 'claimRestoring'
+    >;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -108,16 +111,24 @@ export const restoreDeletedDataLake = async (
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
   // Terminal transition only - see the note on archiveDataLake's settle step.
-  const updated = await db.dataLakes.update({
-    id: dataLakeId,
+  const updated = await db.dataLakes.settleLifecycleStatus(dataLakeId, 'restoring', {
     status: 'active',
     filesDeletedAt: null,
     filesArchivedAt: null,
     ...lakeConfigWriteStamp(actor),
   });
-  // See unarchiveDataLake: a null here means the lake vanished mid-operation, which this path has
-  // never treated as a failure and which leaves nothing to diff.
-  if (updated) {
+  // See unarchiveDataLake's settle: a lake that MOVED is a lost settle and is reported, a lake that
+  // VANISHED keeps the lenient behavior this path has always had. The move that matters here is a
+  // purge accepted mid-restore - settling 'active' over it un-purges a lake whose hard delete is
+  // already irreversible (#1744), which is exactly what claimPurging exists to prevent.
+  if (!updated) {
+    const current = await db.dataLakes.findById(dataLakeId);
+    if (current) {
+      throw new BadRequestError(
+        `This data lake moved to '${current.status}' while it was being restored; the restore did not complete`
+      );
+    }
+  } else {
     await recordLakeConfigChange(
       {
         actor,
@@ -139,7 +150,11 @@ export const restoreDeletedDataLake = async (
       { db, logger }
     );
   }
-  await recomputeLakeStats(existing, { db });
+  // Logger forwarded for parity with every other recompute call, not because an audit row is
+  // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's
+  // draft/null window, so the recompute cannot emit an auto-activate event. Passing it anyway costs
+  // nothing and saves the next reader re-deriving that.
+  await recomputeLakeStats(existing, { db, logger });
 
   return { restoredCount, skippedDuplicates };
 };

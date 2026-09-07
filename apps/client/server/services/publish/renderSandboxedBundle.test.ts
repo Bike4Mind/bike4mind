@@ -189,6 +189,42 @@ describe('renderSandboxedBundle', () => {
     });
   });
 
+  describe('off-origin links', () => {
+    const render = (body: string) =>
+      renderSandboxedBundle({
+        indexHtml: `<html><head></head><body>${body}</body></html>`,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'public',
+      }).srcdoc;
+
+    it('retargets an off-origin link to a new tab with rel=noopener', () => {
+      const srcdoc = render(`<a href="https://github.com/o/r/issues/1">issue</a>`);
+      expect(srcdoc).toContain('target="_blank"');
+      expect(srcdoc).toContain('rel="noopener"');
+    });
+
+    it('keeps the author rel tokens and does not add noreferrer', () => {
+      const srcdoc = render(`<a href="https://example.com/" rel="nofollow">x</a>`);
+      expect(srcdoc).toContain('rel="nofollow noopener"');
+      expect(srcdoc).not.toContain('noreferrer');
+    });
+
+    it('retargets a protocol-relative off-origin link', () => {
+      const srcdoc = render(`<a href="//example.com/x">x</a>`);
+      expect(srcdoc).toContain('target="_blank"');
+    });
+
+    it('leaves same-origin, relative, fragment and non-http links alone', () => {
+      const srcdoc = render(
+        `<a href="${ORIGIN}/p/u/s/other">a</a><a href="page2.html">b</a><a href="#tldr">c</a>` +
+          `<a href="mailto:x@example.com">d</a>`
+      );
+      expect(srcdoc).not.toContain('target="_blank"');
+      expect(srcdoc).not.toContain('rel="noopener"');
+    });
+  });
+
   describe('fragment-nav helper', () => {
     const html = `<html><head></head><body><a href="#tldr">jump</a></body></html>`;
 

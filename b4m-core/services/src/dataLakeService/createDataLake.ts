@@ -1,5 +1,10 @@
 import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { CreateDataLakeRequestInput, DATA_LAKES, normalizeEntitlementKey } from '@bike4mind/common';
+import {
+  CreateDataLakeRequestInput,
+  DATA_LAKES,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  normalizeEntitlementKey,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
 import type { z } from 'zod';
@@ -45,6 +50,34 @@ export function isDatalakeTagWellFormed(lake: { datalakeTag: string; slug: strin
 }
 
 /**
+ * Builds the `<base>-<attempt>` candidate, sized so the RESULT fits MAX_DATA_LAKE_SLUG_LENGTH
+ * rather than being appended past it. Disambiguation runs after validation, so an unbounded append
+ * persists a slug no other surface treats as legal - notably the `datalake:<slug>` entitlement key,
+ * which registry.ts re-checks against MAX_DATA_LAKE_SLUG_LENGTH and therefore reports as unknown,
+ * failing an admin's grant closed on a key that is in fact correct.
+ *
+ * Trailing hyphens are stripped after truncation so a cut landing mid-hyphen cannot produce
+ * `...a--1`. That still matches DATA_LAKE_SLUG_REGEX (which permits interior runs) but reads as a
+ * typo. The base is regex-guaranteed to start alphanumeric, so the trim can never empty it, and the
+ * shortest reachable result is a 1-char base plus a 2-char suffix - still over the 2-char minimum.
+ *
+ * Truncating means a max-length name loses its tail on collision, and two names sharing a
+ * (MAX - suffix.length)-char prefix collapse onto ONE candidate family, so they share the caller's
+ * 50-attempt budget instead of each having their own. That is the intended trade - a hash suffix
+ * would read worse to the lake's owner - but it is why the caller's exhaustion path is now
+ * reachable by lakes with different names.
+ */
+function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
+  const suffix = `-${attempt}`;
+  // Room is derived from `suffix.length`, deliberately, NOT hardcoded to 2: attempts 10-49 already
+  // carry a 3-char suffix, so a literal would persist 61 today - this is not a hypothetical about
+  // raising the cap. `keeps fitting once the suffix reaches two digits` is the test that catches it;
+  // keep that test if you touch this line.
+  const trimmedBase = baseSlug.slice(0, MAX_DATA_LAKE_SLUG_LENGTH - suffix.length).replace(/-+$/, '');
+  return `${trimmedBase}${suffix}`;
+}
+
+/**
  * Resolves a slug collision within the lake's scope (org) deterministically by
  * appending -1, -2, ... until free. Keeps create idempotent-ish instead of hard-failing.
  *
@@ -62,7 +95,7 @@ async function disambiguateSlug(
   const scope = organizationId ? { organizationId } : { organizationId: { $in: [null, ''] } };
   const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   for (let attempt = 0; attempt < 50; attempt++) {
-    const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt}`;
+    const slug = attempt === 0 ? baseSlug : withDisambiguatingSuffix(baseSlug, attempt);
     if (reservedTags.has(buildDatalakeTag(slug, organizationId))) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
     if (existing.length === 0) return slug;

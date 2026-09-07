@@ -176,3 +176,9 @@ craftpix-zips/
 
 # Output from local one-off scripts (e.g. packages/scripts/testKnowledgeToolRefusal.ts)
 packages/scripts/out/
+
+# Belt for the data-lake census artifact. It is written to os.tmpdir() with mode 0600, but
+# DATALAKE_CENSUS_OUT_DIR can override that, and the file carries cross-tenant identity data
+# that must never reach this repo's permanent, public history. Unanchored on purpose so it
+# matches wherever an operator lands it.
+datalake-prefix-only-census-*.json

@@ -30,6 +30,12 @@ const baseInput = (overrides: Partial<RecordLakeConfigChangeInput> = {}): Record
   ...overrides,
 });
 
+const dropIndexByKey = async (key: Record<string, number>) => {
+  const indexes = await LakeConfigChangeEventModel.collection.indexes();
+  const match = indexes.find(index => JSON.stringify(index.key) === JSON.stringify(key));
+  if (match?.name) await LakeConfigChangeEventModel.collection.dropIndex(match.name);
+};
+
 describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', () => {
   setupMongoTest();
   // setupMongoTest's beforeEach dropDatabase()s (indexes included) and this model is not in its
@@ -217,9 +223,18 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
       expect(ttl?.expireAfterSeconds).toBe(0);
     });
 
-    it('indexes the owner-facing history query it exists to serve', async () => {
-      const indexes = await LakeConfigChangeEventModel.collection.indexes();
-      expect(indexes.some(i => i.key?.dataLakeId === 1 && i.key?.createdAt === -1)).toBe(true);
+    it('serves the owner-facing history read from the index, sort included - no blocking SORT', async () => {
+      // Asserts the PLAN, not the key shape: a key-presence check stays green when the index stops
+      // at `createdAt` (it cannot supply `_id` order, so the planner drops the indexed sort and
+      // SORTs the lake's whole three-year retention window above FETCH) and green again when the
+      // superseded two-key index lingers beside the new one.
+      const plan = await LakeConfigChangeEventModel.find({ dataLakeId: 'lake-1' })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(3)
+        .explain('queryPlanner');
+      const winning = JSON.stringify((plan as { queryPlanner: { winningPlan: unknown } }).queryPlanner.winningPlan);
+      expect(winning).toContain('IXSCAN');
+      expect(winning).not.toContain('"stage":"SORT"');
     });
 
     it('stamps createdAt but never updatedAt - an event has no later version', async () => {
@@ -268,6 +283,27 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
         await repo.record(baseInput());
       }
       expect(await repo.listByLake('lake-1', { limit: 2 })).toHaveLength(2);
+    });
+
+    // createdAt alone is not a total order, and the paged reader treats the last row of a window as
+    // that window's boundary - so a tie straddling the page boundary must not be able to reshuffle.
+    it('orders same-millisecond events stably across repeated paged loads', async () => {
+      // Read against the two-key index the tie-break supersedes, on purpose. Under the declared
+      // `{ dataLakeId: 1, createdAt: -1, _id: -1 }` the IXSCAN already walks a createdAt tie in
+      // _id-descending order, so this stays green even with `_id` deleted from the sort clause -
+      // the index would be doing the work, and the sort clause is what this test exists to pin.
+      await dropIndexByKey({ dataLakeId: 1, createdAt: -1, _id: -1 });
+      await LakeConfigChangeEventModel.collection.createIndex({ dataLakeId: 1, createdAt: -1 });
+
+      for (let i = 0; i < 5; i++) {
+        await repo.record(baseInput({ changes: [nameChange('old', `e${i}`)] }));
+      }
+
+      const page = async () => (await repo.listByLake('lake-1', { limit: 3 })).map(e => e.changes[0].after);
+      // Newest-first with an _id tie-break is reverse insertion order, ObjectIds being monotonic
+      // within a process.
+      expect(await page()).toEqual(['e4', 'e3', 'e2']);
+      expect(await page()).toEqual(['e4', 'e3', 'e2']);
     });
 
     it('is empty for a lake with no recorded changes', async () => {

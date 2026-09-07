@@ -1,6 +1,10 @@
 import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
+  DataLakeDocumentPurgeReceipt,
+  DataLakeMembershipArm,
+  DataLakeProposalStatus,
+  IDataLakeProposalDocument,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeSpendResponse,
@@ -8,12 +12,18 @@ import type {
   LakeAccessView,
   LakeOwnershipCandidateList,
   LakeHealthApiResponse,
+  LakeConfigHistoryView,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
+import { useTranslation } from 'react-i18next';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
-import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
+import type {
+  CreateDataLakeRequestInputType,
+  UpdateDataLakeRequestInputType,
+  UpdateFallbackLakeSettingsRequestInputType,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
@@ -21,6 +31,17 @@ import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+
+/**
+ * True for a 4xx, which on the manage-gated lake reads (spend, proposals) means "you may see this
+ * lake but not this surface". Callers hide the surface on it rather than painting an error, so it
+ * must not widen to 5xx - a server fault is a real error and should read as one.
+ */
+function isPermissionRejection(error: unknown): boolean {
+  if (!isAxiosError(error)) return false;
+  const status = error.response?.status ?? 0;
+  return status >= 400 && status < 500;
+}
 
 /**
  * The active account-switcher org to scope a data-lake write to, or undefined for the
@@ -87,6 +108,40 @@ export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) 
       return response.data;
     },
   });
+}
+
+/**
+ * One lake's config-change history (#1769): who changed how this lake answers, what moved, and which
+ * manage rung authorized it. Manager-only server-side - a mere reader gets a 403.
+ *
+ * `staleTime: 0` unlike the other lake reads, because this surface mounts in the same modal that
+ * EDITS the lake: a cached history would show an owner their own just-saved change as absent, which
+ * reads as "the audit missed it" - the one impression an audit surface must never give. `retry: false`
+ * matches the sibling reads (the feature-gate 403 and the manage 403 are both terminal, not transient).
+ */
+export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, limit?: number) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.configHistory(dataLakeId, limit),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 0,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeConfigHistoryView }>(
+        `/api/data-lakes/${dataLakeId}/config-history`,
+        limit == null ? undefined : { params: { limit } }
+      );
+      return response.data.data;
+    },
+  });
+  // Same derivation as useDataLakeSpend, and used the same way: a rejection RETRACTS the surface
+  // rather than painting an error into it. Both of this route's refusals are permission-shaped (the
+  // EnableDataLakes gate and the manage gate), and neither becomes true by retrying.
+  const isForbidden =
+    isAxiosError(query.error) &&
+    (query.error.response?.status ?? 0) >= 400 &&
+    (query.error.response?.status ?? 0) < 500;
+  return { ...query, isForbidden };
 }
 
 /**
@@ -271,19 +326,45 @@ export function useUpdateDataLake() {
       const response = await api.put<DataLakeConfig>(`/api/data-lakes/${id}`, params);
       return response.data;
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // This write is exactly what adds a config-history row, and the history renders in the same
+      // modal that submitted it - without this the owner sees their own change missing from the audit.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       // This mutation is the ONLY writer of `requiredPassageTokenTarget`, and that value is the sole
       // input both the health report (#1666) and the convergence plan (#1681) are graded against -
       // change it and which files are conformant, the reachable-content headline, the convergeable
       // count and the bulk-change share all move at once. Neither query polls or refetches on focus,
       // so without this they keep rendering the pre-change verdict against the new policy.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(variables.id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(variables.id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(id) });
       toast.success('Data lake updated');
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to update data lake');
+    },
+  });
+}
+
+/**
+ * Edit a STATIC (registry) lake's admin-settable overlay (currently `groundingMode` only). A
+ * separate mutation from `useUpdateDataLake` on purpose: it targets PUT /api/data-lakes/:id/settings,
+ * not the general update route, which refuses a fallback lake outright.
+ */
+export function useUpdateFallbackLakeSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, ...params }: UpdateFallbackLakeSettingsRequestInputType & { id: string }) => {
+      const response = await api.put<DataLakeConfig>(`/api/data-lakes/${id}/settings`, params);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      toast.success('Data lake settings updated');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update data lake settings');
     },
   });
 }
@@ -316,8 +397,13 @@ export function useSetLakeVisibility() {
       });
       return response.data;
     },
-    onSuccess: (_data, { visibility }) => {
+    onSuccess: (_data, { id, visibility }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // A visibility change records a config-history row, same as an update. Not relying on the
+      // History tab's staleTime:0 + enabled-toggle refetch: that pairing happens to refresh today,
+      // but it is incidental, and raising staleTime or dropping the toggle would silently strand
+      // the new row.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success(VISIBILITY_TOAST[visibility]);
     },
     onError: (error: Error) => {
@@ -330,7 +416,8 @@ export function useSetLakeVisibility() {
 export const PUBLIC_LAKES_PAGE_SIZE = 24;
 
 /**
- * Browse the public-lake discovery catalog: gate-less public lakes across all orgs, with
+ * Browse the public-lake discovery catalog: the public lakes this caller can reach, across all
+ * orgs (gate-less ones plus any gated public lake whose gate the caller holds), with
  * search + load-more. `search` should already be debounced by the caller. Uses offset paging
  * with a FIXED page size (not a growing `limit`) so a deep load-more can never exceed the
  * route's max-limit cap; pages accumulate via useInfiniteQuery. A new `search` is a new query
@@ -369,7 +456,7 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postLifecycle(id, action),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
@@ -378,6 +465,10 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
       // lake list and the tag tree disagree - the page's lake rail (sourced from `list`) drops the
       // row while the tree beside it still shows that lake's branches and counts it in the totals.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      // Every lifecycle action records a config-history row. Invalidated for all five rather than
+      // only the reversible ones: for delete/cleanup the history observer is already unmounted, so
+      // the extra key is inert, and enumerating which actions qualify would rot as actions are added.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success(successMessage);
     },
     onError: (error: Error) => {
@@ -561,16 +652,54 @@ export function useApplyTaxonomySuggestions(batchId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (tags: TaxonomyTag[]) => {
-      const res = await api.post<{ success: true; filesUpdated: number }>(
-        `/api/data-lakes/batches/${batchId}/apply-taxonomy`,
-        { tags }
-      );
+      const res = await api.post<{
+        success: true;
+        filesUpdated: number;
+        // `unchanged` and `skipped` shipped in the SAME service commit, so a server predating it
+        // omits both - a type marking only one optional describes a payload that never existed.
+        unchanged?: number;
+        // Files whose optimistic-concurrency check lost - something else changed their tags between
+        // the read and the write, or the file was deleted inside the window.
+        skipped?: number;
+      }>(`/api/data-lakes/batches/${batchId}/apply-taxonomy`, { tags });
       return res.data;
     },
     onSuccess: result => {
-      toast.success(
-        `Tags applied to ${result.filesUpdated.toLocaleString()} file${result.filesUpdated === 1 ? '' : 's'}`
-      );
+      // A re-apply that changes nothing reported "Tags applied to N files" - every file counted as
+      // updated, because the identical-value write still bumped `updatedAt`. Splitting `unchanged`
+      // out is what stops that over-report.
+      const plural = (n: number) => `${n.toLocaleString()} file${n === 1 ? '' : 's'}`;
+      // Defaulted once, so an old server's absent fields read as zero everywhere below rather than
+      // needing a `??` (or a `!`) at each use.
+      const unchanged = result.unchanged ?? 0;
+      const skipped = result.skipped ?? 0;
+      const applied =
+        result.filesUpdated === 0 && unchanged === 0
+          ? skipped === 0
+            ? // Reachable: a batch where no file matches any accepted tag emits no ops and counts no
+              // `unchanged`. "Tags applied to 0 files" was the last arm claiming something happened.
+              'No files matched these tags'
+            : // Every op the batch emitted lost its CAS race. Files DID match, so "no files matched"
+              // contradicts the skipped clause below, and falling through to the next arm would say
+              // "already up to date on 0 files" instead - worse. That clause is the whole story
+              // here, so contribute no prefix to it.
+              ''
+          : result.filesUpdated === 0
+            ? `Tags already up to date on ${plural(unchanged)}`
+            : unchanged > 0
+              ? `Tags applied to ${plural(result.filesUpdated)}, ${plural(unchanged)} already up to date`
+              : `Tags applied to ${plural(result.filesUpdated)}`;
+      // Read `skipped` FIRST: "already up to date on 7 files" is an affirmative claim of
+      // completeness, and it would otherwise fire unchanged on a batch where the other 3 files
+      // silently failed their CAS check. Warning rather than success, because nothing in the
+      // product lets the user retry a batch once it is 'applied'.
+      if (skipped > 0) {
+        const detail = `${plural(skipped)} could not be updated - changed while applying.`;
+        toast.warning(applied ? `${applied}. ${detail}` : detail);
+      } else {
+        // `applied` is only ever empty on the all-skipped arm above, which cannot reach here.
+        toast.success(applied);
+      }
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
@@ -624,6 +753,13 @@ export function useDismissTaxonomy(batchId: string) {
 // ── Per-lake files ──────────────────────────────────────────────────────────
 
 /**
+ * A lake member as this browse returns it: the file plus which membership arm made it one -
+ * `meta` (the lake's `datalake:*` tag), `prefix` (a `fileTagPrefix` content tag on a file the
+ * creator owns, no meta-tag), or `both`. Undefined only if the server predates this field.
+ */
+export type DataLakeMemberFile = IFabFileDocument & { membershipArm?: DataLakeMembershipArm };
+
+/**
  * Hook: Fetch files belonging to a specific data lake by ID.
  * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
  * query; see useGetDataLakeArticles.
@@ -632,7 +768,7 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
   return useQuery({
     queryKey: dataLakeKeys.files(dataLakeId, params),
     queryFn: async () => {
-      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
+      const response = await api.get<{ data: DataLakeMemberFile[]; total: number; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/articles`,
         { params: { limit: params?.limit ?? 100 } }
       );
@@ -674,12 +810,118 @@ export function useReprocessFabFile(dataLakeId: string | null) {
 }
 
 /**
+ * The invalidation fan-out shared by a removal and a restore - both change the same lake's
+ * membership, so a caller left stale by one is left stale by the other. Kept in one place so
+ * `useRemoveFileFromDataLake` and `useAddFileToDataLake` cannot drift apart on what "membership
+ * changed" invalidates.
+ *
+ * Exported so a future hook for `PUT /api/data-lakes/:id/files/:fabFileId/tags`
+ * (`setDataLakeFileTags`) can reuse it: that door can also change a file's tags under this lake's
+ * prefix (and, via a prefix-arm join, another lake's membership), which is exactly the same
+ * invalidation shape.
+ */
+export function invalidateLakeFileMembershipQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  dataLakeId: string
+) {
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+  // Membership changes the lake's reachable-content denominator and predicate tallies.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+  // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+  // A membership write can reach activateIfDraft's draft -> active flip (see
+  // removeFileFromDataLake / addFileToDataLake), which records a `system`-principal
+  // config-history row. Inert today because these hooks fire from the file wizard, where the
+  // History observer is unmounted - invalidated anyway for the same reason the lifecycle hook
+  // does it: the cost is nothing, and reasoning about which paths qualify is what rots.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+  // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
+  // files only, so a membership change scoped to a prefix-only file moves rows without
+  // moving the count.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+  // Membership also changes the file's tags under the lake's prefix, so every tag-derived view
+  // is stale (incl. the manager's count-chip fallback). Root prefixes: these caches are
+  // keyed by an opti/datalakes source discriminator, and a fully-specified key would
+  // refresh only one surface.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+  // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
+  // so a membership change stales the list too, not only the counts endpoint.
+  queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+}
+
+/** How long the Undo toast stays visible - long enough to notice, short of feeling stuck open.
+ *  The server's removal record outlives it by a lot (30 minutes - see removeFileFromDataLake), but
+ *  this toast is the ONLY affordance that spends it: there is no list route and no "recently
+ *  removed" panel, so once it closes the restore is reachable only by calling the route directly.
+ *  The non-owner confirmation copy says so, because for a non-owner there is no second way back. */
+const UNDO_TOAST_DURATION_MS = 15000;
+
+/** `toastId` is presentation, not payload - the server reads nothing but the two ids from the
+ *  route. It travels in the variables so `useAddFileToDataLake`'s callbacks can live at the
+ *  MUTATION level and still address the toast that triggered them; see the comment there. */
+export interface AddFileToDataLakeVariables {
+  dataLakeId: string;
+  fabFileId: string;
+  toastId?: string | number;
+}
+
+/**
+ * Hook: restore a file to a data lake - either an Undo of a recent removal (the server's own
+ * short-TTL removal record supplies the real tags) or a cold add of a file the actor owns. The
+ * server decides which path applies; this hook sends nothing that could select one - no
+ * `restoreTags`, nothing beyond the ids.
+ *
+ * Takes the lake id PER CALL, not at hook construction - see `useRemoveFileFromDataLake`'s Undo
+ * wiring for why a hook-level id is the wrong shape for an action that fires long after the
+ * confirming component may have cleared its own state.
+ */
+export function useAddFileToDataLake() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ dataLakeId, fabFileId }: AddFileToDataLakeVariables) => {
+      const res = await api.post<{ success: true; fileCount: number; totalSizeBytes: number }>(
+        `/api/data-lakes/${dataLakeId}/files/${fabFileId}`
+      );
+      return res.data;
+    },
+    // BOTH callbacks are MUTATION-level, and `toastId` rides in the variables purely so they can be.
+    // Per-`mutate()` callbacks are dispatched only while the observer still has listeners
+    // (mutationObserver's `#notify` guards on `hasListeners()`, and useMutation subscribes via
+    // useSyncExternalStore), and the only caller is an Undo button on a toast that OUTLIVES the
+    // component holding this hook: confirming a removal unmounts the dialog on both wizard
+    // surfaces. Per-call callbacks there fire for nobody, so a failed restore was silent - on the
+    // one affordance the user has, promised by the confirmation copy.
+    onSuccess: (_data, { dataLakeId, toastId }) => {
+      invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
+      if (toastId !== undefined) toast.success('File restored to data lake.', { id: toastId });
+    },
+    onError: (error: Error, { toastId }) => {
+      // Surface the server's own refusal text, not axios' `"Request failed with status code N"`.
+      // Every actionable rejection on this door lands here - "You do not have permission to add
+      // files to this data lake", "Data lake not found", the built-in-lake refusal - and this is
+      // the toast the non-owner confirmation copy calls their only way back, so a status string is
+      // the one message that cannot help them. Body key is `error` (server/middlewares/
+      // errorHandler.ts); same extraction as useTransferLakeOwnership above.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const message = refusal || error.message || 'Failed to restore the file to the data lake';
+      toast.error(message, toastId !== undefined ? { id: toastId } : undefined);
+    },
+  });
+}
+
+/**
  * Hook: Remove a single file from a data lake. Drops the lake's membership tags from the file
  * and leaves the file itself alone - no soft-delete, no chunk teardown. Owner/admin only; the
  * server verifies the file actually belongs to the lake.
+ *
+ * Offers Undo on the success toast, backed by the server's short-TTL removal record (#2248) - not
+ * by anything captured client-side, since there is nothing left to capture: the tags to restore
+ * live on the server.
  */
 export function useRemoveFileFromDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
+  const addFileToDataLake = useAddFileToDataLake();
   return useMutation({
     mutationFn: async (fabFileId: string) => {
       const res = await api.delete<{ success: true; fileCount: number; totalSizeBytes: number }>(
@@ -687,31 +929,99 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       );
       return res.data;
     },
-    onSuccess: () => {
-      toast.success('File removed from data lake.');
+    onSuccess: (_data, fabFileId) => {
       if (dataLakeId) {
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
-        // Removing a member changes the lake's reachable-content denominator and predicate tallies.
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
-        // Removing a file can drop the lake's under-chunked count, so refresh the rebuild badge.
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
       }
-      // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
-      // files only, so removing a file that was in the lake by prefix alone drops a row from
-      // the list without moving the count.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
-      // is stale (incl. the manager's count-chip fallback). Root prefixes: these caches are
-      // keyed by an opti/datalakes source discriminator, and a fully-specified key would
-      // refresh only one surface.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
-      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
-      // so dropping tags here staled the list too, not only the counts endpoint.
-      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+
+      if (!dataLakeId) {
+        toast.success('File removed from data lake.');
+        return;
+      }
+      // Captured NOW, in this closure - not read later off the hook's own `dataLakeId` prop, which
+      // a caller typically nulls out (clearing its confirm-dialog target) as soon as this onSuccess
+      // returns. The Undo button's onClick below closes over this constant, not over the hook.
+      const removedLakeId = dataLakeId;
+      const toastId = toast.success('File removed from data lake.', {
+        duration: UNDO_TOAST_DURATION_MS,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            // No per-call callbacks: this click routinely happens after the component holding the
+            // hook has unmounted, which is exactly when those are dropped. The toast id goes in the
+            // variables instead so the mutation-level handlers can replace this toast in place.
+            addFileToDataLake.mutate({ dataLakeId: removedLakeId, fabFileId, toastId });
+          },
+        },
+      });
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to remove file from data lake');
+      // Same extraction as the restore door above: these two fire from the same confirmation
+      // dialog, so leaving this one bare would give Undo the server's reason and Remove a status
+      // code. `Only the creator can remove files from this data lake` is exactly the text a
+      // curator needs here.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to remove file from data lake');
+    },
+  });
+}
+
+/**
+ * Hook: permanently destroy one lake document, its chunks and its vectors, and keep the receipt
+ * the server returns as proof. The reversible sibling is `useRemoveFileFromDataLake`, which only
+ * unpicks lake membership - this one is unrecoverable and removes the file everywhere, so the
+ * caller is expected to confirm first and to show the receipt afterwards.
+ *
+ * A receipt with `verified: false` is surfaced as a warning, not a success: the request completed
+ * but the sweep did not converge, and telling the owner their content is gone would be a claim
+ * the server explicitly declined to make.
+ */
+export function usePurgeDataLakeDocument(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (fabFileId: string) => {
+      const res = await api.post<DataLakeDocumentPurgeReceipt>(
+        `/api/data-lakes/${dataLakeId}/files/${fabFileId}/purge`
+      );
+      return res.data;
+    },
+    onSuccess: receipt => {
+      if (receipt.verified) {
+        toast.success(
+          `Deleted permanently: the document and its ${receipt.chunksBefore} chunk(s) and vectors are gone.`
+        );
+      } else {
+        toast.error(`Deletion did not finish: ${receipt.chunksRemaining} chunk(s) still remain.`);
+      }
+      // `filesRoot`, not `filesOf(dataLakeId)`: membership removal is lake-scoped and this is not,
+      // so any OTHER lake's cached file list is stale too.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+      // Health is computed from the chunk/vector rollups this purge destroys outright, so the badge
+      // would otherwise keep counting the destroyed document's chunks as reachable content until it
+      // goes stale. Root prefix for the same reason as filesRoot: every lake that held the document
+      // is affected, not just this one.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      // The document is gone globally, not just from this lake, so the Files list is stale too.
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      if (dataLakeId) {
+        // Purging an under-chunked document can move the purged lake's rebuild badge, and can
+        // reach recomputeLakeStats' draft -> active flip, which writes a config-history row - same
+        // two keys invalidateLakeFileMembershipQueries refreshes for a membership change.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      // Same extraction as the other lake doors: this is the irreversible one, and a mid-sweep
+      // failure is exactly the case where "Request failed with status code 500" is the one message
+      // that cannot tell the owner whether their document is half destroyed. Body key is `error`
+      // (server/middlewares/errorHandler.ts).
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to permanently delete this file');
     },
   });
 }
@@ -787,18 +1097,34 @@ export function useRechunkDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (limit?: number) => {
-      const res = await api.post<{ detected: number; enqueued: number; remaining: number }>(
-        `/api/data-lakes/${dataLakeId}/rechunk`,
-        limit ? { limit } : {}
-      );
+      const res = await api.post<{
+        detected: number;
+        enqueued: number;
+        remaining: number;
+        // Present only on the refusal arm. Typed optional because the success arm omits it entirely,
+        // and read FIRST below: a paused run also returns `enqueued: 0`, which is indistinguishable
+        // from "nothing to do" on the counts alone.
+        outcome?: 'paused';
+      }>(`/api/data-lakes/${dataLakeId}/rechunk`, limit ? { limit } : {});
       return res.data;
     },
     onSuccess: data => {
-      toast.success(
-        data.enqueued > 0
-          ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
-          : 'All files are already chunked into passages.'
-      );
+      if (data.outcome === 'paused') {
+        // A warning, not a success: the server refused and changed nothing. Without this arm the
+        // refusal fell through to "All files are already chunked into passages" as a GREEN success -
+        // which is not merely uninformative but false, since the gate only runs when at least one
+        // file was detected. Wording mirrors useConvergeDataLake's paused arm below.
+        toast.warning(
+          'Background lake work is paused, so nothing was rebuilt. No files were changed - re-run this ' +
+            'once an administrator turns convergence back on.'
+        );
+      } else {
+        toast.success(
+          data.enqueued > 0
+            ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
+            : 'All files are already chunked into passages.'
+        );
+      }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
@@ -963,6 +1289,73 @@ export function useConvergeDataLake(dataLakeId: string | null) {
   });
 }
 
+/**
+ * Hook: Attach existing files to a data lake by toggling on its `datalake:*` meta-tag, through
+ * the same `/api/files/tags/toggle` write every other manual membership join uses (see
+ * toggleTags). Lets an owner add a file they already uploaded without re-uploading it through
+ * the wizard.
+ *
+ * A dedicated add-only door DOES exist (`POST /api/data-lakes/:id/files/:fabFileId`, see
+ * addFileToDataLake) - it mints a restore record and an audit row and is per-file, not batched.
+ * This hook deliberately uses the shared toggle door instead, for the batch. Both doors now apply
+ * the same ownership conjunct, so their access decisions agree - but each applies it in its own
+ * pre-write pass, NOT in the `addFileToLake` write they both call. `addFileToLake` cannot carry it:
+ * `addFileToDataLake`'s restore path calls it deliberately WITHOUT one. So a new caller of
+ * `addFileToLake` inherits no ownership check and has to grade the file's owner itself - see the
+ * conjunct in `toggleTags` and `addFileToDataLake`'s own docblock. What this door does not get is
+ * the restore record or the per-write audit row.
+ *
+ * IMPORTANT: the toggle endpoint TOGGLES the tag, so this must only ever be called with ids that
+ * are NOT already members - reposting the tag for an existing member would remove it (and its
+ * content-prefix tags with it, unrecoverably). The caller (Files browser) filters the selection
+ * down first; `skippedCount` is purely for the success toast's wording.
+ */
+export function useAddFilesToLake() {
+  const queryClient = useQueryClient();
+  const { t } = useTranslation();
+  return useMutation({
+    mutationFn: async ({
+      fileIds,
+      lake,
+      skippedCount = 0,
+    }: {
+      fileIds: string[];
+      lake: { id: string; datalakeTag: string };
+      skippedCount?: number;
+    }) => {
+      const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
+        ids: fileIds,
+        tags: [lake.datalakeTag],
+      });
+      return { files: res.data, lake, skippedCount };
+    },
+    onSuccess: ({ files, skippedCount }) => {
+      toast.success(
+        skippedCount > 0
+          ? t('file_browser.added_to_lake_with_skipped', { count: files.length, skippedCount })
+          : t('file_browser.added_to_lake', { count: files.length })
+      );
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      if (refusal) {
+        toast.error(refusal);
+        return;
+      }
+      toast.error(error.message || 'Failed to add files to the data lake');
+    },
+    // A mid-batch failure can still leave some of the batch's files written (toggleTags is not
+    // transactional across files - see its docblock), so invalidation must run on every outcome,
+    // not only success: an onSuccess-only invalidation left the cache reporting the pre-add state
+    // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
+    // that same cache before the next attempt.
+    onSettled: (_data, _error, { lake }) => {
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      invalidateLakeFileMembershipQueries(queryClient, lake.id);
+    },
+  });
+}
+
 // ── Browse surfaces (tag tree / articles / tickers) ──────────────────────────
 
 export interface DataLakeArticlesParams {
@@ -973,6 +1366,12 @@ export interface DataLakeArticlesParams {
   limit?: number;
   sortBy?: 'fileName' | 'createdAt';
   sortDir?: 'asc' | 'desc';
+  /**
+   * The merged tree's Uncategorized bucket: lake members categorized under none of the caller's
+   * lake prefixes. Sized by `totalUncategorizedFileCount` on the tag-counts payload. For ONE
+   * lake's bucket use useGetDataLakeUncategorizedFiles - this route has no lake-scope parameter.
+   */
+  uncategorized?: boolean;
 }
 
 /** Response shape for the tag-counts endpoint. */
@@ -988,6 +1387,36 @@ export interface DataLakeTagCountsResponse {
    * tree's branches.
    */
   lakeFileCounts: Record<string, number>;
+  /**
+   * Same lakes as `lakeFileCounts`, split into the two membership arms so the manager can say
+   * whose signal made a file a member: `metaCount` carries the lake's `datalake:*` tag,
+   * `prefixOnlyCount` is a member solely via a `fileTagPrefix` content tag (no meta-tag). The two
+   * are disjoint and sum to `lakeFileCounts[datalakeTag]`.
+   */
+  lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
+  /**
+   * The slice of `lakeFileCounts` a prefix-keyed tag tree has no branch for: members carrying
+   * the lake's meta-tag but no tag under its `fileTagPrefix`. Same key, same predicate, so a
+   * tree can render this as an "Uncategorized" bucket and account for every file the picker
+   * advertises instead of showing a count it cannot list (#2031).
+   */
+  uncategorizedFileCounts: Record<string, number>;
+  /**
+   * Distinct live files across EVERY reachable lake, on the same membership basis as
+   * `lakeFileCounts` - the number for an all-lakes row sitting above per-lake rows. Those rows
+   * can still sum higher than this, since a file in two lakes counts for each; what they no
+   * longer do is describe a different population than the total above them.
+   *
+   * Not `uniqueArticleCounts.total`, which is prefix-based: a lake whose files carry only the
+   * meta-tag contributes 0 there while its own row reads its full size.
+   */
+  totalLakeFileCount: number;
+  /**
+   * The merged (all-lakes) tree's bucket: distinct members categorized under NO accessible
+   * prefix. Not a sum of `uncategorizedFileCounts` - those judge each lake separately, so a file
+   * categorized in lake A but not in lake B is reachable under A's branch and must not appear.
+   */
+  totalUncategorizedFileCount: number;
 }
 
 /**
@@ -1041,6 +1470,32 @@ export function useDataLakeArticleCounts(): { total: number; sales: number; opti
     sales: premiumPrefix ? (unique?.byPrefix[premiumPrefix] ?? 0) : 0,
     opti: unique?.byPrefix['opti:'] ?? 0,
   };
+}
+
+/**
+ * One lake's "Uncategorized" bucket: the members carrying no tag under the lake's own
+ * `fileTagPrefix`, which is exactly what a prefix-keyed tag tree has no branch for. Fetched
+ * lazily (the bucket row's COUNT comes from tag-counts, so nothing here is needed to render it)
+ * and only once a caller opens the bucket - hence the explicit `enabled`.
+ *
+ * Separate from useDataLakeFiles rather than a param on it so the two cannot share a cache
+ * entry: they hit the same route with different scopes and the same key would serve one for
+ * the other.
+ */
+export function useGetDataLakeUncategorizedFiles(dataLakeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: dataLakeKeys.files(dataLakeId, { uncategorized: true }),
+    queryFn: async () => {
+      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
+        `/api/data-lakes/${dataLakeId}/articles`,
+        { params: { uncategorized: 'true', limit: 100 } }
+      );
+      return response.data;
+    },
+    enabled: enabled && !!dataLakeId,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 5,
+  });
 }
 
 /**
@@ -1100,9 +1555,92 @@ export function useDataLakeSpend(dataLakeId: string | null, days: number, opts?:
     staleTime: 1000 * 60,
     placeholderData: keepPreviousData,
   });
-  const isForbidden =
-    isAxiosError(query.error) &&
-    (query.error.response?.status ?? 0) >= 400 &&
-    (query.error.response?.status ?? 0) < 500;
-  return { ...query, isForbidden };
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+// ── Acquisition proposal queue (#1671) ──────────────────────────────────────
+
+/**
+ * One lake's acquisition review queue. Manage-gated server-side, so a mere reader gets a 4xx -
+ * surfaced as `isForbidden` and never retried, matching `useDataLakeSpend`. Callers gate the whole
+ * surface on that flag rather than painting an error.
+ *
+ * No polling: proposals arrive from a background producer, but a reviewer who has the panel open is
+ * mid-decision, and a list that reshuffles under them is worse than one that is a few minutes stale.
+ */
+export function useDataLakeProposals(
+  dataLakeId: string | null,
+  status?: DataLakeProposalStatus,
+  opts?: { enabled?: boolean }
+) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.proposals(dataLakeId, status),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeProposalDocument[] }>(`/api/data-lakes/${dataLakeId}/proposals`, {
+        params: status ? { status } : undefined,
+      });
+      return data.data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    // Refetch on focus, unlike the rest of this file: a reviewer keeps this panel open while opening
+    // sources in other tabs, and coming back to a queue that silently no longer matches the database
+    // is how you decline something a colleague already ruled on. Cheap - one small read of one lake's
+    // pending rows, and only while a manager has the modal open.
+    refetchOnWindowFocus: true,
+    // Short enough that returning to the tab shows the real queue, long enough that tab-flipping
+    // within a single review pass does not refetch on every switch.
+    staleTime: 1000 * 15,
+  });
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+/**
+ * The server's own refusal text for a failed review decision, or a fallback.
+ *
+ * Shared by the toast and the card's inline alert so the two can never disagree about what went
+ * wrong. The body key is `error`, per server/middlewares/errorHandler.ts - reading `message` (as
+ * this once did) matched nothing, so the fallback always won and the messages that matter most
+ * ("already been reviewed", "the source returned HTTP 404") never reached the reviewer.
+ */
+export function reviewProposalFailureMessage(error: unknown): string {
+  const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+  return refusal || 'Could not record that decision. Try again shortly.';
+}
+
+/**
+ * Approve or decline one proposal. An approval admits the source into the lake through the ordinary
+ * ingestion door, so it invalidates the lake's file list and health alongside the queue - the file
+ * appears immediately, and its health badge stops reflecting a corpus that just changed.
+ */
+export function useReviewDataLakeProposal(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      proposalId,
+      decision,
+      reason,
+    }: {
+      proposalId: string;
+      decision: 'approve' | 'decline';
+      reason?: string;
+    }) => {
+      const { data } = await api.post<{ data: IDataLakeProposalDocument }>(
+        `/api/data-lakes/${dataLakeId}/proposals/${proposalId}`,
+        { decision, reason }
+      );
+      return data.data;
+    },
+    onSuccess: (proposal, { decision }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.proposalsOf(dataLakeId) });
+      if (decision === 'approve') {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
+      toast.success(decision === 'approve' ? `Added "${proposal.title}" to the lake` : 'Proposal declined');
+    },
+    onError: (error: unknown) => {
+      toast.error(reviewProposalFailureMessage(error));
+    },
+  });
 }

@@ -11,10 +11,12 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  fallbackLakeSettingsRepository,
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   organizationRepository,
   projectRepository,
+  scopedSettingsRepository,
   userRepository,
 } from '@bike4mind/database';
 import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -90,12 +92,14 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),

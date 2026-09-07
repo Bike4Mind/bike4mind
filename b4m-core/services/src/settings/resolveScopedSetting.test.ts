@@ -3,6 +3,7 @@ import {
   CreditHolderType,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   IScopedSetting,
+  MIN_PASSAGE_TOKEN_TARGET,
   ScopeRef,
   SettingScope,
   SettingScopeLevel,
@@ -13,7 +14,9 @@ import {
   computeCandidateRefs,
   pickOverride,
   resolveScopedSetting,
+  resolveScopedSettingFromOverrides,
   resolveScopedSettingValues,
+  scopeForCaller,
   scopeForFileOwner,
   scopeForLake,
 } from './resolveScopedSetting';
@@ -296,5 +299,133 @@ describe('scope builders', () => {
     expect(s.owner).toEqual({ id: 'u1', type: CreditHolderType.User });
     expect(s.organizationId).toBeUndefined();
     expect(s.lakeId).toBeUndefined();
+  });
+
+  it('scopeForCaller (#1955): an org member resolves at owner:<orgId>, with no lake rung', () => {
+    const s = scopeForCaller({ userId: 'u1', organizationId: 'o1' });
+    // Owner derivation mirrors scopeForLake/scopeForFileOwner: org member -> Organization owner, so
+    // an org-wide override written via any of the three paths lands at the same owner:o1 rung.
+    expect(s.owner).toEqual({ id: 'o1', type: CreditHolderType.Organization });
+    expect(s.organizationId).toBe('o1');
+    expect(s.lakeId).toBeUndefined();
+  });
+
+  it('scopeForCaller: an org-less caller is individually owned', () => {
+    const s = scopeForCaller({ userId: 'u1', organizationId: '' });
+    expect(s.owner).toEqual({ id: 'u1', type: CreditHolderType.User });
+    expect(s.organizationId).toBeUndefined();
+    expect(s.lakeId).toBeUndefined();
+  });
+});
+
+describe('resolveScopedSettingFromOverrides (the bulk, pure resolver - #2157)', () => {
+  // 'PauseLakeConvergence' rather than the numeric KEY above: the bulk API exists for the boolean
+  // pause switch, and a boolean is where the `=== true` vs truthy distinction its callers depend on
+  // actually lives.
+  const PAUSE = 'PauseLakeConvergence' as const;
+  const lake = (id: string, createdByUserId = 'u1', organizationId?: string) =>
+    scopeForLake({ id, createdByUserId, organizationId });
+  const pauseOverride = (scopeLevel: SettingScopeLevel, scopeId: string, settingValue: string) =>
+    ({ scopeLevel, scopeId, settingName: PAUSE, settingValue }) as IScopedSetting;
+
+  it('grades many scopes against ONE row set, in the order given', () => {
+    const resolved = resolveScopedSettingFromOverrides(PAUSE, [lake('l1'), lake('l2'), lake('l3')], false, [
+      pauseOverride(SettingScopeLevel.Lake, 'l2', 'true'),
+    ]);
+
+    expect(resolved.map(r => r.value)).toEqual([false, true, false]);
+    expect(resolved.map(r => r.source)).toEqual([
+      SettingScopeLevel.Platform,
+      SettingScopeLevel.Lake,
+      SettingScopeLevel.Platform,
+    ]);
+  });
+
+  it('an override can point EITHER way against the platform value', () => {
+    // The direction that is easy to forget: a platform-wide pause with a lake overriding back to
+    // "keep running". The rescue sweep leans on this arm to keep such a lake's files sweeping.
+    const [paused, running] = resolveScopedSettingFromOverrides(PAUSE, [lake('l1'), lake('l2')], true, [
+      pauseOverride(SettingScopeLevel.Lake, 'l2', 'false'),
+    ]);
+
+    expect(paused.value).toBe(true);
+    expect(paused.source).toBe(SettingScopeLevel.Platform);
+    expect(running.value).toBe(false);
+    expect(running.source).toBe(SettingScopeLevel.Lake);
+  });
+
+  it('narrower rung wins, same order as the async resolver', () => {
+    const resolved = resolveScopedSettingFromOverrides(PAUSE, [lake('l1', 'u1', 'o1')], false, [
+      pauseOverride(SettingScopeLevel.Organization, 'o1', 'true'),
+      pauseOverride(SettingScopeLevel.Owner, 'o1', 'true'),
+      pauseOverride(SettingScopeLevel.Lake, 'l1', 'false'),
+    ]);
+
+    expect(resolved[0]).toEqual({ value: false, source: SettingScopeLevel.Lake });
+  });
+
+  it('ignores rows naming a DIFFERENT setting, so a caller may pass a wider row set', () => {
+    const resolved = resolveScopedSettingFromOverrides(PAUSE, [lake('l1')], false, [
+      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: KEY, settingValue: '9' } as IScopedSetting,
+    ]);
+
+    expect(resolved[0]).toEqual({ value: false, source: SettingScopeLevel.Platform });
+  });
+
+  it('an unparseable override falls through to the platform value rather than throwing', () => {
+    // Same parse-guard as pickOverride's own contract. Pinned here because this API has no overlay
+    // read to fail, so a bad ROW is the only failure mode it has.
+    const resolved = resolveScopedSettingFromOverrides(PAUSE, [lake('l1')], true, [
+      pauseOverride(SettingScopeLevel.Lake, 'l1', 'sometimes'),
+    ]);
+
+    expect(resolved[0]).toEqual({ value: true, source: SettingScopeLevel.Platform });
+  });
+
+  it('an empty row set returns the platform value for every scope, with no rung claimed', () => {
+    // The fast path every bulk caller short-circuits on - it must be indistinguishable from a
+    // platform-only read, or the caller's "nothing is overridden" branch would not be safe.
+    const resolved = resolveScopedSettingFromOverrides(PAUSE, [lake('l1'), lake('l2')], true, []);
+
+    expect(resolved).toEqual([
+      { value: true, source: SettingScopeLevel.Platform },
+      { value: true, source: SettingScopeLevel.Platform },
+    ]);
+  });
+
+  it('agrees with the async single-scope resolver on the same inputs', () => {
+    // The property that keeps the bulk path from becoming a second, drifting implementation of
+    // narrower-wins. Both delegate to computeCandidateRefs + pickOverride; this asserts it.
+    const rows = [
+      pauseOverride(SettingScopeLevel.Owner, 'u1', 'true'),
+      pauseOverride(SettingScopeLevel.Lake, 'l2', 'false'),
+    ];
+    const scopes = [lake('l1'), lake('l2'), lake('l3', 'u2')];
+
+    const bulk = resolveScopedSettingFromOverrides(PAUSE, scopes, false, rows);
+
+    return Promise.all(
+      scopes.map(scope => resolveScopedSetting(PAUSE, scope, makeDb({ [PAUSE]: 'false' }, rows) as never))
+    ).then(async single => {
+      expect(bulk).toEqual(single);
+    });
+  });
+
+  it("applies the setting's clamp, including to the platform value the caller passed in", () => {
+    // The safety rail is not an override-only concern ("adjustable does not mean unbounded"), so it
+    // has to survive the delegation. DefaultChunkSize is the setting that declares one; it clamps UP
+    // to MIN_PASSAGE_TOKEN_TARGET, and the platform value is the only side reachable here - a
+    // below-min OVERRIDE never gets that far, because the schema rejects it and pickOverride falls
+    // through (asserted by the second scope). Both sides go through the same applyClamp call.
+    const CHUNK = 'DefaultChunkSize' as const;
+    const [clamped, rejectedOverride] = resolveScopedSettingFromOverrides(
+      CHUNK,
+      [scopeForFileOwner({ userId: 'u1' }), scopeForFileOwner({ userId: 'u2' })],
+      1,
+      [{ scopeLevel: SettingScopeLevel.Owner, scopeId: 'u2', settingName: CHUNK, settingValue: '1' } as IScopedSetting]
+    );
+
+    expect(clamped).toEqual({ value: MIN_PASSAGE_TOKEN_TARGET, source: SettingScopeLevel.Platform });
+    expect(rejectedOverride).toEqual({ value: MIN_PASSAGE_TOKEN_TARGET, source: SettingScopeLevel.Platform });
   });
 });

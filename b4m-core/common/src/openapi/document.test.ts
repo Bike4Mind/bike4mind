@@ -185,6 +185,19 @@ describe('buildOpenApiDocument', () => {
     expect(chat.responses['200'].headers['X-Request-ID']).toBeDefined();
   });
 
+  // errorHandler serves every thrown error body, so a bespoke error schema that extends
+  // ApiErrorSchema inherits `name` - and it has to inherit the sunset notice with it, or
+  // the deprecation is visible on the shared component and nowhere else. See
+  // CONVENTIONS.md section 1.
+  it('carries the `name` deprecation into error schemas that extend the envelope', () => {
+    const inherited = doc.components.schemas.synthesizeSpeechResponse422.properties.name;
+    expect(inherited.deprecated).toBe(true);
+    expect(inherited.description).toContain('2026-12-01');
+
+    // The 413 body is written directly rather than thrown, so it never gets `name` at all.
+    expect(doc.components.schemas.synthesizeSpeechResponse413.properties.name).toBeUndefined();
+  });
+
   it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
     // The unwindowed spelling is what the spec used to publish; nothing sets it,
     // so a client coding against it reads undefined.

@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { AdminTab, SIDEBAR_SECTIONS, SIDEBAR_EXPANDED_STORAGE_KEY, findSectionKeyForTab } from './adminSidebarConfig';
 
 const allItems = SIDEBAR_SECTIONS.flatMap(section => section.items);
@@ -86,5 +88,39 @@ describe('findSectionKeyForTab', () => {
 describe('SIDEBAR_EXPANDED_STORAGE_KEY', () => {
   it('is a stable, namespaced localStorage key', () => {
     expect(SIDEBAR_EXPANDED_STORAGE_KEY).toBe('admin-sidebar-expanded-sections');
+  });
+});
+
+/**
+ * The sidebar and AdminPage's TabPanels are two hand-maintained lists of the same enum, so they
+ * can drift silently: a tab whose panel carries the wrong `value` is mounted only while a
+ * DIFFERENT tab is selected, which means it never renders and no component test notices - the
+ * component renders fine in isolation. These parse the source rather than mounting AdminPage,
+ * which pulls in most of the admin surface.
+ */
+describe('AdminPage tab wiring', () => {
+  const adminPageSource = readFileSync(join(__dirname, 'AdminPage.tsx'), 'utf8');
+
+  const panels = [...adminPageSource.matchAll(/<TabPanel\s+value=\{AdminTab\.(\w+)\}[^>]*>([\s\S]*?)<\/TabPanel>/g)];
+
+  it('guards each panel body with the same tab the panel is keyed to', () => {
+    const mismatches = panels.flatMap(([, panelTab, body]) =>
+      [...body.matchAll(/activeTab === AdminTab\.(\w+)/g)]
+        .map(([, guardTab]) => guardTab)
+        .filter(guardTab => guardTab !== panelTab)
+        .map(guardTab => `<TabPanel value={AdminTab.${panelTab}}> renders AdminTab.${guardTab}`)
+    );
+    expect(mismatches).toEqual([]);
+  });
+
+  it('gives every sidebar button a panel to render into', () => {
+    const panelTabs = new Set(panels.map(([, panelTab]) => panelTab));
+    const tabNameByValue = new Map(
+      Object.entries(AdminTab)
+        .filter((entry): entry is [string, AdminTab] => typeof entry[1] === 'number')
+        .map(([name, value]) => [value, name])
+    );
+    const orphans = allItems.map(item => tabNameByValue.get(item.tab)).filter(name => !name || !panelTabs.has(name));
+    expect(orphans).toEqual([]);
   });
 });

@@ -1305,6 +1305,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         borderRadius: '8px',
         background: theme.palette.background.body,
         position: 'relative',
+        overflow: 'hidden', // clips the header and content to the frame's 8px radius
       })}
     >
       <Box
@@ -1316,6 +1317,13 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
+          // Same 56px app-chrome band as the chat's SessionTop beside it. minHeight, not
+          // height: on phones the toolbar stacks onto a second row (see the grid below) and
+          // a hard height would clip it.
+          minHeight: '56px',
+          boxSizing: 'border-box',
+          flexShrink: 0,
+          backgroundColor: theme.palette.background.level1,
         })}
       >
         <Box

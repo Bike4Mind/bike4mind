@@ -55,7 +55,6 @@ declare module '@mui/joy/styles' {
      * Chatbox or the Prompt area related colors
      */
     chatbox: {
-      topbarBg: string;
       replyBg: string;
       messageInputDivider: string;
       messageInputColor: string;

@@ -40,7 +40,7 @@ export interface DeleteFabFileAdapter {
       IFabFileRepository,
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
     >;
-    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctEmbeddingModelsByFabFileIds'>;
+    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'>;
     users: Pick<IUserRepository, 'findById' | 'update'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
   };
@@ -86,12 +86,12 @@ export const deleteFabFile = async (
       }
     }
 
-    // Resolve BEFORE the Mongo chunks are deleted below - their per-chunk embeddingModel is the
-    // only place this survives once they're gone. A re-embedded file's chunks can span more
-    // than one model (see IFabFileChunk.embeddingModel), so ownedFile.embeddingModel alone - the
-    // file's CURRENT model only - would miss an OpenSearch index left by an earlier embed.
+    // Resolve BEFORE the Mongo chunks are deleted below - the chunk rows are the only place this
+    // survives once they're gone. A re-embedded file's chunks can span more than one model (see
+    // IFabFileChunk.embeddingModel), so ownedFile.embeddingModel alone - the file's CURRENT model
+    // only - would miss an OpenSearch index left by an earlier embed.
     const chunkEmbeddingModels = searchIndex
-      ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([ownedFile.id])
+      ? await db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds([ownedFile.id])
       : [];
 
     // Handle deletion of new FabFileChunks

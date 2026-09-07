@@ -10,6 +10,8 @@ import {
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
   resolveForcedRetrieval,
+  markShareablePrefixBoundary,
+  SHAREABLE_PREFIX_SOURCES,
   SIDE_EFFECT_ONLY_FEATURES,
   SYSTEM_PROMPT_PRIORITY,
   toPromptDetails,
@@ -92,6 +94,87 @@ describe('SYSTEM_PROMPT_PRIORITY', () => {
     const lowestBuilderInjected = Math.min(IMAGE_PROMPT_PRIORITY, FORMAT_PROMPT_PRIORITY);
 
     expect(Math.max(...Object.values(SYSTEM_PROMPT_PRIORITY))).toBeLessThan(lowestBuilderInjected);
+  });
+});
+
+describe('SHAREABLE_PREFIX_SOURCES', () => {
+  it('is the contiguous leading run of deployment-wide sources', () => {
+    const firstPerCaller = PROMPT_SOURCE_ORDER.findIndex(
+      source => !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin)
+    );
+
+    expect(SHAREABLE_PREFIX_SOURCES).toEqual(PROMPT_SOURCE_ORDER.slice(0, firstPerCaller));
+  });
+
+  it('carries no per-caller source, which would make the region unshareable', () => {
+    const perCaller = SHAREABLE_PREFIX_SOURCES.filter(
+      source => !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin)
+    );
+
+    expect(perCaller).toEqual([]);
+  });
+
+  it('excludes recentImages, which is hardcoded but sits behind per-caller content', () => {
+    // The reason the run has to be contiguous rather than an origin filter over the whole table:
+    // a prompt cache matches on a prefix, so a shared block behind a per-caller one is not shared.
+    expect(SHAREABLE_PREFIX_SOURCES).not.toContain('recentImages');
+  });
+
+  it('is wide enough to be worth a breakpoint at all', () => {
+    // A one-source prefix is the failure this table exists to prevent: extraContext sitting at
+    // position 2 cut the run down to dateContext alone, and a ~13-token head can never clear
+    // Anthropic's 1024-token minimum cacheable block, so the breakpoint would never materialise.
+    expect(SHAREABLE_PREFIX_SOURCES.length).toBeGreaterThan(1);
+  });
+});
+
+describe('markShareablePrefixBoundary', () => {
+  it('marks the last shareable message and nothing else', () => {
+    const tagged = buildTaggedContextMessages({
+      dateContext: [sys('date')],
+      artifactEmission: [sys('artifacts')],
+      abstention: [sys('abstain')],
+      sessionPrompt: [sys('per session')],
+      mementos: [sys('per user')],
+    });
+
+    markShareablePrefixBoundary(tagged);
+
+    expect(tagged.map(t => [t.source, t.message.cache === true])).toEqual([
+      ['dateContext', false],
+      ['artifactEmission', false],
+      ['abstention', true],
+      ['sessionPrompt', false],
+      ['mementos', false],
+    ]);
+  });
+
+  it('mutates in place, because callers key priorities and delivery off the message reference', () => {
+    const message = sys('abstain');
+    const tagged = buildTaggedContextMessages({ abstention: [message] });
+
+    markShareablePrefixBoundary(tagged);
+
+    expect(message.cache).toBe(true);
+    expect(tagged[0].message).toBe(message);
+  });
+
+  it('is a no-op when nothing shareable survived the gates, rather than marking an arbitrary block', () => {
+    const tagged = buildTaggedContextMessages({ sessionPrompt: [sys('per session')], mementos: [sys('per user')] });
+
+    markShareablePrefixBoundary(tagged);
+
+    expect(tagged.some(t => t.message.cache === true)).toBe(false);
+  });
+
+  it('lands on the last SURVIVING shareable block when a gate dropped the one behind it', () => {
+    // The boundary is applied after the promptMode filter for this reason: marking a block that
+    // does not ship declares a breakpoint the request never carries.
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('date')], mementos: [sys('per user')] });
+
+    markShareablePrefixBoundary(tagged);
+
+    expect(tagged[0].message.cache).toBe(true);
   });
 });
 

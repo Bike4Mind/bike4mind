@@ -3,8 +3,9 @@ import type { AgentExecutionStatus, IQuestGraphDocument, IQuestNodeDocument } fr
 import { BadRequestError, InternalServerError } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
-import { Resource } from 'sst';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
+import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
+import { resolveAgentExecutorFunctionName } from '@server/utils/agentExecutorFunctionName';
 
 const lambdaClient = new LambdaClient({});
 
@@ -16,28 +17,6 @@ const lambdaClient = new LambdaClient({});
  * will pass the viewer's real connection id when a run is started from the UI.
  */
 const HEADLESS_CONNECTION_ID = 'questmaster-v5-headless';
-
-/**
- * The executor's function name off the `lambdaFunctionNames` Linkable, read
- * through a Record view rather than as `Resource.lambdaFunctionNames.agentExecutor`.
- *
- * The generated `sst-env.d.ts` is committed and only learns a new key on the
- * next successful deploy, so a compile-time property access breaks a fresh
- * checkout's build - and CI's, which typechecks against the committed file.
- * Same bridge `modelDiscovery/runNow.ts` uses for exactly this reason.
- *
- * Returns undefined when the link is absent (the web app links the executor's
- * NAME, not the function - the WebSocket handler is the one with the direct
- * link), which the caller reports as a deployment gap rather than a bad request.
- */
-function linkedAgentExecutorName(): string | undefined {
-  try {
-    return (Resource as unknown as { lambdaFunctionNames?: Record<string, string | undefined> }).lambdaFunctionNames
-      ?.agentExecutor;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * Render a node into the single prompt its agent run receives.
@@ -97,7 +76,10 @@ export async function runQuestNode(args: {
   // by a dead Lambda would count against them (unconditional here rather than
   // memoized as in `agentExecute`: a dispatch is rare and about to cost real
   // credits, so one extra updateMany is noise).
-  await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
+  const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
+  // `aborted` is terminal, so the hourly abandoned-sweep can never revisit these
+  // - settle their bubbles here or they spin forever.
+  await settleStrandedQuests(swept, logger, '[runQuestNode]');
   const activeCount = await agentExecutionRepository.countActiveByUserId(userId);
   if (activeCount >= MAX_CONCURRENT_EXECUTIONS_PER_USER) {
     throw new BadRequestError(
@@ -108,7 +90,7 @@ export async function runQuestNode(args: {
   // Resolved BEFORE the claim: an unlinked executor is a deployment gap, and
   // failing here leaves the node untouched rather than claiming it, rolling it
   // back to `failed`, and making the operator wonder what they did wrong.
-  const executorFunctionName = linkedAgentExecutorName();
+  const executorFunctionName = resolveAgentExecutorFunctionName();
   if (!executorFunctionName) {
     throw new InternalServerError(
       'Agent executor is not linked to this deployment; a stack deploy is needed before nodes can run'
@@ -150,6 +132,11 @@ export async function runQuestNode(args: {
       userId,
       sessionId: graph.sessionId,
       questId: quest.id,
+      // Set at CREATE time, unlike `agentExecute.handleStart` which has to patch it afterwards
+      // (its Quest is written after the execution doc). Carries the real Quest id through a
+      // resumed/checkpointed invocation, where the start payload is absent - without it every
+      // LakeAccessEvent from the second invocation on would be written unlinked (#1867).
+      linkedQuestId: quest.id,
       query,
       model,
       status: 'pending' as AgentExecutionStatus,
@@ -170,6 +157,10 @@ export async function runQuestNode(args: {
       // pipelines: a V5 node never reads a user's beliefs into its prompt nor
       // writes machine-authored ones back.
       enableMementos: false,
+      // `enableArtifacts` is deliberately left UNSET, which is not the same call as `enableMementos`
+      // above: a node's answer bubbles up to a human-visible quest, so artifacts in it are wanted
+      // whenever the deployment wants them. Absence means "no preference" and leaves the admin
+      // setting as the only gate - an explicit `false` here would strip them unconditionally.
     });
 
     executionId = execution.id;

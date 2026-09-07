@@ -9,9 +9,14 @@ const getDynamicDataLakeAccessMock = vi.fn().mockResolvedValue({
   scopedTagPrefixes: [],
   lakes: [],
 });
-vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
-  getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
-}));
+// Keep lakeMembershipsFrom real (pure, over `lakes`) - only the DB-backed resolver is stubbed.
+vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', async () => {
+  const actual = await vi.importActual('../../../../dataLakeService/getDynamicDataLakeTags');
+  return {
+    ...actual,
+    getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
+  };
+});
 
 import { knowledgeBaseRetrieveTool } from './index';
 import type { ToolContext } from '../../base/types';
@@ -58,6 +63,7 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
     userId: 'u1',
     user: { id: 'u1', groups: [] } as never,
     sessionId: 's1',
+    questId: 'q1',
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     retrievalFilter: { excludeFilenameMarkers: ['MARK'], vectorizedOnly: true },
@@ -164,6 +170,91 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 
     expect(out).toContain('Clean Guide.pdf');
     expect(out).not.toContain('MARK - retired.pdf');
+  });
+});
+
+// #2243: search_knowledge_base now surfaces a dynamic lake's prefix-only members to every
+// caller who passes the lake gate (not only the lake's creator). Without this membership arm,
+// retrieve_knowledge_content would deny exactly the file search just returned.
+describe('retrieve_knowledge_content - by-id (Path A) dynamic-lake membership arm (#2243)', () => {
+  const LAKE_SCOPE = {
+    kind: 'owned' as const,
+    datalakeTag: 'datalake:org1:acme',
+    fileTagPrefix: 'acme:',
+    creatorUserId: 'creator-1',
+  };
+  /** The same lake under a registry scope: same tags, but an UNANCHORED prefix arm. */
+  const REGISTRY_SCOPE = {
+    kind: 'registry' as const,
+    datalakeTag: LAKE_SCOPE.datalakeTag,
+    fileTagPrefix: LAKE_SCOPE.fileTagPrefix,
+  };
+  const lakesWith = (scope: typeof LAKE_SCOPE | typeof REGISTRY_SCOPE) => [
+    {
+      id: 'lake1',
+      name: 'Acme Docs',
+      slug: 'acme',
+      datalakeTag: LAKE_SCOPE.datalakeTag,
+      fileTagPrefix: LAKE_SCOPE.fileTagPrefix,
+      membership: scope,
+      source: scope.kind === 'owned' ? ('dynamic' as const) : ('registry' as const),
+    },
+  ];
+
+  it('a non-creator retrieves a prefix-only member of a lake they may read', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValueOnce({
+      dataLakeTags: [LAKE_SCOPE.datalakeTag],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [LAKE_SCOPE.fileTagPrefix],
+      lakes: lakesWith(LAKE_SCOPE),
+    });
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null); // not owned
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      // Creator-owned, prefix-only: no meta-tag, no share, no group - membership is the only door.
+      makeFile({ fileName: 'Prefix Owned.pdf', userId: 'creator-1', tags: [{ name: 'acme:report' }] })
+    );
+
+    const out = await runById(ctx);
+    expect(out).toContain('Retrieved content from');
+  });
+
+  it('a same-prefix file under a DIFFERENT creator is still denied', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValueOnce({
+      dataLakeTags: [LAKE_SCOPE.datalakeTag],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [LAKE_SCOPE.fileTagPrefix],
+      lakes: lakesWith(LAKE_SCOPE),
+    });
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      // Same prefix, but owned by someone other than THIS lake's creator - never a member.
+      makeFile({ fileName: 'Someone Elses.pdf', userId: 'stranger-1', tags: [{ name: 'acme:report' }] })
+    );
+
+    const out = await runById(ctx);
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+  });
+
+  it('a registry lake grants no membership access on its own, scope present or not', async () => {
+    // This case used to be expressed as a lake with NO membership scope. Registry lakes carry one
+    // now (#2265), so the guard being tested is no longer "the field is absent" but "its `kind` is
+    // not creator-anchored, so `lakeMembershipsFrom` drops it". Same denial, live reason.
+    getDynamicDataLakeAccessMock.mockResolvedValueOnce({
+      dataLakeTags: [LAKE_SCOPE.datalakeTag],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: lakesWith(REGISTRY_SCOPE),
+    });
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Prefix Owned.pdf', userId: 'creator-1', tags: [{ name: 'acme:report' }] })
+    );
+
+    const out = await runById(ctx);
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
   });
 });
 
@@ -600,6 +691,170 @@ describe('retrieve_knowledge_content zero-chunk wording for inlined attachments 
   });
 });
 
+describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
+  it('records attempted:true, outcome:ok even when a matched file has no stored text (zero case)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = pagedTextChunkRepo([]);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    await runById(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records attempted:true, outcome:ok when content is retrieved', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Current Protocol.pdf' })
+    );
+
+    await runById(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when retrieval throws, instead of leaving retrieval byte-identical to never-attempted', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('An error occurred while retrieving document content');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:no_lakes when the agent kbScope is empty (#1971 review)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [] } });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'anything' })) as string;
+
+    expect(out).toContain('No documents found matching your request');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'no_lakes',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when Path B (tag/query search) runs to completion and matches no documents (#1971 review)', async () => {
+    // Distinct from and broader than the retrievedFiles.length===0 case above: this is Path B's
+    // OWN zero case (the search itself matched nothing), not a matched-file-with-no-stored-text
+    // case - previously silent.
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'nothing matches this' })) as string;
+
+    expect(out).toContain('No documents found matching');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when the fabfiles repository is not available at all (#1971 second review)', async () => {
+    const ctx = makeContext({ db: {} as never });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('not available at this time');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when the fabfilechunks paged text reader is not wired (#1971 second review)', async () => {
+    const ctx = makeContext({
+      db: { fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() }, fabfilechunks: {} } as never,
+    });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('chunk reader unavailable');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when an out-of-scope file_id is rejected before any DB lookup (#1971 second review)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: ['some-other-file'] } });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when Path A (direct file_id) resolves to nothing after owned/shared checks run (#1971 second review)', async () => {
+    // Distinct from the out-of-scope case above: this is the UNSCOPED owned/shared branch
+    // running to completion (both lookups execute) and legitimately finding no accessible file.
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const out = await runById(ctx);
+
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+});
+
 /**
  * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
  * fails to advance. Both were added with the paging and neither would fail if it were deleted.
@@ -727,6 +982,22 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
     expect(out).toContain('Keep following only the system');
   });
 
+  /**
+   * #2236 names only the search and forced-retrieval headers, but this is the third channel that
+   * heads retrieved content for the model. A dateless header here would let one turn cite the same
+   * document dated via search and undated via retrieve.
+   */
+  it('heads the document with its date, and omits the clause when it has none', async () => {
+    const dated = await runById(retrievableCtx('body', { createdAt: new Date('2026-08-14T09:30:00.000Z') }));
+    expect(dated).toContain('### Handbook.pdf (ID: file-1) - dated 2026-08-14');
+    // The suffix must not create a second header or defang ours.
+    expect(dated.match(/^### /gm)).toHaveLength(1);
+
+    const undated = await runById(retrievableCtx('body'));
+    expect(undated).toContain('### Handbook.pdf (ID: file-1)\n');
+    expect(undated).not.toContain(' - dated');
+  });
+
   it('leaves the retrieved-count line outside the block', async () => {
     const out = await runById(retrievableCtx('body'));
     expect(out.indexOf('Retrieved content from 1 of 1 document(s)')).toBeLessThan(out.indexOf(BEGIN));
@@ -837,6 +1108,9 @@ describe('retrieve_knowledge_content access-event audit', () => {
         resolvedLakeIds: ['lake-x'],
         fileIds: [FILE_ID],
         surface: 'chat-kb-retrieve',
+        // #1867 turn linkage: no scores here - direct file_id lookup, not a ranked search.
+        questId: 'q1',
+        sessionId: 's1',
       })
     );
   });
@@ -930,5 +1204,86 @@ describe('retrieve_knowledge_content access-event audit', () => {
 
     expect(out).toContain('Retrieved content from');
     expect(record).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Personal-corpus scoping reaches this tool too. It is AUTO-PAIRED with search_knowledge_base
+ * (addPairedTool in ChatCompletionProcess), so a session scoped to its own files offers this tool on
+ * every such turn - and while only search honoured the scope, this was a live path back to every
+ * lake the owner could reach.
+ */
+describe('retrieve_knowledge_content honours the personal-corpus scope', () => {
+  it("serves the caller's own file without consulting owner-wide lake access", async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, suppressLakeArms: true } as Partial<ToolContext>);
+
+    await runById(ctx);
+
+    // Suppression removes the LAKE arms only. It must not become an id allow-list: the caller's own
+    // documents stay retrievable, which is what routing this through kbScope used to break.
+    expect(ctx.db.fabfiles!.findById).toHaveBeenCalled();
+  });
+});
+
+describe('retrieve_knowledge_content narrows lake access to the session lake', () => {
+  /**
+   * The earlier versions of these two used makeContext's DEFAULT bare vi.fn() readers, so `files`
+   * stayed empty and dynamicAccess() - the code under test - was never invoked; one of them wrapped
+   * its only assertion in an always-false `if`. Both passed while asserting nothing. Setting up a
+   * real served file is what makes them exercise the path.
+   */
+  const twoLakes = {
+    dataLakeTags: ['datalake:mine', 'datalake:unrelated'],
+    dataLakeTagPrefixes: ['mine:', 'unrel:'],
+    scopedTagPrefixes: [],
+    lakes: [
+      {
+        id: 'l1',
+        name: 'mine',
+        datalakeTag: 'datalake:mine',
+        fileTagPrefix: 'mine:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:' },
+        source: 'registry',
+      },
+      {
+        id: 'l2',
+        name: 'Unrelated-Product-KB',
+        datalakeTag: 'datalake:unrelated',
+        fileTagPrefix: 'unrel:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:unrelated', fileTagPrefix: 'unrel:' },
+        source: 'registry',
+      },
+    ],
+  };
+
+  it("serves the caller's own file without consulting owner-wide lake access", async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, suppressLakeArms: true } as never);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
+
+    const out = await runById(ctx);
+
+    // Suppression removes the LAKE arms only - the caller's own documents stay retrievable, which is
+    // what routing this through kbScope used to break.
+    expect(ctx.db.fabfiles!.findByIdAndUserId).toHaveBeenCalled();
+    expect(out).not.toContain('No document found');
+  });
+
+  it('attributes the audit against OWNER-WIDE lakes, not the narrowed set', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    const record = vi.fn();
+    const ctx = makeContext({ retrievalFilter: undefined, sessionRetrievalTags: ['datalake:mine'] } as never);
+    // The audit block is gated on this repository being present - without it the assertion below
+    // would pass vacuously by never entering the branch at all.
+    (ctx.db as Record<string, unknown>).lakeAccessEvents = { record };
+    // Owner-served (the fast path consults no lake state) and tagged to a lake OUTSIDE the session
+    // scope. Attributing against the narrowed set finds nothing and drops the row; attributing
+    // against owner-wide access records it. That difference is the finding.
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ tags: [{ name: 'datalake:unrelated' }] })
+    );
+
+    await runById(ctx);
+
+    expect(record).toHaveBeenCalled();
   });
 });

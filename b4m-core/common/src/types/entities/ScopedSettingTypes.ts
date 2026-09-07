@@ -137,6 +137,19 @@ export interface IScopedSettingsRepository extends IBaseRepository<IScopedSettin
    */
   findOverrides: (scopes: ScopeRef[], settingNames: SettingKey[]) => Promise<IScopedSetting[]>;
   /**
+   * Every LIVE override row for one setting, at any rung. The inverse read of `findOverrides`: that
+   * one answers "what does this scope resolve to", this one answers "which scopes have an opinion at
+   * all" - the question a GLOBAL consumer has to ask, because it has no single scope to resolve
+   * against and cannot afford one `findOverrides` round trip per candidate rung.
+   *
+   * The chunk rescue sweep is that consumer (#2157): it is one query over every file in the install,
+   * so the only affordable way for it to honor a scoped pause is to read the setting's whole (small)
+   * override set once per run and grade the affected lakes in memory - see
+   * `resolveScopedSettingFromOverrides`. Returns `[]` when nothing is overridden, which is the fast
+   * path such a consumer short-circuits on.
+   */
+  findBySettingName: (settingName: SettingKey) => Promise<IScopedSetting[]>;
+  /**
    * Create the override at this (rung, setting) address, or replace its value/ownerType if a live
    * row already exists there. Must tolerate a prior soft-deleted row at the same address (the unique
    * index is partial on `deletedAt: null`) without a duplicate-key error.

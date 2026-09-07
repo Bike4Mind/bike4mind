@@ -11,7 +11,7 @@ import {
   getExpiringModels,
   resolveCatalogRecords,
 } from '@bike4mind/llm-adapters';
-import { modelDiscoveryService } from '@bike4mind/services';
+import { builtInAgentModelReferences, modelDiscoveryService } from '@bike4mind/services';
 import { toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 
@@ -98,6 +98,7 @@ const handler = baseApi()
         lifecycles,
         fallbackChains: FALLBACK_PREFERENCES,
         defaultChain: DEFAULT_FALLBACK_CHAIN,
+        agentModels: builtInAgentModelReferences(),
       }),
     });
   })

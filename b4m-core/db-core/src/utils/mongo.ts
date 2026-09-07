@@ -511,6 +511,42 @@ export function convertIds(ids: Array<string | mongoose.Types.ObjectId>): Array<
 }
 
 /**
+ * Keeps only the ids that can address a row by `_id`.
+ *
+ * Session and project id arrays are declared `[{ type: String }]`, so they can hold an entry that
+ * is not a stringified ObjectId. Passing one to an `_id` query rejects the WHOLE `$in` with a
+ * CastError, losing every other row in the call - and the API error handler remaps that to a 404,
+ * so it surfaces as a confusing "not found". Such an id could never have matched, so it is dropped
+ * and named in the log, because a short result is otherwise indistinguishable from a complete one.
+ *
+ * `isObjectIdOrHexString`, not `isValidObjectId`: for string input the two agree, but the latter
+ * also accepts a number and casts it to a fabricated id. Pinned against a real server in
+ * packages/database/src/models/content/FabFileModel.objectIdCasting.integration.test.ts.
+ *
+ * `artifactIds` must NOT be filtered with this - those are `artifact_<ts>_<rand>`, matched on a
+ * string `id` field rather than `_id`.
+ */
+export function usableObjectIds(
+  ids: string[] | undefined,
+  label: string,
+  // Defaulted, not required: `@bike4mind/database` does not depend on @bike4mind/observability, so
+  // its repositories cannot pass a logger. Callers that HAVE a request-scoped logger should pass
+  // it - the global one carries no request metadata.
+  logger: Pick<typeof Logger.globalInstance, 'warn'> = Logger.globalInstance
+): string[] {
+  // `?? []` keeps the old shape: these are optional document fields, and an `_id: { $in: undefined }`
+  // query previously returned nothing rather than throwing.
+  const all = ids ?? [];
+  const usable = all.filter(id => mongoose.isObjectIdOrHexString(id));
+  if (usable.length !== all.length) {
+    logger.warn(`[${label}] skipping ids that cannot address a row by _id`, {
+      skipped: all.filter(id => !mongoose.isObjectIdOrHexString(id)),
+    });
+  }
+  return usable;
+}
+
+/**
  * Compare two IDs, converting them to ObjectId if necessary.
  */
 export function compareMongoIds(a: string | mongoose.Types.ObjectId, b: string | mongoose.Types.ObjectId) {

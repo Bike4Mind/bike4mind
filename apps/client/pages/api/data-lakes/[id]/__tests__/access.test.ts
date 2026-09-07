@@ -60,6 +60,11 @@ const view: LakeAccessView = {
   channels: [{ kind: 'organization', value: 'orgA', label: 'Acme', holderCount: 3 }],
   history: [],
   historyTruncated: false,
+  candidateCapPressure: {
+    turnsWithSignal: 6,
+    turnsAtCap: 2,
+    lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
+  },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
 
@@ -95,6 +100,14 @@ describe('GET /api/data-lakes/[id]/access', () => {
       expect.anything()
     );
     expect(json).toHaveBeenCalledWith({ data: view, meta: { canTransferOwnership: false } });
+    // The whole view is serialized, so candidate-cap pressure reaches JSON consumers with no
+    // route-level projection to keep in sync.
+    const body = json.mock.calls[0][0] as { data: LakeAccessView };
+    expect(body.data.candidateCapPressure).toEqual({
+      turnsWithSignal: 6,
+      turnsAtCap: 2,
+      lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
+    });
   });
 
   it('refuses a caller who can read but not manage the lake (403), without assembling', async () => {
@@ -115,10 +128,20 @@ describe('GET /api/data-lakes/[id]/access', () => {
     const { res, send, setHeader } = makeRes();
     await call(req({ id: 'lake1', format: 'csv' }), res);
     expect(setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
-    expect(setHeader).toHaveBeenCalledWith('Content-Disposition', 'attachment; filename=lake-access-lake-oid-1.csv');
+    expect(setHeader).toHaveBeenCalledWith('Content-Disposition', 'attachment; filename="lake-access-lake-oid-1.csv"');
     const body = send.mock.calls[0][0] as string;
     expect(body).toContain('# Members and grants');
     expect(body).toContain('"user","u2","Bob","reader","active"');
+  });
+
+  it('still streams CSV when format is repeated, rather than 500ing on the array (#2095)', async () => {
+    // `?format=csv&format=csv` arrives as an array. `(format ?? '').toLowerCase()` threw a TypeError
+    // on it - a 500 raised AFTER the manage gate and the whole access aggregation had already run,
+    // so the work was done and then thrown away.
+    const { res, send, setHeader } = makeRes();
+    await call(req({ id: 'lake1', format: ['csv', 'csv'] }), res);
+    expect(setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
+    expect(send.mock.calls[0][0] as string).toContain('# Members and grants');
   });
 
   it('applies the identical manage gate to the CSV path (403 before assembling, no attachment)', async () => {

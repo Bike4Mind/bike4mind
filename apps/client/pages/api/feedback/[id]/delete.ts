@@ -1,4 +1,4 @@
-import { FeedbackModel } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -23,6 +23,12 @@ const handler = baseApi().delete(
 
     const deletedFeedbackItem = await FeedbackModel.findOneAndDelete({ _id: id });
     if (!deletedFeedbackItem) throw new NotFoundError('Feedback not found');
+
+    // Mongo has no cascade: without this, a deleted report's free text survives up to 90 days,
+    // inverting the retention promise. Best-effort - the report is already gone either way.
+    await FeedbackTextModel.deleteOne({ _id: id }).catch(err => {
+      req.logger?.error('Failed to delete FeedbackText sibling on report deletion', err);
+    });
 
     await logEvent({ userId, type: FeedbackEvents.DELETE_FEEDBACK, metadata: { id } }, { ability: req.ability });
 

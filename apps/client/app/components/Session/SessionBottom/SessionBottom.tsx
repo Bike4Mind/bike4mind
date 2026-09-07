@@ -292,7 +292,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   }, [pendingMessageFiles]);
 
   const { data: sessionAgents = [] } = useGetSessionAgents(effectiveSessionId);
-  const { data: availableAgents = [] } = useGetAgents();
+  // Deliberately not defaulted to []: a literal default mints a fresh array on
+  // every render until the query resolves, defeating the memo below during
+  // exactly the window that matters (first typing on a cold page).
+  const { data: availableAgents } = useGetAgents();
 
   // Get chat history for the current session
   const { data: questsData } = useGetSessionQuests(effectiveSessionId);
@@ -301,12 +304,41 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Combine session agents and workBench agents for display
   const displayAgents = currentSessionId ? sessionAgents : workBenchAgents;
 
-  // Prepare data for LexicalChatInput
-  const lexicalAgents = availableAgents.map(agent => ({
-    id: agent.id,
-    name: agent.name,
-    triggerWords: agent.triggerWords,
-  }));
+  // Prepare data for LexicalChatInput. Memoised because the identity becomes the
+  // mention plugin's `items`, where a new array per render drives an un-bailable
+  // update storm - see the note at `mentionItems` in LexicalChatInput.tsx.
+  const lexicalAgents = useMemo(
+    () =>
+      (availableAgents ?? []).map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        triggerWords: agent.triggerWords,
+      })),
+    [availableAgents]
+  );
+
+  // Both handlers are memoised: LexicalChatInput hands them to OnChangePlugin and
+  // SubmitOnEnterPlugin, which key their lexical registrations on the identity, so
+  // inline arrows re-register an editor listener and a command on every render.
+  const handleInputChange = useCallback(
+    (newValue: string) => {
+      setChatInputValue(newValue);
+
+      // Save draft as user types. A new notebook has no id yet, so
+      // draft under the stable new-notebook key - it survives a
+      // full-page reload and is restored by useMessageDraft.
+      setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
+
+      const shouldShowSlashSuggestions =
+        typeof newValue === 'string' &&
+        newValue.startsWith('/') &&
+        !newValue.startsWith('/admin') &&
+        !newValue.includes(' '); // Hide when user has completed the command and added a space
+
+      setShowSlashSuggestions(shouldShowSlashSuggestions);
+    },
+    [setChatInputValue, setDraft, currentSessionId]
+  );
 
   const { rollRandomDice } = useRollDice();
 
@@ -318,6 +350,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     setChatCompletion,
     onAgentsAttached: () => setAgentBenchCollapsed(false),
   });
+
+  const handleEditorSubmit = useCallback(async () => {
+    // Block Enter-to-send while a response is still streaming
+    // or while files are still uploading/scanning.
+    if (shouldShowStopButton || submitting || hasActiveUploads) return;
+    await handleSendClick();
+  }, [shouldShowStopButton, submitting, hasActiveUploads, handleSendClick]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
   const sendPromptCallback = useCallback(
@@ -483,7 +522,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           boxShadow: theme.palette.session.boxShadow,
           paddingX: isPWA ? '24px' : '16px',
           pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
-          borderRadius: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem',
+          // Bottom corners at 8px to sit inside the chat pane's own 8px frame; the top pair
+          // is free-standing and keeps its looser .625rem.
+          borderRadius:
+            isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem .625rem 8px 8px',
         })}
       >
         <Box>
@@ -588,28 +630,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     <LexicalChatInput
                       ref={lexicalInputRef}
                       value={chatInputValue}
-                      onChange={newValue => {
-                        setChatInputValue(newValue);
-
-                        // Save draft as user types. A new notebook has no id yet, so
-                        // draft under the stable new-notebook key - it survives a
-                        // full-page reload and is restored by useMessageDraft.
-                        setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
-
-                        const shouldShowSlashSuggestions =
-                          typeof newValue === 'string' &&
-                          newValue.startsWith('/') &&
-                          !newValue.startsWith('/admin') &&
-                          !newValue.includes(' '); // Hide when user has completed the command and added a space
-
-                        setShowSlashSuggestions(shouldShowSlashSuggestions);
-                      }}
-                      onSubmit={async () => {
-                        // Block Enter-to-send while a response is still streaming
-                        // or while files are still uploading/scanning.
-                        if (shouldShowStopButton || submitting || hasActiveUploads) return;
-                        await handleSendClick();
-                      }}
+                      onChange={handleInputChange}
+                      onSubmit={handleEditorSubmit}
                       onPaste={handlePaste}
                       placeholder={`${t('session.typeYourMessage')}...`}
                       agents={lexicalAgents}

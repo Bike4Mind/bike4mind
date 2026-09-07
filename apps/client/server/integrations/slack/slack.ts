@@ -1,7 +1,7 @@
 import axios from 'axios';
-import { Config, classifyStage } from '@server/utils/config';
+import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { classifyStage, isPlaceholderValue } from '@bike4mind/common';
 import type {
   FeedbackDeliveryStageClass,
   FeedbackDeliverySkipReason,
@@ -10,6 +10,7 @@ import type {
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
+import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -53,7 +54,7 @@ type FeedbackSlackRoute =
 
 /**
  * Decides where feedback-to-Slack posts go for a given deploy stage, via the shared
- * classifyStage() (@server/utils/config) - the single source of truth for the
+ * classifyStage() (@bike4mind/common) - the single source of truth for the
  * production/non-production split, so a future stage rename touches one file.
  *
  * Non-production stages deliberately do NOT fall through resolveSlackWebhookUrl's chain: doing so
@@ -61,14 +62,19 @@ type FeedbackSlackRoute =
  * stage-leak bug this resolver exists to close (a deployed Lambda's NODE_ENV commonly reads
  * 'production' independent of the actual deploy stage, since nothing in infra/ sets it per stage,
  * so the old check could not reliably separate stages).
+ *
+ * `singleEnvironmentInstall` (a self-host deploy) routes like production - one environment, its
+ * own settings store, no shared production channel to leak into - without relabeling `stageClass`
+ * itself, so metrics/logs still report the install's real (non-production) stage classification.
  */
 export function resolveFeedbackSlackRoute(
   stage: string | undefined,
-  settings: Record<string, string>
+  settings: Record<string, string>,
+  singleEnvironmentInstall = false
 ): FeedbackSlackRoute {
   const stageClass: FeedbackDeliveryStageClass = classifyStage(stage);
 
-  if (stageClass === 'production') {
+  if (stageClass === 'production' || singleEnvironmentInstall) {
     const webhookUrl = resolveSlackWebhookUrl('SlackFeedbackWebhookUrl', settings);
     return webhookUrl
       ? { kind: 'post', webhookUrl, stageClass }
@@ -113,11 +119,11 @@ export async function postFeedbackToSlack(
   userEmail: string,
   userId: string,
   content: string,
-  promptMeta: string
+  promptMeta?: FeedbackPromptMetaInput | null
 ): Promise<FeedbackChannelDelivery> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const route = resolveFeedbackSlackRoute(Config.STAGE, settings);
+    const route = resolveFeedbackSlackRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
 
     if (route.kind === 'skip') {
       // 'nonprod_unconfigured' is the expected default until an operator opts a stage in - warn,
@@ -137,8 +143,16 @@ export async function postFeedbackToSlack(
     // Prefix non-prod posts with the stage name so a mis-pointed non-prod webhook is self-evident
     // in the receiving channel.
     const stagePrefix = route.stageClass === 'nonprod' ? `*[${Config.STAGE}]*\n` : '';
-    const message = `${stagePrefix}*Type:* ${type}\n*User Details:* ${organization} - ${username} (ID: ${userId})\n*User Email:* ${userEmail}\n*Feedback:* ${content}
-    \n*Prompt Meta:* ${promptMeta}`;
+    const message = buildFeedbackSlackMessage({
+      stagePrefix,
+      type,
+      organization,
+      username,
+      userEmail,
+      userId,
+      content,
+      promptMeta,
+    });
 
     try {
       await axios.post(
@@ -196,6 +210,65 @@ export async function postEmailMirrorToSlack(payload: EmailMirrorPayload): Promi
     );
   } catch (error) {
     Logger.error('Error mirroring outbound email to Slack:', error);
+  }
+}
+
+/**
+ * Announce a NEW paid subscription (first charge only) to Slack.
+ *
+ * Called from the invoice.payment_succeeded subscriber AFTER the subscription and
+ * credits are recorded, so the message means "this actually completed", not "Stripe
+ * said something".
+ *
+ * First charge only: the caller gates on Stripe's `billing_reason ===
+ * 'subscription_create'`. Renewals (`subscription_cycle`) would otherwise post every
+ * month per customer and drown the signal this exists to give.
+ *
+ * No enable flag: an unset webhook URL is the off switch, matching the convention
+ * used for the analytics ids. Add a SettingKey gate if the channel is configured but
+ * the announcements should be pausable separately.
+ *
+ * Never throws. Its caller is an event subscriber whose failure would be retried,
+ * and a retry re-runs credit granting - so a Slack outage must not turn into
+ * double-granted credits.
+ */
+export async function postNewSubscriptionToSlack(payload: {
+  planName: string;
+  amount: number;
+  currency: string;
+  /** Stripe invoice id - the natural dedupe key if this is ever redelivered. */
+  invoiceId: string;
+  email?: string;
+  ownerType?: string;
+  organizationName?: string;
+}): Promise<void> {
+  try {
+    // A paid signup is a business event, not an operational alert -> general channel.
+    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    const slackWebhookUrl = resolveSlackWebhookUrl('SlackGeneralWebhookUrl', settings);
+    if (!slackWebhookUrl) {
+      // Debug, not error: unconfigured is a valid state (the feature is simply off),
+      // unlike the low-credits alert where a missing URL loses an operational signal.
+      Logger.debug('Skipping new-subscription Slack post: no SlackGeneralWebhookUrl / SlackDefaultWebhookUrl set');
+      return;
+    }
+
+    const formattedAmount = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: payload.currency.toUpperCase(),
+    }).format(payload.amount);
+
+    const lines = [
+      `:tada: *New paid subscription* - ${payload.planName} (${formattedAmount})`,
+      payload.email ? `*Customer:* ${payload.email}` : undefined,
+      payload.organizationName ? `*Organization:* ${payload.organizationName}` : undefined,
+      payload.ownerType ? `*Type:* ${payload.ownerType}` : undefined,
+      `*Invoice:* ${payload.invoiceId}`,
+    ].filter(Boolean);
+
+    await axios.post(slackWebhookUrl, { text: lines.join('\n') }, { headers: { 'Content-Type': 'application/json' } });
+  } catch (error) {
+    Logger.error('Error posting new subscription notification to Slack:', error);
   }
 }
 

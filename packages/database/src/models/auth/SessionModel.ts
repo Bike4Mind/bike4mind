@@ -8,7 +8,7 @@ import {
   ISessionRepository,
   SearchOptions,
 } from '@bike4mind/common';
-import { softDeletePlugin } from '../../utils/mongo';
+import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
 import { NotFoundError } from '@bike4mind/utils';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -364,8 +364,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
   }
+  /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[]) {
-    return this.sessionModel.find({ _id: { $in: ids } });
+    return this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
   }
 
   async attachAgent(sessionId: string, agentId: string) {
@@ -397,7 +398,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (!session) {
       throw new NotFoundError('Session not found');
     }
-    return session.agentIds || [];
+    // Callers resolve each entry with agentRepository.findById, so one legacy entry that cannot
+    // address a row took the whole attached-agent list down with it.
+    return usableObjectIds(session.agentIds, 'SessionModel.getAttachedAgents');
   }
 
   async addArtifact(sessionId: string, artifactId: string) {

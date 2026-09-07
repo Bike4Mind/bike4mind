@@ -69,7 +69,8 @@ const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) } as never, json };
 };
-const put = (body: Record<string, unknown>) => ({ method: 'PUT', query: { id: 'lake1' }, body }) as never;
+const put = (body: Record<string, unknown>, over: Record<string, unknown> = {}) =>
+  ({ method: 'PUT', query: { id: 'lake1' }, body, ...over }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
 describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforced at the write boundary', () => {
@@ -108,6 +109,34 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
       })
     );
     expect(json.mock.calls[0][0].preferredSystemPromptId).toBe('triage_router');
+  });
+
+  /**
+   * API-key attribution, asserted at the ROUTE because that is the only place it exists: the actor is
+   * built here and `lakeConfigAuditPrincipal` is not mocked, so this exercises the real helper.
+   *
+   * Silent failure mode: delete the `auditPrincipal` line from this route and every other suite stays
+   * green while key-driven writes are recorded as the owning human's own edit, permanently, in
+   * append-only rows.
+   */
+  it('attaches the KEY as the audit principal when the caller authenticated with an API key', async () => {
+    const { res } = makeRes();
+    await run(put({ name: 'L' }, { user: { id: 'owner' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
+    expect(h.updateDataLake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' },
+      }),
+      'lake1',
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('attaches NO audit principal for a session write, leaving the service derivation alone', async () => {
+    const { res } = makeRes();
+    await run(put({ name: 'L' }, { user: { id: 'owner' }, apiKeyInfo: undefined }), res);
+    const actor = h.updateDataLake.mock.calls[0][0] as { auditPrincipal?: unknown };
+    expect(actor.auditPrincipal).toBeUndefined();
   });
 
   it('accepts the empty-string clear sentinel (removing the binding)', async () => {

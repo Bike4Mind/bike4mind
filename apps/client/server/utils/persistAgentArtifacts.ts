@@ -31,6 +31,11 @@ import {
   generateCompleteArtifactId,
   parseArtifactsWithFallback,
 } from '@client/app/utils/artifactParser';
+// Static, unlike the barrels below - but note it pulls `@bike4mind/services` in transitively for
+// `resolveArtifactsEnabled`, so the dynamic imports below no longer keep that barrel off this path.
+// They stay because the barrel was already reachable from `agentExecute.ts` five other ways, so
+// nothing gets heavier either way; the injectable deps still earn their keep for test isolation.
+import { resolveAgentArtifactGate } from './artifactGate';
 
 /** Upper bound on rows written per run; excess is dropped and logged, never silent. */
 export const MAX_AGENT_ARTIFACTS_PER_RUN = 25;
@@ -107,9 +112,18 @@ export function buildAgentArtifactPayloads(args: {
   );
 }
 
-/** Injected so tests never load the heavy @bike4mind/services and @bike4mind/database barrels. */
+/**
+ * Injected so a test can drive this without a live database. Not a barrel guard: `./artifactGate`
+ * already reaches @bike4mind/services statically, and @bike4mind/database is reachable from
+ * `agentExecute.ts` regardless.
+ */
 export interface PersistAgentArtifactsDeps {
-  isArtifactsEnabled: () => Promise<boolean>;
+  /**
+   * The effective gate for this run: the admin setting AND the caller's opt-out, resolved through
+   * the same helper the prompt half uses so the two cannot answer differently. A caller that opted
+   * out must not get a durable row even if the model tags `<artifact>` out of habit or persona.
+   */
+  isArtifactsEnabled: (callerEnableArtifacts?: boolean) => Promise<boolean>;
   artifactExists: (id: string) => Promise<boolean>;
   createArtifact: (userId: string, payload: AgentArtifactPayload) => Promise<void>;
   /**
@@ -130,9 +144,12 @@ function defaultDeps(): PersistAgentArtifactsDeps {
   // Dynamic imports (same reason as the eventBus import in persistRunAsQuest):
   // keep the barrels off this module's import graph so it stays cheap to load.
   return {
-    isArtifactsEnabled: async () => {
+    isArtifactsEnabled: async callerEnableArtifacts => {
       const { adminSettingsRepository } = await import('@bike4mind/database');
-      return (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
+      return resolveAgentArtifactGate({
+        adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+        executionEnableArtifacts: callerEnableArtifacts,
+      });
     },
     artifactExists: async id => {
       const { artifactRepository } = await import('@bike4mind/database');
@@ -221,10 +238,15 @@ export async function persistAgentArtifacts(args: {
   sessionId: string;
   userId: string;
   executionId: string;
+  /**
+   * `enableArtifacts` as persisted on the AgentExecution doc. Absent means the caller expressed no
+   * preference and the admin setting is the only gate - see `resolveArtifactsEnabled`.
+   */
+  enableArtifacts?: boolean;
   logger: Logger;
   deps?: PersistAgentArtifactsDeps;
 }): Promise<void> {
-  const { replyText, questId, questCreatedAtMs, sessionId, userId, executionId, logger } = args;
+  const { replyText, questId, questCreatedAtMs, sessionId, userId, executionId, enableArtifacts, logger } = args;
   const deps = args.deps ?? defaultDeps();
 
   try {
@@ -235,8 +257,8 @@ export async function persistAgentArtifacts(args: {
       return;
     }
 
-    if (!(await deps.isArtifactsEnabled())) {
-      logger.info('[Artifacts] EnableArtifacts is off - skipping agent artifact persistence', {
+    if (!(await deps.isArtifactsEnabled(enableArtifacts))) {
+      logger.info('[Artifacts] artifacts are gated off - skipping agent artifact persistence', {
         executionId,
         questId,
         parsed: payloads.length,

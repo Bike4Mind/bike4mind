@@ -125,7 +125,7 @@ describe('POST /api/[type]/[id]/invites', () => {
     const { req, res } = createMocks({
       method: 'POST',
       query: { type: pathType, id: 'doc-1' },
-      body: { permissions: ['Read'] },
+      body: { permissions: ['read'] },
     });
     (req as any).user = { id: 'u1' };
 
@@ -136,6 +136,79 @@ describe('POST /api/[type]/[id]/invites', () => {
       expect.objectContaining({ id: 'doc-1', type: 'FabFile' }),
       expect.anything()
     );
+  });
+
+  it('does not allow a body id to redirect the invite to a different document', async () => {
+    // Security property: body spread used to win over the path param. Verify the path param is authoritative.
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: 'doc-path-id' },
+      body: { permissions: ['read'], id: 'attacker-doc-id' },
+    });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.postHandler!(req, res);
+    expect(createInvite).toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ id: 'doc-path-id', type: 'FabFile' }),
+      expect.anything()
+    );
+    expect(createInvite).not.toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ id: 'attacker-doc-id' }),
+      expect.anything()
+    );
+  });
+
+  it('accepts a future ISO expiresAt and coerces it to Date', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: 'doc-1' },
+      body: { permissions: ['read'], expiresAt: '2099-12-31T00:00:00.000Z' },
+    });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.postHandler!(req, res);
+    expect(createInvite).toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ expiresAt: expect.any(Date) }),
+      expect.anything()
+    );
+  });
+
+  it('maps null expiresAt to undefined so the service prefault applies', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: 'doc-1' },
+      body: { permissions: ['read'], expiresAt: null },
+    });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.postHandler!(req, res);
+    expect(createInvite).not.toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ expiresAt: expect.anything() }),
+      expect.anything()
+    );
+  });
+
+  it('rejects a past expiresAt without calling the service', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: 'doc-1' },
+      body: { permissions: ['read'], expiresAt: '2020-01-01T00:00:00.000Z' },
+    });
+    (req as any).user = { id: 'u1' };
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing permissions field without calling the service', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: 'doc-1' },
+      body: {},
+    });
+    (req as any).user = { id: 'u1' };
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
   });
 
   it('rejects an unrecognized type without calling the service', async () => {

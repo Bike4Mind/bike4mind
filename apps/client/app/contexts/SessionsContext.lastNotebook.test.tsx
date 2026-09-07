@@ -4,9 +4,9 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ISessionDocument } from '@bike4mind/common';
 
-// changeSession reads the user through the provider's non-reactive `useUser.getState()`
-// snapshot, so the write only fires when this mock carries a lastNotebookId that differs
-// from the session being opened.
+// changeSession reads the user reactively via `useUser(s => s.currentUser?.id)` and
+// `...?.lastNotebookId`, so the write only fires when this mock carries a lastNotebookId that
+// differs from the session being opened.
 const mocks = vi.hoisted(() => ({
   currentUser: { id: 'u1', lastNotebookId: 'session-old' } as { id: string; lastNotebookId: string | null },
   updateUserToServer: vi.fn(),
@@ -14,9 +14,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@client/app/utils/userAPICalls', () => ({ updateUserToServer: mocks.updateUserToServer }));
 
-vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: Object.assign(vi.fn().mockReturnValue(null), { getState: () => ({ currentUser: mocks.currentUser }) }),
-}));
+vi.mock('@client/app/contexts/UserContext', () => {
+  const useUser = (selector?: (s: { currentUser: typeof mocks.currentUser }) => unknown): unknown => {
+    const state = { currentUser: mocks.currentUser };
+    return selector ? selector(state) : state;
+  };
+  return { useUser: Object.assign(useUser, { getState: () => ({ currentUser: mocks.currentUser }) }) };
+});
 
 vi.mock('@client/app/utils/sessionsAPICalls', () => ({
   pushChatMessage: vi.fn().mockResolvedValue({}),
@@ -120,15 +124,19 @@ describe('SessionsContext - lastNotebookId write on session switch', () => {
     expect(lastNotebookErrors()).toHaveLength(0);
   });
 
-  it('skips the write when the user is already on that notebook', async () => {
+  it('skips the write when the user is already on that notebook, but still refreshes the session', async () => {
     mocks.currentUser = { id: 'u1', lastNotebookId: NEW_SESSION_ID };
-    const { result } = renderSessions();
+    const { result, invalidateSpy } = renderSessions();
 
     await act(async () => {
       await result.current.changeSession(NEW_SESSION_ID);
     });
 
     expect(mocks.updateUserToServer).not.toHaveBeenCalled();
+    // #1632 finding 3: the ['sessions', id] invalidation must not be gated on the user-record
+    // comparison. If it were still inside the write guard, opening your stored last notebook
+    // would skip the refresh and serve up-to-30-min-stale data.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['sessions', NEW_SESSION_ID] });
     expect(result.current.currentSessionId).toBe(NEW_SESSION_ID);
   });
 

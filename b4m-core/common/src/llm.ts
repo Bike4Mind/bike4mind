@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
+import { BFLSafetyToleranceSchema } from './schemas/bfl';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -59,6 +60,10 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
+  safety_tolerance: BFLSafetyToleranceSchema,
+  prompt_upsampling: z.boolean().optional(),
+  seed: z.number().nullable().optional(),
+  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
   intent: PromptIntentSchema.optional(),
   promptEnhancement: z

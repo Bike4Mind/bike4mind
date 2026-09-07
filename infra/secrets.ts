@@ -45,7 +45,6 @@ export const secrets = {
   NPM_TOKEN: new sst.Secret('NPM_TOKEN', 'not-configured'),
   SLACK_SIGNING_SECRET: new sst.Secret('SLACK_SIGNING_SECRET', 'not-configured'),
   SLACK_APP_ID: new sst.Secret('SLACK_APP_ID', 'not-configured'),
-  B4M_PROD_API_KEY: new sst.Secret('B4M_PROD_API_KEY', 'not-configured'),
   SLACK_CLIENT_ID: new sst.Secret('SLACK_CLIENT_ID', 'not-configured'),
   SLACK_CLIENT_SECRET: new sst.Secret('SLACK_CLIENT_SECRET', 'not-configured'),
   SLACK_OAUTH_REDIRECT_URI: new sst.Secret('SLACK_OAUTH_REDIRECT_URI', 'not-configured'),
@@ -169,3 +168,9 @@ export const secrets = {
 };
 
 export const allSecrets = Object.values(secrets);
+
+// Deliberately outside `secrets`, and therefore outside both `allSecrets` and the
+// `Object.values(secrets)` spread in web.ts - either one links a secret into every
+// Lambda and service on every stage. DataSyncer is the only consumer and links this
+// export directly (infra/dataSyncer.ts); keep it that way when adding a consumer.
+export const b4mProdApiKey = new sst.Secret('B4M_PROD_API_KEY', 'not-configured');

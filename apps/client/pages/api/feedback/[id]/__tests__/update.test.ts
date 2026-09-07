@@ -24,12 +24,17 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const feedbackDoc = { id: 'fb1', userId: 'owner1' };
+const feedbackDoc = { id: 'fb1', userId: 'owner1', contentStored: false };
 const model = vi.hoisted(() => ({
   findById: vi.fn(),
   findOneAndUpdate: vi.fn(),
 }));
-vi.mock('@bike4mind/database', () => ({ FeedbackModel: model }));
+const feedbackText = vi.hoisted(() => ({
+  create: vi.fn().mockResolvedValue({}),
+  updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+  find: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+}));
+vi.mock('@bike4mind/database', () => ({ FeedbackModel: model, FeedbackTextModel: feedbackText }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '@pages/api/feedback/[id]/update';

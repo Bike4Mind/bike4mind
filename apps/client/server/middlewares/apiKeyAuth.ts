@@ -11,6 +11,7 @@ import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
 import { getClientIp } from '@server/utils/ip';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
+import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 
 /**
  * Hashes an API key for safe logging (avoids exposing partial credentials)
@@ -74,19 +75,38 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
       // Check required scopes (OR / "any of" semantics): the key must hold at
       // least one of the required scopes. Matches the CLI verifyApiKey convention
       // (cli/auth.ts DEFAULT_COMPLETION_SCOPES) so a generate-or-chat key isn't
-      // split across endpoints.
-      if (requiredScopes && !requiredScopes.some(scope => validation.scopes?.includes(scope))) {
-        // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
-        // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
-        req.logger?.warn('API key scope check failed', {
-          keyHash: hashApiKeyForLogging(apiKey),
-          keyId: validation.keyId,
-          userId: validation.userId,
-          heldScopes: validation.scopes,
-          requiredScopes,
-          endpoint: req.originalUrl,
-        });
-        throw new ForbiddenError('Insufficient API key permissions');
+      // split across endpoints. A scope named in API_KEY_SCOPE_STAGING is still
+      // rolling out, so its gate reports instead of rejecting - see apiKeyScopeGate.ts.
+      // Most routes declare no scopes, so nothing here runs for them at all.
+      if (requiredScopes) {
+        const { staged, rejected } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
+        if (rejected.length > 0) {
+          req.logger?.warn('Ignoring unstageable or unknown API key scopes in staging list', {
+            envVar: SCOPE_STAGING_ENV_VAR,
+            rejected,
+          });
+        }
+        const gate = decideScopeGate(requiredScopes, validation.scopes, staged);
+        if (gate.outcome !== 'allow') {
+          // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
+          // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
+          // The staged line is also the re-mint backlog: every hit is a production key
+          // that will start failing the day its scope leaves API_KEY_SCOPE_STAGING.
+          const context = {
+            keyHash: hashApiKeyForLogging(apiKey),
+            keyId: validation.keyId,
+            userId: validation.userId,
+            heldScopes: validation.scopes,
+            requiredScopes,
+            endpoint: req.originalUrl,
+          };
+          if (gate.outcome === 'stagedAllow') {
+            req.logger?.warn('API key scope check missed but staged - allowing', context);
+          } else {
+            req.logger?.warn('API key scope check failed', context);
+            throw new ForbiddenError('Insufficient API key permissions');
+          }
+        }
       }
 
       const user = await User.findById(validation.userId);

@@ -285,8 +285,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
   it('404s a malformed id before the lake write gate or any persistence runs', async () => {
     const { res } = makeRes();
 
-    // 'file-not-real' is 13 characters, so it fails isValid outright; the round trip in the guard
-    // is what additionally catches a 12-character string, which isValid accepts and then coerces.
+    // 'file-not-real' is not 24 hex characters, so the guard rejects it before any lookup.
     await run({ tags: [{ name: META, strength: 1 }] }, res, 'file-not-real');
 
     expect(res.status).toHaveBeenCalledWith(404);

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import type { IDataLakeDocument } from '@bike4mind/common';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { DATA_LAKES, type DataLakeConfig, type IDataLakeDocument } from '@bike4mind/common';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from './getDataLakePrompts';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 
@@ -24,13 +24,15 @@ const makeLake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument
 const makeContext = (
   lakes: IDataLakeDocument[],
   user: DataLakeAccessContext['user'] = { id: OWNER, tags: [] },
-  organizationIds: string[] = []
+  organizationIds: string[] = [],
+  fallbackLakeSettings?: DataLakeAccessContext['db']['fallbackLakeSettings']
 ): DataLakeAccessContext & { findMock: ReturnType<typeof vi.fn> } => {
   const findMock = vi.fn().mockResolvedValue(lakes);
   return {
     db: {
       dataLakes: { findActiveByUserTags: vi.fn(), findActiveByUserTagsAndEntitlements: findMock },
       organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(organizationIds) },
+      fallbackLakeSettings,
     },
     user,
     entitlementKeys: [],
@@ -237,6 +239,175 @@ describe('getAccessibleDataLakePrompts', () => {
       const ctx = makeContext([lakeA]);
       await getAccessibleDataLakePrompts(ctx, { restrictToDatalakeTags: [] });
       expect(ctx.findMock).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Phase 2: a STATIC (registry) lake's overlay `systemPrompt` (see IFallbackLakeSetting), gated
+   * by the SAME `isTrustedForInjection` org arm - deliberately never widened for a registry lake,
+   * per the function doc comment. Pushes synthetic entries into the real (mutable) DATA_LAKES
+   * registry, mirroring dataLakeService.test.ts's established pattern for this.
+   */
+  describe('registry (static) lake systemPrompt - org-scoped only (Phase 2)', () => {
+    const ORG_LAKE: DataLakeConfig = {
+      id: 'test-only-org-registry',
+      slug: 'test-only-org-registry',
+      name: 'Test Org Registry Lake',
+      fileTagPrefix: 'testorgreg:',
+      datalakeTag: 'datalake:test-only-org-registry',
+      organizationId: ORG,
+    };
+    const GATELESS_LAKE: DataLakeConfig = {
+      id: 'test-only-gateless-registry',
+      slug: 'test-only-gateless-registry',
+      name: 'Test Gateless Registry Lake',
+      fileTagPrefix: 'testgatelessreg:',
+      datalakeTag: 'datalake:test-only-gateless-registry',
+    };
+
+    beforeEach(() => {
+      DATA_LAKES.push(ORG_LAKE, GATELESS_LAKE);
+    });
+
+    afterEach(() => {
+      for (const entry of [ORG_LAKE, GATELESS_LAKE]) {
+        const idx = DATA_LAKES.indexOf(entry);
+        if (idx !== -1) DATA_LAKES.splice(idx, 1);
+      }
+    });
+
+    const findByLakeIds = (rows: { lakeId: string; systemPrompt?: string }[]) => vi.fn().mockResolvedValue(rows);
+
+    it('injects an org-scoped registry lake prompt for a member of that org', async () => {
+      const fallbackLakeSettings = {
+        findByLakeIds: findByLakeIds([{ lakeId: ORG_LAKE.id, systemPrompt: 'Cite sources.' }]),
+      };
+      const prompts = await getAccessibleDataLakePrompts(
+        makeContext([], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings)
+      );
+      expect(prompts).toEqual([{ id: ORG_LAKE.id, name: ORG_LAKE.name, systemPrompt: 'Cite sources.' }]);
+    });
+
+    it('the headline scope decision: a GATELESS registry lake NEVER injects, even with a set prompt', async () => {
+      const fallbackLakeSettings = {
+        findByLakeIds: findByLakeIds([{ lakeId: GATELESS_LAKE.id, systemPrompt: 'Recommend our product.' }]),
+      };
+      // Caller org membership is irrelevant here - the lake itself has no org to match against.
+      const prompts = await getAccessibleDataLakePrompts(
+        makeContext([], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings)
+      );
+      expect(prompts).toEqual([]);
+      // Not even a CANDIDATE: the pre-filter excludes a gateless lake before the overlay is ever
+      // fetched. ORG_LAKE (also seeded by beforeEach) IS a candidate for this org-member caller,
+      // so this asserts the exact candidate set rather than a weaker "wasn't in there somewhere".
+      expect(fallbackLakeSettings.findByLakeIds).toHaveBeenCalledWith([ORG_LAKE.id]);
+    });
+
+    it('does NOT inject an org-scoped registry lake prompt for a non-member of that org', async () => {
+      const fallbackLakeSettings = {
+        findByLakeIds: findByLakeIds([{ lakeId: ORG_LAKE.id, systemPrompt: 'Cite sources.' }]),
+      };
+      const prompts = await getAccessibleDataLakePrompts(
+        makeContext([], { id: 'me', tags: [] }, ['some-other-org'], fallbackLakeSettings)
+      );
+      expect(prompts).toEqual([]);
+    });
+
+    it('reaches the registry branch even when the caller has ZERO matching DB lakes (regression: not gated behind lakes.length)', async () => {
+      const fallbackLakeSettings = {
+        findByLakeIds: findByLakeIds([{ lakeId: ORG_LAKE.id, systemPrompt: 'Cite sources.' }]),
+      };
+      // The DB query resolves to [] - a caller who owns no lake at all - but is still an org member.
+      const prompts = await getAccessibleDataLakePrompts(
+        makeContext([], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings)
+      );
+      expect(prompts.map(p => p.id)).toContain(ORG_LAKE.id);
+    });
+
+    it('contributes nothing when no fallbackLakeSettings adapter is wired (back-compat)', async () => {
+      const prompts = await getAccessibleDataLakePrompts(makeContext([], { id: 'me', tags: [] }, [ORG]));
+      expect(prompts).toEqual([]);
+    });
+
+    it('degrades to no registry prompts, without throwing, when the overlay read fails', async () => {
+      const fallbackLakeSettings = { findByLakeIds: vi.fn().mockRejectedValue(new Error('mongo down')) };
+      const ctx = makeContext(
+        [makeLake({ systemPrompt: 'DB lake prompt.' })],
+        { id: OWNER, tags: [] },
+        [],
+        fallbackLakeSettings
+      );
+      const prompts = await getAccessibleDataLakePrompts(ctx);
+      // The DB-lake prompt still comes through - a registry overlay failure must not sink the turn.
+      expect(prompts).toEqual([{ id: 'lake1', name: 'Lake One', systemPrompt: 'DB lake prompt.' }]);
+    });
+
+    it('omits an empty/whitespace-only overlay systemPrompt, same as a DB lake', async () => {
+      const fallbackLakeSettings = { findByLakeIds: findByLakeIds([{ lakeId: ORG_LAKE.id, systemPrompt: '   ' }]) };
+      const prompts = await getAccessibleDataLakePrompts(
+        makeContext([], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings)
+      );
+      expect(prompts).toEqual([]);
+    });
+
+    it('respects restrictToDatalakeTags for a registry lake exactly like a DB lake', async () => {
+      const fallbackLakeSettings = {
+        findByLakeIds: findByLakeIds([{ lakeId: ORG_LAKE.id, systemPrompt: 'Cite sources.' }]),
+      };
+      const excluded = await getAccessibleDataLakePrompts(
+        makeContext([], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings),
+        { restrictToDatalakeTags: ['datalake:something-else'] }
+      );
+      expect(excluded).toEqual([]);
+
+      const included = await getAccessibleDataLakePrompts(
+        makeContext([], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings),
+        { restrictToDatalakeTags: [ORG_LAKE.datalakeTag] }
+      );
+      expect(included.map(p => p.id)).toEqual([ORG_LAKE.id]);
+    });
+
+    it('a required tag gate on a registry lake still applies (lakeMatchesAccess, not bypassed)', async () => {
+      const gatedOrgLake: DataLakeConfig = {
+        ...ORG_LAKE,
+        id: 'test-only-gated-registry',
+        requiredUserTag: 'special-team',
+      };
+      DATA_LAKES.push(gatedOrgLake);
+      try {
+        const fallbackLakeSettings = {
+          findByLakeIds: findByLakeIds([{ lakeId: gatedOrgLake.id, systemPrompt: 'Cite sources.' }]),
+        };
+        const prompts = await getAccessibleDataLakePrompts(
+          makeContext([], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings)
+        );
+        expect(prompts).toEqual([]);
+      } finally {
+        const idx = DATA_LAKES.indexOf(gatedOrgLake);
+        if (idx !== -1) DATA_LAKES.splice(idx, 1);
+      }
+    });
+
+    it('a registry id shadowed by a real DB lake at the same slug is excluded from registry candidates', async () => {
+      // disambiguateSlug refuses to mint a NEW lake at a registry-owned slug, so this shape is rare -
+      // but if a DB lake already exists there (predating the registry entry), the DB lake wins.
+      const shadowingDbLake = makeLake({
+        id: 'db-doc-id',
+        slug: ORG_LAKE.id,
+        organizationId: ORG,
+        createdByUserId: 'someone-else',
+        systemPrompt: 'The real document wins.',
+      });
+      const fallbackLakeSettings = {
+        findByLakeIds: findByLakeIds([{ lakeId: ORG_LAKE.id, systemPrompt: 'Should never be read.' }]),
+      };
+      const prompts = await getAccessibleDataLakePrompts(
+        makeContext([shadowingDbLake], { id: 'me', tags: [] }, [ORG], fallbackLakeSettings)
+      );
+      expect(prompts).toEqual([{ id: 'db-doc-id', name: 'Lake One', systemPrompt: 'The real document wins.' }]);
+      // Excluded before the overlay fetch (GATELESS_LAKE has no org, ORG_LAKE is shadowed), so with
+      // no candidates left the batch read is never even attempted.
+      expect(fallbackLakeSettings.findByLakeIds).not.toHaveBeenCalled();
     });
   });
 });
