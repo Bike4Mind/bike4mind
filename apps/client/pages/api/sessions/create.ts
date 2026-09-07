@@ -14,11 +14,21 @@ import {
   activityRepository,
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
-import { SessionEvents, ProjectEvents, redactSessionForClient, ForbiddenError, NotFoundError } from '@bike4mind/common';
+import {
+  SessionEvents,
+  ProjectEvents,
+  redactSessionForClient,
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+} from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@client/config/activities';
 import { CreateSessionRequestBody } from '../../../types/api';
+
+/** See the cap check in the handler - bounds a sequential, two-reads-per-id authorization loop. */
+const MAX_PREAUTHORIZED_LAKES = 10;
 
 interface CreateSessionBody {
   projectId?: string;
@@ -47,6 +57,15 @@ const handler = baseApi().post(
       ? Array.from(new Set(body.preauthorizedLakeIds.filter((id): id is string => typeof id === 'string')))
       : undefined;
     delete body.preauthorizedLakeIds;
+
+    // Bound the authorization loop below: it is SEQUENTIAL and costs two indexed reads per id
+    // (findById + the grant read), so an unbounded list turns one request into thousands of
+    // round-trips. Capped here at the raw body rather than in the zod request schema, which this
+    // route never parses. The real admission is one lake ("test this lake"); the headroom is for a
+    // maintainer arming a handful at once.
+    if (requestedPreauthorizedLakeIds && requestedPreauthorizedLakeIds.length > MAX_PREAUTHORIZED_LAKES) {
+      throw new BadRequestError(`At most ${MAX_PREAUTHORIZED_LAKES} pre-authorized data lakes per session`);
+    }
 
     let preauthorizedLakeIds: string[] | undefined;
     if (requestedPreauthorizedLakeIds && requestedPreauthorizedLakeIds.length > 0) {
@@ -117,9 +136,11 @@ const handler = baseApi().post(
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
     });
 
-    // Separate, authorized write - never part of createSession's own params (see above). Mutates the
-    // in-memory document too, so the redacted response below and the CREATE_SESSION log line agree
-    // with what is actually on the record.
+    // Separate, authorized write - never part of createSession's own params (see above). The
+    // in-memory mutation keeps `newSession` faithful to the record for any later reader in this
+    // handler; it is NOT what keeps the response honest - `preauthorizedLakeIds` is in
+    // SERVER_OWNED_SESSION_FIELDS, so redactSessionForClient strips it either way, and the
+    // CREATE_SESSION log line does not carry the field at all.
     if (preauthorizedLakeIds) {
       const updated = await sessionRepository.update({ id: newSession.id, preauthorizedLakeIds });
       if (updated) newSession.preauthorizedLakeIds = updated.preauthorizedLakeIds;

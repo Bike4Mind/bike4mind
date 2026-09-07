@@ -359,6 +359,59 @@ describe('ChatCompletionProcess', () => {
       await expect(service.userHasAccessibleKnowledgeLake()).resolves.toBe(false);
       expect((service as any).logger.warn).toHaveBeenCalled();
     });
+
+    // This memo is not only the offer signal: the attachment classifier and the inline-defer plan
+    // read it too, so a pre-authorized lake missing here marks the corpus personal and suppresses
+    // the lake arms - the admitted session ends up MORE restricted than an ordinary one.
+    describe('pre-authorized lakes', () => {
+      const MANAGED = {
+        id: 'managed',
+        name: 'Managed Lake',
+        slug: 'managed-lake',
+        datalakeTag: 'datalake:managed',
+        fileTagPrefix: 'managed:',
+        status: 'active',
+        createdByUserId: 'someone-else',
+      };
+
+      const wire = (grantee: string) => {
+        (service as any).accessibleDataLakeAccessMemo = undefined;
+        (service as any).db = {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            findById: vi.fn().mockResolvedValue(MANAGED),
+          },
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
+          dataLakeAccessGrants: {
+            listActiveByLakes: vi
+              .fn()
+              .mockResolvedValue([
+                { dataLakeId: 'managed', principalType: 'user', principalId: grantee, role: 'curator' },
+              ]),
+          },
+        };
+        (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+        (service as any).entitlementsResolved = true;
+        (service as any).entitlementKeys = [];
+        (service as any).turnPreauthorizedLakeIds = ['managed'];
+      };
+
+      it('counts a pre-authorized lake the ordinary resolver returns nothing for', async () => {
+        wire('user1');
+
+        expect(await service.userHasAccessibleKnowledgeLake()).toBe(true);
+        expect((service as any).accessibleDataLakeAccessMemo.dataLakeTags).toContain('datalake:managed');
+      });
+
+      it('does not count one the caller no longer manages', async () => {
+        wire('someone-who-is-not-the-caller');
+
+        expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
+      });
+    });
   });
 
   describe('resolveCorpusInlinePlan (defer only the tool-retrievable corpus subset)', () => {

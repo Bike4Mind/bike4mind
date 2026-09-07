@@ -119,6 +119,32 @@ describe('POST /api/sessions/create - preauthorizedLakeIds', () => {
     expect('preauthorizedLakeIds' in createParams).toBe(false);
   });
 
+  // The authorization loop is sequential and costs two indexed reads per id, so the list length is
+  // an amplification lever on an authenticated endpoint. Rejected BEFORE the first read.
+  it('rejects an over-long list without spending a single read on it', async () => {
+    h.resolveCanManageLake.mockResolvedValue(true);
+    const { res } = makeRes();
+    const ids = Array.from({ length: 11 }, (_, i) => `lake${i}`);
+
+    await expect(run(post({ name: 'N', preauthorizedLakeIds: ids }), res)).rejects.toThrow(
+      'At most 10 pre-authorized data lakes per session'
+    );
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+    expect(h.createSession).not.toHaveBeenCalled();
+  });
+
+  // The cap counts DISTINCT ids: it runs after the dedupe, so a padded list of one real lake is a
+  // one-lake request and must not be refused.
+  it('counts distinct ids, so a duplicate-padded list is admitted', async () => {
+    h.resolveCanManageLake.mockResolvedValue(true);
+    const { res } = makeRes();
+
+    await run(post({ name: 'N', preauthorizedLakeIds: Array.from({ length: 40 }, () => 'lake1') }), res);
+
+    expect(h.sessionUpdate).toHaveBeenCalledWith({ id: 's1', preauthorizedLakeIds: ['lake1'] });
+  });
+
   it('does no manage-check at all when no preauthorizedLakeIds is requested', async () => {
     const { res } = makeRes();
 

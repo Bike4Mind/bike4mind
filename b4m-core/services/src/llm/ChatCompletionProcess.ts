@@ -158,6 +158,7 @@ import {
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
@@ -807,6 +808,13 @@ export class ChatCompletionProcess {
       }
     | undefined;
   /**
+   * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
+   * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
+   * - the attachment classifier, the tool-offer gate, the inline-defer plan - all read its memo.
+   * Undefined means no admission this turn, which makes the widening a no-op.
+   */
+  private turnPreauthorizedLakeIds: string[] | undefined;
+  /**
    * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
    * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
    * so the turn pays for this DB read at most once. `null` means the lookup failed this turn (see
@@ -941,11 +949,20 @@ export class ChatCompletionProcess {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
         const entitlementKeys = await this.resolveEntitlementKeys();
-        this.accessibleDataLakeAccessMemo = await getDynamicDataLakeAccess({
+        const resolved = await getDynamicDataLakeAccess({
           db: this.db,
           user: this.user,
           entitlementKeys,
         });
+        // Same union the retrieval and tool doors run, so all three agree on what this session can
+        // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
+        // un-widened exactly as it would have before the admission.
+        this.accessibleDataLakeAccessMemo = await unionPreauthorizedLakeAccess(
+          resolved,
+          this.turnPreauthorizedLakeIds,
+          this.user.id,
+          this.db
+        );
       } catch (err) {
         this.logger.warn(
           `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
@@ -1673,6 +1690,14 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
+      // Captured HERE, ahead of every consumer, because getAccessibleDataLakeAccess memoizes per
+      // turn: whoever touches it first freezes the access set for the rest of the turn. A
+      // pre-authorized lake missing from that set does not merely fail to widen retrieval - it
+      // reads to the attachment classifier as "this file belongs to no lake I can reach", which
+      // marks the corpus personal and SUPPRESSES the lake arms for the one session the admission
+      // exists to serve.
+      this.turnPreauthorizedLakeIds = vetPreauthorizedLakeIds(session, this.user.id);
+
       const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
       // Any promptMode is an eval/passthrough that must not receive our server-side offers.
       const skipAutoOffers = Boolean(promptMode);
@@ -1868,7 +1893,9 @@ export class ChatCompletionProcess {
       // must be the same value - a telemetry field that recomputes its own answer is a field that
       // can disagree with the behaviour it claims to describe.
       const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
-      const vettedPreauthorizedLakeIds = vetPreauthorizedLakeIds(session, this.user.id);
+      // The field, not a second vetPreauthorizedLakeIds call: the offer/classification path above
+      // and the retrieval feature below must be admitted for the same lakes or they disagree.
+      const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
