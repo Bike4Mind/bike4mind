@@ -116,6 +116,10 @@ describe('POST /api/sessions/create - preauthorizedLakeIds', () => {
     await expect(run(post({ name: 'N', preauthorizedLakeIds: [MISSING_ID] }), res)).rejects.toThrow(
       `Data lake ${MISSING_ID} not found`
     );
+    // The malformed-id guard throws the byte-identical message, so the message alone does not prove
+    // this reached the miss branch: without this the test would still pass if MISSING_ID ever
+    // stopped being valid hex, short-circuiting before the read it exists to exercise.
+    expect(h.findById).toHaveBeenCalledWith(MISSING_ID);
     expect(h.createSession).not.toHaveBeenCalled();
   });
 
@@ -147,7 +151,9 @@ describe('POST /api/sessions/create - preauthorizedLakeIds', () => {
   it('rejects an over-long list without spending a single read on it', async () => {
     h.resolveCanManageLake.mockResolvedValue(true);
     const { res } = makeRes();
-    const ids = Array.from({ length: 11 }, (_, i) => `lake${i}`);
+    // Distinct VALID ids on purpose: malformed ones would also be refused by the isValidObjectId
+    // guard, so the "not a single read" assertion below would still pass with the cap deleted.
+    const ids = Array.from({ length: 11 }, (_, i) => `651f1e0a9c3b4d5e6f7a8b${(0xa0 + i).toString(16)}`);
 
     await expect(run(post({ name: 'N', preauthorizedLakeIds: ids }), res)).rejects.toThrow(
       'At most 10 pre-authorized data lakes per session'
