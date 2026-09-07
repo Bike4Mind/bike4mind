@@ -7,7 +7,8 @@ import type { IDataLakeBatchSummary, TaxonomyStatus } from '@bike4mind/common';
  * 'analyzing'/'queued' at least render the progress indicator; 'applying' renders in no consumer
  * gate at all (ManagerNav, LakeInfoPanel), so it ranks last rather than hiding a sibling that
  * would show something. Must stay a permutation of TAXONOMY_ATTENTION_STATUSES - taxonomySlot.test.ts
- * asserts every pairwise relation here and that each attention status stays eligible.
+ * asserts every pairwise relation here, that each attention status stays eligible, and that the
+ * three phases outside that set stay out.
  */
 const SLOT_PRIORITY: readonly TaxonomyStatus[] = ['ready', 'failed', 'analyzing', 'queued', 'applying'];
 
@@ -18,8 +19,8 @@ const rankOf = (batch: IDataLakeBatchSummary): number =>
 /**
  * Total order: rank, then id ascending. Equal rank means an identical taxonomyStatus and so an
  * identical rendered chip, leaving only "which id does the chip hand to onReviewTaxonomy" to
- * settle - and it has to settle the same way on every 10s poll. Both keys are immutable, so the
- * winner cannot change while the batches merely ingest. Deliberately NOT `updatedAt`: ingest
+ * settle - and it has to settle the same way on every 10s poll. Neither key moves on an ingest
+ * write, so the winner changes only when a taxonomy phase does. Deliberately NOT `updatedAt`: ingest
  * bumps it per file (incrementCounters, DataLakeModel) on a clock independent of taxonomy, so
  * two 'ready' siblings would trade the slot between polls. Id ascending is oldest-first among
  * equals, ObjectIds being creation-ordered.
