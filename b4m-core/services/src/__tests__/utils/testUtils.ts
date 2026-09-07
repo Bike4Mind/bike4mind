@@ -42,6 +42,7 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
   findAccessibleById: vi.fn(),
   findAllAccessibleByIds: vi.fn(),
   findUpdateAccessById: vi.fn(),
+  findAllUpdateAccessByIds: vi.fn(),
   findShareAccessById: vi.fn(),
 });
 

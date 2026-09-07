@@ -41,7 +41,7 @@ describe('projectService - addSystemPrompts', () => {
   });
 
   it('stores prompts in the order requested, not the order Mongo returned them', async () => {
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(projectWith([]));
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(projectWith([]));
     // The reader returns rows in its own order; the request order is the one composition uses.
     (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(filesFor([HEX_A, HEX_B, HEX_C]));
 
@@ -52,7 +52,7 @@ describe('projectService - addSystemPrompts', () => {
 
   it('does not re-add a file whose existing prompt is stored in uppercase hex', async () => {
     // A legacy systemPrompts row naming the same file in the other hex case.
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(projectWith([HEX_A.toUpperCase()]));
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(projectWith([HEX_A.toUpperCase()]));
     (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(filesFor([HEX_A]));
 
     await expect(addSystemPrompts(user, { projectId: 'project-1', fileIds: [HEX_A] }, adapters)).rejects.toThrow(

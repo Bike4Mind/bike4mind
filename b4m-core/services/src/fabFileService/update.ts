@@ -80,9 +80,19 @@ export const updateFabFile = async (
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
-  const fabFile = await db.fabFiles.shareable.findAccessibleById(user, id);
+  // Update-level, not read-level: a read share authorizes viewing this file, never rewriting its
+  // bytes, tags or metadata. Unlike findAccessibleById this returns a hydrated document, and the
+  // `{ ...fabFile }` spread below would copy Mongoose internals instead of the fields - so
+  // normalize first, as updateDocumentSharing does for the same reason.
+  const found = await db.fabFiles.shareable.findUpdateAccessById(user, id);
 
-  if (!fabFile) throw new NotFoundError('Invalid ID');
+  if (!found) throw new NotFoundError('Invalid ID');
+
+  const fabFile = (
+    typeof (found as { toJSON?: unknown }).toJSON === 'function'
+      ? (found as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : found
+  ) as IFabFileDocument;
 
   if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
     const mimeType = params.mimeType ?? fabFile.mimeType;

@@ -128,7 +128,7 @@ export const toggleTags = async (
   if (!user) throw new Error('User not found');
 
   // Only get files that the user has update access to
-  const fabFiles = await db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+  const fabFiles = await db.fabFiles.shareable.findAllUpdateAccessByIds(user, ids);
 
   // Check if user has permission to update all requested files. Counted as a Set for the same
   // reason `tags` is deduped above: the reader returns distinct rows, so a file sent twice is not
@@ -482,7 +482,7 @@ export const toggleTags = async (
 
   // Re-read: the writes above are element-level, so the documents loaded earlier no longer
   // reflect what is stored.
-  const freshFiles = await db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+  const freshFiles = await db.fabFiles.shareable.findAllUpdateAccessByIds(user, ids);
 
   // Surfaces the trap: a content-prefix tag can join a file to a lake with no
   // `datalake:*` meta-tag ever applied, and the caller who reached for an ordinary tag has no way

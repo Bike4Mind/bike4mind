@@ -82,6 +82,7 @@ export * from './utils/activity';
 export * from './utils/sseEvents';
 export * from './utils/streamVisibility';
 export * from './utils/ttfvt';
+export * from './utils/shareableAccess';
 export * from './utils/stopReasons';
 export * from './utils/retrievalRate';
 export * from './utils/requestId';
