@@ -25,12 +25,19 @@ const makeContext = (
   lakes: IDataLakeDocument[],
   user: DataLakeAccessContext['user'] = { id: OWNER, tags: [] },
   organizationIds: string[] = [],
-  fallbackLakeSettings?: DataLakeAccessContext['db']['fallbackLakeSettings']
-): DataLakeAccessContext & { findMock: ReturnType<typeof vi.fn> } => {
+  fallbackLakeSettings?: DataLakeAccessContext['db']['fallbackLakeSettings'],
+  byIdLakes: IDataLakeDocument[] = []
+): DataLakeAccessContext & { findMock: ReturnType<typeof vi.fn>; findByIdMock: ReturnType<typeof vi.fn> } => {
   const findMock = vi.fn().mockResolvedValue(lakes);
+  const byId = new Map(byIdLakes.map(lake => [lake.id, lake]));
+  const findByIdMock = vi.fn(async (id: string) => byId.get(id) ?? null);
   return {
     db: {
-      dataLakes: { findActiveByUserTags: vi.fn(), findActiveByUserTagsAndEntitlements: findMock },
+      dataLakes: {
+        findActiveByUserTags: vi.fn(),
+        findActiveByUserTagsAndEntitlements: findMock,
+        findById: findByIdMock,
+      },
       organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(organizationIds) },
       fallbackLakeSettings,
     },
@@ -38,6 +45,7 @@ const makeContext = (
     entitlementKeys: [],
     logger: { warn: vi.fn(), log: vi.fn(), error: vi.fn() } as unknown as DataLakeAccessContext['logger'],
     findMock,
+    findByIdMock,
   };
 };
 
@@ -408,6 +416,99 @@ describe('getAccessibleDataLakePrompts', () => {
       // Excluded before the overlay fetch (GATELESS_LAKE has no org, ORG_LAKE is shadowed), so with
       // no candidates left the batch read is never even attempted.
       expect(fallbackLakeSettings.findByLakeIds).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Phase 3: manage-but-not-member admission. Regression case 1 - assert on the returned
+   * DataLakePrompt[], not on candidate-set membership (a test on the candidate set alone passes
+   * green even when the in-memory filter still drops the lake two lines later).
+   */
+  describe('preauthorizedLakeIds (Phase 3 - manage-but-not-member admission)', () => {
+    it('injects a pre-authorized lake the caller cannot otherwise reach, when the turn retrieved it', async () => {
+      const managed = makeLake({
+        id: 'managed',
+        name: 'Managed Lake',
+        datalakeTag: 'datalake:managed',
+        createdByUserId: 'someone-else',
+        organizationId: 'org-partner',
+        systemPrompt: 'Sales playbook.',
+      });
+      // findActiveByUserTagsAndEntitlements resolves nothing - the manager is neither the creator
+      // nor a member of org-partner - so admission depends entirely on the pre-authorization union.
+      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [managed]);
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        preauthorizedLakeIds: ['managed'],
+        restrictToDatalakeTags: ['datalake:managed'],
+      });
+      expect(prompts).toEqual([{ id: 'managed', name: 'Managed Lake', systemPrompt: 'Sales playbook.' }]);
+    });
+
+    it('restrictTags is NEVER bypassed - a pre-authorized lake the turn did not retrieve injects nothing', async () => {
+      const managed = makeLake({
+        id: 'managed',
+        name: 'Managed Lake',
+        datalakeTag: 'datalake:managed',
+        createdByUserId: 'someone-else',
+        organizationId: 'org-partner',
+        systemPrompt: 'Sales playbook.',
+      });
+      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [managed]);
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        preauthorizedLakeIds: ['managed'],
+        // A different lake's tag - this turn retrieved something else, not the managed lake.
+        restrictToDatalakeTags: ['datalake:other'],
+      });
+      expect(prompts).toEqual([]);
+    });
+
+    it('a pre-authorized lake already in the DB-matched set is not fetched again', async () => {
+      const owned = makeLake({ id: 'lake1', datalakeTag: 'datalake:lake1' });
+      const ctx = makeContext([owned], { id: OWNER, tags: [] });
+      await getAccessibleDataLakePrompts(ctx, {
+        preauthorizedLakeIds: ['lake1'],
+        restrictToDatalakeTags: ['datalake:lake1'],
+      });
+      expect(ctx.findByIdMock).not.toHaveBeenCalled();
+    });
+
+    it('drops a pre-authorized id that no longer resolves to an active lake', async () => {
+      const archived = makeLake({ id: 'gone', status: 'archived', systemPrompt: 'Should never show.' });
+      const ctx = makeContext([], { id: 'manager', tags: [] }, [], undefined, [archived]);
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        preauthorizedLakeIds: ['gone'],
+        restrictToDatalakeTags: ['datalake:lake1'],
+      });
+      expect(prompts).toEqual([]);
+    });
+
+    it('gateless-registry negative: pre-authorization does not reach past the registry pre-filter or the second trust call', async () => {
+      // A gateless (no organizationId) registry lake, "pre-authorized" by id. The registry branch
+      // never reads preauthorizedLakeIds at all - it must stay excluded by :185's own-org pre-filter
+      // regardless, proving the DB-side short-circuit was never wired into the registry path.
+      const GATELESS: DataLakeConfig = {
+        id: 'test-only-phase3-gateless',
+        slug: 'test-only-phase3-gateless',
+        name: 'Phase 3 Gateless Registry Lake',
+        fileTagPrefix: 'phase3gateless:',
+        datalakeTag: 'datalake:test-only-phase3-gateless',
+      };
+      DATA_LAKES.push(GATELESS);
+      try {
+        const fallbackLakeSettings = {
+          findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: GATELESS.id, systemPrompt: 'Should never inject.' }]),
+        };
+        const ctx = makeContext([], { id: 'manager', tags: [] }, [], fallbackLakeSettings);
+        const prompts = await getAccessibleDataLakePrompts(ctx, {
+          preauthorizedLakeIds: [GATELESS.id],
+          restrictToDatalakeTags: [GATELESS.datalakeTag],
+        });
+        expect(prompts).toEqual([]);
+        expect(fallbackLakeSettings.findByLakeIds).not.toHaveBeenCalled();
+      } finally {
+        const idx = DATA_LAKES.indexOf(GATELESS);
+        if (idx !== -1) DATA_LAKES.splice(idx, 1);
+      }
     });
   });
 });

@@ -3,6 +3,7 @@ import {
   narrowLakeAccessToSession,
   type ResolvedLakeAccessSet,
 } from '../../../dataLakeService/narrowLakeAccessToSession';
+import { unionPreauthorizedLakeAccess } from '../../../dataLakeService/unionPreauthorizedLakeAccess';
 import type { ToolContext } from './types';
 
 const NO_LAKES: ResolvedLakeAccessSet = {
@@ -22,5 +23,7 @@ const NO_LAKES: ResolvedLakeAccessSet = {
  */
 export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   if (context.suppressLakeArms) return NO_LAKES;
-  return narrowLakeAccessToSession(await getDynamicDataLakeAccess(context), context.sessionRetrievalTags);
+  const resolved = await getDynamicDataLakeAccess(context);
+  const unioned = await unionPreauthorizedLakeAccess(resolved, context.sessionPreauthorizedLakeIds, context.db);
+  return narrowLakeAccessToSession(unioned, context.sessionRetrievalTags);
 }

@@ -157,6 +157,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import {
@@ -1866,6 +1867,7 @@ export class ChatCompletionProcess {
       // must be the same value - a telemetry field that recomputes its own answer is a field that
       // can disagree with the behaviour it claims to describe.
       const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
+      const vettedPreauthorizedLakeIds = vetPreauthorizedLakeIds(session, this.user.id);
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
@@ -1883,7 +1885,8 @@ export class ChatCompletionProcess {
         forcedRetrievalEnabled,
         session.retrievalTags,
         session.citationStyle,
-        toRetrievalFilter(session)
+        toRetrievalFilter(session),
+        vettedPreauthorizedLakeIds
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -2494,6 +2497,7 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -5779,7 +5783,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     forceKnowledgeRetrieval?: boolean,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
+    preauthorizedLakeIds?: string[]
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -5891,7 +5897,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
+        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter, preauthorizedLakeIds)
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer

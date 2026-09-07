@@ -621,6 +621,64 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
   });
 });
 
+describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => {
+  const makeCtx = (findById: ReturnType<typeof vi.fn>) => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'u1', tags: [] },
+    db: {
+      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findActiveByUserTags: vi.fn().mockResolvedValue([]),
+        findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        findById,
+      },
+    },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+  });
+
+  // The knowledge tools' resolveSessionLakeAccess and this feature's forced-retrieval door are
+  // two separate call sites into the same union (unionPreauthorizedLakeAccess) - this pins that
+  // the forced-retrieval door actually wires its ctor arg through, not just the tool door.
+  it('unions a pre-authorized lake the ordinary resolver could not reach', async () => {
+    const findById = vi.fn().mockResolvedValue({
+      id: 'managed',
+      name: 'Managed Lake',
+      slug: 'managed-lake',
+      datalakeTag: 'datalake:managed',
+      fileTagPrefix: 'managed:',
+      status: 'active',
+      createdByUserId: 'other-user',
+    });
+    const ctx = makeCtx(findById);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['managed']
+    );
+
+    const access = await (
+      feature as unknown as { resolveDataLakeAccess: () => Promise<{ lakes: Array<{ id: string }> }> }
+    ).resolveDataLakeAccess();
+
+    expect(findById).toHaveBeenCalledWith('managed');
+    expect(access.lakes.map(l => l.id)).toEqual(['managed']);
+  });
+
+  it('does not touch findById when no lakes are pre-authorized', async () => {
+    const findById = vi.fn();
+    const ctx = makeCtx(findById);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess();
+
+    expect(findById).not.toHaveBeenCalled();
+  });
+});
+
 describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   const embeddingFactory = {
     createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),

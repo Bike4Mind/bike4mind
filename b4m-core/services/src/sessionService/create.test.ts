@@ -131,4 +131,21 @@ describe('createSession knowledgeIds validation', () => {
     await createSession(user, { name: 'ok', artifactIds: ['artifact_1756000000_ab12cd'] }, adapters);
     expect(created[0].artifactIds).toEqual(['artifact_1756000000_ab12cd']);
   });
+
+  // Phase 3, regression case 4: preauthorizedLakeIds (manage-but-not-member admission) must never
+  // enter createSession's own input - it is authorized and written as a SEPARATE call by the create
+  // route, strictly after createSession returns (see pages/api/sessions/create.ts). A caller that
+  // tries to pass it here - fork/snip/clone included, though none of them do today; they build their
+  // own db.sessions.create() literal and never call this function at all - must fail to COMPILE, not
+  // merely be ignored at runtime, so the field can never be smuggled in by a future refactor that
+  // starts forwarding a source session's fields wholesale.
+  it('rejects preauthorizedLakeIds as a param at compile time', async () => {
+    const { adapters } = makeAdapters();
+    await createSession(
+      user,
+      // @ts-expect-error - preauthorizedLakeIds is not part of CreateSessionParameters.
+      { name: 'ok', preauthorizedLakeIds: ['lake1'] },
+      adapters
+    );
+  });
 });

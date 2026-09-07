@@ -6,6 +6,7 @@ import {
   dataLakeRepository,
   fabFileRepository,
   fallbackLakeSettingsRepository,
+  organizationRepository,
   projectRepository,
   sessionRepository,
   userRepository,
@@ -13,7 +14,7 @@ import {
   activityRepository,
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
-import { SessionEvents, ProjectEvents, redactSessionForClient } from '@bike4mind/common';
+import { SessionEvents, ProjectEvents, redactSessionForClient, ForbiddenError, NotFoundError } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@client/config/activities';
@@ -36,6 +37,44 @@ const handler = baseApi().post(
     // nor pin a mode on an ordinary non-lake session and switch off size-based deferral there. The
     // lake arm re-sets it from the lake; a non-lake session is left with no mode (size-only behavior).
     delete body.corpusGroundingMode;
+
+    // Manage-but-not-member admission: a lake maintainer who is not a member of the lake's org (or
+    // does not otherwise pass the ordinary tag/entitlement gate) can still test it, for exactly this
+    // session, if they manage it. Authorize here - never let it ride through createSession's own
+    // input, so no other caller of that service (fork/snip/clone, the Slack handlers, ...) can ever
+    // pass it through by construction. Written onto the session as a separate call AFTER creation.
+    const requestedPreauthorizedLakeIds = Array.isArray(body.preauthorizedLakeIds)
+      ? Array.from(new Set(body.preauthorizedLakeIds.filter((id): id is string => typeof id === 'string')))
+      : undefined;
+    delete body.preauthorizedLakeIds;
+
+    let preauthorizedLakeIds: string[] | undefined;
+    if (requestedPreauthorizedLakeIds && requestedPreauthorizedLakeIds.length > 0) {
+      // Rung 1 (isAdmin) deliberately excluded: this must be "the maintainer who manages THIS lake",
+      // not "any platform admin" - see canManageLake's rung table. administeredOrgIds is re-resolved
+      // here rather than read off toAccessContext because that helper zeroes it for admin actors
+      // (org resolution is skipped as a pure-overhead optimization for the ordinary read gates it
+      // serves), which would silently reject an admin whose only relationship to the lake is
+      // org-admin.
+      const manageActor = {
+        userId: req.user.id,
+        isAdmin: false,
+        administeredOrgIds: await organizationRepository.findIdsWithAdminRights(req.user.id),
+      };
+      for (const lakeId of requestedPreauthorizedLakeIds) {
+        const lake = await dataLakeRepository.findById(lakeId);
+        if (!lake || lake.status !== 'active') {
+          throw new NotFoundError(`Data lake ${lakeId} not found`);
+        }
+        const canManage = await dataLakeService.resolveCanManageLake(lake, manageActor, {
+          db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        });
+        if (!canManage) {
+          throw new ForbiddenError(`You do not manage data lake ${lakeId}`);
+        }
+      }
+      preauthorizedLakeIds = requestedPreauthorizedLakeIds;
+    }
 
     // "Start chat with this lake": when the request names a lake, seed the session's
     // lake-derived defaults (forced retrieval scoped to the lake + its preferred prompt id) from
@@ -77,6 +116,14 @@ const handler = baseApi().post(
       resolveLakeAccess: async () =>
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
     });
+
+    // Separate, authorized write - never part of createSession's own params (see above). Mutates the
+    // in-memory document too, so the redacted response below and the CREATE_SESSION log line agree
+    // with what is actually on the record.
+    if (preauthorizedLakeIds) {
+      const updated = await sessionRepository.update({ id: newSession.id, preauthorizedLakeIds });
+      if (updated) newSession.preauthorizedLakeIds = updated.preauthorizedLakeIds;
+    }
 
     await User.findByIdAndUpdate(userId, { lastNotebookId: newSession.id });
 

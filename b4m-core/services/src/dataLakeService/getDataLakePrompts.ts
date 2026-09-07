@@ -111,15 +111,26 @@ function isTrustedForInjection(
  * filter, so a retrieved-but-untrusted lake still contributes nothing. Omit it only for a caller
  * that legitimately wants every trusted lake's prompt regardless of retrieval; injection sites must
  * always pass it, or they reintroduce the org-wide over-injection this scope exists to close.
+ *
+ * PRE-AUTHORIZED LAKES (manager-but-not-member admission): `options.preauthorizedLakeIds` names DB
+ * lake ids a manager was admitted to at session-create time (canManageLake, never re-derived here -
+ * see pages/api/sessions/create.ts). Such a lake is unioned into the DB candidate query below (it
+ * would otherwise never match `findActiveByUserTagsAndEntitlements`'s tag/entitlement/org predicate
+ * at all) and short-circuits `isTrustedForInjection` in the in-memory filter - but `restrictTags`
+ * stays an UNCONDITIONAL separate conjunct, so a pre-authorized lake still only contributes when the
+ * turn actually retrieved it. Deliberately DB-lake-only: the registry/fallback-lake candidate
+ * gathering and its own trust check below are retrieval-only and must never be pierced here - a
+ * fallback lake's prompt keeps requiring its ordinary org-trust arm regardless of pre-authorization.
  */
 export async function getAccessibleDataLakePrompts(
   context: DataLakeAccessContext,
-  options?: { restrictToDatalakeTags?: Iterable<string> }
+  options?: { restrictToDatalakeTags?: Iterable<string>; preauthorizedLakeIds?: Iterable<string> }
 ): Promise<DataLakePrompt[]> {
   // Normalize the scope once. An EMPTY (but present) restrict set means "this turn retrieved no
   // lake" -> inject nothing; only an ABSENT set means "do not scope". Distinguished by undefined.
   const restrictTags = options?.restrictToDatalakeTags ? new Set(options.restrictToDatalakeTags) : undefined;
   if (restrictTags && restrictTags.size === 0) return [];
+  const preauthorizedIds = options?.preauthorizedLakeIds ? new Set(options.preauthorizedLakeIds) : undefined;
 
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
@@ -154,6 +165,18 @@ export async function getAccessibleDataLakePrompts(
         organizationIds,
         userId
       );
+      // Union in any pre-authorized lake not already returned above - a manage-but-not-member
+      // lake fails the ordinary tag/entitlement/org predicate by construction, so it would
+      // otherwise never reach the in-memory filter for its short-circuit to matter.
+      if (preauthorizedIds && preauthorizedIds.size > 0 && context.db.dataLakes.findById) {
+        const findById = context.db.dataLakes.findById.bind(context.db.dataLakes);
+        const existingIds = new Set(lakes.map(lake => lake.id));
+        const missingIds = [...preauthorizedIds].filter(id => !existingIds.has(id));
+        const fetched = await Promise.all(missingIds.map(id => findById(id)));
+        for (const lake of fetched) {
+          if (lake && lake.status === 'active') lakes.push(lake);
+        }
+      }
     } catch (err) {
       context.logger?.warn('[dataLakes] prompt lookup failed; injecting no lake prompts', err);
     }
@@ -167,8 +190,13 @@ export async function getAccessibleDataLakePrompts(
   const dbPrompts = lakes
     .filter(
       lake =>
-        lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
-        isTrustedForInjection(lake, { userId, organizationIds }) &&
+        // A pre-authorized lake short-circuits the ordinary access+trust check (it is trusted BY
+        // the admission itself, granted once at session-create - see the function doc comment).
+        // `restrictTags` stays OUTSIDE this OR as an unconditional separate conjunct below, so
+        // pre-authorization alone never injects a prompt the turn did not actually retrieve.
+        (!!preauthorizedIds?.has(lake.id) ||
+          (lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
+            isTrustedForInjection(lake, { userId, organizationIds }))) &&
         // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact
         // string a lake's files carry, so this is a precise lake<->retrieval match, not a prefix.
         (!restrictTags || restrictTags.has(lake.datalakeTag))
