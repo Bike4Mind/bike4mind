@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -25,15 +25,22 @@ import {
 } from '@mui/joy';
 import { toast } from 'sonner';
 import {
+  useCreateDataLakeResearchConfig,
   useDataLakeProposals,
+  useDataLakeResearchConfigs,
+  useDataLakeResearchRuns,
   useDataLakeSpend,
+  useDeleteDataLakeResearchConfig,
   useLakeConfigHistory,
   useReviewDataLakeProposal,
   reviewProposalFailureMessage,
   useSetLakeVisibility,
+  useStartDataLakeResearchRun,
   useUpdateDataLake,
+  useUpdateDataLakeResearchConfig,
 } from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useFeatureFlags } from '@client/app/hooks/useAdminSettingsCache';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import {
@@ -48,11 +55,13 @@ import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
 import { DataLakeProposalsPanel } from './DataLakeProposalsPanel';
+import { DataLakeResearchPanel } from './DataLakeResearchPanel';
 import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
-/** The modal's tabs. Settings is always present; the other three are each permission-gated and only
- *  appear when they have content - see showSpendTab / showHistoryTab / showProposalsTab. */
-type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals';
+/** The modal's tabs. Settings is always present; the other four are each permission-gated and only
+ *  appear when they have content - see showSpendTab / showHistoryTab / showProposalsTab /
+ *  showResearchTab. */
+type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals' | 'research';
 
 /** Human-facing labels + helper copy for the grounding-mode picker, keyed by the shared enum. */
 const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
@@ -159,19 +168,44 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   }, [queueHasItems, lake?.id]);
   const showProposalsTab =
     (queueHasItems || (!!lake?.id && queueSeenFor === lake.id)) && !!lake?.canManage && !proposals.isForbidden;
+  // Research (#1682) is fetched only while its tab is open, like spend and history: unlike the
+  // Proposals queue there is nothing about it the tab label needs to count.
+  const researchConfigs = useDataLakeResearchConfigs(lake?.id ?? null, {
+    enabled: !!lake?.canManage && tab === 'research',
+  });
+  const researchRuns = useDataLakeResearchRuns(lake?.id ?? null, { enabled: !!lake?.canManage && tab === 'research' });
+  const createResearchConfig = useCreateDataLakeResearchConfig(lake?.id ?? '');
+  const updateResearchConfig = useUpdateDataLakeResearchConfig(lake?.id ?? '');
+  const deleteResearchConfig = useDeleteDataLakeResearchConfig(lake?.id ?? '');
+  const startResearchRun = useStartDataLakeResearchRun(lake?.id ?? '');
+  // Shown unconditionally to a manager, unlike Proposals: this tab is where a configuration is
+  // CREATED, so hiding it while there are none would hide the only way to make one.
+  const showResearchTab = !!lake?.canManage && !researchConfigs.isForbidden;
+  const { data: modelCatalog } = useModelInfo();
+  // Text models only - the judge reads a title and a snippet and answers with a number.
+  const researchModelOptions = useMemo(
+    () =>
+      (modelCatalog ?? []).filter(model => model.type === 'text').map(model => ({ id: model.id, name: model.name })),
+    [modelCatalog]
+  );
   // A tab that has just been retracted must not stay selected, or the panel renders blank.
   const activeTab: DataLakeSettingsTab =
     (tab === 'spend' && !showSpendTab) ||
     (tab === 'history' && !showHistoryTab) ||
-    (tab === 'proposals' && !showProposalsTab)
+    (tab === 'proposals' && !showProposalsTab) ||
+    (tab === 'research' && !showResearchTab)
       ? 'settings'
       : tab;
-  const showTabs = showSpendTab || showHistoryTab || showProposalsTab;
+  const showTabs = showSpendTab || showHistoryTab || showProposalsTab || showResearchTab;
   // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
   // them means a future narrow read-only tab silently gets a Save button it must not have.
   // Every non-settings panel is tabular and needs the room; the settings form does not.
-  const isWideTab = activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals';
-  const isReadOnlyTab = activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals';
+  const isWideTab =
+    activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals' || activeTab === 'research';
+  // Research saves through its own per-configuration buttons, so the modal's Save must stay away
+  // from it - it would submit the lake settings form the user is not looking at.
+  const isReadOnlyTab =
+    activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals' || activeTab === 'research';
   const { accounts, selectedAccount } = useAccounts();
   // Promotion targets the active account-switcher org, so the toggle is enabled only in a
   // Team context (a non-personal account selected) - matching what the create/visibility
@@ -610,6 +644,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       {`Proposals (${proposals.data?.length ?? 0})`}
                     </Tab>
                   )}
+                  {showResearchTab && (
+                    <Tab value="research" data-testid="datalake-settings-tab-research">
+                      Research
+                    </Tab>
+                  )}
                 </TabList>
                 <TabPanel value="settings" sx={{ p: 0 }}>
                   {settingsFields}
@@ -656,13 +695,31 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     }
                   />
                 </TabPanel>
+                <TabPanel value="research" sx={{ p: 0 }}>
+                  <DataLakeResearchPanel
+                    configs={researchConfigs.data}
+                    runs={researchRuns.data}
+                    isLoading={researchConfigs.isLoading}
+                    error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
+                    modelOptions={researchModelOptions}
+                    isCreating={createResearchConfig.isPending}
+                    savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
+                    deletingConfigId={deleteResearchConfig.isPending ? deleteResearchConfig.variables : null}
+                    startingConfigId={startResearchRun.isPending ? startResearchRun.variables : null}
+                    onCreate={input => createResearchConfig.mutate(input)}
+                    onUpdate={(configId, input) => updateResearchConfig.mutate({ configId, ...input })}
+                    onDelete={configId => deleteResearchConfig.mutate(configId)}
+                    onStartRun={configId => startResearchRun.mutate(configId)}
+                  />
+                </TabPanel>
               </Tabs>
             ) : (
               settingsFields
             )}
           </DialogContent>
-          {/* Save/Cancel apply to the Settings form only - the read-only Spend, History and
-              Proposals tabs have nothing to save, so these belong to that tab, not the modal. */}
+          {/* Save/Cancel apply to the Settings form only. Spend, History and Proposals have nothing
+              to save; Research saves through the form inside its own panel, one configuration at a
+              time. So these belong to the Settings tab, not to the modal. */}
           {!isReadOnlyTab && (
             <DialogActions>
               <Button

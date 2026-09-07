@@ -25,6 +25,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: {},
+  dataLakeResearchConfigRepository: {},
+  dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
@@ -66,6 +68,10 @@ describe('dataLakeCleanup consumer', () => {
           // so an unwired repo is a silent no-op that typechecks forever. This is the only place
           // that can tell "swept" from "never ran".
           lakeMembershipDecisions: expect.anything(),
+          // And the research slice (#1682), reached through `?.` for the same reason: a saved config
+          // targeting a purged lake could only ever fail, and its run history has no reader left.
+          dataLakeResearchConfigs: expect.anything(),
+          dataLakeResearchRuns: expect.anything(),
         }),
         logger,
       })

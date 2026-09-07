@@ -91,4 +91,18 @@ export const dataLakeKeys = {
   proposals: (dataLakeId: string | null, status?: string) => ['dataLakeProposals', dataLakeId, { status }] as const,
   /** Invalidation prefix covering every status variant of one lake's queue. */
   proposalsOf: (dataLakeId: string) => ['dataLakeProposals', dataLakeId] as const,
+  /**
+   * One lake's saved research configurations (GET /api/data-lakes/:id/research/configs), #1682.
+   * Outside `list` for the same reason as `spend` and `proposals`.
+   */
+  researchConfigs: (dataLakeId: string | null) => ['dataLakeResearchConfigs', dataLakeId] as const,
+  /**
+   * One lake's research run history (GET /api/data-lakes/:id/research/runs). A SEPARATE root from
+   * the configs, not a child: starting a run writes a run and touches a config's `lastRunAt`, but
+   * the run list is polled while a run is in flight and the config list must not ride along on
+   * every poll.
+   */
+  researchRuns: (dataLakeId: string | null, limit?: number) => ['dataLakeResearchRuns', dataLakeId, { limit }] as const,
+  /** Invalidation prefix covering every `limit` variant of one lake's run history. */
+  researchRunsOf: (dataLakeId: string) => ['dataLakeResearchRuns', dataLakeId] as const,
 };

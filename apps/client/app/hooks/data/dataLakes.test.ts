@@ -58,6 +58,7 @@ import {
   LAKE_MEMORY_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
+  useDataLakeResearchRuns,
   useDataLakeSpend,
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
@@ -872,6 +873,69 @@ describe('config-history invalidation on the non-update config writes', () => {
     });
 
     expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeConfigHistory']));
+  });
+});
+
+describe('useDataLakeResearchRuns settle -> proposals invalidation', () => {
+  const runs = (status: string) => [{ id: 'run-1', status, totals: { searchHits: 0, proposed: 0 } }];
+
+  const mount = (initialStatus: string) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiGet.mockResolvedValue({ data: { data: runs(initialStatus) } });
+    return { queryClient, invalidate, wrapper };
+  };
+
+  const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
+    invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
+
+  // The proposal queue is a SEPARATE surface mirroring what a run produced, and its tab carries a
+  // count. Without this the reviewer sees "3 proposed" on the run and Proposals still reading (0).
+  it('refreshes the review queue when a run stops being in flight', async () => {
+    const { invalidate, wrapper } = mount('running');
+    const { result, rerender } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('running'));
+
+    apiGet.mockResolvedValue({ data: { data: runs('completed') } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+    rerender();
+
+    await waitFor(() => {
+      const keys = invalidatedKeys(invalidate);
+      expect(keys).toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
+      // The queue only. `lastRunAt` is the config row's one run-derived field and it is stamped at
+      // START, so refreshing the config list here would be a read that can never return anything new.
+      expect(keys).not.toContain(JSON.stringify(['dataLakeResearchConfigs', 'lake-1']));
+    });
+  });
+
+  // Edge-triggered, not level-triggered: the poll runs every few seconds while a run is in flight,
+  // and invalidating the queue on each unchanged tick would refetch the reviewer's list under them.
+  it('does not invalidate while the run is merely still running', async () => {
+    const { invalidate, wrapper } = mount('running');
+    const { result, rerender } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('running'));
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+    rerender();
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
+  });
+
+  // Opening the tab on an already-finished history is not a settle. Firing there would invalidate
+  // the queue on every mount, which is exactly the refetch loop the tab-gated `enabled` avoids.
+  it('does not invalidate when the history was already settled on arrival', async () => {
+    const { invalidate, wrapper } = mount('completed');
+    const { result } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('completed'));
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
   });
 });
 
