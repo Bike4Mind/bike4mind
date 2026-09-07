@@ -345,8 +345,13 @@ export const setupSamlStrategy = (idp: {
             // Trust anchor: a signed assertion only proves the IdP said it, not that the
             // IdP is entitled to say it. Bind the asserted address to the domain this IdP
             // is registered for BEFORE any account lookup, link or session - otherwise any
-            // registered IdP can name a victim in another tenant. Covers nameID too, since
-            // it is the fallback source of `email` above.
+            // registered IdP can name a victim in another tenant.
+            //
+            // Scope: this guards the asserted EMAIL only. nameID is a separate
+            // attacker-controlled field, and it is the one the account lookup keys on
+            // (`standardProfile.id` below), so it is bound separately - by matching the
+            // stored samlIdentityProviderId in verifyCallback.ts. Both binds are needed;
+            // neither covers the other's field.
             if (!emailMatchesIdpDomain(email, idp.emailDomain)) {
               Logger.warn('[SAML] Rejecting assertion: asserted email is outside the IDP registered domain', {
                 idpId: idp._id,

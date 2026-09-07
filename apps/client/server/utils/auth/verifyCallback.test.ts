@@ -449,6 +449,105 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
   });
 });
 
+describe('verifyCallback - SAML identity is scoped to the asserting IDP', () => {
+  // A nameID is unique inside one IDP, never across them, and for SAML the stage-1 lookup
+  // key IS the nameID. The email-domain bind in server/auth/auth.ts cannot cover this: the
+  // attacker's assertion carries an email genuinely inside their own registered domain and
+  // puts the victim's identifier in nameID, which stage 1 matches on and the bind never
+  // inspects. So the IDP has to be part of the match itself.
+  const VICTIM = {
+    _id: 'victim-id',
+    email: 'victim@acme.com',
+    emailVerified: true,
+    hasUsablePassword: true,
+    authProviders: [{ strategy: AuthStrategy.SAML, id: 'victim@acme.com', samlIdentityProviderId: 'idp-acme' }],
+  };
+
+  // Stands in for Mongo: an $elemMatch matches only when EVERY clause matches the stored
+  // entry, which is the whole point of adding the IDP clause. Without it the mock returns
+  // the victim, exactly as the database would.
+  const mongoLikeFindOne = () =>
+    mockFindOne.mockImplementation((query: Record<string, any>) => {
+      const elemMatch = query?.authProviders?.$elemMatch;
+      if (!elemMatch) return Promise.resolve(null); // stage 2: nothing owns the attacker's email
+      const entry = VICTIM.authProviders[0] as Record<string, unknown>;
+      const matches = Object.entries(elemMatch).every(([field, value]) => entry[field] === value);
+      return Promise.resolve(matches ? { ...VICTIM } : null);
+    });
+
+  const runSaml = (profile: Record<string, unknown>, samlIdentityProviderId: string) =>
+    new Promise<{ err: unknown; user: any; info: unknown }>(resolve => {
+      const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      verifyCallback(AuthStrategy.SAML)('access-tok', 'refresh-tok', profile, done, {
+        strategy: AuthStrategy.SAML,
+        samlNameId: profile.id as string,
+        samlIdentityProviderId,
+      });
+    });
+
+  it("refuses to resolve another IDP's user from a colliding nameID", async () => {
+    mongoLikeFindOne();
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
+
+    // partner.com's IDP asserts an email inside its OWN domain (so the domain bind passes)
+    // while naming the acme.com victim in nameID.
+    const { user } = await runSaml(
+      { id: 'victim@acme.com', emails: [{ value: 'attacker@partner.com', verified: true }] },
+      'idp-partner'
+    );
+
+    // The victim must not be the resolved account, and must not be touched.
+    expect(user?._id).not.toBe('victim-id');
+    expect(user?.email).not.toBe('victim@acme.com');
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+
+    // And the reason it cannot be: the IDP is part of the stage-1 match.
+    expect(mockFindOne).toHaveBeenCalledWith({
+      authProviders: {
+        $elemMatch: expect.objectContaining({
+          strategy: AuthStrategy.SAML,
+          id: 'victim@acme.com',
+          samlIdentityProviderId: 'idp-partner',
+        }),
+      },
+    });
+  });
+
+  it('still resolves the user when the same IDP re-asserts its own nameID', async () => {
+    mongoLikeFindOne();
+
+    const { err, user } = await runSaml(
+      { id: 'victim@acme.com', emails: [{ value: 'victim@acme.com', verified: true }] },
+      'idp-acme'
+    );
+
+    expect(err).toBeNull();
+    expect(user?._id).toBe('victim-id');
+    // Same (nameID, IDP) identity, so this is a refresh: no re-linking gate, no revoke.
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1);
+    expect(mockUpdateOne.mock.calls[0][1].$inc).toBeUndefined();
+  });
+
+  it('leaves strategies without a per-IDP discriminator unscoped', async () => {
+    mockFindOne.mockResolvedValueOnce({
+      _id: 'u1',
+      email: 'user@example.com',
+      emailVerified: true,
+      authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub' }],
+    });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub',
+      emails: [{ value: 'user@example.com', verified: true }],
+    });
+
+    // No samlIdentityProviderId clause smuggled into a Google lookup.
+    expect(mockFindOne).toHaveBeenCalledWith({
+      authProviders: { $elemMatch: { strategy: AuthStrategy.Google, id: 'google-sub' } },
+    });
+  });
+});
+
 describe('verifyCallback - new user creation username field', () => {
   it('stores the provider username (handle) not the displayName so second login finds the user', async () => {
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);

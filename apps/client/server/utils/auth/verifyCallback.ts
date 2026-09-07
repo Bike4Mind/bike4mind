@@ -138,12 +138,22 @@ const authenticateUser = async (
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
   const username = profile?.username ?? profile?.preferred_username ?? null;
   const id = profile?.id ?? profile?.sub ?? null;
+  // SAML identity is (nameID, samlIdentityProviderId), never nameID alone: a nameID is
+  // unique within one IdP but nothing stops two IdPs minting the same one, and for SAML
+  // `id` above IS the nameID. Without this discriminator any registered IdP can assert a
+  // nameID belonging to another IdP's tenant and match that tenant's user on stage 1 -
+  // the domain bind in server/auth/auth.ts guards the asserted *email*, which a stage-1
+  // hit never consults. Mirrors the oktaIdentityProviderId comparison in
+  // pages/api/auth/okta/callback.ts; null for strategies that have no per-IdP notion
+  // (Google, GitHub), where it adds no constraint.
+  const samlIdpId = authProvider?.samlIdentityProviderId ?? null;
+  const idpScope = samlIdpId ? { samlIdentityProviderId: samlIdpId } : {};
 
   try {
     // Stage 1: match by immutable (strategy, providerId).
     // Guard: only when id is truthy - $elemMatch with id:null would match other
     // users' legacy null-id rows and introduce a new null-collision takeover.
-    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id } } }) : null;
+    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id, ...idpScope } } }) : null;
 
     // Stage 2: fallback to mutable email/username only when stage 1 missed.
     // The Missing Identifier guard lives here (between stages) because a stage-1
@@ -194,8 +204,15 @@ const authenticateUser = async (
       // a stage-1 hit on a later entry could be mis-evaluated here. Duplicates
       // are now collapsed on write (applyAccountLink) and on save (UserModel
       // pre-save guard), so such rows self-heal on the next login.
+      // The samlIdpId clause is the refresh-exemption half of the same (nameID, IdP)
+      // identity above: without it a cross-IdP nameID collision that reached this point
+      // would be treated as "the same identity we already linked" and skip the gate
+      // entirely. Vacuous for strategies with no per-IdP discriminator.
       const existingSameIdentity =
-        existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
+        existingProviderIndex !== -1 &&
+        !!incomingId &&
+        authProviders[existingProviderIndex].id === incomingId &&
+        (!samlIdpId || authProviders[existingProviderIndex].samlIdentityProviderId === samlIdpId);
 
       let promoteEmailVerified = false;
       if (!existingSameIdentity) {
