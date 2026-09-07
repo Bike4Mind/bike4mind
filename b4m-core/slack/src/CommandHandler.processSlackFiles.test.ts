@@ -27,8 +27,6 @@ const upload = vi.fn();
 const create = vi.fn();
 const downloadFile = vi.fn();
 // #1685: processSlackFiles now enforces MaxFileSize + the user's storage limit before create.
-// `undefined` here means "no admin setting configured", matching the pre-#1685 behavior for
-// every test below that isn't specifically exercising one of those two new refusals.
 const getSettingsValue = vi.fn();
 const organizationFindById = vi.fn();
 
@@ -53,8 +51,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   upload.mockResolvedValue(undefined);
   create.mockImplementation(async () => ({ _id: { toString: () => 'fab-1' } }));
-  downloadFile.mockResolvedValue(Buffer.from('bytes'));
-  getSettingsValue.mockResolvedValue(undefined);
+  // Same length as attachment()'s claimed `size` (1024) so the pinned assertions below hold
+  // whether they read the claim or the real bytes - the two are only meant to diverge in the
+  // lying-client tests further down, which override this explicitly.
+  downloadFile.mockResolvedValue(Buffer.alloc(1024));
+  // The real MaxFileSize schema has .prefault(30) - getSettingsValue never actually resolves
+  // undefined for this key in production, so the default here matches that instead of
+  // modeling an unconfigured-setting case that can't happen. Tests that need a different
+  // value (or the never-configured case) override this explicitly.
+  getSettingsValue.mockResolvedValue(30);
   getSlackDeps.mockReturnValue({ storage: { filesStorage: { upload } } });
   getSlackDb.mockReturnValue({
     FabFile: { create },
@@ -168,6 +173,22 @@ describe('processSlackFiles', () => {
     expect(data.fileSize).toBe(1024);
     expect(data.status).toBe('complete');
     expect(data.sourceType).toBe('slack');
+  });
+
+  it('persists the resolved (extension-based) mimetype and real byte count, not the claim', async () => {
+    // Claimed mimetype is a lie and claimed size understates the real download - the FabFile
+    // record and fileMetadata must reflect what the checks actually verified, not the claim,
+    // or a job that later rebuilds storage usage from fileSize would undercount this file.
+    downloadFile.mockResolvedValue(Buffer.alloc(2048));
+    const result = await makeHandler().processSlackFiles([
+      attachment({ mimetype: 'application/octet-stream', size: 1024 }),
+    ] as never);
+
+    const data = create.mock.calls[0][0];
+    expect(data.mimeType).toBe('application/pdf');
+    expect(data.fileSize).toBe(2048);
+    expect(result.fileMetadata[0].mimeType).toBe('application/pdf');
+    expect(result.fileMetadata[0].sizeBytes).toBe(2048);
   });
 });
 
