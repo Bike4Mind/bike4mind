@@ -471,12 +471,24 @@ export class CommandHandler {
     // attachment - neither the admin setting nor the org lookup below can change mid-call.
     const { adminSettingsRepository, Organization, FabFile } = getSlackDb();
     const { storage } = getSlackDeps();
-    // any: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary; the
-    // bound implementation (slackPackageInit.ts) is the real IAdminSettingsRepository.
-    const maxFileSizeMB = await (adminSettingsRepository as any as IAdminSettingsRepository).getSettingsValue(
-      'MaxFileSize'
-    );
-    const maxFileSizeBytes = typeof maxFileSizeMB === 'number' ? maxFileSizeMB * 1024 * 1024 : undefined;
+    // Resolved outside the per-file try/catch below, so a lookup failure here is caught on its
+    // own (mirroring resolveModelConfig's DB-failure fallback above) instead of propagating out
+    // of processSlackFiles entirely - this method never threw before #1685 added this check.
+    let maxFileSizeBytes: number | undefined;
+    try {
+      // any: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary;
+      // the bound implementation (slackPackageInit.ts) is the real IAdminSettingsRepository.
+      const maxFileSizeMB = await (adminSettingsRepository as any as IAdminSettingsRepository).getSettingsValue(
+        'MaxFileSize'
+      );
+      maxFileSizeBytes = typeof maxFileSizeMB === 'number' ? maxFileSizeMB * 1024 * 1024 : undefined;
+    } catch (settingsError) {
+      // Fails open (no MaxFileSize limit for this call) rather than blocking every attachment -
+      // the real storage-quota check below still runs regardless.
+      this.logger.error('[Slack Files] Failed to resolve MaxFileSize setting, proceeding without it', {
+        error: settingsError,
+      });
+    }
     // Memoized rather than resolved eagerly: most messages carry no attachment that actually
     // needs the storage check, so this only pays for the lookup the first time it is used.
     // any: same DI-boundary reason as adminSettingsRepository above - Organization is typed
@@ -484,11 +496,23 @@ export class CommandHandler {
     // checkStorageLimitForFile's real `Promise<IOrganizationDocument | null>` signature.
     let organizationLookup: Promise<any> | undefined;
     const findOrganizationOnce = (id: string) => {
-      organizationLookup ??= (Organization as any).findById(id);
+      // `.exec()` is load-bearing: `Organization.findById(id)` returns an un-executed Mongoose
+      // Query, not a Promise - memoizing the Query itself and awaiting it more than once throws
+      // "Query was already executed" on the second await, which is exactly what happens for an
+      // org-affiliated user with 2+ attachments in one message (checkStorageLimitForFile awaits
+      // this once per accepted attachment).
+      organizationLookup ??= (Organization as any).findById(id).exec();
       // TS can't narrow a closed-over variable past `??=` on its own - it is always assigned
       // by this point.
       return organizationLookup as Promise<any>;
     };
+    // `this.user`/the org doc's `currentStorageSize` is a snapshot taken once for this whole
+    // call - it is only updated asynchronously later via the S3 `objectCreated` event, not as
+    // attachments are accepted here. Tracking bytes accepted so far in THIS message and adding
+    // them to each subsequent check keeps a user right at quota from overshooting it by
+    // attaching several files in one message that would each individually pass against the
+    // stale snapshot.
+    let acceptedBytesThisMessage = 0;
 
     for (const rawFile of files) {
       try {
@@ -514,8 +538,9 @@ export class CommandHandler {
         // buffer length, since a lying client's claim must not be the actual enforcement.
         if (maxFileSizeBytes !== undefined && file.size >= maxFileSizeBytes) {
           const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+          const limitMB = (maxFileSizeBytes / (1024 * 1024)).toFixed(0);
           // Warning sign, escaped so this source file stays ASCII.
-          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${maxFileSizeMB}MB limit. Skipping.`;
+          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
           this.logger.warn(error);
           errors.push(error);
           continue;
@@ -530,17 +555,21 @@ export class CommandHandler {
 
         if (maxFileSizeBytes !== undefined && fileBuffer.length >= maxFileSizeBytes) {
           const sizeMB = (fileBuffer.length / (1024 * 1024)).toFixed(1);
+          const limitMB = (maxFileSizeBytes / (1024 * 1024)).toFixed(0);
           // Warning sign, escaped so this source file stays ASCII.
-          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${maxFileSizeMB}MB limit. Skipping.`;
+          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
           this.logger.warn(error);
           errors.push(error);
           continue;
         }
 
         try {
+          // Adding `acceptedBytesThisMessage` folds in every file already accepted earlier in
+          // this same loop, so the check is against "quota used so far, including this
+          // message" rather than the stale start-of-call snapshot alone.
           await checkStorageLimitForFile(
             this.user,
-            fileBuffer.length,
+            fileBuffer.length + acceptedBytesThisMessage,
             this.user.organizationId ?? undefined,
             findOrganizationOnce
           );
@@ -551,6 +580,7 @@ export class CommandHandler {
           errors.push(error);
           continue;
         }
+        acceptedBytesThisMessage += fileBuffer.length;
 
         if (statusCallback) {
           await statusCallback(`Processing file: ${file.name}...`);
@@ -559,7 +589,11 @@ export class CommandHandler {
         // Upload to S3 storage
         const filePath = `slack-files/${this.user.id}/${Date.now()}-${file.name}`;
         await storage.filesStorage.upload(fileBuffer, filePath, {
-          ContentType: file.mimetype,
+          // resolvedMimeType, not the client's claim - a file that only passed the gate because
+          // its extension resolved to a supported type must not have an arbitrary/wrong
+          // Content-Type header written to S3 (e.g. an attachment that claims text/html on a
+          // real .png would otherwise let the object render as HTML from the bucket origin).
+          ContentType: resolvedMimeType,
         });
 
         // Create FAB file record in database
