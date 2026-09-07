@@ -372,4 +372,29 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     // Memoized: the org lookup is resolved once per message, not once per attachment.
     expect(organizationFindById).toHaveBeenCalledTimes(1);
   });
+
+  it('reports a generic message and logs, instead of leaking the raw error, when the org lookup itself fails', async () => {
+    // An unexpected DB error (not the storage-limit BadRequestError) must not be echoed
+    // verbatim into a customer Slack channel - it can name internal details like a host:port.
+    organizationFindById.mockReturnValue({
+      select: () => ({
+        lean: () => ({ exec: () => Promise.reject(new Error('connect ECONNREFUSED 10.0.0.5:27017')) }),
+      }),
+    });
+
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', organizationId: 'org-1' } as never;
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const result = await handler.processSlackFiles([attachment()] as never);
+
+    expect(result.fabFileIds).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).not.toContain('ECONNREFUSED');
+    expect(result.errors[0]).toContain('Could not verify your storage limit');
+    expect(logger.error).toHaveBeenCalledWith(
+      '[Slack Files] Storage limit check failed',
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
 });
