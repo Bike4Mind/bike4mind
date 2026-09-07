@@ -41,8 +41,8 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   }),
 }));
 
-vi.mock('@client/app/contexts/ApiContext', () => ({
-  resetRefreshPromise: vi.fn(),
+vi.mock('@client/app/utils/refreshCoordinator', () => ({
+  resetRefreshCoordinator: vi.fn(),
 }));
 
 vi.mock('@client/app/utils/sessionBootstrap', () => ({

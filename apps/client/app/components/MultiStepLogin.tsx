@@ -27,13 +27,13 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { resetRefreshPromise } from '@client/app/contexts/ApiContext';
+import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { useCommonStyles } from '@client/app/hooks/useCommonStyles';
 import { useTheme } from '@mui/joy/styles';
 import MFAModal from './common/MFAModal';
 import useGetLogo from '@client/app/hooks/useGetLogo';
-import { useBrandingSettings } from '@client/app/hooks/data/settings';
+import { useBrandingSettings, usePublicConfig } from '@client/app/hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
@@ -105,6 +105,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
   const verifyMFA = useVerifyMFA();
+  const { data: publicConfig } = usePublicConfig();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
   const { t } = useTranslation();
@@ -255,7 +256,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }
   };
 
-  const handleMFAVerification = async (token: string) => {
+  const handleMFAVerification = async (token: string, rememberDevice = false) => {
     if (!mfaUserId) return;
     setMfaError(null);
     try {
@@ -263,9 +264,9 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       if (mfaMode === 'setup') {
         result = await verifyMFASetup.mutateAsync({ token });
       } else {
-        result = await verifyMFA.mutateAsync({ token });
+        result = await verifyMFA.mutateAsync({ token, rememberDevice });
       }
-      resetRefreshPromise();
+      resetRefreshCoordinator();
       // Drop the cached cold-load result: this browser just acquired a session, so the next
       // protected navigation must not reuse the "no session" answer from before login.
       resetSessionBootstrap();
@@ -393,7 +394,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // Shared success path: store the access token, set the user, honor ?redirectTo. The refresh
   // token is not here - the login endpoint set it as an HttpOnly cookie.
   const finishLogin = (user: Record<string, unknown> & { accessToken: string }) => {
-    resetRefreshPromise();
+    resetRefreshCoordinator();
     // Drop the cached cold-load result: this browser just acquired a session, so the next
     // protected navigation must not reuse the "no session" answer from before login.
     resetSessionBootstrap();
@@ -1110,6 +1111,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         manualEntryKey={mfaSetupData?.manualEntryKey}
         backupCodes={mfaSetupData?.backupCodes}
         showVerify={true}
+        allowRememberDevice={publicConfig?.allowTrustedDevices ?? false}
       />
     </Box>
   );

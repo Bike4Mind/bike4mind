@@ -100,3 +100,18 @@ export class ServerAgentStore {
     return Array.from(servers);
   }
 }
+
+/**
+ * The hardcoded model ids the built-in subagents ship with, keyed by agent name.
+ *
+ * Feeds `checkStaleModelReferences`'s `agentModels` surface so the nightly
+ * hygiene report covers these the way it already covers fallback chains. Built
+ * with an empty config on purpose: the per-request config only ever overrides a
+ * model, and the report is about what the DEFAULTS name. Overlay agents are
+ * excluded for the same reason - a user's own agent is data, not a code surface
+ * an operator can edit.
+ */
+export function builtInAgentModelReferences(): Record<string, { model?: string; fallbackModels?: string[] }> {
+  const entries = new ServerAgentStore({}).getAllAgents();
+  return Object.fromEntries(entries.map(a => [a.name, { model: a.model, fallbackModels: a.fallbackModels }]));
+}

@@ -34,11 +34,12 @@ const makeRes = () => {
   return res;
 };
 
-const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[] }) => {
+const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[]; apiKeyInfo?: { keyId: string } }) => {
   const chunks = opts.body ?? [Buffer.from('hello')];
   return {
     query: { id: opts.id ?? 'ff1' },
     user: { id: opts.userId ?? 'u1' },
+    apiKeyInfo: opts.apiKeyInfo,
     headers: { 'content-type': 'text/plain' },
     logger: { error: vi.fn() },
     destroy: vi.fn(),
@@ -147,6 +148,24 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     await handler(makeReq({}), res);
 
     expect(recomputeUploadedMock).toHaveBeenCalledWith(fabFile, expect.anything());
+  });
+
+  /**
+   * The recompute can flip a draft lake active, writing an append-only config-change row an owner
+   * reads. This proxy is the one upload door with a request behind it, so it is the only one that
+   * can attribute that row at all - the S3 event and the MinIO webhook have no actor to pass.
+   */
+  it('attributes the recompute to the uploading user, and to the KEY when one authenticated', async () => {
+    findByIdMock.mockResolvedValue(makePendingFile());
+    await handler(makeReq({}), makeRes());
+    expect(recomputeUploadedMock.mock.calls[0][1]).toMatchObject({ actor: { userId: 'u1', isAdmin: false } });
+    expect(recomputeUploadedMock.mock.calls[0][1].actor.auditPrincipal).toBeUndefined();
+
+    findByIdMock.mockResolvedValue(makePendingFile());
+    await handler(makeReq({ apiKeyInfo: { keyId: 'key-abc' } }), makeRes());
+    expect(recomputeUploadedMock.mock.calls[1][1].actor).toMatchObject({
+      auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'u1' },
+    });
   });
 
   it('does not recompute when the write fails', async () => {

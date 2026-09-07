@@ -1,4 +1,4 @@
-import { Modal, Typography, Box, Stack, Button, Sheet, IconButton, Input } from '@mui/joy';
+import { Modal, Typography, Box, Stack, Button, Sheet, IconButton, Input, Checkbox } from '@mui/joy';
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import Image from 'next/image';
@@ -9,8 +9,12 @@ interface MFAModalProps {
   className?: string;
   onClose: () => void;
   onCancel: () => void;
-  onVerify: (code: string) => void;
+  onVerify: (code: string, rememberDevice: boolean) => void;
   loading?: boolean;
+  /** Show the "remember this device" opt-in. Verification only - never during setup. */
+  allowRememberDevice?: boolean;
+  /** Length of the trust window, for the checkbox label. */
+  rememberDeviceDays?: number;
   error?: string | null;
   title?: string;
   qrCodeUrl?: string;
@@ -35,14 +39,21 @@ const MFAModal: React.FC<MFAModalProps> = ({
   description,
   showVerify = true,
   isEnforced = false,
+  allowRememberDevice = false,
+  rememberDeviceDays = 30,
 }) => {
   const [code, setCode] = useState('');
+  const [rememberDevice, setRememberDevice] = useState(false);
   const isSetupMode = title?.includes('Set Up');
+  // Setup enrolls the second factor; offering to skip it in the same breath makes no
+  // sense, so the opt-in is verification-only.
+  const showRememberDevice = allowRememberDevice && showVerify && !isSetupMode;
 
   // Clear code input when modal is opened
   useEffect(() => {
     if (open) {
       setCode('');
+      setRememberDevice(false);
     }
   }, [open]);
 
@@ -76,7 +87,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
   };
 
   const handleVerify = () => {
-    onVerify(code);
+    onVerify(code, showRememberDevice && rememberDevice);
   };
 
   const handleCancel = () => {
@@ -219,6 +230,22 @@ const MFAModal: React.FC<MFAModalProps> = ({
                 <Typography color="danger" sx={{ mb: 1 }}>
                   {error}
                 </Typography>
+              )}
+              {showRememberDevice && (
+                <Box>
+                  <Checkbox
+                    className="mfa-modal-remember-device"
+                    data-testid="mfa-modal-remember-device-checkbox"
+                    label={`Remember this device for ${rememberDeviceDays} days`}
+                    checked={rememberDevice}
+                    disabled={loading}
+                    onChange={event => setRememberDevice(event.target.checked)}
+                  />
+                  <Typography level="body-xs" sx={{ mt: 0.5 }}>
+                    Skips this code on future sign-ins from this browser. You will still be emailed a one-time code each
+                    time. Only do this on a device you control.
+                  </Typography>
+                </Box>
               )}
               <Button
                 className="mfa-modal-verify-button"

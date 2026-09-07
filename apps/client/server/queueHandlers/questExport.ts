@@ -8,6 +8,7 @@ import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { apiKeyService } from '@bike4mind/services';
 import { ChatModels, isImageServeable } from '@bike4mind/common';
+import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
@@ -126,25 +127,6 @@ function slugify(text: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 50);
-}
-
-/**
- * Returns the appropriate status icon for a subquest status.
- * ✓ = completed, 🔄 = in_progress, ⏳ = not_started, ⏭ = skipped
- */
-function getStatusIcon(status: string): string {
-  switch (status) {
-    case 'completed':
-      return ' ✓';
-    case 'in_progress':
-      return ' 🔄';
-    case 'not_started':
-      return ' ⏳';
-    case 'skipped':
-      return ' ⏭';
-    default:
-      return '';
-  }
 }
 
 /**
@@ -359,7 +341,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let subQuestNum = 0;
       for (const subQuest of quest.subQuests) {
         subQuestNum++;
-        const statusIcon = getStatusIcon(subQuest.status);
+        const statusIcon = getSubQuestStatusIcon(subQuest.status);
         markdown += `  - ${questNum}.${subQuestNum}: ${subQuest.title}${statusIcon}\n`;
       }
     }
@@ -375,7 +357,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let subQuestNum = 0;
       for (const subQuest of quest.subQuests) {
         subQuestNum++;
-        const statusIcon = getStatusIcon(subQuest.status);
+        const statusIcon = getSubQuestStatusIcon(subQuest.status);
         markdown += `### ${questNum}.${subQuestNum}: ${subQuest.title}${statusIcon}\n\n`;
 
         if (subQuest.status === 'not_started') {

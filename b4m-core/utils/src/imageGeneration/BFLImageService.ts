@@ -110,7 +110,19 @@ export class BFLImageService extends AIImageService {
           }
 
           const cleanedBody = this.stripNullFields(requestBody);
-          Logger.globalInstance.debug('[DEBUG] BFL Image generation request body:', cleanedBody);
+          // .log(), not .debug(), so the actual outbound payload is visible at the default log
+          // level. prompt is truncated and image_prompt redacted, matching every other prompt log
+          // on this path (route: promptPreview.substring(0,100); GeminiImageService: same) -
+          // logging full user prompts at the default level is a different posture than diagnosing
+          // params, which is all this needed.
+          const safeRequestBody = {
+            ...cleanedBody,
+            prompt: prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt,
+            ...(cleanedBody.image_prompt
+              ? { image_prompt: `[BASE64_DATA_${(cleanedBody.image_prompt as string).length}_CHARS]` }
+              : {}),
+          };
+          Logger.globalInstance.log('BFL Image generation request body:', safeRequestBody);
 
           // Submit a new generation request for each image
           const submitResponse = await axios.post(`${this.baseUrl}/${model}`, cleanedBody, {
@@ -128,7 +140,7 @@ export class BFLImageService extends AIImageService {
             pollingUrl,
             responseData: submitResponse.data,
             endpoint: `${this.baseUrl}/${model}`,
-            requestBody,
+            requestBody: safeRequestBody,
           });
 
           // Poll for this specific request's result using the polling_url from BFL

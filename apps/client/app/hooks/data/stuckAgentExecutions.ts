@@ -50,6 +50,8 @@ export type CleanupResponse = {
   requested: number;
   marked: number;
   notifiedConnections: number;
+  /** Stranded quest bubbles given a terminal state alongside the executions. */
+  questsSettled: number;
 };
 
 const QUERY_KEY = ['admin', 'agent-executions', 'stuck'] as const;

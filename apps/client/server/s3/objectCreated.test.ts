@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findOne: vi.fn(),
+  updateOne: vi.fn(),
   findOneAndUpdate: vi.fn(),
+  findById: vi.fn(),
   userFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   claimFileStatus: vi.fn(),
@@ -25,7 +27,12 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   changeStorageSize: vi.fn(),
   dataLakeBatchRepository: { claimFileStatus: h.claimFileStatus, incrementCounter: h.incrementCounter },
-  FabFile: { findOne: h.findOne, findOneAndUpdate: h.findOneAndUpdate, findById: vi.fn() },
+  FabFile: {
+    findOne: h.findOne,
+    updateOne: h.updateOne,
+    findOneAndUpdate: h.findOneAndUpdate,
+    findById: h.findById,
+  },
   imageModerationIncidentRepository: {},
   User: { findById: h.userFindById },
   withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
@@ -67,6 +74,7 @@ const metadata = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.updateOne.mockResolvedValue({ modifiedCount: 1 });
   h.findOneAndUpdate.mockResolvedValue({ id: 'ff1' });
   h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'clean' });
   h.userFindById.mockReturnValue({ session: () => ({ id: 'u1', currentStorageSize: 1, save: vi.fn() }) });
@@ -136,5 +144,65 @@ describe('objectCreated - data lake stats (#1342)', () => {
     await run();
 
     expect(h.recomputeUploaded).not.toHaveBeenCalled();
+  });
+});
+
+describe('objectCreated - upload status is recorded independently of post-processing', () => {
+  let file: ReturnType<typeof metadata> & { status?: string; moderationStatus?: string };
+
+  beforeEach(() => {
+    file = metadata({ status: 'pending', moderationStatus: 'pending' });
+    h.findOne.mockResolvedValue(file);
+    h.findOneAndUpdate.mockResolvedValue({ ...file, moderationStatus: 'scanning' });
+  });
+
+  it("marks the file 'complete' even when the owner lookup fails", async () => {
+    h.userFindById.mockReturnValue({ session: () => null });
+
+    await run();
+
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
+  });
+
+  it('recomputes the lakes the file joined even when the owner lookup fails', async () => {
+    h.userFindById.mockReturnValue({ session: () => null });
+
+    await run();
+
+    expect(h.recomputeUploaded).toHaveBeenCalledWith(file, { logger });
+  });
+
+  it("marks the file 'complete' before a moderation scan that throws", async () => {
+    h.moderateUploadedFile.mockRejectedValue(new Error('Rekognition unavailable'));
+
+    await expect(run()).rejects.toThrow('Rekognition unavailable');
+
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
+  });
+
+  it('marks the file complete on the happy path and leaves the moderation verdict on the record', async () => {
+    await run();
+
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
+    expect(file.status).toBe('complete');
+    expect(file.moderationStatus).toBe('clean');
+    expect(file.save).toHaveBeenCalled();
+  });
+
+  it('skips the write when a redelivered event finds the file already complete', async () => {
+    file.status = 'complete';
+
+    await run();
+
+    expect(h.updateOne).not.toHaveBeenCalled();
   });
 });

@@ -8,13 +8,18 @@ import {
 } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
+import { decryptAtRest } from '@bike4mind/utils/security';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { encryptSecret, isEncrypted } from '@server/security/secretEncryption';
+import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@server/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
+
+// One-time guard so a self-host install running without a configured key logs the
+// plaintext-at-rest degradation once, rather than silently or on every write.
+let warnedSelfHostPlaintext = false;
 
 // Update Admin Setting
 const handler = baseApi().put(
@@ -43,7 +48,11 @@ const handler = baseApi().put(
     if (isSensitiveSetting && isMaskedSensitiveSettingValue(value)) {
       const existing = await AdminSettings.findOne({ settingName: key }).lean();
       if (!existing) throw new NotFoundError('Admin setting not found');
-      return res.json({ ...existing, settingValue: maskSensitiveSettingValue(existing.settingValue) });
+      // The stored value is ciphertext; mask the decrypted plaintext so the admin still
+      // sees the real last-4, not the ciphertext tail. decryptAtRest passes plaintext
+      // (not-yet-migrated) values through unchanged.
+      const existingPlaintext = typeof existing.settingValue === 'string' ? decryptAtRest(existing.settingValue) : '';
+      return res.json({ ...existing, settingValue: maskSensitiveSettingValue(existingPlaintext) });
     }
 
     // Clearing a sensitive setting is a legitimate admin action, but it destroys a live
@@ -90,9 +99,45 @@ const handler = baseApi().put(
       value = sreValue;
     }
 
+    // Encrypt sensitive scalar values at rest. sreAgentConfig (an object handled above) is
+    // not isSensitive and never reaches this branch. A confirmed clear ('') is stored as-is,
+    // and an already-encrypted value is left untouched (idempotent). The submitted plaintext
+    // stays in `value` for the response mask below so the admin sees the real last-4.
+    //
+    // This handler is the ONLY sanctioned writer of a sensitive admin setting, so the
+    // encrypt-on-write decision lives here rather than at the repository choke point the read
+    // path uses (a future writer - e.g. an OAuth flow persisting a refreshed secret - must
+    // encrypt here too, or route through AdminSettings with the same guard). The fail-closed
+    // contract is kept identical to the per-user provider-key path (ApiKeyModel.create): a
+    // cloud stage without a valid key throws; only a deliberate self-host install
+    // (B4M_SELF_HOST) degrades to plaintext at rest, so an admin can still save a local-only
+    // sensitive setting such as ollamaBackend before running the openssl key step.
+    let settingValueToStore: unknown = value;
+    if (isSensitiveSetting && typeof value === 'string' && value !== '' && !isEncrypted(value)) {
+      const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
+      if (encryptionKey && isValidEncryptionKey(encryptionKey)) {
+        settingValueToStore = encryptSecret(value, encryptionKey);
+      } else if (process.env.B4M_SELF_HOST === 'true') {
+        if (!warnedSelfHostPlaintext) {
+          warnedSelfHostPlaintext = true;
+          req.logger?.warn(
+            'SECRET_ENCRYPTION_KEY is not configured; storing sensitive admin settings in plaintext at rest ' +
+              '(self-host). Set a 64-hex SECRET_ENCRYPTION_KEY to encrypt them.'
+          );
+        }
+        // settingValueToStore stays the plaintext `value`.
+      } else {
+        throw new Error(
+          'SECRET_ENCRYPTION_KEY is not configured (needs a 64-hex value), refusing to store a sensitive ' +
+            'setting in plaintext. Set a 64-hex key on this stage (sst secret set SECRET_ENCRYPTION_KEY <value>), ' +
+            'or set B4M_SELF_HOST=true to opt into plaintext.'
+        );
+      }
+    }
+
     const updatedSetting = await AdminSettings.findOneAndUpdate(
       { settingName: key },
-      { $set: { settingValue: value } },
+      { $set: { settingValue: settingValueToStore } },
       { upsert: true, new: true }
     );
 
@@ -136,11 +181,12 @@ const handler = baseApi().put(
     }
 
     // Never echo a sensitive value back, not even the one just submitted - the write
-    // response is the other way a stored secret could land in the browser payload.
+    // response is the other way a stored secret could land in the browser payload. Mask
+    // the submitted plaintext (`value`), not the stored ciphertext, so the last-4 is real.
     if (isSensitiveSetting) {
       const redacted = updatedSetting.toObject();
       (redacted as unknown as Record<string, unknown>).settingValue = maskSensitiveSettingValue(
-        updatedSetting.settingValue
+        typeof value === 'string' ? value : ''
       );
       return res.json(redacted);
     }

@@ -1,7 +1,13 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { ModelRecordWrite, groupsTouchedByPatch } from '@bike4mind/common';
+import { ModelRecordWrite, groupsTouchedByPatch, isModelDeprecated } from '@bike4mind/common';
 import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
-import { getAvailableModels, setModelCatalogProvider } from '@bike4mind/llm-adapters';
+import {
+  GeminiBackend,
+  getAvailableModels,
+  mergeCatalog,
+  resolveDeprecatedModelId,
+  setModelCatalogProvider,
+} from '@bike4mind/llm-adapters';
 import { collectStaticCatalogModels, generateModelCatalogSeed } from './generateModelCatalogSeed';
 import { buildSeedNotice } from './regenerateModelCatalogSeed';
 import { CATALOG_SEED_NOTE, CATALOG_SEED_SOURCE, seedModelCatalog } from './seedModelCatalog';
@@ -131,6 +137,26 @@ describe('the checked-in seed applied as catalog rows (no DB)', () => {
         });
       }
     }
+  });
+
+  it('keeps gemini-2.5-flash deprecated once the checked-in seed rows are merged in', async () => {
+    // Unlike resolveDeprecatedModel.test.ts, this exercises the actual merge
+    // (mergeCatalog) instead of the adapter table alone - a stale lifecycle row
+    // that overlays the adapter literal back to "active" passes the adapter-only
+    // check and only fails here.
+    const geminiModels = await new GeminiBackend('test-key-not-used').getModelInfo();
+    const gateCtx = { apiKeys: { gemini: 'test-key-not-used' }, isSelfHost: false };
+    const merged = mergeCatalog(geminiModels, seedRows(), gateCtx);
+
+    const retired = merged.find(model => model.id === 'gemini-2.5-flash');
+    expect(retired).toBeDefined();
+    expect(isModelDeprecated(retired as ModelInfo)).toBe(true);
+
+    const resolved = resolveDeprecatedModelId('gemini-2.5-flash');
+    const replacement = merged.find(model => model.id === resolved);
+    expect(resolved).not.toBe('gemini-2.5-flash');
+    expect(replacement).toBeDefined();
+    expect(isModelDeprecated(replacement as ModelInfo)).toBe(false);
   });
 });
 

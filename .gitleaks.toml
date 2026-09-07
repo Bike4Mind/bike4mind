@@ -57,13 +57,18 @@ regexes = [
 [[rules]]
 id = "bike4mind-mongodb-uri"
 description = "MongoDB Connection String"
-regex = "mongodb(\\+srv)?://[^\\s'\"]*"
+# The group is non-capturing and there is no entropy floor on purpose. gitleaks
+# applies an entropy floor to capture group 1, not to the whole match, whatever
+# secretGroup says - with `(\+srv)` captured and `entropy = 3.0` this rule scored
+# the literal "+srv" and therefore never reported anything.
+regex = "mongodb(?:\\+srv)?://[^\\s'\"]*"
 tags = ["mongodb", "connection-string"]
-secretGroup = 0
-entropy = 3.0
 
 [rules.allowlist]
 regexes = [
+  # Scheme prefix with no host or credentials: startsWith() guards and prose that
+  # names the scheme. The optional trailing dot is a sentence terminator in prose.
+  "^mongodb(\\+srv)?://\\.?$",
   "mongodb(\\+srv)?://localhost",
   "mongodb(\\+srv)?://127\\.0\\.0\\.1",
   "mongodb(\\+srv)?://mongo(:[0-9]+)?/",
@@ -95,9 +100,10 @@ entropy = 3.0
 [[rules]]
 id = "bike4mind-stripe-keys"
 description = "Stripe API Key"
-regex = "(sk|pk|whsec)_(test|live)_[0-9a-zA-Z]{24,}"
+# Groups stay non-capturing so the entropy floor scores the key, not the "sk"/
+# "test" alternation - see the note on bike4mind-mongodb-uri above.
+regex = "(?:sk|pk|whsec)_(?:test|live)_[0-9a-zA-Z]{24,}"
 tags = ["stripe", "payment"]
-secretGroup = 0
 entropy = 3.0
 
 [[rules]]

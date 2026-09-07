@@ -371,6 +371,47 @@ describe('GET /api/user-api-keys - revoked-key visibility', () => {
 });
 
 /**
+ * Scope allowlist guard: the server rejects any scope outside USER_API_KEY_SCOPE_VALUES
+ * regardless of the caller's admin status, so privileged scopes (admin:*, cc-bridge:connect,
+ * overwatch-ingest:write) cannot be self-minted through this endpoint.
+ */
+describe('POST /api/user-api-keys - scope allowlist guard', () => {
+  beforeEach(() => createUserApiKey.mockClear());
+
+  it('rejects admin:* for a non-admin user with Scope not allowed', async () => {
+    const { req, res } = post({ name: 'test', scopes: ['admin:*'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Scope not allowed/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects admin:* even for a platform admin user', async () => {
+    const { req, res } = post({ name: 'test', scopes: ['admin:*'] }, { isAdmin: true });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Scope not allowed/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects overwatch-ingest:write (admin-provisioned only) from the user endpoint', async () => {
+    const { req, res } = post({ name: 'ingest', scopes: ['overwatch-ingest:write'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Scope not allowed/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('allows a valid self-service scope through (notebooks:read)', async () => {
+    const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalled();
+  });
+
+  it('allows embed:chat through the user endpoint', async () => {
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'a1' });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalled();
+  });
+});
+
+/**
  * List route computes `ownerHasWhitelabel` per embed key (#891) so the Configure
  * UI gates the toggle on the OWNER's plan, not the viewer's. The finders return
  * hydrated Mongoose docs whose toJSON emits only schema paths, so the handler

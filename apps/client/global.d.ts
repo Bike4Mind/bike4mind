@@ -33,7 +33,13 @@ declare global {
       logger: Logger;
       /** Correlation ID for this request, echoed back as the X-Request-ID header. */
       requestId: string;
-      user: IUserDocument;
+      /**
+       * The authenticated user, plus the transient auth claims `verifyJwtPayload` attaches from
+       * the access-token JWT (never persisted on the document): `sid` (session id, for per-device
+       * logout), `mfaPending`, and `impersonatedBy`. All optional - API-key auth sets `user`
+       * without them, and legacy/mfaPending tokens omit `sid`.
+       */
+      user: IUserDocument & { sid?: string; mfaPending?: boolean; impersonatedBy?: string };
       ability?: Ability;
       /**
        * Per-request memoized entitlement keys (Quest 3). Set ONLY by

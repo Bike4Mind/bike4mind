@@ -210,6 +210,7 @@ async function main() {
         const updateData = {
           ...agent,
           systemPrompt,
+          lastSystemPromptGeneratedAt: new Date(),
         };
 
         const updatedAgent = await agentRepository.update(updateData);

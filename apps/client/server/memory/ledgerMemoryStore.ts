@@ -55,6 +55,12 @@ export interface LedgerRepo {
     ownerUserId: string,
     subject: string
   ): Promise<number>;
+  markSourceShredded(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string,
+    source: string
+  ): Promise<number>;
 }
 
 // A concurrent append re-reads the head and retries; a handful of attempts absorbs realistic
@@ -316,6 +322,22 @@ export async function shredBelief(
   beliefId: string
 ): Promise<number> {
   return repo.markSubjectShredded(principal.kind, principal.id, ownerUserId, beliefId);
+}
+
+/**
+ * Shred every fact extracted FROM one source document, leaving the principal's other facts readable.
+ * The per-document counterpart of `shredPrincipalMemory`, which the whole-lake purge uses: a lake's
+ * DEK cannot be destroyed when only one of its documents is going, so scoping by `sources` is what
+ * makes a permanent document deletion reach the beliefs that document produced. Returns the number
+ * of events shredded (0 when the document contributed none).
+ */
+export async function shredMemoryFromSource(
+  repo: Pick<LedgerRepo, 'markSourceShredded'>,
+  principal: Principal,
+  ownerUserId: string,
+  source: string
+): Promise<number> {
+  return repo.markSourceShredded(principal.kind, principal.id, ownerUserId, source);
 }
 
 /** The memento-side surface `purgeUserMemory` needs; `mementoRepository` satisfies it. */

@@ -39,3 +39,10 @@ export type {
   DlqAlarmSpec,
 } from './dlqAlarmSpecs.js';
 export { buildDlqAlarmSpecs, DLQ_ALARM_DEFAULTS } from './dlqAlarmSpecs.js';
+export type {
+  EcsServiceHealthAlarmDefaults,
+  EcsServiceHealthAlarmDescriptor,
+  EcsServiceHealthAlarmNaming,
+  EcsServiceHealthAlarmSpec,
+} from './ecsServiceHealthAlarmSpecs.js';
+export { buildEcsServiceHealthAlarmSpec, ECS_SERVICE_HEALTH_ALARM_DEFAULTS } from './ecsServiceHealthAlarmSpecs.js';

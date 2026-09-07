@@ -234,13 +234,38 @@ export class SystemPromptRepository extends BaseRepository<IAdminSystemPromptDoc
     deletedBy: string,
     deletedByName: string
   ): Promise<{ deleted: boolean; historyPreserved: boolean }> {
+    return this.deleteWithHistory(promptId, deletedBy, deletedByName, 'Reset to default', false);
+  }
+
+  /**
+   * Delete a prompt outright - for DB-only prompts that have no code default to fall back to,
+   * so "reset" is not a meaningful operation for them.
+   * Unlike resetToDefault this removes the row for good: there is no code entry left to
+   * stand in for it, so a soft-deleted tombstone would serve nothing. History is preserved.
+   */
+  async deletePrompt(
+    promptId: string,
+    deletedBy: string,
+    deletedByName: string
+  ): Promise<{ deleted: boolean; historyPreserved: boolean }> {
+    return this.deleteWithHistory(promptId, deletedBy, deletedByName, 'Deleted', true);
+  }
+
+  private async deleteWithHistory(
+    promptId: string,
+    deletedBy: string,
+    deletedByName: string,
+    changeReason: string,
+    hardDelete: boolean
+  ): Promise<{ deleted: boolean; historyPreserved: boolean }> {
     const current = await this.findByPromptId(promptId);
 
     if (!current) {
       return { deleted: false, historyPreserved: false };
     }
 
-    // Save final version to history with "Reset to default" reason
+    // Preserve the final version in history before the doc goes away. saveVersion
+    // replaces in place: the current version is usually already there.
     await systemPromptHistoryRepository.saveVersion({
       promptId: current.promptId,
       version: current.version,
@@ -250,13 +275,15 @@ export class SystemPromptRepository extends BaseRepository<IAdminSystemPromptDoc
       category: current.category,
       tags: current.tags,
       variables: current.variables,
-      changeReason: 'Reset to default',
+      changeReason,
       createdBy: deletedBy,
       createdByName: deletedByName,
     });
 
-    // Delete the DB override
-    await this.systemPromptModel.deleteOne({ promptId });
+    await this.systemPromptModel.deleteOne(
+      { promptId },
+      hardDelete ? ({ hardDelete: true } as Record<string, unknown>) : undefined
+    );
 
     return { deleted: true, historyPreserved: true };
   }

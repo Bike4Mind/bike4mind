@@ -24,12 +24,14 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 // These tests use legacy JWT refresh tokens, which take the non-opaque branch:
 // verify -> tokenVersion check -> lazily migrate onto a session via issueSession.
 const mockIssueSession = vi.fn();
+const mockIsOpaque = vi.fn(() => false);
+const mockRotateSession = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   isTokenVersionCurrent: (payloadVersion?: number, userVersion?: number) =>
     (payloadVersion ?? 0) === (userVersion ?? 0),
   authSessionService: {
-    isOpaqueRefreshToken: () => false,
-    rotateSession: vi.fn(),
+    isOpaqueRefreshToken: (...args: any[]) => mockIsOpaque(...(args as [])),
+    rotateSession: (...args: any[]) => mockRotateSession(...args),
     issueSession: (...args: any[]) => mockIssueSession(...args),
   },
 }));
@@ -206,5 +208,66 @@ describe('POST /api/auth/refreshToken — cookie vs body transport', () => {
     const { req, res } = createMocks({ method: 'POST', body: {} });
 
     await expect(handler(req as any, res as any)).rejects.toThrow('Refresh token is required');
+  });
+});
+
+/**
+ * The session-store branch. A browser has one cookie jar, so the endpoint must never emit a refresh
+ * token it did not just mint - otherwise a concurrent sibling's token is overwritten by a stale one
+ * and that client is revoked as a thief at its next refresh.
+ */
+describe('POST /api/auth/refreshToken - opaque token rotation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsOpaque.mockReturnValue(true);
+  });
+
+  const rotated = {
+    status: 'rotated' as const,
+    user: { id: 'user-1' },
+    accessToken: 'access-1',
+    refreshToken: 'sid.rotated-secret',
+    impersonatedBy: null,
+  };
+  const coalesced = {
+    status: 'coalesced' as const,
+    user: { id: 'user-1' },
+    accessToken: 'access-1',
+    impersonatedBy: null,
+  };
+
+  it('sets the rotated token as the cookie when this call advanced the chain', async () => {
+    mockRotateSession.mockResolvedValue(rotated);
+    const { req, res } = createMocks({ method: 'POST', body: {}, headers: { cookie: 'b4m_rt=sid.old-secret' } });
+
+    await handler(req as any, res as any);
+
+    expect(String(res.getHeader('Set-Cookie'))).toContain('b4m_rt=sid.rotated-secret');
+    expect(res._getJSONData().accessToken).toBe('access-1');
+  });
+
+  it('sets NO cookie when a concurrent sibling already advanced the chain', async () => {
+    mockRotateSession.mockResolvedValue(coalesced);
+    const { req, res } = createMocks({ method: 'POST', body: {}, headers: { cookie: 'b4m_rt=sid.old-secret' } });
+
+    await handler(req as any, res as any);
+
+    // The winner's Set-Cookie must be the only one in play; overwriting it with the secret we were
+    // handed would put the jar a generation behind and strand this browser.
+    expect(res.getHeader('Set-Cookie')).toBeUndefined();
+    // The caller still gets what it actually needed: a working access token.
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().accessToken).toBe('access-1');
+  });
+
+  it('omits refreshToken from a body-transport response when the chain was not advanced', async () => {
+    // RFC 6749 s6: an absent refresh_token means "keep the one you have", never "you have none".
+    mockRotateSession.mockResolvedValue(coalesced);
+    const { req, res } = createMocks({ method: 'POST', body: { refresh_token: 'sid.old-secret' } });
+
+    await handler(req as any, res as any);
+
+    expect(res._getJSONData()).not.toHaveProperty('refreshToken');
+    expect(res._getJSONData().accessToken).toBe('access-1');
   });
 });

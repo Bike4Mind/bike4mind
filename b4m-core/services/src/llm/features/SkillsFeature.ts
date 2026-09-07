@@ -18,6 +18,17 @@ import { ChatCompletionFeature, ChatCompletionContext } from '../ChatCompletionF
 const SKILLS_CATALOG_LIMIT = 50;
 
 /**
+ * The quest fields this feature stamps on for its own two-phase handoff (`beforeDataGathering`
+ * writes them, `getContextMessages` reads them back). Exported so any other reader of
+ * `_skillCatalog` - e.g. the tool-gating decision in ChatCompletionProcess.ts - can use the real
+ * shape instead of a duplicated inline cast.
+ */
+export type QuestWithSkillCatalog = IChatHistoryItemDocument & {
+  _skillsToInvoke?: ResolvedSkillInvocation[];
+  _skillCatalog?: ISkill[];
+};
+
+/**
  * SkillsFeature - expands `/skill-name args` invocations in the user's message
  * into system-prompt instructions before the LLM responds.
  *
@@ -44,7 +55,7 @@ export class SkillsFeature implements ChatCompletionFeature {
   }
 
   async beforeDataGathering(args: {
-    quest: IChatHistoryItemDocument & { _skillsToInvoke?: ResolvedSkillInvocation[]; _skillCatalog?: ISkill[] };
+    quest: QuestWithSkillCatalog;
     session: ISessionDocument;
     startParams: unknown;
     llm: unknown;
@@ -103,7 +114,7 @@ export class SkillsFeature implements ChatCompletionFeature {
   }
 
   async getContextMessages(
-    quest: IChatHistoryItemDocument & { _skillsToInvoke?: ResolvedSkillInvocation[]; _skillCatalog?: ISkill[] },
+    quest: QuestWithSkillCatalog,
     _embeddingFactory: unknown,
     _message: string,
     _modelInfo: ModelInfo

@@ -18,7 +18,7 @@ vi.mock('../../client.js', () => ({
 import { registerSearchTools } from '../../tools/search.js';
 import { notionRequest } from '../../client.js';
 import { getConfig } from '../../config.js';
-import { TOOL_NOTION_SEARCH } from '../../constants.js';
+import { TOOL_NOTION_SEARCH, TOOL_DESCRIPTIONS } from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
 
 function makeSearchResult(id: string, title: string, parent?: Record<string, unknown>) {
@@ -52,6 +52,11 @@ describe('Search Tools', () => {
   describe(TOOL_NOTION_SEARCH, () => {
     it('should register the tool', () => {
       expect(registeredTools.has(TOOL_NOTION_SEARCH)).toBe(true);
+    });
+
+    it('should have a description matching TOOL_DESCRIPTIONS', () => {
+      const tool = registeredTools.get(TOOL_NOTION_SEARCH)!;
+      expect(tool.description).toBe(TOOL_DESCRIPTIONS[TOOL_NOTION_SEARCH]);
     });
 
     it('should return search results', async () => {

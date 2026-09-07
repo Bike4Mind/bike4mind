@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User, Session, Agent } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError } from '@server/utils/errors';
 
 const KeywordRoutingRuleSchema = z.object({
@@ -125,7 +125,7 @@ const handler = baseApi()
 
         // Validate custom agent exists and is accessible to user
         if (slackSettings.customAgentId) {
-          if (!Types.ObjectId.isValid(slackSettings.customAgentId)) {
+          if (!isValidObjectId(slackSettings.customAgentId)) {
             throw new BadRequestError('Invalid agent ID format');
           }
 

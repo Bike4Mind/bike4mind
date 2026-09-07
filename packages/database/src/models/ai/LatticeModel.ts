@@ -482,11 +482,15 @@ const LatticeModelSchema = new Schema<ILatticeModelDocument, ILatticeModelModel>
 
 // INDEXES
 
-// User + name uniqueness (within non-deleted models)
-LatticeModelSchema.index(
-  { userId: 1, name: 1 },
-  { unique: true, partialFilterExpression: { deletedAt: { $exists: false } } }
-);
+// Live (non-deleted) userId+name lookups. Partial-filtered on `deletedAt: null`
+// (not `$exists: false`, which Mongo rejects in a partial filter): softDeletePlugin
+// defaults deletedAt to null on every live row, so this indexes live models.
+// Deliberately NOT unique: unlike Project, no write path (create/rename/duplicate/
+// agent tool) maps a duplicate-key error to a 4xx, and there's no product signal
+// that per-user Lattice names must be unique. Enforcing it would 500 those paths.
+// To make it unique later: add duplicate-key handling on those paths first, then a
+// dedupe+rebuild migration (see the Project pair for the pattern).
+LatticeModelSchema.index({ userId: 1, name: 1 }, { partialFilterExpression: { deletedAt: null } });
 
 // Session-based queries
 LatticeModelSchema.index({ sessionId: 1, updatedAt: -1 });

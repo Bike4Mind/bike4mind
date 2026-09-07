@@ -8,6 +8,7 @@ import {
   requiresImageInput,
   isModelAccessible,
   isBflImageModel,
+  supportsImageEdit,
 } from './modelHelpers';
 
 describe('requiresImageInput', () => {
@@ -220,5 +221,34 @@ describe('isModelAccessible', () => {
       const model = makeModel({ allowedUserTags: [], allowedEntitlements: [] });
       expect(isModelAccessible(model, ['pro'], false, ['medlib:pro'])).toBe(false);
     });
+  });
+});
+
+describe('supportsImageEdit', () => {
+  it('accepts every GPT-Image model', () => {
+    expect(supportsImageEdit(ImageModels.GPT_IMAGE_1)).toBe(true);
+    expect(supportsImageEdit(ImageModels.GPT_IMAGE_1_5)).toBe(true);
+    expect(supportsImageEdit(ImageModels.GPT_IMAGE_1_MINI)).toBe(true);
+    expect(supportsImageEdit(ImageModels.GPT_IMAGE_2)).toBe(true);
+  });
+
+  it('accepts Gemini image models', () => {
+    expect(supportsImageEdit(ImageModels.GEMINI_2_5_FLASH_IMAGE)).toBe(true);
+    expect(supportsImageEdit(ImageModels.GEMINI_3_PRO_IMAGE)).toBe(true);
+  });
+
+  it('accepts Flux Fill but no other BFL model', () => {
+    expect(supportsImageEdit(ImageModels.FLUX_PRO_FILL)).toBe(true);
+    expect(supportsImageEdit(ImageModels.FLUX_KONTEXT_PRO)).toBe(false);
+    expect(supportsImageEdit(ImageModels.FLUX_PRO_1_1)).toBe(false);
+    expect(supportsImageEdit(ImageModels.FLUX_PRO_ULTRA)).toBe(false);
+  });
+
+  it('rejects XAI, unknown ids and empty input', () => {
+    expect(supportsImageEdit(ImageModels.GROK_IMAGINE_IMAGE_QUALITY)).toBe(false);
+    expect(supportsImageEdit('made-up-model')).toBe(false);
+    expect(supportsImageEdit(null)).toBe(false);
+    expect(supportsImageEdit(undefined)).toBe(false);
+    expect(supportsImageEdit('')).toBe(false);
   });
 });

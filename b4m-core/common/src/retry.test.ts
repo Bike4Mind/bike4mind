@@ -200,6 +200,54 @@ describe('retry', () => {
       expect(result).toBeGreaterThan(2000);
       expect(result).toBeLessThan(4000);
     });
+
+    // #2118: withRetry overrides its exponential backoff with ANY non-null return, so a zero does
+    // not mean "wait a moment" - it means "abandon the backoff and retry immediately". A server only
+    // sends Retry-After when it is already struggling, so honouring it collapses the whole retry
+    // budget into an instant burst at the worst possible moment. This path backs the LLM adapters.
+    it.each([
+      ['an explicit zero', '0'],
+      ['a negative value', '-3'],
+    ])('should return null for %s rather than disabling the backoff', (_label, value) => {
+      const error = createAxiosError(429, undefined, { 'retry-after': value });
+      expect(getRetryAfterMs(error)).toBeNull();
+    });
+
+    it('should return null for an HTTP date that has already elapsed', () => {
+      // Reachable without a misbehaving server: clock skew, or seconds of queueing between the
+      // provider writing the header and this code reading it. Math.max(0, ...) floored it to zero.
+      const pastDate = new Date(Date.now() - 3000);
+      const error = createAxiosError(429, undefined, { 'retry-after': pastDate.toUTCString() });
+      expect(getRetryAfterMs(error)).toBeNull();
+    });
+  });
+
+  describe('withRetry honours a Retry-After only when it asks us to wait (#2118)', () => {
+    it('falls through to the exponential backoff when the header says zero', async () => {
+      // The end-to-end consequence, not just the helper's return: with a zero honoured, all the
+      // remaining attempts fire back-to-back with no pause at all.
+      vi.useFakeTimers();
+      try {
+        let attempts = 0;
+        const op = vi.fn(async () => {
+          attempts++;
+          if (attempts < 3) throw createAxiosError(429, undefined, { 'retry-after': '0' });
+          return 'ok';
+        });
+
+        const promise = withRetry(op, { maxRetries: 3, initialDelayMs: 100, maxDelayMs: 5000, jitterFactor: 0 });
+        // Nothing may resolve while the backoff is still pending - which is exactly what a
+        // zero-delay retry would break.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(op).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(promise).resolves.toMatchObject({ result: 'ok' });
+        expect(op).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('calculateRetryDelay', () => {

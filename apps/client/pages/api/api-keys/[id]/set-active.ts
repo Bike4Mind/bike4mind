@@ -25,7 +25,14 @@ const handler = baseApi().post(
 
     await logEvent({ userId, type: ApiKeyEvents.SET_API_KEY, metadata: { id } }, { ability: req.ability });
 
-    return res.json(updatedApiKey);
+    // setApiKey returns the stored document, whose apiKey is ciphertext at rest. Never echo the
+    // key field back (matching the create/update write responses); the client only needs the
+    // record's metadata and just invalidates its query on success.
+    const record = (updatedApiKey as unknown as { toObject?: () => Record<string, unknown> }).toObject?.() ?? {
+      ...(updatedApiKey as unknown as Record<string, unknown>),
+    };
+    delete record.apiKey;
+    return res.json(record);
   })
 );
 

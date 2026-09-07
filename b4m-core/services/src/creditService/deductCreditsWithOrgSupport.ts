@@ -8,7 +8,6 @@ import {
   IUserDocument,
   type CompletionSource,
 } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
 import { subtractCredits, SubtractCreditsParameters } from './subtractCredits';
 
 /**
@@ -162,20 +161,15 @@ export async function deductCreditsWithOrgSupport(
 
   if (organization) {
     const memberDetails = organization.userDetails?.find(u => u.id === user.id);
-
-    // Enforce per-member credit cap if configured
-    // NOTE: Known TOCTOU - pre-check and atomic increment are separate operations.
-    // A concurrent request can exceed the limit by one. Accepted: window is tiny, stakes are low.
-    if (organization.maxCreditsPerMember != null) {
-      const usedCredits = memberDetails?.usedCredits ?? 0;
-      if (usedCredits + credits > organization.maxCreditsPerMember) {
-        throw new BadRequestError('Organization member credit limit reached');
-      }
-    }
-
     ownerId = organization.id;
     ownerType = CreditHolderType.Organization;
     creditHolderMethods = adapters.db.organizations;
+
+    // No per-member cap check guards the tracking below: this is the settlement write, and
+    // the cap is enforced at reservation (see isMemberCreditCapExceeded, used by
+    // ChatCompletionProcess/cliCompletions pre-flight). Throwing here cannot block an
+    // already-served request - it only skips the usage tracking below, freezing `usedCredits`
+    // at 0 forever so the cap can never trip (#1536). Always track.
 
     // Self-heal a member with no `userDetails` row - one added before grant-point seeding existed
     // (see `ensureUserDetails`). The positional $inc below cannot create a missing row, so without

@@ -1,130 +1,48 @@
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
-import { connectDB, mongoose } from '@bike4mind/database';
-import { verifyJwtToken, checkRateLimit } from './auth';
-import { validateToolRequest, executeToolWithLogging } from './toolsHandler.shared';
-import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';
+import { executeToolContract } from '@bike4mind/common';
+import { checkRateLimit } from './auth';
+import { executeToolWithLogging } from './toolsHandler.shared';
+import { defineLambdaRoute } from './defineLambdaRoute';
 
 /**
  * Lambda handler for CLI server-side tool execution (production & preview).
  *
- * Thin wrapper around shared business logic in toolsHandler.shared.ts.
- * Local dev uses the Next.js API route instead:
+ * Contract-driven (executeToolContract): defineLambdaRoute owns request parsing,
+ * DB connect, JWT-only auth, the rate limit (via the `rateLimit` option, ordered
+ * before validation), and contract validation (a bad body is now a 422, uniform
+ * with the rest of the API - it used to be a 400). This handler owns only tool
+ * execution. Local dev uses the Next.js route instead:
  * @see apps/client/pages/api/ai/v1/tools.ts
  *
- * WHY dual implementation? SST dev + Lambda Function URLs + CloudFront
- * router causes socket hang ups; Next.js API works reliably in local dev.
- *
- * All business logic must stay in toolsHandler.shared.ts - this file and
- * the Next.js API are thin wrappers only.
+ * All business logic must stay in toolsHandler.shared.ts - this and the Next.js
+ * route are thin wrappers only.
  */
-export async function handleToolRequest(
-  event: APIGatewayProxyEventV2,
-  // Pre-resolved by the wrapper handler so both layers report the same ID.
-  // Falls back to resolving here when invoked directly.
-  resolvedRequestId?: string
-): Promise<APIGatewayProxyResultV2> {
-  const logger = new Logger();
+export const handleToolRequest = defineLambdaRoute(
+  executeToolContract,
+  async ({ validated, auth, requestId }) => {
+    // executeToolContract is jwtOnly, so auth is always the JWT result.
+    const userEmail = auth?.method === 'jwt' ? (auth.user.email ?? undefined) : undefined;
 
-  // Correlation ID - reuse the wrapper's value, or accept the caller's
-  // (sanitized) / generate one when called directly.
-  const requestId =
-    resolvedRequestId ??
-    resolveRequestId(
-      event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
-      event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
-    );
-  logger.updateMetadata({ requestId });
+    const logger = new Logger();
+    logger.updateMetadata({ requestId });
 
-  try {
-    // 1. Connect to database
-    if (mongoose.connection.readyState !== 1) {
-      await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
-    }
-
-    // 2. Parse request body
-    let body: any;
-    try {
-      body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
-    } catch (error) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
-        body: JSON.stringify({ error: 'Invalid request body', request_id: requestId }),
-      };
-    }
-
-    // 3. Verify JWT token
-    const token = event.headers?.authorization?.replace('Bearer ', '');
-    let user;
-    try {
-      user = await verifyJwtToken(token);
-    } catch (error) {
-      return {
-        statusCode: 401,
-        headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
-        body: JSON.stringify({
-          error: error instanceof Error ? error.message : 'Authentication failed',
-          request_id: requestId,
-        }),
-      };
-    }
-
-    // 4. Check rate limit
-    try {
-      await checkRateLimit(user.id);
-    } catch (error) {
-      return {
-        statusCode: 429,
-        headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
-        body: JSON.stringify({
-          error: error instanceof Error ? error.message : 'Rate limit exceeded',
-          request_id: requestId,
-        }),
-      };
-    }
-
-    // 5. Validate request using shared logic
-    const validation = validateToolRequest(body);
-    if (!validation.valid) {
-      return {
-        statusCode: validation.statusCode,
-        headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
-        body: JSON.stringify({ error: validation.error, request_id: requestId }),
-      };
-    }
-
-    // 6. Execute tool using shared logic
-    const result = await executeToolWithLogging(validation.data, {
-      userId: user.id,
-      userEmail: user.email || undefined,
+    const result = await executeToolWithLogging(validated, {
+      userId: auth!.userId,
+      userEmail,
       logger: {
         info: msg => logger.info(`[CLI_TOOLS] ${msg}`),
         error: (msg, err) => logger.error(`[CLI_TOOLS] ${msg}`, err),
       },
     });
 
-    // 7. Echo request_id in the body so it matches the X-Request-ID header
-    // on the result path too (header/body parity).
-    return {
-      statusCode: result.success ? 200 : 500,
-      headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
-      body: JSON.stringify({ ...result, request_id: requestId }),
-    };
-  } catch (error) {
-    logger.error('[CLI_TOOLS] Unexpected error:', error);
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
-      body: JSON.stringify({
-        error: 'Internal server error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        request_id: requestId,
-      }),
-    };
-  }
-}
+    // Echo request_id in the body so it matches the X-Request-ID header on the
+    // result path too (header/body parity).
+    return { statusCode: result.success ? 200 : 500, body: { ...result, request_id: requestId } };
+  },
+  // Per-user rate limit (100/hour for the api surface). Runs before validation so a
+  // flood of malformed bodies still counts against the limit (429 on exceed).
+  { rateLimit: ({ auth }) => checkRateLimit(auth!.userId) }
+);
 
 // Export as 'handler' for Lambda (SST expects this name)
 export const handler = handleToolRequest;

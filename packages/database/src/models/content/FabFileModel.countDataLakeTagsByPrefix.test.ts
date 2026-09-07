@@ -107,12 +107,12 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
   });
 
   describe('ownership scoping', () => {
-    it('excludes another user file from the scoped-prefix arm', async () => {
+    it('excludes another user file carrying a lake prefix this caller has no arm for', async () => {
       await makeFile({ userId: 'other-user', tags: ['acme:uncategorized'] });
 
-      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {
-        scopedTagPrefixes: ['acme:'],
-      });
+      // No lake arm at all: the file is reachable only through base access, which this caller
+      // does not have on it. The prefix alone was never a grant.
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {});
 
       expect(result).toEqual([]);
     });
@@ -127,16 +127,14 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
       expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
     });
 
-    it('includes a file shared with our user via the scoped-prefix arm (base access AND)', async () => {
+    it('includes a file shared with our user through the plain base-access arm', async () => {
       await makeFile({
         userId: 'other-user',
         tags: ['acme:uncategorized'],
         users: [{ userId: USER, permissions: ['read'] }],
       });
 
-      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {
-        scopedTagPrefixes: ['acme:'],
-      });
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {});
 
       expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
     });

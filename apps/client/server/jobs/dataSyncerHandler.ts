@@ -19,7 +19,7 @@ import { Resource } from 'sst';
 import type { Handler } from 'aws-lambda';
 import mongoose from 'mongoose';
 import { MongoClient } from 'mongodb';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { isPlaceholderValue, settingsMap } from '@bike4mind/common';
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 
 interface DataSyncerEvent {
@@ -43,6 +43,27 @@ const PRODUCTION_B4M_URL = process.env.PROD_SERVER_DOMAIN ? `https://app.${proce
 
 // Collections to sync from staging to preview environments
 const COLLECTIONS_TO_SYNC = ['adminsettings'];
+
+// isSensitive admin settings are encrypted at rest under the SOURCE stage's SECRET_ENCRYPTION_KEY.
+// A preview stage does not have that key linked (SST secrets are per-stage), so copying the
+// ciphertext across would decrypt to '' on read - silently blanking every provider/demo key,
+// Slack token, Firecrawl/Serper key and ollamaBackend at once. Never sync them cross-stage;
+// previews resolve sensitive settings from their own config (or the demo-key fallback).
+const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
+  Object.entries(settingsMap)
+    .filter(([, def]) => (def as { isSensitive?: boolean })?.isSensitive === true)
+    .map(([key]) => key)
+);
+
+// Source-side query for a synced collection. adminsettings excludes sensitive rows (above);
+// every other collection copies in full. Used for BOTH the count and the cursor so the
+// progress total matches what is actually inserted.
+function syncSourceFilter(collectionName: string): Record<string, unknown> {
+  if (collectionName === 'adminsettings' && SENSITIVE_ADMIN_SETTING_NAMES.size > 0) {
+    return { settingName: { $nin: Array.from(SENSITIVE_ADMIN_SETTING_NAMES) } };
+  }
+  return {};
+}
 
 // Batch size for memory-efficient streaming
 const BATCH_SIZE = 1000;
@@ -202,7 +223,15 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
       const backupCollectionName = `${collectionName}_backup_temp`;
       const backupCollection = targetDb.collection(backupCollectionName);
 
-      const totalDocs = await sourceCollection.countDocuments({});
+      const sourceFilter = syncSourceFilter(collectionName);
+      if (Object.keys(sourceFilter).length > 0) {
+        console.log(
+          `  - Excluding ${SENSITIVE_ADMIN_SETTING_NAMES.size} sensitive settings from the cross-stage sync ` +
+            `(encrypted under the source stage's key; a preview cannot decrypt them).`
+        );
+      }
+
+      const totalDocs = await sourceCollection.countDocuments(sourceFilter);
 
       if (totalDocs === 0) {
         console.log(`  - No documents found in ${collectionName}. Skipping.`);
@@ -242,7 +271,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
         console.log(`  - Cleared ${deleteResult.deletedCount} existing documents in target.`);
 
         // Stream documents from source and insert into target in batches
-        const cursor = sourceCollection.find({});
+        const cursor = sourceCollection.find(sourceFilter);
         let batch: Record<string, unknown>[] = [];
         let insertedCount = 0;
 

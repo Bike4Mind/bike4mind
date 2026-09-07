@@ -1,32 +1,25 @@
-import { actorColorIndex } from '@bike4mind/hearth';
+import { ACTOR_COLOR_SLOTS, actorColorIndex } from '@bike4mind/hearth';
 
 /**
  * Per-actor color for terminal output.
  *
- * The SLOT comes from @bike4mind/hearth so an actor lands on the same slot here
- * as in the SPA - that shared mapping is the point, since a session that reads
- * as teal in the web channel view and amber in the CLI is two identities to a
- * human, not one. Only the palette is local, because a terminal cannot express
- * the SPA's light/dark hex pairs and vice versa.
+ * Both the SLOT and the hues come from @bike4mind/hearth so an actor lands on
+ * the same color here as in the SPA - a session that reads as green in the web
+ * channel view and amber in the CLI is two identities to a human, not one. Only
+ * the ENCODING is local: the shared palette is light/dark hex pairs, which a
+ * terminal cannot take directly.
  *
- * 256-color foreground codes, chosen to stay legible on BOTH light and dark
- * terminal backgrounds (nothing near-black or near-white) and to remain
- * distinguishable under the common forms of color-vision deficiency - which is
- * also why the actor NAME is always printed alongside and color never carries
- * meaning on its own.
+ * Truecolor rather than the 256-color cube so the emitted color is the validated
+ * hue itself and not a nearest-neighbour approximation of it - the all-pairs
+ * separation numbers in ACTOR_COLOR_SLOTS only hold for the exact steps. The
+ * dark step is used because a terminal is assumed dark and there is no portable
+ * way to ask it. Colour is never the only signal either way: the actor name and
+ * the kind marker are always printed alongside.
  */
-// Must stay ACTOR_COLOR_SLOT_COUNT long: a shorter palette silently folds two
-// slots onto one color and undoes the cross-surface guarantee above. Pinned by
-// actorColors.test.ts rather than a module-level throw, which would take the
-// whole CLI down on import over a cosmetic mismatch.
-export const ACTOR_ANSI_COLORS = [
-  '\x1b[38;5;33m', // blue
-  '\x1b[38;5;35m', // green
-  '\x1b[38;5;172m', // amber
-  '\x1b[38;5;135m', // purple
-  '\x1b[38;5;168m', // rose
-  '\x1b[38;5;37m', // teal
-] as const;
+export const ACTOR_ANSI_COLORS: readonly string[] = ACTOR_COLOR_SLOTS.map(slot => {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(slot.dark.slice(i, i + 2), 16));
+  return `\x1b[38;2;${r};${g};${b}m`;
+});
 
 const RESET = '\x1b[0m';
 

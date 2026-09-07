@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildFirstIterationQuery, maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
+import {
+  buildFirstIterationQuery,
+  maybeBuildFirstIterationQuery,
+  CONTENT_READ_TOOL,
+} from './agentExecutor.firstIterationQuery';
 import type { IFabFileDocument } from '@bike4mind/common';
 
 // Minimal Logger stub - matches the shape `buildFirstIterationQuery` uses.
@@ -20,11 +24,20 @@ function makeRepo(impl: RepoStub['getAccessibleFiles']): RepoStub {
 }
 
 // `getAccessibleFiles` returns `IFabFileDocument[]` per the interface contract;
-// the helper only reads `id` / `fileName` / `mimeType`. These fixtures keep the
+// the helper reads `id` / `fileName` / `mimeType` plus the chunk state. These fixtures keep the
 // surface minimal - cast through `unknown` since constructing a full Mongoose
 // document for a unit test is needless ceremony.
-function makeFile(id: string, fileName: string, mimeType?: string): IFabFileDocument {
-  return { id, fileName, mimeType } as unknown as IFabFileDocument;
+//
+// `chunkCount: 1` is the default on purpose: these fixtures stand for an ORDINARY attached file,
+// and the readability guard treats a zero-chunk file as unreadable. Leaving it unset would make
+// every unrelated test in this file silently exercise the unreadable path instead.
+function makeFile(
+  id: string,
+  fileName: string,
+  mimeType?: string,
+  overrides: Partial<IFabFileDocument> = {}
+): IFabFileDocument {
+  return { id, fileName, mimeType, chunkCount: 1, ...overrides } as unknown as IFabFileDocument;
 }
 
 const BASE_QUERY = 'What does the attached PDF say?';
@@ -180,7 +193,8 @@ describe('buildFirstIterationQuery', () => {
     // Guards against regressing to an owner-only `{ userId }` scope - chat
     // completion passes the CASL `accessibleBy(...).ofType(FabFile)` filter
     // so org/group/shared files surface, and this helper must do the same.
-    expect(getAccessibleFiles).toHaveBeenCalledWith(['id1'], SCOPE);
+    // The trailing `undefined` is the omitted `lakeAccess` param, forwarded as-is.
+    expect(getAccessibleFiles).toHaveBeenCalledWith(['id1'], SCOPE, undefined);
   });
 
   it('dedupes across sessionFabFileIds, messageFileIds, and sessionKnowledgeIds before lookup', async () => {
@@ -369,6 +383,188 @@ describe('buildFirstIterationQuery readability guard', () => {
   });
 });
 
+/**
+ * The production failure this guards: with the reader present, the preamble pointed the agent at
+ * `retrieve_knowledge_content` for files it could not serve. The agent narrated its own guess -
+ * "still indexing" for a stalled file, repeated across an hour, and "I have no OCR capability" for
+ * an image that no agent run can view. Both read to the user as the model being unhelpful rather
+ * than the attachment never having arrived.
+ */
+describe('buildFirstIterationQuery unreadable-file marking', () => {
+  const build = (files: IFabFileDocument[], tools: readonly string[] = TOOLS_WITH_READER) => {
+    const logger = makeLogger();
+    const repo = makeRepo(vi.fn().mockResolvedValue(files));
+    return buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: files.map(f => f.id) },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      tools
+    ).then(result => ({ result, logger }));
+  };
+
+  it('marks an image as unopenable in this run, and says why', async () => {
+    const { result } = await build([makeFile('id1', 'beat6.png', 'image/png')]);
+
+    expect(result).toContain('"beat6.png" (image/png) -> fabFileId: id1  [NOT READABLE: this run cannot open images');
+    expect(result).toContain('do not describe or infer its contents from its file name');
+  });
+
+  it('marks an image unreadable even when it has chunks', async () => {
+    // Chunk state is irrelevant for an image: no agent code path builds an image message block,
+    // so a chunked image is still invisible to the run.
+    const { result } = await build([makeFile('id1', 'chart.png', 'image/png', { chunkCount: 12 })]);
+
+    expect(result).toContain('[NOT READABLE: this run cannot open images');
+  });
+
+  it('tells the agent that waiting will not help a file with no chunks and nothing in flight', async () => {
+    // The exact production record: status complete, no chunks, nothing chunking, no error.
+    const { result } = await build([
+      makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0, isChunking: false, isVectorizing: false }),
+    ]);
+
+    expect(result).toContain('no indexed text exists for this file and none is being produced');
+    expect(result).toContain('waiting will not help');
+    // The instruction that stops the hour-long "try again in a moment" loop.
+    expect(result).toContain('Do not tell the user to wait unless the reason says indexing is in progress');
+  });
+
+  it('does say to expect it shortly when indexing is genuinely in flight', async () => {
+    const { result } = await build([
+      makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0, isChunking: true }),
+    ]);
+
+    expect(result).toContain('NOT READABLE YET: indexing is in progress');
+    expect(result).not.toContain('waiting will not help');
+  });
+
+  it('treats a file mid-vectorization the same as one mid-chunking', async () => {
+    const { result } = await build([
+      makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0, isVectorizing: true }),
+    ]);
+
+    expect(result).toContain('NOT READABLE YET: indexing is in progress');
+  });
+
+  it('leaves a readable file unmarked and adds no trailer when every file is readable', async () => {
+    const { result } = await build([makeFile('id1', 'notes.md', 'text/markdown')]);
+
+    expect(result).toContain('"notes.md" (text/markdown) -> fabFileId: id1');
+    expect(result).not.toContain('NOT READABLE');
+    expect(result).toContain(CONTENT_READ_TOOL);
+  });
+
+  it('marks only the unreadable file in a mixed batch', async () => {
+    const { result } = await build([
+      makeFile('good', 'notes.md', 'text/markdown'),
+      makeFile('bad', 'context.md', 'text/markdown', { chunkCount: 0 }),
+      makeFile('img', 'shot.png', 'image/png'),
+    ]);
+
+    const lines = result.split('\n');
+    expect(lines.find(l => l.includes('fabFileId: good'))).not.toContain('NOT READABLE');
+    expect(lines.find(l => l.includes('fabFileId: bad'))).toContain('NOT READABLE');
+    expect(lines.find(l => l.includes('fabFileId: img'))).toContain('NOT READABLE');
+  });
+
+  it('names the unreadable ids in a warning so a stalled record is greppable', async () => {
+    const { logger } = await build([makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })]);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('not readable in this run'),
+      expect.objectContaining({
+        readable: 0,
+        unreadable: [expect.objectContaining({ fabFileId: 'id1', chunkCount: 0 })],
+      })
+    );
+  });
+
+  it('does NOT mark a chunkless file that content materialization already inlined', async () => {
+    // The whole point of materialization: the file is in front of the agent right now, so its
+    // chunk state says nothing about whether it can be read. Marking it unreadable here would
+    // tell the agent to ignore content sitting in its own first message.
+    const logger = makeLogger();
+    const repo = makeRepo(
+      vi.fn().mockResolvedValue([makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })])
+    );
+
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['id1'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER,
+      ['id1']
+    );
+
+    expect(result).not.toContain('NOT READABLE');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still marks a chunkless file that materialization did NOT inline', async () => {
+    const logger = makeLogger();
+    const repo = makeRepo(
+      vi
+        .fn()
+        .mockResolvedValue([
+          makeFile('inlined', 'good.md', 'text/markdown', { chunkCount: 0 }),
+          makeFile('missed', 'bad.md', 'text/markdown', { chunkCount: 0 }),
+        ])
+    );
+
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['inlined', 'missed'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER,
+      ['inlined']
+    );
+
+    const lines = result.split('\n');
+    expect(lines.find(l => l.includes('fabFileId: inlined'))).not.toContain('NOT READABLE');
+    expect(lines.find(l => l.includes('fabFileId: missed'))).toContain('NOT READABLE');
+  });
+
+  it('does not mark an image that was inlined as a real image block', async () => {
+    const logger = makeLogger();
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('img', 'shot.png', 'image/png')]));
+
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['img'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER,
+      ['img']
+    );
+
+    expect(result).not.toContain('cannot open images');
+  });
+
+  it('adds no per-file marking when the run has no reader at all', async () => {
+    // The METADATA ONLY header already says nothing is readable; a per-file reason would only
+    // contradict it, and naming the reader tool is exactly what that header exists to avoid.
+    const { result } = await build(
+      [makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })],
+      TOOLS_WITHOUT_READER
+    );
+
+    expect(result).toContain('METADATA ONLY');
+    expect(result).not.toContain('NOT READABLE:');
+    expect(result).not.toContain(CONTENT_READ_TOOL);
+  });
+});
+
 describe('maybeBuildFirstIterationQuery (gate)', () => {
   // The gate is the headline correctness guarantee of the file-context feature:
   // the preamble must only appear in iteration 0 of a new execution. Every
@@ -439,5 +635,103 @@ describe('maybeBuildFirstIterationQuery (gate)', () => {
 
     // Proves the gate is not dropping the toolbelt on the floor and defaulting to "readable".
     expect(result).toContain('METADATA ONLY');
+  });
+
+  describe('lakeAccess (#1576 attachment door lake-membership arm)', () => {
+    const MEMBERSHIP = {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'creator-1',
+    };
+
+    it('is only resolved (the thunk is only called) when the gate actually builds a preamble', async () => {
+      const repo = makeRepo(vi.fn());
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockResolvedValue({ lakeMemberships: [MEMBERSHIP] });
+
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: false, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: true, iterationIndex: 1, lakeAccess },
+        logger,
+        repo
+      );
+
+      expect(lakeAccess).not.toHaveBeenCalled();
+    });
+
+    it('forwards the thunk-resolved lakeAccess to getAccessibleFiles as the fourth argument on the building iteration', async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([makeFile('id1', 'spec.pdf', 'application/pdf')]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const resolvedLakeAccess = { lakeMemberships: [MEMBERSHIP], dataLakeTags: ['datalake:acme'] };
+      const lakeAccess = vi.fn().mockResolvedValue(resolvedLakeAccess);
+
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: true, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+
+      expect(lakeAccess).toHaveBeenCalledTimes(1);
+      expect(getAccessibleFiles).toHaveBeenCalledWith(['id1'], SCOPE, resolvedLakeAccess);
+    });
+
+    it("propagates a rejecting thunk rather than swallowing it here - the fail-safe degrade lives in the thunk itself (agentExecutor's memo), not this gate", async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([makeFile('id1', 'spec.pdf', 'application/pdf')]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockRejectedValue(new Error('resolver down'));
+
+      await expect(
+        maybeBuildFirstIterationQuery(
+          { ...baseArgs, isNewExecution: true, iterationIndex: 0, lakeAccess },
+          logger,
+          repo
+        )
+      ).rejects.toThrow('resolver down');
+    });
+
+    // Deliberately NOT titled as catching an unconverted scope: the repo is a mock that returns the
+    // file whatever `lakeAccess` holds, so the query-level predicate is out of its reach. That is
+    // pinned against a real Mongo in FabFileModel.dataLakeLifecycle.test.ts.
+    it('names a prefix-only creator-owned member in the preamble when lakeAccess is forwarded', async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([makeFile('id1', 'report.pdf', 'application/pdf')]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockResolvedValue({ lakeMemberships: [MEMBERSHIP] });
+
+      const result = await maybeBuildFirstIterationQuery(
+        { ...baseArgs, isNewExecution: true, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+
+      expect(result).toContain('"report.pdf"');
+    });
+
+    it('agent-supplied execution input cannot substitute for the resolved lakeAccess - only the thunk result is forwarded', async () => {
+      const getAccessibleFiles = vi.fn().mockResolvedValue([]);
+      const repo = makeRepo(getAccessibleFiles);
+      const logger = makeLogger();
+      const lakeAccess = vi.fn().mockResolvedValue({ lakeMemberships: [MEMBERSHIP] });
+      // A forged bucket smuggled into execution - the args type has no field for this, but a
+      // caller building `execution` from request-derived data could still attach one.
+      const forgedExecution = { ...baseArgs.execution, lakeMemberships: [{ ...MEMBERSHIP, creatorUserId: 'anyone' }] };
+
+      await maybeBuildFirstIterationQuery(
+        { ...baseArgs, execution: forgedExecution, isNewExecution: true, iterationIndex: 0, lakeAccess },
+        logger,
+        repo
+      );
+
+      const forwardedLakeAccess = getAccessibleFiles.mock.calls[0][2];
+      expect(forwardedLakeAccess).toEqual({ lakeMemberships: [MEMBERSHIP] });
+      expect(JSON.stringify(forwardedLakeAccess)).not.toContain('anyone');
+    });
   });
 });

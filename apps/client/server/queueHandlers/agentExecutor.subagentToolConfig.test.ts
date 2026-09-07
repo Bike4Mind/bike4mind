@@ -38,4 +38,17 @@ describe('buildSubagentToolConfig', () => {
     expect(result.image_generation).toBeUndefined();
     expect(result.edit_image).toBeUndefined();
   });
+
+  it('spreads audioConfig into audio_generation when provided so agent-mode audio honors the Audio tab', () => {
+    const audioConfig = { ttsProvider: 'elevenlabs', voice: 'Rachel', format: 'mp3' } as const;
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', audioConfig });
+    expect(result.audio_generation).toEqual(audioConfig);
+    // Independent of the image config, which stays absent here.
+    expect(result.image_generation).toBeUndefined();
+  });
+
+  it('omits audio_generation when audioConfig is undefined so the tool uses its built-in defaults', () => {
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', audioConfig: undefined });
+    expect(result.audio_generation).toBeUndefined();
+  });
 });

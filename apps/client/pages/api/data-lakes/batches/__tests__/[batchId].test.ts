@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findById: vi.fn(),
-  update: vi.fn(),
+  updateIfActive: vi.fn(),
   markTerminalIfActive: vi.fn(),
   lakeFindById: vi.fn(),
   recomputeLakeStats: vi.fn(),
@@ -23,7 +23,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeBatchRepository: { findById: h.findById, update: h.update, markTerminalIfActive: h.markTerminalIfActive },
+  // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
+  // rather than omitted because this mock REPLACES the whole module: a missing export is an
+  // import-time failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+  dataLakeBatchRepository: {
+    findById: h.findById,
+    updateIfActive: h.updateIfActive,
+    markTerminalIfActive: h.markTerminalIfActive,
+  },
   dataLakeRepository: { findById: h.lakeFindById },
   fabFileRepository: {},
 }));
@@ -45,7 +57,9 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
   beforeEach(() => {
     vi.clearAllMocks();
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake1', status: 'uploading' });
-    h.update.mockResolvedValue(null);
+    // The guarded write WINS by default: it returns the post-update doc to the single caller that
+    // moved a still-non-terminal batch, and null to one whose batch was already settled.
+    h.updateIfActive.mockResolvedValue({ id: 'b1', status: 'failed' });
     h.markTerminalIfActive.mockResolvedValue({ id: 'b1', status: 'cancelled' });
     h.lakeFindById.mockResolvedValue({ id: 'lake1', datalakeTag: 'datalake:lake', fileTagPrefix: 'lake:' });
     h.recomputeLakeStats.mockResolvedValue({ fileCount: 2, totalSizeBytes: 20 });
@@ -58,7 +72,21 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
 
     await run('PUT', res, { status: 'failed', failedFiles: 1 });
 
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1' }), expect.anything());
+    // Asserts the audit adapters BY NAME, not expect.anything(): both reach recomputeLakeStats
+    // through one shared `db` literal, and `adminSettings` is optional, so a route that dropped
+    // either would still compile and silently write no event (or pin every event to the floor
+    // retention) with nothing else going red.
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1' }),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      }),
+      // The actor: this route is authenticated, so its auto-activate must not record as `system`.
+      expect.objectContaining({ actor: expect.objectContaining({ userId: 'u1' }) })
+    );
   });
 
   it('recomputes the lake on a cancel', async () => {
@@ -66,16 +94,50 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
 
     await run('DELETE', res);
 
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1' }), expect.anything());
+    // Asserts the audit adapters BY NAME, not expect.anything(): both reach recomputeLakeStats
+    // through one shared `db` literal, and `adminSettings` is optional, so a route that dropped
+    // either would still compile and silently write no event (or pin every event to the floor
+    // retention) with nothing else going red.
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1' }),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      }),
+      // The actor: this route is authenticated, so its auto-activate must not record as `system`.
+      expect.objectContaining({ actor: expect.objectContaining({ userId: 'u1' }) })
+    );
   });
 
   it('does not recompute a terminal status the batch already holds', async () => {
-    // A client re-PUTting 'failed' would otherwise run a whole-lake aggregation per call.
+    // A client re-PUTting 'failed' would otherwise run a whole-lake aggregation per call. The guard
+    // is what reports this now: an already-terminal batch loses the claim, so updateIfActive is null.
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake1', status: 'failed' });
+    h.updateIfActive.mockResolvedValue(null);
     const { res } = makeRes();
 
     await run('PUT', res, { status: 'failed' });
 
+    expect(h.recomputeLakeStats).not.toHaveBeenCalled();
+  });
+
+  it('routes the status write through the guard, so a settled batch is never resurrected (#2089)', async () => {
+    // The window without a client in sight: the status guard used to be read from `findById` above
+    // while the write was a plain $set, so a queue finalization landing in between was BOTH
+    // overwritten (the batch went back to non-terminal, reappeared in findActiveByUserId, and
+    // reconcileStuckBatches later force-failed a batch that had succeeded) AND mis-classified here,
+    // firing a second whole-lake aggregation.
+    h.updateIfActive.mockResolvedValue(null);
+    const { res, json } = makeRes();
+
+    await run('PUT', res, { status: 'uploading' });
+
+    // The guarded method is the only write path - a plain `update` would bypass the guard entirely.
+    expect(h.updateIfActive).toHaveBeenCalledWith('b1', expect.objectContaining({ status: 'uploading' }));
+    // Losing is a benign no-op, not a 500: the batch is already settled so the intent is moot.
+    expect(json).toHaveBeenCalledWith({ success: true });
     expect(h.recomputeLakeStats).not.toHaveBeenCalled();
   });
 

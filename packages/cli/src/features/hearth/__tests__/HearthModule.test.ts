@@ -3,6 +3,7 @@ import { HearthModule } from '../HearthModule.js';
 import { createHearthTools } from '../hearthTools.js';
 import type { ApiClient } from '../../../auth/ApiClient.js';
 import type { IHearthService } from '../IHearthService.js';
+import type { WebSocketConnectionManager } from '../../../ws/WebSocketConnectionManager.js';
 import type { HearthEvent } from '../types.js';
 
 function makeEvent(text: string): HearthEvent {
@@ -91,6 +92,58 @@ describe('HearthModule', () => {
     const output = logSpy.mock.calls.map(c => c[0]).join('\n');
     expect(output).toContain('No live events');
     logSpy.mockRestore();
+  });
+
+  describe('/hearth listing', () => {
+    /** Feed the module's ring buffer through the WS path it actually uses. */
+    function listEvents(events: HearthEvent[]): string {
+      let handler: ((message: unknown) => void) | undefined;
+      module.registerWsHandlers({
+        onAction: (_action: string, cb: (message: unknown) => void) => {
+          handler = cb;
+        },
+        offAction: () => {},
+      } as unknown as WebSocketConnectionManager);
+      for (const event of events) handler!({ event });
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      module
+        .getCommands()
+        .find(c => c.name === 'hearth')!
+        .execute([]);
+      const output = logSpy.mock.calls.map(c => c[0]).join('\n');
+      logSpy.mockRestore();
+      return output;
+    }
+
+    const ESC = String.fromCharCode(27);
+
+    function withTty<T>(isTTY: boolean, run: () => T): T {
+      const original = process.stdout.isTTY;
+      Object.defineProperty(process.stdout, 'isTTY', { value: isTTY, configurable: true });
+      try {
+        return run();
+      } finally {
+        Object.defineProperty(process.stdout, 'isTTY', { value: original, configurable: true });
+      }
+    }
+
+    it('marks the actor kind, so a human-looking name still reads as an agent', () => {
+      const output = withTty(false, () => listEvents([{ ...makeEvent('hi'), actorName: 'erik', actorKind: 'agent' }]));
+      expect(output).toContain('A erik');
+    });
+
+    it('colors the actor and never the actor-written body', () => {
+      const output = withTty(true, () => listEvents([{ ...makeEvent('body text'), actorName: 'erik' }]));
+      expect(output).toContain(`${ESC}[38;2;`);
+      expect(output.slice(output.indexOf('body text'))).not.toContain(ESC);
+    });
+
+    it('emits no escape codes when stdout is not a TTY', () => {
+      // The listing gets piped and pasted; color must never be load-bearing.
+      const output = withTty(false, () => listEvents([{ ...makeEvent('hi'), actorKind: 'agent' }]));
+      expect(output).not.toContain('\u001b[');
+    });
   });
 });
 

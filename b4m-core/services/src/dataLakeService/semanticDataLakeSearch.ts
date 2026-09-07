@@ -7,6 +7,8 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   SupportedEmbeddingModel,
+  type ChunkStallReason,
+  type DataLakeMembershipScope,
 } from '@bike4mind/common';
 import {
   computeCosineSimilarity,
@@ -16,18 +18,35 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
-import { supportsAtlasVectorSearch } from '@bike4mind/db-core';
+import { supportsAtlasVectorSearch, selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
   emptyEmbeddingMismatchReport,
-  partitionFilesByEmbeddingModel,
+  groupFilesByEmbeddingModel,
+  isForeignEmbeddingModel,
   type EmbeddingMismatchAccumulator,
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
 import { partitionByVectorSearchReadiness } from './vectorSearchEligibility';
+import {
+  buildRetrievalUnavailableReport,
+  emptyRetrievalUnavailableReport,
+  partitionByIndexAvailability,
+  type RetrievalUnavailableReport,
+} from './retrievalUnavailable';
+import {
+  buildSupersessionReport,
+  emptySupersessionReport,
+  partitionBySupersession,
+  type SupersessionReport,
+} from './supersession';
+import type { AttributableLake } from './attributeAccessedLakes';
 import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
+import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
+import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
+import type { AnnVectorSearchResult } from './annVectorSearch';
 
 /**
  * Shared vector/semantic search over FabFile chunks in a user's accessible data lakes.
@@ -77,6 +96,17 @@ export interface SemanticChunkResult {
   fileTags: string[];
   chunkText: string;
   score: number;
+  /**
+   * The parent document's `createdAt`, rendered by `documentDateClause` into the passage header
+   * (#2236). Required, not optional, so every producer (this module's scan, annVectorSearch) has
+   * to supply it: a producer that omitted it would serve dateless passages from one retrieval
+   * backend and dated ones from another, and nothing would fail. `null` when the parent carries
+   * no date.
+   *
+   * NOTE: this interface is a public export of @bike4mind/services, so this required field is a
+   * source break for any out-of-repo code that CONSTRUCTS one. Readers are unaffected.
+   */
+  fileCreatedAt: Date | string | null;
 }
 
 /** Tuning + hard limits. All optional; the module defaults apply when omitted. */
@@ -126,15 +156,25 @@ export interface SemanticSearchScanAccounting {
   /** Of those, skipped because their width differs from the query's (embedding model changed). */
   chunksSkippedDimensionMismatch: number;
   /**
-   * Files served by Atlas `$vectorSearch` instead of the brute-force scan. Additive to
-   * `filesScanned`, not a replacement for it - an ann-served file was never handed to the scan
-   * path at all, so `filesScanned + annFilesQueried` is the files actually searched by either
-   * route (still <= `filesScoped`; ineligible/not-yet-ready files may be searched by neither if
-   * a budget stopped the scan first).
+   * Files served by ANN retrieval (Atlas `$vectorSearch` or self-host OpenSearch), across the
+   * query's own model AND every alternate model that got its own ANN query (see
+   * alternateModelAnn.ts), instead of the brute-force scan. Additive to `filesScanned`, not a
+   * replacement for it - an ann-served file was never handed to the scan path at all, so
+   * `filesScanned + annFilesQueried` is the files actually searched by either route (still <=
+   * `filesScoped`; ineligible/not-yet-ready files may be searched by neither if a budget stopped
+   * the scan first).
    */
   annFilesQueried: number;
-  /** Chunk hits returned by Atlas across all ann-queried files, before minScore/scope filtering. */
+  /** Chunk hits returned by ANN retrieval across all ann-queried files and models, before minScore/scope filtering. */
   annHits: number;
+  /**
+   * Distinct embedding models an ANN query was actually issued under this search: 0 when ANN
+   * never ran, 1 for a healthy single-model lake, up to `1 + MAX_ALTERNATE_ANN_MODELS`. Without
+   * this, `annFilesQueried` alone cannot distinguish "one model served 10 files" from "three
+   * models served 10" - the distinction this ticket's cutover introduces, and the number an
+   * operator needs to see cap pressure.
+   */
+  annModelsQueried: number;
   /** Budgets in force, echoed so a caller can explain a truncation without guessing. */
   budgets: { maxFiles: number; maxChunks: number };
 }
@@ -151,10 +191,56 @@ export interface SemanticDataLakeSearchResult {
    * space". A lake can be fully scanned and still return a partial answer.
    */
   embeddingMismatch: EmbeddingMismatchReport;
+  /**
+   * What was in scope but could not be SERVED, as distinct from what could not be COMPARED
+   * (`embeddingMismatch`) or was not REACHED (`scan.truncated`). Content mid-(re)index has no
+   * vectors and its previous ones are already gone, so it is refused rather than allowed to
+   * contribute nothing while its neighbours are re-ranked into the top-K (#1681 constraint 1).
+   */
+  retrievalUnavailable: RetrievalUnavailableReport;
+  /**
+   * The third reason a search returns less than the whole corpus, alongside `embeddingMismatch`
+   * (could not be COMPARED) and `retrievalUnavailable` (could not be SERVED): older generations of
+   * a document the same lake also holds a newer generation of, dropped before the chunk scan so the
+   * recovered budget goes to other files. Always empty unless the caller opted in - see
+   * `supersessionCollapseEnabled`.
+   */
+  supersession: SupersessionReport;
   /** Same value as `scan.filesScoped`; retained for existing consumers. */
   filesInScope: number;
   embeddingModel: string;
   scan: SemanticSearchScanAccounting;
+  /**
+   * Every alternate embedding model this search actually ran a query embed under (successfully),
+   * in `plan.selected` order (the embeds run concurrently, but `Promise.all` preserves input order
+   * in its output regardless of completion timing) - a caller must bill a usage event for each of these IN ADDITION TO the primary
+   * `embeddingModel`, regardless of whether that model's ANN query then found any hits. See
+   * knowledgeBaseSearch/index.ts and apps/client/pages/api/data-lakes/semantic-search.ts.
+   */
+  alternateModelsEmbedded: string[];
+}
+
+/**
+ * Did this search compare NOTHING against the query - not one passage scored, by the scan path or
+ * by any ANN index? The counterpart of `isPartialSearch`: that one answers "did we return less
+ * than the whole corpus", this one answers "did we look at any of it at all".
+ *
+ * Keyed on `chunksScored`, which `scanAndRank` increments BEFORE the `minScore` filter, so a
+ * relevance floor that emptied a genuinely-ranked result set is correctly NOT "compared nothing" -
+ * the distinction a caller cannot make from `results.length` alone.
+ *
+ * `scan.annHits` (raw hits, pre-scope-filter) is what covers the ANN routes, and it is a sound
+ * "something was compared" signal despite being a HIT count rather than a comparison count only
+ * because of the zero-raw-hits rebucket below: a ready file whose ANN query returned nothing is
+ * moved to `scanEligible` and scanned, so it still reaches `chunksScored`. Without that rebucket
+ * this predicate could not tell an un-indexed ANN file from a genuine topical zero.
+ *
+ * Says nothing about WHY nothing was compared, deliberately - an empty scope, an unvectorized
+ * corpus and a failed query embed all satisfy it, and they carry different remedies. Callers
+ * separate them (see `proveRetrievalOutcome` in knowledgeBaseSearch); this is the raw fact.
+ */
+export function comparedNoPassages(search: Pick<SemanticDataLakeSearchResult, 'chunksScored' | 'scan'>): boolean {
+  return search.chunksScored === 0 && search.scan.annHits === 0;
 }
 
 export interface SemanticDataLakeSearchParams {
@@ -171,10 +257,26 @@ export interface SemanticDataLakeSearchParams {
   apiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } | null | undefined;
   /** datalake:* meta-tags for the user's accessible lakes (caller-computed). */
   dataLakeTags: string[];
+  /**
+   * Rank the caller's OWN and shared files when no lake is in scope, instead of returning empty.
+   *
+   * The bail on an empty `dataLakeTags` is an optimization for a caller with no lake at all, for whom
+   * there is nothing worth embedding a query over. It is wrong for a caller whose lakes were
+   * suppressed DELIBERATELY (a session whose corpus is personal): `collectScopedFiles` passes
+   * `includeShared: true` alongside the lake args, so with them empty the corpus is still real - the
+   * caller's own and shared files - and bailing drops that session to metadata-only keyword search,
+   * losing content search over their own uploads. Off by default so the lake-less caller is unchanged.
+   */
+  ownFilesOnly?: boolean;
   /** OPEN static-registry content-tag prefixes (e.g. 'opti:') - ownership-bypass by design. */
   dataLakeTagPrefixes: string[];
-  /** SCOPED dynamic-lake prefixes - matched only within owner/org access (caller-computed). */
-  scopedTagPrefixes?: string[];
+  /**
+   * One membership arm per SCOPED dynamic lake, each anchored to THAT lake's creator (see
+   * `lakeMembershipsFrom`) - replaces the old caller-anchored `scopedTagPrefixes` prefix match, so
+   * a prefix-only member is reachable by every caller who passes the lake gate, not only its
+   * creator (#2243).
+   */
+  lakeMemberships?: DataLakeMembershipScope[];
   /** Scan limits + paging tuning. Omit for the defaults; callers may source these from settings. */
   budgets?: SemanticSearchBudgets;
   /**
@@ -186,14 +288,29 @@ export interface SemanticDataLakeSearchParams {
    */
   retrievalFilter?: RetrievalExclusionOptions;
   /**
-   * Server-side kill-switch for the Atlas `$vectorSearch` cutover (admin setting
-   * `EnableDataLakeVectorSearch`) - the caller reads it, not this module, matching how
-   * `apiKeyTable`/`budgets` are already resolved by the caller and passed in. Off by default
-   * (undefined/false): every existing caller that omits this keeps today's scan-only behavior
-   * byte-for-byte. Even when true, the ann path only ever engages on an Atlas backend with a
-   * queryable index for `embeddingModel` - see rankChunksForFiles.
+   * Server-side kill-switch for ANN retrieval - both the Atlas `$vectorSearch` cutover and the
+   * self-host OpenSearch path share this one flag (admin setting `EnableDataLakeVectorSearch`) -
+   * the caller reads it, not this module, matching how `apiKeyTable`/`budgets` are already
+   * resolved by the caller and passed in. Off by default (undefined/false): every existing
+   * caller that omits this keeps today's scan-only behavior byte-for-byte. Even when true, the
+   * ann path only ever engages on a backend that's actually ready for `embeddingModel` right
+   * now (a queryable Atlas index, or self-host OpenSearch enabled) - see rankChunksForFiles.
    */
   vectorSearchEnabled?: boolean;
+  /**
+   * The caller's resolved lakes, used ONLY to attribute a scoped file back to one lake so
+   * supersession can group per lake (see supersession.ts). Never a second way to resolve access:
+   * this module still takes its scope from `dataLakeTags`/`dataLakeTagPrefixes` exactly as before,
+   * and omitting this simply means nothing is attributable and nothing collapses.
+   */
+  lakes?: AttributableLake[];
+  /**
+   * Server-side gate for supersession collapse (admin setting
+   * `EnableRetrievalSupersessionCollapse`) - the caller reads it, not this module, matching
+   * `vectorSearchEnabled` above. Off by default: every caller that omits this (or omits `lakes`)
+   * keeps today's behavior byte-for-byte.
+   */
+  supersessionCollapseEnabled?: boolean;
   logger?: Logger;
 }
 
@@ -206,12 +323,16 @@ export interface SemanticDataLakeSearchAdapters {
     fabfiles: Pick<IFabFileRepository, 'search'>;
     fabfilechunks: FabFileChunksAdapter;
   };
+  /** Self-host OpenSearch retrieval, undefined elsewhere - a separate cluster, not a Mongo repo method. */
+  vectorIndex?: OpenSearchVectorSearchAdapters;
 }
 
 /** Shape both entrypoints need from a scoped file's metadata. */
 interface RankableFile {
   fileName: string;
   fileTags: string[];
+  /** Parent-document date for the passage header (#2236). Both builders below must carry it. */
+  createdAt?: Date | string | null;
   /**
    * The only record of which embedding space a file's chunks live in - chunks carry no model of
    * their own. Width alone cannot separate ada-002 from text-embedding-3-small (both 1536), so
@@ -219,8 +340,39 @@ interface RankableFile {
    */
   embeddingModel?: string | null;
   vectorizedChunkCount?: number;
-  /** Atlas-cutover readiness signal - see vectorSearchEligibility.ts. */
+  /** ANN readiness signal, shared by the Atlas and self-host OpenSearch paths - see vectorSearchEligibility.ts. */
   chunkEmbeddingModelStampedAt?: Date | string | null;
+  /**
+   * The next three exist for the mid-(re)index refusal (#1681) and are read ONLY by
+   * `partitionByIndexAvailability`. `chunkCount` with `vectorizedChunkCount` says whether the file's
+   * chunks are embedded yet; `error` and `chunkStallReason` say whether a shortfall is a genuine
+   * in-flight pass or a permanent stall (which must NOT be withheld, or a broken file silently marks
+   * every search partial forever).
+   */
+  chunkCount?: number;
+  error?: string | null;
+  chunkStallReason?: ChunkStallReason | null;
+  /** Transitional legacy stall prose; read only by `isChunkStalledFile` - see its docblock in `common`. */
+  notes?: string | null;
+  /** A requested-but-uncommitted passage rebuild (#1939) - the only in-flight signal a CHUNKLESS
+   *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
+  chunkRebuildRequestedAt?: Date | string | null;
+  /**
+   * These two, plus `createdAt` above, are the source-identity key supersession collapse groups on,
+   * read there ONLY by `partitionBySupersession`. `createdAt` is shared with the passage header
+   * rather than declared twice - it is the recency signal here and the document date there, and one
+   * field serving both is why a builder that drops it breaks two features at once. Both builders
+   * below populate all three even though only the lake-scoped entrypoint opts into the collapse -
+   * see the note at each builder.
+   */
+  relativePath?: string;
+  driveFileId?: string;
+  /**
+   * The file's owner, read by the collapse's ATTRIBUTION rather than its key: a dynamic lake's
+   * content-tag prefix identifies a lake only when the lake's creator owns the file. Omitting it
+   * fails quiet - the collapse silently narrows to meta-tagged members - so both builders carry it.
+   */
+  userId?: string;
 }
 
 /**
@@ -271,6 +423,7 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     chunksSkippedDimensionMismatch: 0,
     annFilesQueried: 0,
     annHits: 0,
+    annModelsQueried: 0,
     budgets: { maxFiles: resolved.maxFiles, maxChunks: resolved.maxChunks },
   };
 }
@@ -287,7 +440,10 @@ function emptyResult(
     chunksScored: 0,
     embeddingModel,
     embeddingMismatch: emptyEmbeddingMismatchReport(),
+    retrievalUnavailable: emptyRetrievalUnavailableReport(),
+    supersession: emptySupersessionReport(),
     scan: { ...emptyScanAccounting(budgets), ...overrides },
+    alternateModelsEmbedded: [],
   };
 }
 
@@ -392,6 +548,7 @@ async function scanAndRank(args: {
           fileTags: file.fileTags,
           chunkText: chunk.text ?? '',
           score,
+          fileCreatedAt: file.createdAt ?? null,
         });
       }
 
@@ -423,6 +580,11 @@ async function scanAndRank(args: {
 /**
  * Page fabfiles.search up to the file budget. A lake that fits in one page costs exactly one
  * query as before; a larger one is no longer silently cut off at the first page.
+ *
+ * `includeShared: true` is hardcoded below and `restrictToDataLake` is never set, so dropping the
+ * old caller-anchored `scopedTagPrefixes` arm in favour of `lakeMemberships` is lossless here: the
+ * caller's own files stay in scope via the base owner/share/group arms regardless of which lake
+ * arm ran (see semanticDataLakeSearch's Approach property 1).
  */
 async function collectScopedFiles(args: {
   // The repository OBJECT, not a detached `search` reference: FabFileRepository.search calls
@@ -433,7 +595,7 @@ async function collectScopedFiles(args: {
   tags: string[];
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
-  scopedTagPrefixes: string[];
+  lakeMemberships: DataLakeMembershipScope[];
   retrievalFilter: RetrievalExclusionOptions;
   maxFiles: number;
   filePageSize: number;
@@ -468,11 +630,8 @@ async function collectScopedFiles(args: {
         userGroups: args.userGroups,
         dataLakeTags: args.dataLakeTags,
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
-        scopedTagPrefixes: args.scopedTagPrefixes,
+        lakeMemberships: args.lakeMemberships,
         excludeContent: true,
-        // fileName is not unique, so walking more than one page needs the _id tiebreaker or a
-        // file can fall between pages - the same silent loss this pagination exists to fix.
-        stableSort: true,
         // Retrieval exclusion (caller-driven) - best-effort DB pre-filter; the authoritative
         // in-memory pass below guarantees excluded files are dropped before any chunk load.
         ...args.retrievalFilter,
@@ -518,8 +677,15 @@ async function rankChunksForFiles(args: {
   filesMatching: number;
   fileBudgetHit: boolean;
   vectorSearchEnabled: boolean;
+  /**
+   * Opt-in to per-lake supersession collapse. Present only from `semanticDataLakeSearch`;
+   * `fileScopedSemanticSearch` deliberately never passes it (see the note at its builder), so the
+   * collapse cannot reach a curated allow-list by accident.
+   */
+  supersession?: { lakes: AttributableLake[] };
   logger?: Logger;
   fabfilechunks: FabFileChunksAdapter;
+  vectorIndex?: OpenSearchVectorSearchAdapters;
 }): Promise<SemanticDataLakeSearchResult> {
   const { query, fileIds, fileById, topK, minScore, embeddingModel, apiKeyTable, budgets, logger } = args;
 
@@ -546,18 +712,72 @@ async function rankChunksForFiles(args: {
   // Withhold files whose recorded model puts their vectors in another embedding space, BEFORE the
   // scan: foreign vectors then never enter a page and never spend the chunk budget, so a large
   // off-model file cannot crowd out chunks that could have matched.
-  const scopedFiles = fileIds.map(id => {
+  const allScopedFiles = fileIds.map(id => {
     const file = fileById.get(id);
     return {
       id,
       fileName: file?.fileName,
+      fileTags: file?.fileTags ?? [],
       embeddingModel: file?.embeddingModel,
       vectorizedChunkCount: file?.vectorizedChunkCount,
       chunkEmbeddingModelStampedAt: file?.chunkEmbeddingModelStampedAt,
+      chunkCount: file?.chunkCount,
+      error: file?.error,
+      chunkStallReason: file?.chunkStallReason,
+      notes: file?.notes,
+      chunkRebuildRequestedAt: file?.chunkRebuildRequestedAt,
+      // Source identity for the supersession collapse below. `fileTags` above and `userId` here are
+      // what attribute the file to a lake (a dynamic lake's prefix arm is creator-anchored), so they
+      // belong to the same partition and are not the mismatch projection's concern.
+      relativePath: file?.relativePath,
+      driveFileId: file?.driveFileId,
+      createdAt: file?.createdAt,
+      userId: file?.userId,
     };
   });
-  const { rankable, foreign } = partitionFilesByEmbeddingModel(scopedFiles, embeddingModel);
-  const mismatch = createEmbeddingMismatchAccumulator(foreign, embeddingModel);
+  // Refuse mid-(re)index files BEFORE anything else looks at them (#1681 constraint 1). Their old
+  // vectors are already deleted and their new chunks carry none, so they can only contribute
+  // nothing - the choice is between reporting that and letting the top-K quietly fill up with
+  // neighbours. Refusing here rather than after the scan also keeps them out of the mismatch
+  // report, where a vector-less file would otherwise be miscounted as an embedding-space problem.
+  const { servable: scopedFiles, withheld: reindexing } = partitionByIndexAvailability(allScopedFiles);
+  const retrievalUnavailable = buildRetrievalUnavailableReport(reindexing);
+  if (reindexing.length > 0) {
+    logger?.warn?.(
+      `[semanticSearch] withheld ${reindexing.length} file(s) that are mid-(re)index; results are partial`,
+      { fileIds: reindexing.slice(0, 5).map(f => f.id) }
+    );
+  }
+  const { primary: modelMatchedFiles, alternates } = groupFilesByEmbeddingModel(scopedFiles, embeddingModel);
+  // Collapse superseded generations AFTER BOTH partitions above, never before. The invariant is
+  // that a winner which cannot actually be served must never suppress a sibling that can, or the
+  // lake contributes NOTHING for that document where today the older generation still ranks:
+  //  - availability: a newest generation that is mid-(re)index is withheld above and carries no
+  //    vectors at all;
+  //  - embedding model: only the query model's bucket is scanned. The alternate buckets reach the
+  //    ANN phase below ONLY when `vectorSearchEnabled` is set, and that setting is off by default,
+  //    so on the default deployment a foreign-model file is a hard DROP rather than a deferral.
+  // Same ordering, for the same reason, as the forced-retrieval path in ChatCompletionFeatures.
+  //
+  // Collapsing the primary bucket alone can therefore MISS a collapse (two generations that are
+  // both foreign-model and both ANN-served rank together). That is the safe direction: it serves a
+  // duplicate rather than dropping a document, which is the trade this whole module makes.
+  const { servable: rankable, superseded } = args.supersession
+    ? partitionBySupersession(modelMatchedFiles, args.supersession)
+    : { servable: modelMatchedFiles, superseded: [] };
+  const supersession = buildSupersessionReport(superseded);
+  if (superseded.length > 0) {
+    logger?.warn?.(`[semanticSearch] suppressed ${superseded.length} superseded file(s) before ranking`, {
+      superseded: supersession.sample,
+    });
+  }
+  // Foreign-model files no path has served (yet). Filtering `scopedFiles` (rather than
+  // concatenating the grouper's alternate buckets) preserves scope order, so `excludedFiles.sample`
+  // stays byte-identical to before this cutover on any lake with no served alternates. `served` is
+  // populated once the alternate-model ANN phase below runs; every earlier return passes an empty
+  // set, reproducing today's `foreign` list exactly.
+  const excludedForeignFiles = (served: ReadonlySet<string>) =>
+    scopedFiles.filter(f => isForeignEmbeddingModel(f.embeddingModel, embeddingModel) && !served.has(f.id));
 
   // An empty query embedding would make every chunk look like a width mismatch and return nothing.
   // Report the real cause rather than ranking against a meaningless vector, and do not throw: a
@@ -567,19 +787,22 @@ async function rankChunksForFiles(args: {
       queryEmbeddingModel: embeddingModel,
       filesInScope: fileIds.length,
     });
+    const mismatch = createEmbeddingMismatchAccumulator(excludedForeignFiles(new Set()), embeddingModel);
     mismatch.queryEmbeddingFailed();
     return {
       ...emptyResult(embeddingModel, budgets, { filesMatching: args.filesMatching, filesScoped: fileIds.length }),
       embeddingMismatch: mismatch.report(),
+      retrievalUnavailable,
+      supersession,
     };
   }
 
-  // Split same-model files into Atlas-eligible and scan-only BEFORE the scan runs, so an
+  // Split same-model files into ANN-eligible and scan-only BEFORE the scan runs, so an
   // ann-served file is never handed to scanAndRank and never spends its chunk budget - per-file
   // subset selection, not all-or-nothing. Every gate below defaults closed: the ann path only
   // engages when the caller opted in AND the backend/index are actually ready right now: a
-  // disabled/DocumentDB/self-host/not-yet-queryable deployment scans every rankable file exactly
-  // as it did before this cutover existed.
+  // disabled/DocumentDB/not-yet-queryable deployment scans every rankable file exactly as it did
+  // before this cutover existed.
   let annEligible: typeof rankable = [];
   let scanEligible = rankable;
   const canUseAtlas =
@@ -587,6 +810,12 @@ async function rankChunksForFiles(args: {
     supportsAtlasVectorSearch() &&
     !!args.fabfilechunks.vectorSearch &&
     !!args.fabfilechunks.getAtlasIndexStatus;
+  // Atlas and self-host OpenSearch are mutually exclusive: getVectorBackend() resolves to exactly
+  // one VectorBackend per deployment, so this is an if/else-if documenting that invariant, not two
+  // independent guards that happen never to both fire.
+  const canUseOpenSearch =
+    !canUseAtlas && args.vectorSearchEnabled && selfHostOpenSearchEnabled() && !!args.vectorIndex;
+
   if (canUseAtlas) {
     const indexStatus = await args.fabfilechunks.getAtlasIndexStatus!(embeddingModel);
     if (indexStatus?.queryable) {
@@ -594,56 +823,120 @@ async function rankChunksForFiles(args: {
       annEligible = split.annReady;
       scanEligible = split.scanOnly;
     }
+  } else if (canUseOpenSearch) {
+    // No mongot-style indexing-lag concept to check here - the readiness stamp still applies
+    // (same-model chunks must be fully vectorized+stamped), but "is it actually in the index yet"
+    // is instead covered below by the zero-raw-hits rebucket, same as Atlas's missedFiles case.
+    const split = partitionByVectorSearchReadiness(rankable, new Date());
+    annEligible = split.annReady;
+    scanEligible = split.scanOnly;
   }
 
-  let annResult: Awaited<ReturnType<typeof atlasVectorSearch>> = {
+  // Shared backend seam for the primary model AND every alternate model - this module never
+  // learns that Atlas or OpenSearch exist beyond this one closure.
+  const runAnn = (a: { fileIds: string[]; queryVector: number[]; model: string }): Promise<AnnVectorSearchResult> =>
+    canUseAtlas
+      ? atlasVectorSearch({
+          ...a,
+          fileById,
+          limit: topK,
+          minScore,
+          adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
+        })
+      : openSearchVectorSearch({ ...a, fileById, limit: topK, minScore, adapters: args.vectorIndex! });
+
+  let annResult: AnnVectorSearchResult = {
     results: [],
     hitsReturned: 0,
     hitsSkippedUnknownFile: 0,
     filesWithHits: new Set(),
   };
+  // Set on a primary-model ANN failure so the alternate-model phase below is skipped entirely -
+  // an outage that broke the primary model's query almost certainly breaks every other model on
+  // the same backend/connection, so there is no point spending alternate-model embeds against it.
+  let primaryAnnFailed = false;
+  const primaryAnnQueried = annEligible.length > 0;
   if (annEligible.length > 0) {
     try {
-      annResult = await atlasVectorSearch({
+      annResult = await runAnn({
         fileIds: annEligible.map(f => f.id),
-        fileById,
         queryVector: queryEmbedding,
         model: embeddingModel,
-        limit: topK,
-        minScore,
-        adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
       });
     } catch (error) {
-      // A broken Atlas index (transient mongot outage, IAM regression, quota exhaustion) must
-      // degrade to the scan path, not surface as a 500 - the whole point of the per-file split
-      // is that scanAndRank can always cover any file the ann path can't serve right now.
-      logger?.warn?.('[semanticSearch] $vectorSearch failed, falling back to scan for its files', {
-        embeddingModel,
-        fileCount: annEligible.length,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // A broken ANN index (transient outage, IAM regression, quota exhaustion, unreachable
+      // self-host cluster) must degrade to the scan path, not surface as a 500 - the whole point
+      // of the per-file split is that scanAndRank can always cover any file the ann path can't
+      // serve right now.
+      logger?.warn?.(
+        '[semanticSearch] ANN vector search failed, falling back to scan for its files and skipping the alternate-model phase',
+        {
+          embeddingModel,
+          backend: canUseAtlas ? 'atlas' : 'opensearch',
+          fileCount: annEligible.length,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
       scanEligible = [...scanEligible, ...annEligible];
       annEligible = [];
+      primaryAnnFailed = true;
     }
 
-    // A queryable index does not guarantee a given file's chunks are actually IN it yet: mongot's
-    // indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill, or a re-embed
-    // mid-file can label chunks under the wrong model so mongot never indexes them. Either way the
-    // file returns zero raw hits (not "nothing scored well", since Atlas ranks by similarity
-    // before minScore is applied) and, with no scan fallback, would silently contribute zero
-    // results. Rebucket per file rather than all-or-nothing, so one un-indexed file in a batch
-    // does not cost the rest their ANN path.
+    // A queryable index does not guarantee a given file's chunks are actually IN it yet. On
+    // Atlas: mongot's indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill,
+    // or a re-embed mid-file can label chunks under the wrong model so mongot never indexes
+    // them. On self-host OpenSearch: the file's chunks may simply predate the feature being
+    // enabled (see selfHostSearchIndex.ts - there is no backfill). Either way the file returns
+    // zero raw hits (not "nothing scored well", since both backends rank by similarity before
+    // minScore is applied) and, with no scan fallback, would silently contribute zero results.
+    // Rebucket per file rather than all-or-nothing, so one un-indexed file in a batch does not
+    // cost the rest their ANN path.
     const missedFiles = annEligible.filter(f => !annResult.filesWithHits.has(f.id));
     if (missedFiles.length > 0) {
-      logger?.warn?.('[semanticSearch] $vectorSearch returned no hits for ready files, scanning them instead', {
+      logger?.warn?.('[semanticSearch] ANN vector search returned no hits for ready files, scanning them instead', {
         embeddingModel,
+        backend: canUseAtlas ? 'atlas' : 'opensearch',
         fileCount: missedFiles.length,
       });
       scanEligible = [...scanEligible, ...missedFiles];
       annEligible = annEligible.filter(f => annResult.filesWithHits.has(f.id));
     }
   }
+
+  // Multi-model ANN cutover: give every OTHER embedding model actually present in the lake its
+  // own query (re-embedded under that model) against its own ANN index, instead of dropping those
+  // files outright. Gated on the same backend capability as the primary model, and skipped
+  // entirely when the primary model's own ANN call just failed (see `primaryAnnFailed` above).
+  let outcomes: AlternateAnnOutcome[] = [];
+  if ((canUseAtlas || canUseOpenSearch) && !primaryAnnFailed) {
+    const isModelQueryable = canUseAtlas
+      ? async (m: string) => !!(await args.fabfilechunks.getAtlasIndexStatus!(m))?.queryable
+      : // Self-host has no per-model status port. openSearchChunkAdapter already fails closed on
+        // an unregistered model or a missing index (returns [] -> filesMissed, not a throw), and
+        // that "stay excluded" outcome is already correct - the only cost of an optimistic answer
+        // here is one wasted embed per model, bounded by MAX_ALTERNATE_ANN_MODELS.
+        async () => true;
+    const plan = await planAlternateAnnModels({ alternates, now: new Date(), apiKeyTable, isModelQueryable, logger });
+    outcomes = await Promise.all(
+      plan.selected.map(candidate => runAlternateModelAnn({ query, candidate, apiKeyTable, runAnn, logger }))
+    );
+    // plan.skipped is the only place a cap/credential/readiness/registry skip is visible - without
+    // this it's indistinguishable in logs from "no alternate models were present at all".
+    if (plan.skipped.length > 0) {
+      logger?.debug?.('[semanticSearch] alternate-model buckets skipped', {
+        skipped: plan.skipped.map(s => ({ model: s.model, reason: s.reason, fileCount: s.files.length })),
+      });
+    }
+  }
+  const servedByAlternateAnn = new Set(outcomes.flatMap(o => [...o.filesWithHits]));
+  // Billable regardless of whether the ANN query itself then found anything - the embed call ran.
+  const alternateModelsEmbedded = outcomes.filter(o => o.embedded).map(o => o.model);
+
+  const mismatch = createEmbeddingMismatchAccumulator(excludedForeignFiles(servedByAlternateAnn), embeddingModel);
   for (let i = 0; i < annResult.hitsSkippedUnknownFile; i++) mismatch.skip('unknownFile');
+  for (const outcome of outcomes) {
+    for (let i = 0; i < outcome.hitsSkippedUnknownFile; i++) mismatch.skip('unknownFile');
+  }
 
   const scanned = await scanAndRank({
     fileIds: scanEligible.map(f => f.id),
@@ -658,13 +951,43 @@ async function rankChunksForFiles(args: {
     mismatch,
     fabfilechunks: args.fabfilechunks,
   });
+  // A model counts as "served" only if it actually returned >=1 raw hit - a model that was
+  // embedded and queried but found nothing served zero files, so its files correctly remain in
+  // `excludedFiles` (via `servedByAlternateAnn` above) and must not also appear here.
+  const servedOutcomes = outcomes.filter(o => o.filesWithHits.size > 0);
+  if (servedOutcomes.length > 0) {
+    mismatch.alternateModelServed(
+      servedOutcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
+      servedOutcomes.map(o => o.model)
+    );
+  }
   const mismatchReport = mismatch.report();
 
-  // Merge both sources into one bounded top-K - each already ranks its own subset, so this is a
-  // cheap second pass over at most 2*topK items, not a rescore of the corpus.
+  const alternateResults = outcomes.flatMap(o => o.results);
+  const alternateHitsReturned = outcomes.reduce((sum, o) => sum + o.hitsReturned, 0);
+  const alternateModelsQueried = outcomes.filter(o => o.embedded).length;
+
+  // Merge every source into one bounded top-K - each already ranks its own subset, so this is a
+  // cheap second pass over at most (2 + alternates)*topK items, not a rescore of the corpus.
+  //
+  // Cross-model caveat: raw cosine is NOT directly comparable across different embedding models -
+  // their score distributions differ (see MEMENTO_MIN_SIMILARITY's documented history of exactly
+  // this failure when a deployment's default model changed). Merging the primary and alternate
+  // models' hits by raw cosine therefore systematically favors whichever model's scale runs
+  // higher. With the data-lake surfaces' own default `minScore` of 0 this is purely a rank bias.
+  // A caller-supplied nonzero minScore is a DIFFERENT, pre-existing property this cutover does
+  // not change: the scan path already applies one floor across every chunk regardless of which
+  // embedding space it came from, and this merge inherits that same behavior for alternate models
+  // - a floor tuned for the primary model's scale can filter an entire alternate model's hits.
+  // That model still counts as "served" in `alternateModelServed` (its ANN query DID run and
+  // return raw hits, which is the file-level signal this report tracks - see `filesWithHits`),
+  // not as excluded; a caller relying on `partial`/`excludedFiles` to catch every zero-result
+  // cause under a custom minScore already has this gap for the primary model today. See the
+  // pinned test for the accepted rank-bias behavior.
   const merged = new BoundedTopK<SemanticChunkResult>(topK, compareByScore);
   for (const result of scanned.results) merged.offer(result);
   for (const result of annResult.results) merged.offer(result);
+  for (const result of alternateResults) merged.offer(result);
   const mergedResults = merged.drain();
 
   const scan: SemanticSearchScanAccounting = {
@@ -676,8 +999,9 @@ async function rankChunksForFiles(args: {
     filesScanned: scanned.filesScanned,
     chunksScanned: scanned.chunksScanned,
     chunksSkippedDimensionMismatch: scanned.chunksSkippedDimensionMismatch,
-    annFilesQueried: annEligible.length,
-    annHits: annResult.hitsReturned,
+    annFilesQueried: annEligible.length + outcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
+    annHits: annResult.hitsReturned + alternateHitsReturned,
+    annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
 
@@ -695,13 +1019,18 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  // Warn only when NOTHING could be compared by EITHER path. A few withheld chunks mid-revectorize
-  // are expected and must stay quiet - the same policy the truncation warning above applies, and
-  // the reason unlabeled files and budgets do not raise the flag either. Excludes annResult.hitsReturned
-  // (not annEligible.length): a lake fully served by Atlas legitimately scores zero chunks on the
-  // scan path, and without this the warning would false-fire on every healthy all-ANN search that
-  // also happens to have an unrelated off-model file elsewhere in scope.
-  if (mismatchReport.partial && scanned.chunksScored === 0 && annResult.hitsReturned === 0) {
+  // Warn only when NOTHING could be compared by ANY path - `comparedNoPassages` above owns that
+  // definition, and counting the ann hits (rather than annEligible.length/outcome file counts) is
+  // why: a lake fully served by ANN retrieval - the primary model, an alternate model, or both -
+  // legitimately scores zero chunks on the scan path, and without them the warning would
+  // false-fire on every healthy all-ANN search that also happens to have an unrelated excluded
+  // file elsewhere in scope. The `partial` guard keeps this to a MISMATCH diagnosis: a few
+  // withheld chunks mid-revectorize are expected and must stay quiet, the same policy the
+  // truncation warning above applies, and the reason unlabeled files and budgets do not raise
+  // the flag either. The retrieval-outcome readers deliberately do NOT inherit that guard - see
+  // `proveRetrievalOutcome` in knowledgeBaseSearch, where an unvectorized corpus raises no
+  // mismatch at all and still has to be reported as unsearched.
+  if (mismatchReport.partial && comparedNoPassages({ chunksScored: scanned.chunksScored, scan })) {
     logger?.warn?.('[semanticSearch] nothing could be compared in the query embedding space', {
       queryEmbeddingModel: embeddingModel,
       excludedFiles: mismatchReport.excludedFiles.count,
@@ -723,8 +1052,13 @@ async function rankChunksForFiles(args: {
   }
 
   logger?.debug?.(
-    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via Atlas), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
+    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via ${canUseAtlas ? 'atlas' : 'opensearch'} ${embeddingModel}), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits across ${scan.annModelsQueried} model(s) -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
   );
+  if (outcomes.length > 0) {
+    logger?.debug?.(
+      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files/${o.filesMissed.length}missed`}`).join(', ')}`
+    );
+  }
 
   return {
     results: mergedResults,
@@ -732,8 +1066,11 @@ async function rankChunksForFiles(args: {
     filesInScope: scan.filesScoped,
     chunksScored: scanned.chunksScored,
     embeddingMismatch: mismatchReport,
+    retrievalUnavailable,
+    supersession,
     embeddingModel,
     scan,
+    alternateModelsEmbedded,
   };
 }
 
@@ -752,14 +1089,18 @@ export async function semanticDataLakeSearch(
     apiKeyTable,
     dataLakeTags,
     dataLakeTagPrefixes,
-    scopedTagPrefixes = [],
+    lakeMemberships = [],
     retrievalFilter = {},
+    ownFilesOnly = false,
     logger,
   } = params;
 
   const budgets = resolveBudgets(params.budgets);
 
-  if (!query.trim() || dataLakeTags.length === 0) return emptyResult(embeddingModel, budgets);
+  // Gate on dataLakeTags, not on membership: it still names every accessible lake, dynamic or
+  // registry, so a caller with only dynamic-lake access (all memberships, no meta-tags reachable
+  // yet) is not mistaken for a lake-less one. Do not swap this for a memberships-based gate.
+  if (!query.trim() || (dataLakeTags.length === 0 && !ownFilesOnly)) return emptyResult(embeddingModel, budgets);
 
   // --- Scope the files (metadata only) within the accessible data lakes ---
   const scoped = await collectScopedFiles({
@@ -769,7 +1110,7 @@ export async function semanticDataLakeSearch(
     tags,
     dataLakeTags,
     dataLakeTagPrefixes,
-    scopedTagPrefixes,
+    lakeMemberships,
     retrievalFilter,
     maxFiles: budgets.maxFiles,
     filePageSize: budgets.filePageSize,
@@ -794,9 +1135,28 @@ export async function semanticDataLakeSearch(
       {
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
+        createdAt: f.createdAt,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
+        // Index-state fields for the mid-(re)index refusal (#1681). Both builders must carry them:
+        // a builder that omits them hands the partition a file with chunkCount undefined, which
+        // reads as "nothing to withhold" and re-arms the silent-degradation bug on that entrypoint.
+        chunkCount: f.chunkCount,
+        error: f.error,
+        chunkStallReason: f.chunkStallReason,
+        notes: f.notes,
+        // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
+        // ranking map below still names it) is exactly the omission this comment warns about, and it
+        // fails silently - the member reads as an image and is served.
+        chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
+        // Source identity for the supersession collapse - with `createdAt` above, which the passage
+        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
+        // the collapse today, but a builder that quietly stopped carrying these would make the
+        // collapse a silent no-op rather than an error.
+        relativePath: f.relativePath,
+        driveFileId: f.driveFileId,
+        userId: f.userId,
       },
     ])
   );
@@ -813,8 +1173,12 @@ export async function semanticDataLakeSearch(
     filesMatching: scoped.filesMatching,
     fileBudgetHit: scoped.fileBudgetHit,
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
+    // Both halves are required: the flag alone with no lakes could not attribute anything, and
+    // lakes alone would collapse behind an admin's back.
+    supersession: params.supersessionCollapseEnabled && params.lakes?.length ? { lakes: params.lakes } : undefined,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
+    vectorIndex: adapters.vectorIndex,
   });
 }
 
@@ -843,6 +1207,8 @@ export interface FileScopedSemanticSearchAdapters {
     fabfiles: Pick<IFabFileRepository, 'getAccessibleFiles'>;
     fabfilechunks: FabFileChunksAdapter;
   };
+  /** Self-host OpenSearch retrieval, undefined elsewhere - a separate cluster, not a Mongo repo method. */
+  vectorIndex?: OpenSearchVectorSearchAdapters;
 }
 
 /**
@@ -872,15 +1238,42 @@ export async function fileScopedSemanticSearch(
   const withinBudget = ordered.slice(0, budgets.maxFiles);
   const fileBudgetHit = ordered.length > withinBudget.length;
 
+  // No supersession collapse here, deliberately. A curated kbScope is an explicit allow-list - a
+  // human chose these ids - and silently dropping some of them overrides that curation, a worse
+  // failure than showing a near-duplicate. This path also has no lake context at all, so the
+  // collapse would be a guaranteed no-op anyway (an unattributable member groups only with itself).
+  // The identity fields are still populated below so the two builders stay symmetric; see the
+  // comment there. If duplicate curation ever becomes a real complaint it belongs to the curation
+  // layer, not to this seam.
+
   const fileById = new Map<string, RankableFile>(
     withinBudget.map(f => [
       f.id,
       {
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
+        createdAt: f.createdAt,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
+        // Index-state fields for the mid-(re)index refusal (#1681). Both builders must carry them:
+        // a builder that omits them hands the partition a file with chunkCount undefined, which
+        // reads as "nothing to withhold" and re-arms the silent-degradation bug on that entrypoint.
+        chunkCount: f.chunkCount,
+        error: f.error,
+        chunkStallReason: f.chunkStallReason,
+        notes: f.notes,
+        // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
+        // ranking map below still names it) is exactly the omission this comment warns about, and it
+        // fails silently - the member reads as an image and is served.
+        chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
+        // Source identity for the supersession collapse - with `createdAt` above, which the passage
+        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
+        // the collapse today, but a builder that quietly stopped carrying these would make the
+        // collapse a silent no-op rather than an error.
+        relativePath: f.relativePath,
+        driveFileId: f.driveFileId,
+        userId: f.userId,
       },
     ])
   );
@@ -899,5 +1292,6 @@ export async function fileScopedSemanticSearch(
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
+    vectorIndex: adapters.vectorIndex,
   });
 }

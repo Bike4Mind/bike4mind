@@ -1,16 +1,24 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
   BatchPresignedUrlRequestInput,
   DATALAKE_TAG_PREFIX,
   DATALAKE_TAG_STRENGTH,
+  FabFileSourceType,
   KnowledgeType,
   type IDataLakeBatchFile,
   type IDataLakeDocument,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
-import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  scopedSettingsRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { BadRequestError } from '@server/utils/errors';
@@ -21,7 +29,7 @@ import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
-const s3Client = new S3Client();
+const s3Client = createS3Client();
 const EXPIRES = 600; // 10 minutes
 
 const handler = baseApi().post(async (req: Request, res) => {
@@ -40,10 +48,11 @@ const handler = baseApi().post(async (req: Request, res) => {
   // Look up data lake for meta-tag injection. Uploading into a lake is a WRITE, so enforce the
   // creator/admin gate (not just read access) - otherwise a read-only member could inject files.
   // Not-found-style denial when unreadable; manage-denied when readable but not owned.
+  const ctx = await toAccessContext(req);
   let dataLake: IDataLakeDocument | undefined;
   if (data.dataLakeSlug) {
-    dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
+    dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     // Same rule as the batch-create door: only a draft (first batch) or active lake takes new
     // files, so an archived/deleting one cannot be topped up through this entrance either.
@@ -53,12 +62,37 @@ const handler = baseApi().post(async (req: Request, res) => {
   }
   const datalakeTag = dataLake?.datalakeTag;
 
+  // The admission contract (#1680) for the lake this upload is JOINING. `assertLakeWriteAccess`
+  // above answered "may you write here"; this answers "will this content be findable once it is
+  // here". Checked before a single presigned URL is handed out, so a refused upload costs no S3
+  // round-trip and no embedding spend. No FabFile exists yet, so the subject is the owner-to-be
+  // (the uploader) and the gate predicts from THEIR chunk policy - the same value fabFileChunk
+  // will resolve. Report-only unless the lake's EnforceLakeAdmission lever is on.
+  const admissionSettings = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
+  if (dataLake) {
+    await dataLakeService.assertLakeAdmission([dataLake], [{ userId }], {
+      db: admissionSettings,
+      logger: req.logger,
+    });
+  }
+
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
   // through per-file tags. Gate every such tag with the same write check.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
-  await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, clientMetaTags, {
-    db: { dataLakes: dataLakeRepository },
+  await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
+    db: {
+      dataLakes: dataLakeRepository,
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      ...admissionSettings,
+    },
+    // These files are being created by this request, so the uploader is their owner-to-be.
+    members: [{ userId }],
+    logger: req.logger,
   });
+  // This route creates each FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates the static-registry namespace centrally - so
+  // it needs its own check, same as the meta-tag one above.
+  dataLakeService.assertCanWriteStaticRegistryTags({ userId, isAdmin: !!req.user.isAdmin }, clientMetaTags);
 
   // A meta-tag the client sent must name the lake this upload is joining, not merely some lake
   // the caller may write to - which, for an admin, is all of them.
@@ -203,6 +237,10 @@ const handler = baseApi().post(async (req: Request, res) => {
           mimeType,
           type: KnowledgeType.FILE,
           tags,
+          // Admission provenance (#1679): stamp the door so a lake can say which one a member came
+          // through. This web upload door is the common case the lake previously could not identify
+          // (sourceType left unset); the connector and chat-platform doors already stamp their own.
+          sourceType: FabFileSourceType.MANUAL_UPLOAD,
           ...(fileItem.contentHash && { contentHash: fileItem.contentHash }),
           ...(fileItem.relativePath && { relativePath: fileItem.relativePath }),
           ...(data.batchId && { batchId: data.batchId }),

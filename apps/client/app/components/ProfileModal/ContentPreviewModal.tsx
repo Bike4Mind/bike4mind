@@ -39,6 +39,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { uploadBlogImage, generatePostIdFromTitle } from '@client/app/utils/blogImageUpload';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import ImageBrowserModal from '../Agent/ImageBrowserModal';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 import rehypeSanitize from 'rehype-sanitize';
 
@@ -84,7 +85,7 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
         duration: 10000,
         action: {
           label: 'Open',
-          onClick: () => window.open(data.url, '_blank'),
+          onClick: () => openInNewTab(data.url),
         },
       });
       handleClose();

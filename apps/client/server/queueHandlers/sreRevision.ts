@@ -126,9 +126,15 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
 
   if (!repoConfig) {
     logger.warn('Repo not configured, skipping revision', { repoSlug });
-    await sreErrorTrackingRepository.atomicTransition(revisionRequest.trackingId, 'revision_requested', 'failed', {
-      errorMessage: 'Repo not configured',
-    });
+    await sreErrorTrackingRepository.atomicTransition(
+      revisionRequest.trackingId,
+      repoSlug,
+      'revision_requested',
+      'failed',
+      {
+        errorMessage: 'Repo not configured',
+      }
+    );
     // Intentionally no Slack notification here: repoConfig is null, so slackConfig is unavailable.
     // Operators can detect this via CloudWatch logs (logger.warn above) or the failed doc in the admin UI.
     await clearRevisionDedup(repoSlug, revisionRequest.prNumber);
@@ -137,9 +143,15 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
 
   if (!repoConfig.enabled) {
     logger.info('SRE agent disabled, skipping revision');
-    await sreErrorTrackingRepository.atomicTransition(revisionRequest.trackingId, 'revision_requested', 'failed', {
-      errorMessage: 'SRE agent disabled during revision',
-    });
+    await sreErrorTrackingRepository.atomicTransition(
+      revisionRequest.trackingId,
+      repoSlug,
+      'revision_requested',
+      'failed',
+      {
+        errorMessage: 'SRE agent disabled during revision',
+      }
+    );
     try {
       await postSreAnalysisFailureMessage(
         revisionRequest.trackingId,
@@ -166,9 +178,15 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
       repoFailures,
       threshold: repoConfig.circuitBreaker.failureThreshold,
     });
-    await sreErrorTrackingRepository.atomicTransition(revisionRequest.trackingId, 'revision_requested', 'failed', {
-      errorMessage: revCbFailureReason,
-    });
+    await sreErrorTrackingRepository.atomicTransition(
+      revisionRequest.trackingId,
+      repoSlug,
+      'revision_requested',
+      'failed',
+      {
+        errorMessage: revCbFailureReason,
+      }
+    );
     try {
       await postSreAnalysisFailureMessage(
         revisionRequest.trackingId,
@@ -195,6 +213,7 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
     });
     await sreErrorTrackingRepository.atomicTransition(
       revisionRequest.trackingId,
+      repoSlug,
       'revision_requested',
       'rate_limited',
       {
@@ -244,9 +263,15 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
   }
   if (!githubService) {
     logger.error('GitHub service unavailable');
-    await sreErrorTrackingRepository.atomicTransition(revisionRequest.trackingId, 'revision_requested', 'failed', {
-      errorMessage: 'GitHub service unavailable during revision',
-    });
+    await sreErrorTrackingRepository.atomicTransition(
+      revisionRequest.trackingId,
+      repoSlug,
+      'revision_requested',
+      'failed',
+      {
+        errorMessage: 'GitHub service unavailable during revision',
+      }
+    );
     try {
       await postSreAnalysisFailureMessage(
         revisionRequest.trackingId,
@@ -337,9 +362,15 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
       : (result.failureReason ?? 'Diagnostician revision failed');
 
     logger.warn('Revision diagnosis failed', { reason });
-    await sreErrorTrackingRepository.atomicTransition(revisionRequest.trackingId, 'revision_requested', 'failed', {
-      errorMessage: reason,
-    });
+    await sreErrorTrackingRepository.atomicTransition(
+      revisionRequest.trackingId,
+      repoSlug,
+      'revision_requested',
+      'failed',
+      {
+        errorMessage: reason,
+      }
+    );
 
     try {
       await postSreFixFailureMessage(
@@ -380,10 +411,16 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
       fingerprint: revisionRequest.fingerprint,
       rootCause: result.diagnosis.rootCause?.slice(0, 200),
     });
-    await sreErrorTrackingRepository.atomicTransition(revisionRequest.trackingId, 'revision_requested', 'failed', {
-      diagnosisResult: result.diagnosis,
-      errorMessage: 'Escalated to human — fix would require editing a test or conflicts with test intent',
-    });
+    await sreErrorTrackingRepository.atomicTransition(
+      revisionRequest.trackingId,
+      repoSlug,
+      'revision_requested',
+      'failed',
+      {
+        diagnosisResult: result.diagnosis,
+        errorMessage: 'Escalated to human - fix would require editing a test or conflicts with test intent',
+      }
+    );
     try {
       await postSreFixFailureMessage(
         revisionRequest.trackingId,
@@ -422,6 +459,7 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
     });
     const wontFixTransitioned = await sreErrorTrackingRepository.atomicTransition(
       revisionRequest.trackingId,
+      repoSlug,
       'revision_requested',
       'wont_fix',
       {
@@ -481,6 +519,7 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
   // Transition to fixing and dispatch to sreFixQueue
   const transitioned = await sreErrorTrackingRepository.atomicTransition(
     revisionRequest.trackingId,
+    repoSlug,
     'revision_requested',
     'fixing',
     {

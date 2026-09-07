@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { appendSuccessParams } from './callbackUrl';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { appendSuccessParams, isAllowedCallbackOrigin } from './callbackUrl';
 
 describe('appendSuccessParams', () => {
   it('adds the success marker and session template to a bare url', () => {
@@ -32,5 +32,74 @@ describe('appendSuccessParams', () => {
     const url = appendSuccessParams('https://app.example.com');
     expect(url).toContain('{CHECKOUT_SESSION_ID}');
     expect(url).not.toContain('%7B');
+  });
+});
+
+describe('isAllowedCallbackOrigin', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('accepts any path on the configured app origin', () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+
+    expect(isAllowedCallbackOrigin('https://app.example.com')).toBe(true);
+    expect(isAllowedCallbackOrigin('https://app.example.com/settings/billing?x=1#frag')).toBe(true);
+  });
+
+  it('rejects a different host, which is the open-redirect this guard exists to stop', () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+
+    expect(isAllowedCallbackOrigin('https://attacker.example.net/phish')).toBe(false);
+    // Origin is scheme + host + port, so a lookalike subdomain and a scheme downgrade both fail.
+    expect(isAllowedCallbackOrigin('https://app.example.com.attacker.net/')).toBe(false);
+    expect(isAllowedCallbackOrigin('http://app.example.com/')).toBe(false);
+    // Userinfo: the allowed host sits before the `@`, so it reads as the app origin to a
+    // human but parses to an origin of https://attacker.net. Comparing origins is what
+    // defeats it - a prefix or substring check on the URL would not.
+    expect(isAllowedCallbackOrigin('https://app.example.com@attacker.net')).toBe(false);
+  });
+
+  it('rejects anything the URL parser cannot resolve to an origin', () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+
+    expect(isAllowedCallbackOrigin('/settings/billing')).toBe(false);
+    expect(isAllowedCallbackOrigin('not a url')).toBe(false);
+    expect(isAllowedCallbackOrigin('')).toBe(false);
+    // Protocol-relative: a browser would resolve this against the current page, but the
+    // guard has no base URL, so `new URL()` throws and the catch rejects it.
+    expect(isAllowedCallbackOrigin('//attacker.net')).toBe(false);
+  });
+
+  it('fails closed when APP_URL is missing in production', () => {
+    // The branch that matters: a stage that lost APP_URL must reject every callback
+    // rather than wave all origins through.
+    vi.stubEnv('APP_URL', '');
+    vi.stubEnv('NODE_ENV', 'production');
+
+    expect(isAllowedCallbackOrigin('https://attacker.example.net/phish')).toBe(false);
+  });
+
+  it('fails closed when APP_URL is missing on a stage that is neither production nor development', () => {
+    // The gap this closes: the old `=== 'production'` test waved EVERY origin through on any
+    // other NODE_ENV, so a deployed stage that lost APP_URL was an open redirect. NODE_ENV is
+    // baked in by `next build` and nothing in infra/ sets it per stage, so the only line it can
+    // draw is local dev vs everything else - and everything else must reject. 'test' is also
+    // what vitest runs under, so this pins the local-test posture too.
+    vi.stubEnv('APP_URL', '');
+
+    for (const nodeEnv of ['test', 'staging'] as const) {
+      vi.stubEnv('NODE_ENV', nodeEnv);
+      expect(isAllowedCallbackOrigin('https://attacker.example.net/phish')).toBe(false);
+      // Rejects the app's own origin too - with no APP_URL there is nothing to compare against.
+      expect(isAllowedCallbackOrigin('https://app.example.com/settings/billing')).toBe(false);
+    }
+  });
+
+  it('passes through only when APP_URL is missing in local development (documented dev convenience)', () => {
+    vi.stubEnv('APP_URL', '');
+    vi.stubEnv('NODE_ENV', 'development');
+
+    expect(isAllowedCallbackOrigin('https://anything.example.net')).toBe(true);
   });
 });

@@ -1,21 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock state via vi.hoisted so it is initialized before the hoisted vi.mock factories run.
-const { createSessionMock, sideEffects, QuestMock, SessionMock, findAccessibleById } = vi.hoisted(() => ({
-  createSessionMock: vi.fn(),
+const { sideEffects, QuestMock, SessionMock, findAccessibleById } = vi.hoisted(() => ({
   sideEffects: {
     publishSummarizeSession: vi.fn().mockResolvedValue(undefined),
     publishContextSummarizeSession: vi.fn().mockResolvedValue(undefined),
   },
   QuestMock: {
     find: vi.fn(),
-    findById: vi.fn(),
     findOne: vi.fn(),
     create: vi.fn(),
     findOneAndUpdate: vi.fn(),
   },
   SessionMock: {
-    findById: vi.fn(),
     findOne: vi.fn(),
     updateOne: vi.fn().mockResolvedValue(undefined),
     where: vi.fn(),
@@ -24,7 +21,6 @@ const { createSessionMock, sideEffects, QuestMock, SessionMock, findAccessibleBy
 }));
 
 // ---- cross-module + side-effect boundaries ----
-vi.mock('./sessionCrud', () => ({ createSession: createSessionMock }));
 vi.mock('./sessionSideEffects', () => sideEffects);
 
 vi.mock('@bike4mind/database', () => ({
@@ -38,11 +34,16 @@ vi.mock('@bike4mind/database/auth', () => ({
   sessionRepository: { shareable: { findAccessibleById } },
 }));
 
-vi.mock('@bike4mind/common', () => ({
-  Permission: { update: 'update' },
-  // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
-  NotFoundError: class NotFoundError extends Error {},
-}));
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    Permission: { update: 'update' },
+    // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
+    NotFoundError: class NotFoundError extends Error {},
+    // Real implementation: the redaction test below verifies the actual behavior, not a stub.
+    redactPromptMetaForViewer: actual.redactPromptMetaForViewer,
+  };
+});
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -56,11 +57,9 @@ import {
   addMessageToSession,
   deleteMessageFromSession,
   stopReply,
-  forkSession,
-  snipSession,
-  cloneSession,
   summarizeSession,
   contextSummarizeSession,
+  getMessagesFromSession,
 } from './sessionOperations';
 import { publishSummarizeSession, publishContextSummarizeSession } from './sessionSideEffects';
 import type { Ability } from '@server/auth/ability';
@@ -78,6 +77,55 @@ describe('sessionOperations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     SessionMock.updateOne.mockResolvedValue(undefined);
+  });
+
+  describe('getMessagesFromSession', () => {
+    // A Mongoose Query mock: skip/limit/sort mutate-and-return-this, and the object itself is
+    // awaitable (thenable), matching how the real code chains then `await`s the query.
+    const chainableFind = (docs: unknown[]) => {
+      const query = {
+        skip: () => query,
+        limit: () => query,
+        sort: () => query,
+        then: (resolve: (v: unknown[]) => void) => resolve(docs),
+      };
+      return query;
+    };
+
+    const questWithFunctionCalls = (returnValue: string) => ({
+      toJSON: () => ({
+        id: 'q1',
+        promptMeta: {
+          functionCalls: [{ name: 'web_search', parameters: {}, id: 'call_1', returnValue, success: true }],
+        },
+      }),
+    });
+
+    it('returns functionCalls untouched for the session owner', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithFunctionCalls('private tool output')]));
+
+      const { data } = await getMessagesFromSession({ id: 'owner-1' } as never, 's1', undefined, { all: true });
+
+      expect(JSON.stringify(data)).toContain('private tool output');
+    });
+
+    it('strips functionCalls[].returnValue for a non-owner viewer (shared-session read)', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithFunctionCalls('private tool output')]));
+
+      const { data } = await getMessagesFromSession({ id: 'sharee-2' } as never, 's1', undefined, { all: true });
+
+      expect(JSON.stringify(data)).not.toContain('private tool output');
+      // name/id/success must survive - only returnValue/error are owner-only.
+      expect(JSON.stringify(data)).toContain('web_search');
+      expect(JSON.stringify(data)).toContain('call_1');
+    });
+
+    it('throws NotFoundError when the session is not accessible', async () => {
+      findAccessibleById.mockResolvedValueOnce(null);
+      await expect(getMessagesFromSession({ id: 'u1' } as never, 's1')).rejects.toThrow('Session not found');
+    });
   });
 
   describe('addMessageToSession', () => {
@@ -150,72 +198,6 @@ describe('sessionOperations', () => {
       QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue(null) });
       SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
       await expect(stopReply('s1', ability)).rejects.toThrow('No active quest found');
-    });
-  });
-
-  describe('forkSession', () => {
-    it('creates a "Forked" session and copies messages up to the fork point', async () => {
-      const newSession = { id: 'fork-1', save: vi.fn().mockResolvedValue(undefined) };
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig', knowledgeIds: ['k'], tags: ['t'] });
-      QuestMock.findById.mockResolvedValueOnce({ timestamp: new Date(10) });
-      createSessionMock.mockResolvedValueOnce(newSession);
-      QuestMock.find.mockResolvedValueOnce([{ toObject: () => ({ _id: 'm1', id: 'm1', prompt: 'one' }) }]);
-      // addMessageToSession internals
-      SessionMock.findOne.mockResolvedValue({ id: 'fork-1', lastUpdated: new Date(0) });
-      QuestMock.create.mockResolvedValue({ id: 'copied' });
-
-      const result = await forkSession('s1', 'm1', ability);
-
-      expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Forked Orig' }, ability);
-      expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $lte: expect.any(Date) } });
-      // the single source message is re-created on the new session, without _id/id
-      expect(QuestMock.create).toHaveBeenCalledWith({ prompt: 'one', sessionId: 'fork-1' });
-      expect(result).toBe(newSession);
-    });
-
-    it('throws when the source message is missing', async () => {
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      QuestMock.findById.mockResolvedValueOnce(null);
-      await expect(forkSession('s1', 'missing', ability)).rejects.toThrow('Message not found');
-    });
-  });
-
-  describe('snipSession', () => {
-    it('copies messages from the snip point forward', async () => {
-      const newSession = { id: 'snip-1', save: vi.fn().mockResolvedValue(undefined) };
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      QuestMock.findById.mockResolvedValueOnce({ timestamp: new Date(10) });
-      createSessionMock.mockResolvedValueOnce(newSession);
-      QuestMock.find.mockResolvedValueOnce([]);
-
-      await snipSession('s1', 'm1', ability);
-
-      expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Snipped Orig' }, ability);
-      expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $gte: expect.any(Date) } });
-    });
-  });
-
-  describe('cloneSession', () => {
-    it('rejects when the ability lacks the clone permission', async () => {
-      const denyAbility = mockAbility(false);
-      await expect(cloneSession('s1', 'admin-1', denyAbility)).rejects.toThrow(
-        'User does not have permission to clone sessions'
-      );
-    });
-
-    it('clones the session under the admin user and copies all messages', async () => {
-      const newSession = { id: 'clone-1', save: vi.fn().mockResolvedValue(undefined) };
-      SessionMock.findById.mockResolvedValueOnce({ name: 'Orig', knowledgeIds: ['k'], tags: ['t'] });
-      createSessionMock.mockResolvedValueOnce(newSession);
-      QuestMock.find.mockResolvedValueOnce([{ toObject: () => ({ _id: 'm1', id: 'm1', prompt: 'x' }) }]);
-      SessionMock.findOne.mockResolvedValue({ id: 'clone-1', lastUpdated: new Date(0) });
-      QuestMock.create.mockResolvedValue({ id: 'copied' });
-
-      const result = await cloneSession('s1', 'admin-1', ability);
-
-      expect(createSessionMock).toHaveBeenCalledWith('admin-1', { name: 'Cloned Orig', knowledgeIds: ['k'] }, ability);
-      expect(QuestMock.create).toHaveBeenCalledWith({ prompt: 'x', sessionId: 'clone-1' });
-      expect(result).toBe(newSession);
     });
   });
 

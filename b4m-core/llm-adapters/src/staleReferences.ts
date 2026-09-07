@@ -22,7 +22,17 @@ export type StaleReferenceProblem = 'deprecated' | 'retired' | 'not-invocable' |
  * a chain pointing AT one is the outage this check exists to prevent.
  */
 export type StaleReferenceSurface =
-  'fallback-chain' | 'fallback-chain-key' | 'fallback-default' | 'deprecated-model-map' | 'replaced-by-overlay';
+  | 'fallback-chain'
+  | 'fallback-chain-key'
+  | 'fallback-default'
+  | 'deprecated-model-map'
+  | 'replaced-by-overlay'
+  // A built-in subagent's hardcoded model choice. Reported apart from its
+  // fallbacks for the same reason chain keys are: an agent whose PRIMARY model
+  // is unreachable degrades on every single delegation, while a dead fallback
+  // only costs the rung.
+  | 'agent-model'
+  | 'agent-fallback';
 
 export interface StaleModelReference {
   surface: StaleReferenceSurface;
@@ -58,6 +68,17 @@ export interface StaleReferenceInput {
   fallbackChains?: Readonly<Record<string, readonly string[]>>;
   /** The generic chain findAutomaticFallback uses when a model has no entry. */
   defaultChain?: readonly string[];
+  /**
+   * Built-in subagent model declarations, keyed by agent name. Injected rather
+   * than imported for the same reason as `fallbackChains`: the agent
+   * definitions live in @bike4mind/services, which depends on this package.
+   *
+   * These are hardcoded ids exactly like a fallback chain, and until they were
+   * covered here nothing checked them: an agent could name a model the
+   * deployment cannot serve and the only evidence was a failed delegation in
+   * the user's face.
+   */
+  agentModels?: Readonly<Record<string, { model?: string; fallbackModels?: readonly string[] }>>;
   now?: Date;
 }
 
@@ -117,6 +138,11 @@ export function checkStaleModelReferences(input: StaleReferenceInput): StaleMode
   }
 
   for (const referencedId of input.defaultChain ?? []) check('fallback-default', 'default', referencedId);
+
+  for (const [agentName, decl] of Object.entries(input.agentModels ?? {})) {
+    if (decl.model) check('agent-model', agentName, decl.model);
+    for (const referencedId of decl.fallbackModels ?? []) check('agent-fallback', agentName, referencedId);
+  }
 
   // Only the targets: the keys of a redirect table are dead ids by definition.
   for (const [source, target] of Object.entries(DEPRECATED_MODEL_MAP)) check('deprecated-model-map', source, target);

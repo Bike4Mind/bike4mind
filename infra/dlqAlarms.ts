@@ -34,6 +34,7 @@ import {
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   lakeMemoryQueueDLQ,
+  driveLakeIngestQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -235,6 +236,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'lakeMemoryQueue',
     queue: lakeMemoryQueueDLQ,
+  },
+  {
+    label: 'drive-lake-ingest',
+    displayName: 'Drive Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveLakeIngestQueue',
+    queue: driveLakeIngestQueueDLQ,
   },
   {
     label: 'video-generation',
