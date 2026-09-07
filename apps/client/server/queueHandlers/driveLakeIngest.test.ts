@@ -180,6 +180,7 @@ describe('driveLakeIngest consumer', () => {
     h.releaseSyncClaim.mockResolvedValue({ id: 'conn1', status: 'connected' });
     h.lakeFindById.mockResolvedValue({
       id: 'lake1',
+      status: 'active',
       datalakeTag: 'lake-tag',
       fileTagPrefix: 'demo:',
       createdByUserId: 'creator1',
@@ -1132,6 +1133,34 @@ describe('driveLakeIngest consumer', () => {
       else expect(h.releaseSyncClaim).not.toHaveBeenCalled();
     });
 
+    it('settles an adopted batch when the target lake is archived mid-chain', async () => {
+      // Same early-return shape as the connection/lake/user-not-found exits above: a continuation
+      // reaching a now-archived lake still owns an adopted batch that needs settling.
+      h.lakeFindById.mockResolvedValue({
+        id: 'lake1',
+        status: 'archived',
+        datalakeTag: 'lake-tag',
+        fileTagPrefix: 'demo:',
+        createdByUserId: 'creator1',
+      });
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 3,
+        skippedFiles: 0,
+        files: [{ fabFileId: 'ff-prev' }],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
+
+      expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-adopt', null);
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
     it('forwards the chain identity when a continuation loses the claim race and must defer', async () => {
       // A continuation that cannot re-adopt or freshly claim must not come back as a brand-new
       // first-slice sync on its deferred retry - that would carry no resumeBatchId, subtract
@@ -1163,6 +1192,28 @@ describe('driveLakeIngest consumer', () => {
       expect(h.walkFolder).not.toHaveBeenCalled();
     });
   });
+
+  it.each(['archived', 'archiving', 'deleting', 'deleted', 'unarchiving', 'restoring', 'purging'])(
+    'is a no-op, not a failure, when the target data lake is %s',
+    async status => {
+      h.lakeFindById.mockResolvedValue({
+        id: 'lake1',
+        status,
+        datalakeTag: 'lake-tag',
+        fileTagPrefix: 'demo:',
+        createdByUserId: 'creator1',
+      });
+
+      await run();
+
+      expect(h.walkFolder).not.toHaveBeenCalled();
+      expect(h.batchCreate).not.toHaveBeenCalled();
+      // Healed, not failed: the claim is released with no error, same as a fresh sync that found
+      // nothing to do, so a lifecycle transition can never leave the connection stuck 'syncing'.
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
 
   it('releases the syncing claim (guarded) when the run throws mid-ingest', async () => {
     h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);

@@ -8,6 +8,7 @@ import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLa
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
+import { bestEffortSetDriveConnectionEnabled, type DriveConnectionEnablePort } from './ports';
 
 interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
@@ -27,6 +28,8 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
       'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'
     >;
   };
+  /** Re-enable the lake's Drive connection, reversing archive/delete's disable. See ports.ts. */
+  enableDriveConnection?: DriveConnectionEnablePort;
 }
 
 /**
@@ -49,7 +52,7 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
 export const restoreDeletedDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, logger }: RestoreDeletedDataLakeAdapters
+  { db, enableDriveConnection, logger }: RestoreDeletedDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -149,6 +152,10 @@ export const restoreDeletedDataLake = async (
       },
       { db, logger }
     );
+    // Reverses archive/delete's disable - see ports.ts for why this is best-effort. Open question:
+    // a 'deleted' lake's connection may already be hard-released via the manual purge cleanup
+    // action by the time restore is reachable, in which case this is a no-op (no connection found).
+    await bestEffortSetDriveConnectionEnabled(enableDriveConnection, dataLakeId, logger);
   }
   // Logger forwarded for parity with every other recompute call, not because an audit row is
   // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's

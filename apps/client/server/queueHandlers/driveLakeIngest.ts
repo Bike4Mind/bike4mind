@@ -386,6 +386,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
+    // Same rule as the web/Slack upload doors: only a draft (first batch) or active lake takes new
+    // files. An archived/deleting (or any other transitional) lake is a no-op here, not a failure -
+    // the connection should already be disabled by the lifecycle transition, but this closes the
+    // window for anything already enqueued or in flight when that transition happened.
+    if (lake.status !== 'draft' && lake.status !== 'active') {
+      logger.info('[driveLakeIngest] target data lake is not writable; dropping', {
+        connectionId,
+        lakeStatus: lake.status,
+      });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim(null);
+      return;
+    }
     const user = await User.findById(connection.connectedBy);
     if (!user) {
       logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });

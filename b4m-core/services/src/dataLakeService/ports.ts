@@ -85,3 +85,34 @@ export async function strictIndexRemove(
   if (!retrievalIndex) return;
   await retrievalIndex.removeForDataLake(input);
 }
+
+/**
+ * Optional port: flip `enabled` on whatever Drive connection feeds a lake - disable on
+ * archive/delete, re-enable on unarchive/restore. Injected because the connection lookup + write
+ * lives in the app layer (see disableDriveConnectionForLake/enableDriveConnectionForLake), same
+ * reason `releaseDriveConnection` is injected into cleanupDeletedDataLake. Absent -> a host
+ * without the Drive integration is unaffected.
+ */
+export type DriveConnectionEnablePort = (args: { dataLakeId: string }) => Promise<void>;
+
+/**
+ * Archive/delete/unarchive/restore: a failure here is logged, not fatal. The ingest-level status
+ * guard (driveLakeIngest.ts) already refuses to sync a lake that is not draft/active, so this port
+ * is defense in depth against the poll cron enqueueing wasted work, not the only thing standing
+ * between a non-active lake and its files - failing the whole lifecycle transition over a Drive
+ * hiccup here would be a worse outcome than a connection briefly out of sync with its lake.
+ */
+export async function bestEffortSetDriveConnectionEnabled(
+  port: DriveConnectionEnablePort | undefined,
+  dataLakeId: string,
+  // Optional `warn` (not the required shape bestEffortIndexRemove takes): unarchive/restore only
+  // inherit LakeConfigAuditAdapters's LakeConfigAuditLogger, which declares it optional.
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void }
+): Promise<void> {
+  if (!port) return;
+  try {
+    await port({ dataLakeId });
+  } catch (error) {
+    logger?.warn?.(`Failed to update Drive connection enabled state for lake ${dataLakeId}:`, error);
+  }
+}

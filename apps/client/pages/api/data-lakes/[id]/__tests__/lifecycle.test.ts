@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/data-lake-cleanup'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
+  disableDriveConnectionForLake: vi.fn(),
+  enableDriveConnectionForLake: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the serve/gears tests).
@@ -79,6 +81,10 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpen
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@server/integrations/google/drive/common', () => ({
+  disableDriveConnectionForLake: h.disableDriveConnectionForLake,
+  enableDriveConnectionForLake: h.enableDriveConnectionForLake,
+}));
 
 import handler from '../lifecycle';
 
@@ -293,5 +299,28 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
       'lake1',
       expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
     );
+  });
+
+  // Unwired, an archived/deleted lake's Drive connection keeps polling forever - see
+  // disableDriveConnectionForLake's own doc. Assert the wiring, not just that the key is present:
+  // a port passed but never invoking the real function is the same gap as an unwired one.
+  it.each([
+    ['archive', 'archiveDataLake', 'disableDriveConnectionForLake'],
+    ['delete', 'deleteDataLake', 'disableDriveConnectionForLake'],
+    ['unarchive', 'unarchiveDataLake', 'enableDriveConnectionForLake'],
+    ['restore', 'restoreDeletedDataLake', 'enableDriveConnectionForLake'],
+  ] as const)('%s wires the Drive connection %s port', async (action, serviceName, portName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    const call = h[serviceName].mock.calls[0][2] as {
+      disableDriveConnection?: unknown;
+      enableDriveConnection?: unknown;
+    };
+    const port = (call.disableDriveConnection ?? call.enableDriveConnection) as (args: {
+      dataLakeId: string;
+    }) => Promise<void>;
+    await port({ dataLakeId: 'lake1' });
+    expect(h[portName]).toHaveBeenCalledWith('lake1');
   });
 });

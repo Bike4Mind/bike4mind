@@ -1804,6 +1804,53 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
   });
 });
 
+describe('unarchiveDataLake - Drive connection re-enable', () => {
+  const makeAdapters = () => {
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+    return { db: { dataLakes, fabFiles } };
+  };
+
+  it('re-enables the Drive connection once the lake has settled back to active', async () => {
+    const adapters = makeAdapters();
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection });
+
+    expect(enableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it('does not re-enable when the settle is lost (lake moved mid-restore)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockResolvedValue(null);
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockResolvedValueOnce(lake({ status: 'archived' }))
+      .mockResolvedValue(lake({ status: 'deleted' }));
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection })
+    ).rejects.toThrow(/moved to 'deleted'/i);
+    expect(enableDriveConnection).not.toHaveBeenCalled();
+  });
+});
+
 describe('restoreDeletedDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
     const blank = lake({ createdByUserId: '', status: 'deleted' });
@@ -1864,6 +1911,35 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
     expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
+  });
+});
+
+describe('restoreDeletedDataLake - Drive connection re-enable', () => {
+  it('re-enables the Drive connection once the lake has settled back to active', async () => {
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles },
+      enableDriveConnection,
+    });
+
+    expect(enableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
   });
 });
 
@@ -2123,6 +2199,64 @@ describe('archiveDataLake - retrieval-index removal', () => {
   });
 });
 
+describe('archiveDataLake - Drive connection disable', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        setStats: vi.fn().mockResolvedValue(undefined),
+        activateIfDraft: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesArchivedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimArchiving: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        archiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('disables the Drive connection once the lake has settled to archived', async () => {
+    const adapters = makeAdapters();
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection });
+
+    expect(disableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it('does not fail the archive when disabling the Drive connection throws (defense in depth only)', async () => {
+    const adapters = makeAdapters();
+    const disableDriveConnection = vi.fn().mockRejectedValue(new Error('drive down'));
+
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to update Drive connection enabled state for lake lake1'),
+      expect.any(Error)
+    );
+  });
+
+  it('is a no-op when no Drive connection port is wired', async () => {
+    const adapters = makeAdapters();
+    await expect(archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters)).resolves.toMatchObject({
+      status: 'archived',
+    });
+  });
+});
+
 describe('deleteDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
     const blank = lake({ createdByUserId: '' });
@@ -2203,6 +2337,40 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
       expect.stringContaining('Best-effort index removal failed for datalake:lake'),
       expect.any(Error)
     );
+  });
+});
+
+describe('deleteDataLake - Drive connection disable', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('disables the Drive connection once the lake has settled to deleted', async () => {
+    const adapters = makeAdapters();
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection });
+
+    expect(disableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
   });
 });
 
