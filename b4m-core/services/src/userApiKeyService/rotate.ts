@@ -1,5 +1,5 @@
-import { IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -17,6 +17,12 @@ interface RotateUserApiKeyAdapters {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
+  /**
+   * Scopes of the API key making the request, when the caller authenticated with one.
+   * Undefined for a browser/JWT caller, who is already the full account and gains
+   * nothing from a rotation. See the no-escalation rule below.
+   */
+  callerScopes?: ApiKeyScope[];
 }
 
 export interface RotateUserApiKeyResult {
@@ -66,6 +72,18 @@ export const rotateUserApiKey = async (
   const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
+  }
+
+  // No escalation by rotation. Rotation hands back a working plaintext credential, so
+  // an API-key caller may only rotate a key whose scopes it already holds - otherwise a
+  // deliberately narrow key could name its owner's admin:* key and be answered with one.
+  // A browser/JWT caller is unrestricted: they already hold the whole account.
+  if (adapters.callerScopes) {
+    const callerScopes = adapters.callerScopes;
+    const escalating = (apiKey.scopes ?? []).filter(scope => !callerScopes.includes(scope));
+    if (escalating.length > 0) {
+      throw new ForbiddenError('Cannot rotate a key holding scopes the calling key does not have');
+    }
   }
 
   const { key, keyPrefix, keyHash } = generateNewApiKey();

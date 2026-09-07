@@ -22,6 +22,9 @@ const handler = baseApi().post(
           userApiKeys: userApiKeyRepository,
           organizations: organizationRepository,
         },
+        // Undefined for a browser/JWT caller; set only when an API key is rotating,
+        // which is when the no-escalation rule applies.
+        callerScopes: req.apiKeyInfo?.scopes,
       }
     );
 
