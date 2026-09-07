@@ -10,6 +10,10 @@
  * the filtered, bundled markdown files.
  *
  * Usage: OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize
+ *
+ * HELP_EMBEDDINGS_REQUIRED=false downgrades a missing key or a failed embedding run
+ * from a build failure to a skip, leaving any existing help-embeddings.json in place
+ * and letting retrieval.ts fall back to keyword search. See embeddingsConfig.ts.
  */
 
 import * as fs from 'fs';
@@ -21,6 +25,7 @@ import { EmbeddingFactory } from '@bike4mind/fab-pipeline';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 import type { HelpEmbeddingChunk, HelpEmbeddingsIndex, HelpIndex, HelpAccessLevel } from './types.js';
 import { chunkByHeadings, estimateTokenCount, truncateAndNormalize } from './utils.js';
+import { helpEmbeddingsRequired } from './embeddingsConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -190,12 +195,7 @@ export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkD
  * Vectors are truncated to EMBEDDING_DIMENSIONS (no-op at native 1536) and
  * floats are rounded to FLOAT_PRECISION decimal places for JSON size savings.
  */
-async function generateEmbeddings(chunks: ChunkData[]): Promise<HelpEmbeddingChunk[]> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is required');
-  }
-
+async function generateEmbeddings(chunks: ChunkData[], apiKey: string): Promise<HelpEmbeddingChunk[]> {
   const factory = new EmbeddingFactory({ openaiApiKey: apiKey });
   const service = factory.createEmbeddingService(EMBEDDING_MODEL);
 
@@ -246,7 +246,26 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const embeddedChunks = await generateEmbeddings(chunks);
+  const required = helpEmbeddingsRequired();
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    if (required) {
+      throw new Error('OPENAI_API_KEY environment variable is required');
+    }
+    console.warn('OPENAI_API_KEY not set and HELP_EMBEDDINGS_REQUIRED=false - skipping vectorization.');
+    console.warn('Help search will use the keyword fallback.');
+    return;
+  }
+
+  let embeddedChunks: HelpEmbeddingChunk[];
+  try {
+    embeddedChunks = await generateEmbeddings(chunks, apiKey);
+  } catch (error) {
+    if (required) throw error;
+    console.warn('Vectorization failed and HELP_EMBEDDINGS_REQUIRED=false - leaving any existing embeddings in place.');
+    console.warn('Help search will use the keyword fallback. Cause:', error);
+    return;
+  }
 
   // Count unique articles
   const uniqueSlugs = new Set(embeddedChunks.map(c => c.slug));
