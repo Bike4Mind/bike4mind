@@ -2931,8 +2931,10 @@ export class ChatCompletionProcess {
             : [],
         urls: urlMessages,
         attachedFiles: fabMessages,
-        // Caller-supplied systemPrompt (API-only), appended last so it sits at the tail of the
-        // stack - after even the caller's own attached files/URLs above.
+        // Caller-supplied systemPrompt, reachable from both POST /api/chat and /api/ai/llm.
+        // Appended last so it sits at the tail of the stack - after even the caller's own
+        // attached files/URLs above. Note this is assembly order only: in the retention table
+        // it outranks lake grounding, so it defers by prose, not by budget priority.
         callerPrompt: renderCallerPromptMessages(parsedBody.systemPrompt),
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
