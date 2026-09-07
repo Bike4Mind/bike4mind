@@ -2,8 +2,14 @@
  * Single source of truth for locating the installed `highs` WASM binary.
  *
  * Two deploy surfaces need this same path and would otherwise each hard-code it:
- *  - the browser bundle (apps/client/scripts/copy-highs-wasm.mjs -> public/highs.wasm)
+ *  - the browser bundle (./copy-highs-wasm.mjs -> public/highs.wasm)
  *  - the plain SST Lambdas that can execute the premium tool set (infra/toolRuntimeAssets.ts)
+ *
+ * It lives under apps/client/scripts rather than the repo-root scripts/ because the client's
+ * postinstall imports it, and the ChatCompletion images install dependencies before copying
+ * the repo (they COPY only apps/client/scripts up front). A repo-root path is not on disk at
+ * install time there, and a failed import would bypass the no-op-when-highs-is-absent guard
+ * below. infra -> apps/client is the safe direction; apps/client -> repo root is not.
  *
  * The remaining two are covered for free and need nothing from here: the Next.js server and
  * the ChatCompletion container both ship real node_modules.
@@ -23,13 +29,13 @@ const require = createRequire(import.meta.url);
 const WASM_FILE = 'highs.wasm';
 
 /**
- * Default repo root: this file lives in `<root>/scripts`.
+ * Default repo root: this file lives in `<root>/apps/client/scripts`.
  *
  * Only correct while this module is executed from source, which is true for the pnpm scripts.
  * Callers running inside a bundle (SST evaluates sst.config.ts as one) must pass their own
  * root instead - see infra/toolRuntimeAssets.ts, which passes `$cli.paths.root`.
  */
-const DEFAULT_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const DEFAULT_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 /**
  * Absolute path to the installed `highs.wasm`, or null when `highs` is not installed.

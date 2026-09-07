@@ -9,7 +9,7 @@
  * No-op when `highs` is not installed (open-core installs without the overlay). Runs via
  * pnpm postinstall / predev / prebuild so the binary is always present and current.
  *
- * The path itself comes from scripts/resolve-highs-wasm.mjs, shared with infra/ so the
+ * The path itself comes from ./resolve-highs-wasm.mjs, shared with infra/ so the
  * browser and the Lambda bundles cannot disagree about where the binary lives.
  */
 
@@ -17,7 +17,7 @@ import { copyFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { resolveHighsWasm, isOptihashiOverlayPresent } from '../../../scripts/resolve-highs-wasm.mjs';
+import { resolveHighsWasm, isOptihashiOverlayPresent } from './resolve-highs-wasm.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

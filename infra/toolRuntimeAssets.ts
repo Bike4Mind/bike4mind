@@ -21,7 +21,7 @@
 
 import path from 'path';
 
-import { resolveHighsWasm, isOptihashiOverlayPresent } from '../scripts/resolve-highs-wasm.mjs';
+import { resolveHighsWasm, isOptihashiOverlayPresent } from '../apps/client/scripts/resolve-highs-wasm.mjs';
 
 /** An `sst.aws.Function` `copyFiles` entry. */
 export type RuntimeAsset = { from: string; to: string };
