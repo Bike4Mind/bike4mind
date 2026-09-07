@@ -423,6 +423,16 @@ export const RetrievalSummarySchema = z.object({
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
+  /**
+   * Ids of the lakes whose `systemPrompt` was injected this turn (getAccessibleDataLakePrompts),
+   * across every injection site (forced retrieval and the model-driven knowledge tools). NOT the
+   * prompt text itself - that already reaches the model in the completion, and copying it here
+   * widens exposure for nothing. Absent means no injection site ran; present-and-empty means one
+   * ran but nothing qualified (untrusted, or an empty systemPrompt).
+   */
+  injectedLakePromptIds: z.array(z.string()).optional(),
+  /** mementoCount/mementoIds precedent: mirrors injectedLakePromptIds.length. */
+  injectedLakePromptCount: z.number().optional(),
 });
 
 /**

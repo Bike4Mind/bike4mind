@@ -1784,6 +1784,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * a lake-prompt failure must not drop the retrieved grounding this feature exists to provide.
    */
   private async resolveRetrievedLakePromptMessage(
+    quest: IChatHistoryItemDocument,
     sourceFileIds: string[],
     fileById: ReadonlyMap<string, { tags?: Array<{ name: string }> }>
   ): Promise<IMessage | null> {
@@ -1798,6 +1799,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         { db, user, entitlementKeys, logger: this.logger },
         { restrictToDatalakeTags: datalakeTags }
       );
+      // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
+      // is distinct from absent - see the field's own comment in promptMeta.ts).
+      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+        attempted: true,
+        surfaces: [],
+        dataLakeTags: [],
+        injectedLakePromptIds: prompts.map(p => p.id),
+      });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;
 
@@ -2451,7 +2461,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // provenance tags on the injected source files. A turn that grounds on no lake injects no lake
       // prompt. Ahead of the retrieved content so it frames how to use it. Fail-safe: any failure
       // here degrades to no lake prompt and never drops the retrieved context.
-      const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(sourceFileIds, fileById);
+      const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(quest, sourceFileIds, fileById);
 
       // Best-effort audit write, attributed via the tags on the files this turn actually
       // grounded on (sourceFileIds), not the wider scanned candidate pool. The candidate search

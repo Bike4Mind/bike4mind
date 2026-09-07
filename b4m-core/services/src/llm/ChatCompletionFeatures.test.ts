@@ -1623,6 +1623,42 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(contents[0]).toContain('[Data Lake - Lake Y]\nY rules.');
     expect(contents[0].match(/\[Data Lake Instructions\]/g)).toHaveLength(1);
   });
+
+  it('records the injected lake id in promptMeta.retrieval when injection fired', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(1);
+  });
+
+  it('leaves promptMeta.retrieval unset when no lake-tagged file was grounded on (site never ran)', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    // No datalake-tagged file was grounded on, so resolveRetrievedLakePromptMessage's own write
+    // never runs (contrast prependRetrievedLakePrompts, whose site runs even when its scoped tags
+    // resolve to no qualifying prompt) - only the coarser outcome-tracking write elsewhere in this
+    // feature touches promptMeta.retrieval here.
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
+  });
 });
 
 /**

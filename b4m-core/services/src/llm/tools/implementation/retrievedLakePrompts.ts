@@ -14,8 +14,9 @@ import { renderDataLakePromptSection } from '../../../dataLakeService/renderData
  * so a lake used by both within one turn is injected once per tool (idempotent, ~a few extra tokens).
  * The block rides INSIDE a tool RESULT, which is model-facing content, so it MUST carry the
  * renderDataLakePromptSection defenses (org-deference header + block-marker defang) - that is what
- * keeps a lake owner from forging an organization block. Fail-safe: any failure (and the agent-
- * scoped case, which passes no tags) returns the tool result unchanged.
+ * keeps a lake owner from forging an organization block. Fail-safe: any RESOLUTION failure (and the
+ * agent-scoped case, which passes no tags) returns the tool result unchanged; the telemetry write is
+ * separately guarded, so recording can never drop the injection it records.
  */
 export async function prependRetrievedLakePrompts(
   context: ToolContext,
@@ -31,6 +32,26 @@ export async function prependRetrievedLakePrompts(
     for (const tag of fresh) injectedLakeTags.add(tag);
 
     const prompts = await getAccessibleDataLakePrompts(context, { restrictToDatalakeTags: fresh });
+    // Recorded whenever this injection site ran, even if nothing qualified - see the field's own
+    // comment in promptMeta.ts. Merges onto whatever the tool's own retrieval outcome write already
+    // set (applyQuestStatusChanges / mergeRetrievalSummary), not a replacement. Its own try/catch:
+    // the fresh tags are marked injected above, so a recording failure reaching the outer catch
+    // would drop this turn's section with no way to re-resolve it. It stays ABOVE the render so the
+    // ran-but-nothing-qualified case is still recorded as present-and-empty.
+    try {
+      await context.statusUpdate({
+        promptMeta: {
+          retrieval: {
+            attempted: true,
+            surfaces: [],
+            dataLakeTags: [],
+            injectedLakePromptIds: prompts.map(p => p.id),
+          },
+        },
+      });
+    } catch (err) {
+      context.logger.warn('\u{1F4CB} KB tool: lake-prompt telemetry write failed; injecting anyway:', err);
+    }
     const section = renderDataLakePromptSection(prompts);
     if (!section) return resultText;
 
