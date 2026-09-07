@@ -83,9 +83,7 @@ const handler = baseApi().post(
       fileStorageService: {
         getFileContent: async (filePath: string): Promise<Buffer | null> => {
           try {
-            // Returned as bytes on purpose. A UTF-8 decode here would replace every byte outside
-            // UTF-8 with U+FFFD before the service base64-encodes it, so every binary knowledge
-            // file (PDF, PNG, ...) would export as unusable mojibake that no consumer can recover.
+            // Bytes, never a decoded string - see ExportFileStorage.getFileContent for why.
             return await getFilesStorage().getContentAsBuffer(filePath);
           } catch (error) {
             req.logger.error('Failed to read file content', { filePath, error });

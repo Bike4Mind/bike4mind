@@ -582,6 +582,19 @@ describe('notebook export - knowledge file bytes', () => {
     expect(Buffer.from(knowledge.content, 'base64').equals(PDF_BYTES)).toBe(true);
   });
 
+  // The branch the `!== null` change deliberately rewrote, pinned in both directions. A zero-byte
+  // file now embeds an empty `content` where it used to emit a `contentUrl` reference, because an
+  // empty Buffer is truthy while the empty string it replaced was falsy. Neither shape round trips
+  // (the import cannot tell empty-but-present from absent), so this records what the export emits
+  // rather than blessing it.
+  it('embeds an empty knowledge file as empty content, not a url reference', async () => {
+    const payload = await exportWithKnowledge(Buffer.alloc(0));
+    const [knowledge] = payload.notebooks[0].knowledge;
+
+    expect(knowledge.content).toBe('');
+    expect(knowledge.contentUrl).toBeUndefined();
+  });
+
   it('embeds a UTF-8 text file unchanged', async () => {
     const payload = await exportWithKnowledge(TEXT_BYTES, TEXT_FILE);
     const [knowledge] = payload.notebooks[0].knowledge;
@@ -652,6 +665,12 @@ describe('notebook export - image bytes', () => {
     expect(Buffer.from(image, 'base64').equals(PDF_BYTES)).toBe(true);
   });
 
+  // Pins CURRENT, KNOWN-BROKEN behaviour, not desired behaviour: `images` is a flat string[] that
+  // holds base64 on success and a raw storage path on failure, with nothing to tell them apart, so
+  // a consumer decoding every element gets plausible garbage from the path entries (Node's base64
+  // decoder does not reject them). Giving images the content/contentUrl split knowledge files
+  // already have is the fix; when that lands, this expectation SHOULD change - it is not a
+  // regression guard for the string[] shape.
   it('exports the path instead when the image cannot be read', async () => {
     const payload = await exportWithImage(null);
 

@@ -407,9 +407,8 @@ export class NotebookExportService {
             const storagePath = file.filePath;
             if (storagePath) {
               const content = await this.adapters.fileStorageService.getFileContent(storagePath);
-              // `=== null` rather than truthiness, matching processImages below. An empty Buffer is
-              // a truthy object where the old `string` was falsy, so relying on truthiness here
-              // would make a zero-byte file's branch an accident of the return type.
+              // `=== null`, matching processImages below: an empty Buffer is truthy where the old
+              // `string` was falsy, so truthiness would make the zero-byte branch an accident.
               if (content !== null) {
                 exportedFile.content = content.toString('base64');
               } else {
