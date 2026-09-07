@@ -102,7 +102,8 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
     h.findByDatalakeTag.mockResolvedValue(LAKE);
     h.listByLake.mockResolvedValue([]);
     h.listActiveByLakes.mockResolvedValue([]);
-    h.findAllAccessibleByIds.mockResolvedValue([{ id: 'f1', userId: 'u2', tags: [] }]);
+    const file = { id: 'f1', userId: 'u2', tags: [] };
+    h.findAllAccessibleByIds.mockResolvedValue([{ ...file, toJSON: () => file }]);
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 0, totalChunkedChars: 0 });
   });
 
