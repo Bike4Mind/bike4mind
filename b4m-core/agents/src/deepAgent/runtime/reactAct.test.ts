@@ -224,4 +224,34 @@ describe('createReActRunAct sandbox wiring', () => {
     const starting = logger.info.mock.calls.find(c => String(c[0]).includes('starting'));
     expect(starting?.[1]).toMatchObject({ codeExecute: false, tools: [] });
   });
+
+  // An isolate is an OS-level resource (its own V8 heap, plus host-side
+  // Reference handles that the guest isolate's own disposal does not reclaim).
+  // The wake runtime is long-lived, so a leak here accumulates per wake rather
+  // than being cleaned up by process exit.
+  it('disposes the isolate when the wake completes', async () => {
+    await runAct();
+
+    expect(mockSessionDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes the isolate even when the agent run throws', async () => {
+    mockAgentRun.mockRejectedValueOnce(new Error('llm exploded mid-trajectory'));
+
+    await expect(runAct()).rejects.toThrow('llm exploded mid-trajectory');
+
+    // The failure path is the one that matters: a wake that throws is exactly
+    // when nobody is around to clean up after it.
+    expect(mockSessionDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not attempt disposal when the sandbox was never constructed', async () => {
+    mockReplSessionCtor.mockImplementationOnce(() => {
+      throw new Error('No native build was found for isolated-vm');
+    });
+
+    await runAct();
+
+    expect(mockSessionDispose).not.toHaveBeenCalled();
+  });
 });

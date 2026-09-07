@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ReplSession } from './ReplSession';
 import { makeCodeExecuteTool, CODE_EXECUTE_TOOL_NAME } from './codeExecuteTool';
+import { ReplSandboxRetiredError } from './replExecutor';
 
 describe('makeCodeExecuteTool', () => {
   let session: ReplSession;
@@ -80,5 +81,42 @@ describe('makeCodeExecuteTool', () => {
 
     await tool.toolFn({ code: 'throw new Error("x");' });
     expect(warn).toHaveBeenCalled();
+  });
+
+  it('reports a retired sandbox as terminal, not as an unexpected error', async () => {
+    // A memory-limit breach or a host deadline kills the isolate for good. The
+    // old wording ("[unexpected] ... has been disposed") read as transient, so
+    // the agent kept re-calling code_execute and burned an iteration on each
+    // attempt for the rest of the loop.
+    const retired = {
+      sessionId: 'retired',
+      getUsage: () => ({ executions: 0 }),
+      runCode: async () => {
+        throw new ReplSandboxRetiredError('IsolatedVmExecutor [wake] has been disposed');
+      },
+    } as unknown as ReplSession;
+    const tool = makeCodeExecuteTool({ session: retired });
+
+    const out = await tool.toolFn({ code: 'console.log(1);' });
+
+    expect(out).toContain('SANDBOX UNAVAILABLE');
+    expect(out).toContain('Do not call code_execute again');
+    expect(out).not.toContain('[unexpected]');
+  });
+
+  it('still reports a genuinely unexpected error as unexpected', async () => {
+    const broken = {
+      sessionId: 'broken',
+      getUsage: () => ({ executions: 0 }),
+      runCode: async () => {
+        throw new Error('mongo connection reset');
+      },
+    } as unknown as ReplSession;
+    const tool = makeCodeExecuteTool({ session: broken });
+
+    const out = await tool.toolFn({ code: 'console.log(1);' });
+
+    expect(out).toContain('[unexpected] mongo connection reset');
+    expect(out).not.toContain('SANDBOX UNAVAILABLE');
   });
 });

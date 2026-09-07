@@ -50,15 +50,41 @@ const HAIKU_MODEL_ID = 'claude-haiku-4-5-20251001';
  * under-counted an Opus call by ~19x and let one request quietly outspend its
  * own cap.
  *
- * Rates are USD per token. Update alongside provider pricing changes.
+ * Rates are USD per token, at Anthropic's published first-party list price.
+ * Update alongside provider pricing changes. A `Map`, not an object literal,
+ * because membership doubles as the allowlist: `SUB_LLM_PRICING[model]` on a
+ * plain object resolves inherited keys, so a `model` of "constructor" (or
+ * "toString", "valueOf", ...) passed the truthiness check and reached the
+ * provider. A Map has no prototype chain to walk.
  */
-const SUB_LLM_PRICING: Record<string, { inputPerToken: number; outputPerToken: number }> = {
-  [HAIKU_MODEL_ID]: { inputPerToken: 0.8e-6, outputPerToken: 4e-6 },
-};
+const SUB_LLM_PRICING = new Map<string, { inputPerToken: number; outputPerToken: number }>([
+  // Claude Haiku 4.5: $1.00 / MTok in, $5.00 / MTok out. Was entered at
+  // Haiku 3.5's $0.80 / $4.00, which under-priced every call by 20% - and the
+  // cap is only as tight as the numbers behind it.
+  [HAIKU_MODEL_ID, { inputPerToken: 1e-6, outputPerToken: 5e-6 }],
+]);
 
 /** Rough chars-per-token for the pre-flight cost estimate. Settled with real
  *  usage as soon as the call returns, so it only has to be the right order. */
 const ESTIMATE_CHARS_PER_TOKEN = 4;
+
+/**
+ * Wall-clock budget for ONE tool call's HTTP work, shared across every request
+ * that call makes (`getArticle` makes three sequentially, so they draw on one
+ * signal rather than getting 15s each).
+ *
+ * Must stay under the REPL's per-tool-call cap, which is itself under the
+ * per-`code_execute` cap: the innermost bound should be the one that fires, so
+ * the agent gets "this article timed out" and keeps its sandbox. If the REPL's
+ * host deadline wins instead, the only preemption it has is disposing the
+ * isolate, and one slow S3 read costs the session every later code_execute.
+ * The 30s that used to sit on the body fetch was ABOVE the 25.5s host
+ * deadline, so it could never fire.
+ */
+const TOOL_HTTP_TIMEOUT_MS = 15_000;
+
+/** One shared abort signal per tool call - see TOOL_HTTP_TIMEOUT_MS. */
+const toolHttpDeadline = () => AbortSignal.timeout(TOOL_HTTP_TIMEOUT_MS);
 
 interface SemanticSearchArgs {
   query: string;
@@ -89,7 +115,7 @@ interface GetArticleArgs {
 
 interface SubAgentQueryArgs {
   prompt: string;
-  /** `'haiku'` or an id in SUB_LLM_PRICING. Anything else is refused. */
+  /** `'haiku'` or a key of SUB_LLM_PRICING. Anything else is refused. */
   model?: string;
   max_tokens?: number;
 }
@@ -111,6 +137,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     if (!a.query) throw new Error('semanticSearch: query is required');
     const r = await fetch(`${baseUrl}/api/data-lakes/semantic-search`, {
       method: 'POST',
+      signal: toolHttpDeadline(),
       headers,
       body: JSON.stringify({
         query: a.query,
@@ -157,6 +184,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     }
     const r = await fetch(`${baseUrl}/api/data-lakes/articles?${params}`, {
       method: 'GET',
+      signal: toolHttpDeadline(),
       headers: { ...deps.authHeaders },
     });
     if (!r.ok) throw new Error(`keywordSearch ${r.status}: ${(await r.text()).slice(0, 200)}`);
@@ -176,6 +204,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     if (a.tag) params.append('tags', a.tag);
     const r = await fetch(`${baseUrl}/api/data-lakes/articles?${params}`, {
       method: 'GET',
+      signal: toolHttpDeadline(),
       headers: { ...deps.authHeaders },
     });
     if (!r.ok) throw new Error(`listArticles ${r.status}: ${(await r.text()).slice(0, 200)}`);
@@ -208,8 +237,13 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     }
     const cap = Math.min(Math.max(a.max_chars ?? 12_000, 100), 60_000);
 
+    // One deadline for all three requests below, created once so they share a
+    // single wall-clock budget instead of each getting the full allowance.
+    const signal = toolHttpDeadline();
+
     // Fetch metadata to learn the filePath
     const metaR = await fetch(`${baseUrl}/api/data-lakes/articles?id=${encodeURIComponent(a.file_id)}`, {
+      signal,
       headers: { ...deps.authHeaders },
     });
     if (metaR.status === 404) {
@@ -226,18 +260,17 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     // Get presigned URL and fetch the body
     const urlR = await fetch(
       `${baseUrl}/api/files/presigned-url?filePaths%5B%5D=${encodeURIComponent(article.filePath)}`,
-      { headers: { ...deps.authHeaders } }
+      { signal, headers: { ...deps.authHeaders } }
     );
     if (!urlR.ok) throw new Error(`getArticle presigned ${urlR.status}`);
     const { urls } = (await urlR.json()) as { urls: string[] };
     const presigned = urls?.[0];
     if (!presigned) throw new Error('getArticle: no presigned URL returned');
 
-    // 30s timeout on the S3 body fetch - without this, a stalled connection
-    // hangs the agent's `code_execute` indefinitely. Caller's outer Lambda
-    // timeout (55s) is the backstop, but local timeouts surface the failure
-    // mode cleanly so the agent can retry/skip the article.
-    const bodyR = await fetch(presigned, { signal: AbortSignal.timeout(30_000) });
+    // Same shared deadline as the two calls above (see TOOL_HTTP_TIMEOUT_MS).
+    // A stalled connection here used to hang `code_execute` past the REPL's
+    // own host deadline, which retires the isolate for the whole session.
+    const bodyR = await fetch(presigned, { signal });
     if (!bodyR.ok) throw new Error(`getArticle s3 ${bodyR.status}`);
     let body = await bodyR.text();
     let truncated = false;
@@ -258,11 +291,11 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     const a = (args[0] ?? {}) as SubAgentQueryArgs;
     if (!a.prompt) throw new Error('subAgentQuery: prompt is required');
     const requestedModel = !a.model || a.model === 'haiku' ? HAIKU_MODEL_ID : a.model;
-    const pricing = SUB_LLM_PRICING[requestedModel];
+    const pricing = typeof requestedModel === 'string' ? SUB_LLM_PRICING.get(requestedModel) : undefined;
     if (!pricing) {
       throw new Error(
-        `subAgentQuery: model "${requestedModel}" is not available. ` +
-          `Allowed models: ${Object.keys(SUB_LLM_PRICING).join(', ')} (or "haiku").`
+        `subAgentQuery: model "${String(requestedModel)}" is not available. ` +
+          `Allowed models: ${[...SUB_LLM_PRICING.keys()].join(', ')} (or "haiku").`
       );
     }
     const maxTokens = Math.min(Math.max(a.max_tokens ?? 1500, 16), 8000);

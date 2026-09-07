@@ -1,15 +1,15 @@
 import { createRequire } from 'node:module';
 import { Logger } from '@bike4mind/observability';
 import type * as IVM from 'isolated-vm';
-import type { ReplExecutor } from './replExecutor';
+import { ReplSandboxRetiredError, type ReplExecutor } from './replExecutor';
 import type { ReplToolFn, ReplToolMap, ReplRunResult } from './ReplContext';
 
 /**
  * In-isolate globals the bootstrap owns. A tool registered under one of these
  * names would shadow `console` capture or the codegen/clone helpers, so
- * `setTools` rejects them. (`_callTool` / `_captureLine` are deleted from the
- * global after bootstrap, but are listed so a tool can't re-create a name that
- * looks like a host hook.)
+ * `setTools` rejects them. (`_callTool` / `_captureLine` / `__registerTools`
+ * are deleted from the global after bootstrap, but are listed so a tool can't
+ * re-create a name that looks like a host hook.)
  */
 const RESERVED_GLOBAL_NAMES = new Set([
   'console',
@@ -112,6 +112,14 @@ const DEFAULT_MEMORY_LIMIT_MB = 256;
  * the better one.
  */
 const HOST_DEADLINE_GRACE_MS = 500;
+/**
+ * Fraction of `timeoutMs` a single host tool call may take before the
+ * dispatcher gives up on it. Strictly below 1 so the guest sees a per-tool
+ * error - and keeps its isolate - instead of the run reaching the host
+ * deadline, which can only preempt a pending run by killing the isolate and
+ * with it every later `code_execute` in the session.
+ */
+const TOOL_CALL_TIMEOUT_FRACTION = 0.8;
 const STDOUT_HEAD_BYTES = 5000;
 const STDOUT_TAIL_BYTES = 2000;
 const HARD_PER_LINE_BYTES = 50_000;
@@ -119,6 +127,14 @@ const HARD_PER_LINE_BYTES = 50_000;
 export interface IsolatedVmExecutorOptions {
   /** Per-call wall-clock cap. Default 30s. Enforced by the isolate's CPU timeout. */
   timeoutMs?: number;
+  /**
+   * Wall-clock cap on a single host tool call made from inside the isolate.
+   * Defaults to 80% of `timeoutMs` (floor 1s). Must stay below `timeoutMs`:
+   * a tool that outlives this is reported to the guest as a failed tool call,
+   * which leaves the isolate alive, whereas letting the run reach the host
+   * deadline retires the sandbox for the rest of the session.
+   */
+  toolTimeoutMs?: number;
   /**
    * Hard memory cap for the isolate, in MB. Default 256 (matches the
    * worker backend's `maxOldGenerationSizeMb`). When the isolate exceeds
@@ -174,12 +190,26 @@ function __formatLine(args) {
     ? line.slice(0, HARD_PER_LINE_BYTES) + ' [...line truncated]'
     : line;
 }
-globalThis.console = {
+// stdout is the channel the HOST reports back as the run's observation, so its
+// integrity is ours, not the guest's. A plain assignment left \`console\`
+// writable and configurable: guest code could set globalThis.console = {log(){}}
+// (or just reassign console.log) and every later run in the session would come
+// back with stdout="" or forged lines, error=null, and a clean listGlobals().
+// Frozen object + non-writable, non-configurable property: the guest's
+// assignment is a silent no-op in sloppy mode and a TypeError under 'use
+// strict', and either way capture keeps working.
+const __console = Object.freeze({
   log: (...a) => __cap.applySync(undefined, [__formatLine(a)], { arguments: { copy: true } }),
   warn: (...a) => __cap.applySync(undefined, [__formatLine(a)], { arguments: { copy: true } }),
   error: (...a) => __cap.applySync(undefined, [__formatLine(a)], { arguments: { copy: true } }),
   info: (...a) => __cap.applySync(undefined, [__formatLine(a)], { arguments: { copy: true } }),
-};
+});
+Object.defineProperty(globalThis, 'console', {
+  value: __console,
+  writable: false,
+  configurable: false,
+  enumerable: true,
+});
 
 // A bare isolate has no structuredClone (it's a host/web API, not a V8
 // intrinsic). The in-process + worker backends expose the *host's* real
@@ -267,11 +297,33 @@ for (const __Ctor of [__RealFunction, __AsyncFunction, __GeneratorFunction, __As
 globalThis.eval = __blockCodegen;
 globalThis.Function = __blockCodegen;
 
+// WebAssembly is removed, not stubbed. Its compile/instantiate promises never
+// settle inside an isolated-vm isolate (there is no host task runner to drive
+// them), so \`await WebAssembly.instantiate(...)\` is a one-line way for guest
+// code to park a run until the host deadline fires - and that deadline kills
+// the isolate, costing the whole session its sandbox. Deleting it turns that
+// into an immediate ReferenceError. It is also codegen-from-bytes, so it
+// belongs on the same side of the line as eval / Function anyway.
+delete globalThis.WebAssembly;
+
 // Tool-stub registry. Each registered tool becomes a top-level async
 // function that round-trips through the host dispatcher and re-throws on
 // the { ok:false } envelope.
+//
+// Assigned to globalThis only so the constructor can lift a Reference to it;
+// the constructor deletes the global immediately afterwards and calls it
+// through that Reference forever after. It must NOT stay guest-reachable: a
+// guest could call __registerTools(['console']) to overwrite the frozen
+// console binding with a tool stub, or \`delete\` it and make the host's next
+// setTools() throw.
+//
+// Indexed loop, not for..of, deliberately: the host calls this with a copied
+// array whose iterator comes from the GUEST's Array.prototype, so an
+// overridden Symbol.iterator would let guest code hang or hijack a host-side
+// setTools() call. Indexing touches only the copy's own properties.
 globalThis.__registerTools = function (names) {
-  for (const name of names) {
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
     globalThis[name] = async (...args) => {
       const envJson = await __callTool.apply(
         undefined,
@@ -298,7 +350,11 @@ export class IsolatedVmExecutor implements ReplExecutor {
   private readonly context: IVM.Context;
   private readonly captureRef: IVM.Reference;
   private readonly callToolRef: IVM.Reference;
+  /** In-isolate tool registrar, held host-side because the guest must not
+   *  reach it - see the BOOTSTRAP comment above `__registerTools`. */
+  private readonly registerToolsRef: IVM.Reference;
   private readonly timeoutMs: number;
+  private readonly toolTimeoutMs: number;
   private readonly label: string;
   /** Global names present immediately after bootstrap - the "builtin"
    * baseline listGlobals() subtracts so callers see only user-defined
@@ -315,6 +371,20 @@ export class IsolatedVmExecutor implements ReplExecutor {
 
   constructor(opts: IsolatedVmExecutorOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // Strictly proportional, with no absolute floor: a floor above
+    // `timeoutMs` would put the tool timeout AFTER the host deadline and
+    // silently restore the behaviour this bound exists to prevent. An explicit
+    // override is clamped for the same reason.
+    const derivedToolTimeout = Math.max(1, Math.floor(this.timeoutMs * TOOL_CALL_TIMEOUT_FRACTION));
+    if (opts.toolTimeoutMs !== undefined && opts.toolTimeoutMs >= this.timeoutMs) {
+      Logger.globalInstance.warn(
+        `[IsolatedVmExecutor] toolTimeoutMs (${opts.toolTimeoutMs}ms) must be below timeoutMs ` +
+          `(${this.timeoutMs}ms) or a stalled tool reaches the host deadline, which retires the isolate. ` +
+          `Using ${derivedToolTimeout}ms instead.`
+      );
+    }
+    this.toolTimeoutMs =
+      opts.toolTimeoutMs !== undefined && opts.toolTimeoutMs < this.timeoutMs ? opts.toolTimeoutMs : derivedToolTimeout;
     this.label = opts.label ?? 'isolated-vm-repl';
     const ivm = loadIvm();
     this.isolate = new ivm.Isolate({ memoryLimit: opts.memoryLimitMb ?? DEFAULT_MEMORY_LIMIT_MB });
@@ -329,6 +399,15 @@ export class IsolatedVmExecutor implements ReplExecutor {
     jail.setSync('_callTool', this.callToolRef);
 
     this.context.evalSync(BOOTSTRAP);
+
+    // Lift the registrar out of the guest global and delete it there. Done
+    // BEFORE the baseline snapshot so it is absent from both the isolate and
+    // listGlobals()'s notion of "builtin".
+    this.registerToolsRef = this.context.evalSync('globalThis.__registerTools', {
+      reference: true,
+    }) as IVM.Reference;
+    this.context.evalSync('delete globalThis.__registerTools');
+
     this.baselineGlobals = new Set(this.readGlobalNames());
   }
 
@@ -350,15 +429,24 @@ export class IsolatedVmExecutor implements ReplExecutor {
     // Merge (add-or-replace), matching ReplContext's setTools semantics:
     // repeated calls accumulate rather than wholesale-replace, so a caller
     // can layer tools on without dropping earlier registrations.
-    this.tools = { ...this.tools, ...filtered };
-    if (this.disposed) return;
-    const names = Object.keys(this.tools);
-    this.context.evalSync(`globalThis.__registerTools(${JSON.stringify(names)})`);
+    const merged = { ...this.tools, ...filtered };
+    if (this.disposed) {
+      this.tools = merged;
+      return;
+    }
+    // Bind the in-isolate stubs BEFORE committing the host-side dispatch
+    // table, so a failed registration leaves the two halves consistent
+    // rather than advertising tools the isolate cannot call.
+    this.registerToolsRef.applySync(undefined, [Object.keys(merged)], {
+      arguments: { copy: true },
+      timeout: this.timeoutMs,
+    });
+    this.tools = merged;
   }
 
   async runCode(code: string): Promise<ReplRunResult> {
     if (this.disposed) {
-      throw new Error(`IsolatedVmExecutor [${this.label}] has been disposed`);
+      throw new ReplSandboxRetiredError(`IsolatedVmExecutor [${this.label}] has been disposed`);
     }
     this.resetStdout();
     const t0 = Date.now();
@@ -442,7 +530,7 @@ export class IsolatedVmExecutor implements ReplExecutor {
   }
 
   /**
-   * Release the two host-side `ivm.Reference` wrappers. `new ivm.Reference(fn)`
+   * Release the host-side `ivm.Reference` wrappers. `new ivm.Reference(fn)`
    * allocates its persistent handle in the HOST isolate, so disposing the guest
    * isolate does not reclaim it - only `release()` does. Idempotent, and called
    * from every path that retires this executor (`dispose()` and the
@@ -460,6 +548,11 @@ export class IsolatedVmExecutor implements ReplExecutor {
     }
     try {
       this.callToolRef.release();
+    } catch {
+      // already released / isolate gone
+    }
+    try {
+      this.registerToolsRef.release();
     } catch {
       // already released / isolate gone
     }
@@ -483,7 +576,23 @@ export class IsolatedVmExecutor implements ReplExecutor {
     let value: unknown;
     try {
       const args = JSON.parse(argsJson) as unknown[];
-      value = await tool(...args);
+      // Bound the tool call here, on the host, rather than letting a tool that
+      // never settles ride the run all the way to the host deadline in
+      // runCode(). That deadline's only means of preemption is disposing the
+      // isolate, which costs the session every later code_execute while the
+      // agent loop keeps spending iterations on a tool that can no longer
+      // work. A per-tool timeout instead surfaces as an ordinary failed tool
+      // call the agent can route around, isolate intact.
+      //
+      // The abandoned promise is left running: we stop awaiting it, we cannot
+      // cancel it. Tools own their own cancellation (the data-lake tools pass
+      // an AbortSignal to every fetch); this is the backstop for one that
+      // does not.
+      value = await withTimeout(
+        tool(...args),
+        this.toolTimeoutMs,
+        `tool "${name}" did not settle within ${this.toolTimeoutMs}ms and was abandoned`
+      );
     } catch (e) {
       const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       return JSON.stringify({ ok: false, error: message });
@@ -537,6 +646,24 @@ export class IsolatedVmExecutor implements ReplExecutor {
     const tail = joined.slice(joined.length - STDOUT_TAIL_BYTES);
     const elidedBytes = joined.length - STDOUT_HEAD_BYTES - STDOUT_TAIL_BYTES;
     return `${head}\n[...${elidedBytes} bytes truncated...]\n${tail}`;
+  }
+}
+
+/**
+ * Resolve `p`, or reject with `message` after `ms`. The loser is abandoned,
+ * not cancelled - callers must be able to tolerate the work continuing.
+ */
+async function withTimeout<T>(p: Promise<T> | T, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

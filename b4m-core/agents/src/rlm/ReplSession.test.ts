@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import {
   ReplSession,
   BudgetExceededError,
@@ -399,6 +400,65 @@ describe('ReplSession sub-LLM budget reservations', () => {
   });
 });
 
+describe('ReplSession non-finite cost handling', () => {
+  const session = (id: string) =>
+    new ReplSession({
+      sessionId: id,
+      executor: 'in-process-unsafe',
+      budget: { maxSubLlmCalls: 100, maxCostUsd: 1 },
+    });
+
+  it.each([[NaN], [Infinity], [-Infinity]])('refuses a reservation estimated at %p', estimate => {
+    // Coercing this to 0 (the old behaviour) meant an UNPRICED call - exactly
+    // what the cap exists for - was the one shape that skipped cost admission
+    // control entirely, and did it silently.
+    const s = session(`nonfinite-${String(estimate)}`);
+    expect(() => s.reserveSubLlm({ estimatedCostUsd: estimate })).toThrowError(BudgetExceededError);
+    expect(s.getUsage().subLlmCalls).toBe(0);
+  });
+
+  it('keeps the cost cap enforceable after a non-finite settle', () => {
+    const s = session('nonfinite-settle');
+    const r = s.reserveSubLlm({ estimatedCostUsd: 0.25 });
+    // A NaN booked into the running total would make it NaN forever, and every
+    // later `total < cap` comparison false - so the ceiling would silently
+    // become whatever the last finite call left behind.
+    r.settle({ costUsd: NaN });
+
+    const usage = s.getUsage();
+    expect(Number.isFinite(usage.totalCostUsd)).toBe(true);
+    // Falls back to the estimate that was already admitted.
+    expect(usage.totalCostUsd).toBeCloseTo(0.25, 10);
+
+    // And the cap still fires. `settle` enforces on the way back, so the
+    // throw lands there - which is the point: had the NaN been booked, the
+    // running total would be NaN, every `total < cap` comparison false, and
+    // this call would sail through.
+    const r2 = s.reserveSubLlm({ estimatedCostUsd: 0.25 });
+    expect(() => r2.settle({ costUsd: 0.8 })).toThrowError(BudgetExceededError);
+    expect(s.getUsage().totalCostUsd).toBeCloseTo(1.05, 10);
+  });
+
+  it('keeps the total finite when the legacy recordSubLlm path books a non-finite cost', () => {
+    const s = session('nonfinite-record');
+    s.recordSubLlm({ costUsd: NaN });
+    const usage = s.getUsage();
+    expect(Number.isFinite(usage.totalCostUsd)).toBe(true);
+    expect(usage.totalCostUsd).toBe(0);
+    // The call-count cap is unaffected and still counts it.
+    expect(usage.subLlmCalls).toBe(1);
+  });
+});
+
+/** Minimal backend: the two members ReplSession actually calls. `listGlobals`
+ *  and `dispose` are optional in the ReplExecutor contract. */
+function stubExecutor() {
+  return {
+    setTools: () => {},
+    runCode: async () => ({ stdout: '', error: null, truncated: false, durationMs: 0 }),
+  };
+}
+
 describe('getOrCreateReplSession executor pinning', () => {
   beforeEach(async () => {
     await _resetReplSessionsForTests();
@@ -418,5 +478,98 @@ describe('getOrCreateReplSession executor pinning', () => {
     expect(() => getOrCreateReplSession({ sessionId: 'collision', executor: 'isolated' })).toThrow(
       /already exists on the "in-process-unsafe" executor but was requested with "isolated"/
     );
+  });
+
+  it('refuses a cache hit on a DIFFERENT custom executor instance', () => {
+    // Every custom instance buckets under the same 'custom' label, so the name
+    // check above cannot separate them: the second caller would silently run
+    // in the first caller's backend, sharing its globals, its tool bindings,
+    // and whatever the first guest left behind.
+    const first = stubExecutor();
+    const second = stubExecutor();
+
+    const a = getOrCreateReplSession({ sessionId: 'custom-collision', executor: first });
+    expect(a.executor).toBe(first);
+
+    expect(() => getOrCreateReplSession({ sessionId: 'custom-collision', executor: second })).toThrow(
+      /different custom ReplExecutor instance/
+    );
+  });
+
+  it('still reuses a cache hit on the SAME custom executor instance', () => {
+    const only = stubExecutor();
+    const a = getOrCreateReplSession({ sessionId: 'custom-same', executor: only });
+    const b = getOrCreateReplSession({ sessionId: 'custom-same', executor: only });
+    expect(b).toBe(a);
+  });
+
+  it('warns that a cache hit is ignoring the tuning options it was handed', () => {
+    // The executor mismatch throws because it is the trust boundary. These
+    // four are tuning, so first-caller-wins - but dropping them in silence is
+    // how a caller ends up believing it set a budget that was never applied.
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      getOrCreateReplSession({
+        sessionId: 'diverge',
+        executor: 'in-process-unsafe',
+        budget: { maxCostUsd: 1 },
+      });
+      getOrCreateReplSession({
+        sessionId: 'diverge',
+        executor: 'in-process-unsafe',
+        label: 'second caller',
+        perCallTimeoutMs: 5_000,
+        budget: { maxCostUsd: 999 },
+      });
+
+      const message = warn.mock.calls.map(c => String(c[0])).join('\n');
+      expect(message).toMatch(/reusing cached session "diverge"/);
+      expect(message).toMatch(/label/);
+      expect(message).toMatch(/perCallTimeoutMs/);
+      expect(message).toMatch(/budget/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not warn when a cache hit passes no divergent options', () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      const opts = { sessionId: 'quiet', executor: 'in-process-unsafe' } as const;
+      getOrCreateReplSession(opts);
+      getOrCreateReplSession(opts);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('ReplSession executor validation', () => {
+  // TypeScript keeps in-repo callers honest, but out-of-repo JS consumers are
+  // not typechecked - and the shape below (no `executor` at all) is exactly
+  // what a caller written against the pre-rename API still passes, because it
+  // used to default.
+  it('rejects a missing executor with an error that names the option', () => {
+    expect(() => new ReplSession({ sessionId: 'no-exec' } as never)).toThrow(/`executor` is required.*got undefined/s);
+  });
+
+  it('rejects a null executor rather than deferring to a setTools TypeError', () => {
+    expect(() => new ReplSession({ sessionId: 'null-exec', executor: null } as never)).toThrow(
+      /`executor` is required.*got null/s
+    );
+  });
+
+  it('rejects an object that is not a ReplExecutor', () => {
+    expect(() => new ReplSession({ sessionId: 'bad-exec', executor: { runCode: 1 } } as never)).toThrow(
+      /no setTools\/runCode/
+    );
+  });
+
+  it('accepts a minimal custom executor (setTools + runCode only)', () => {
+    const ex = stubExecutor();
+    const s = new ReplSession({ sessionId: 'min-exec', executor: ex });
+    expect(s.executor).toBe(ex);
+    expect(s.executorChoice).toBe('custom');
   });
 });

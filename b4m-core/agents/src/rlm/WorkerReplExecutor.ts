@@ -1,5 +1,5 @@
 import { Worker, type ResourceLimits } from 'node:worker_threads';
-import type { ReplExecutor } from './replExecutor';
+import { ReplSandboxRetiredError, type ReplExecutor } from './replExecutor';
 import type { ReplToolFn, ReplToolMap, ReplRunResult } from './ReplContext';
 
 /**
@@ -330,13 +330,15 @@ export class WorkerReplExecutor implements ReplExecutor {
 
   async runCode(code: string): Promise<ReplRunResult> {
     if (this.disposed) {
-      throw new Error('WorkerReplExecutor has been disposed');
+      throw new ReplSandboxRetiredError('WorkerReplExecutor has been disposed');
     }
     await this.readyPromise;
     // Re-check after the await - the worker can crash while we wait on
     // readyPromise, which sets disposed=true via the error/exit handler.
     if (this.disposed) {
-      throw new Error('WorkerReplExecutor was disposed (worker crashed) before runCode could be sent');
+      throw new ReplSandboxRetiredError(
+        'WorkerReplExecutor was disposed (worker crashed) before runCode could be sent'
+      );
     }
     const id = this.nextRunId++;
     return new Promise<ReplRunResult>((resolve, reject) => {

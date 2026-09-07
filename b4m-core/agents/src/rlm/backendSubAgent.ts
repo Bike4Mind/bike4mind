@@ -45,10 +45,12 @@ interface SubAgentArgs {
   temperature?: number;
 }
 
-/** Approx Haiku 4.5 pricing (per token), kept locally so we record
- *  consistent budget numbers. The actual Bedrock bill comes from AWS. */
-const HAIKU_INPUT_PER_TOKEN = 0.8e-6;
-const HAIKU_OUTPUT_PER_TOKEN = 4e-6;
+/** Haiku 4.5 list price per token ($1.00 / MTok in, $5.00 / MTok out), kept
+ *  locally so we record consistent budget numbers. The actual Bedrock bill
+ *  comes from AWS. Previously entered at Haiku 3.5's $0.80 / $4.00, which
+ *  under-counted every fallback-priced call by 20%. */
+const HAIKU_INPUT_PER_TOKEN = 1e-6;
+const HAIKU_OUTPUT_PER_TOKEN = 5e-6;
 /** Rough chars-per-token for the pre-flight reservation estimate only. */
 const ESTIMATE_CHARS_PER_TOKEN = 4;
 
@@ -117,7 +119,7 @@ export function buildBackendSubAgentQuery(deps: BackendSubAgentDeps): ReplToolFn
 
           Logger.globalInstance.warn(
             `[backendSubAgent] modelId="${deps.modelId}" did not provide usdCost on completion; ` +
-              `falling back to Haiku-rate estimate ($0.8/M in, $4/M out). ` +
+              `falling back to Haiku-rate estimate ($1/M in, $5/M out). ` +
               `The recorded session cost may not match the actual bill.`
           );
         }

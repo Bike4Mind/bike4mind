@@ -218,7 +218,8 @@ export type {
 // Core: persistent V8 context + per-session lifecycle / budget tracking
 export { ReplContext } from './rlm/ReplContext';
 export type { ReplToolFn, ReplToolMap, ReplRunResult, ReplContextOptions } from './rlm/ReplContext';
-export type { ReplExecutor } from './rlm/replExecutor';
+export { ReplSandboxRetiredError } from './rlm/replExecutor';
+export type { ReplExecutor, ReplExecutorName } from './rlm/replExecutor';
 export { WorkerReplExecutor } from './rlm/WorkerReplExecutor';
 export type { WorkerReplExecutorOptions } from './rlm/WorkerReplExecutor';
 export { IsolatedVmExecutor } from './rlm/IsolatedVmExecutor';
@@ -235,7 +236,13 @@ export {
   evictIdleReplSessions,
   _resetReplSessionsForTests,
 } from './rlm/ReplSession';
-export type { ReplSessionOptions, ReplSessionUsage, ReplSessionEvents } from './rlm/ReplSession';
+export type {
+  ReplSessionOptions,
+  ReplSessionUsage,
+  ReplSessionEvents,
+  ReplExecutorChoice,
+  SubLlmReservation,
+} from './rlm/ReplSession';
 
 // Tool factory: wraps a ReplSession in the ICompletionOptionTools contract
 export { makeCodeExecuteTool, CODE_EXECUTE_TOOL_NAME } from './rlm/codeExecuteTool';

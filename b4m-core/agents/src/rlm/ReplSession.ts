@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
+import { Logger } from '@bike4mind/observability';
 import { ReplContext, type ReplToolMap, type ReplRunResult } from './ReplContext';
-import type { ReplExecutor } from './replExecutor';
+import type { ReplExecutor, ReplExecutorName } from './replExecutor';
 import { WorkerReplExecutor, type WorkerReplExecutorOptions } from './WorkerReplExecutor';
 import { IsolatedVmExecutor, type IsolatedVmExecutorOptions } from './IsolatedVmExecutor';
 
@@ -26,7 +27,7 @@ import { IsolatedVmExecutor, type IsolatedVmExecutorOptions } from './IsolatedVm
  * or a caller-supplied `ReplExecutor`. See `ReplSessionOptions.executor` for
  * what each name costs you in isolation.
  */
-export type ReplExecutorChoice = 'isolated' | 'worker' | 'in-process-unsafe' | ReplExecutor;
+export type ReplExecutorChoice = ReplExecutorName | ReplExecutor;
 
 export interface ReplSessionOptions {
   /** Stable identifier for this session (typically the agentSessionId). */
@@ -167,6 +168,30 @@ interface TypedReplSessionEmitter {
   removeAllListeners(event?: string): this;
 }
 
+/**
+ * Structural check for a caller-supplied backend. Both members of the
+ * `ReplExecutor` contract that ReplSession actually calls must be present -
+ * `listGlobals` / `dispose` are optional in the interface, so they are not
+ * part of the test.
+ */
+function isReplExecutor(v: unknown): v is ReplExecutor {
+  if (typeof v !== 'object' || v === null) return false;
+  const candidate = v as Partial<ReplExecutor>;
+  return typeof candidate.setTools === 'function' && typeof candidate.runCode === 'function';
+}
+
+/** Describe a rejected `executor` value for the error message, without
+ *  stringifying a whole object into it. */
+function describeExecutorValue(v: unknown): string {
+  if (v === undefined) return 'undefined';
+  if (v === null) return 'null';
+  if (typeof v === 'object') {
+    const name = (v as object).constructor?.name ?? 'Object';
+    return `a ${name} with no setTools/runCode`;
+  }
+  return `${typeof v} ${JSON.stringify(v)}`;
+}
+
 export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmitter) {
   readonly sessionId: string;
   readonly label: string;
@@ -186,7 +211,7 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
    * caller a session running a backend it did not ask for - see
    * `getOrCreateReplSession`.
    */
-  readonly executorChoice: 'isolated' | 'worker' | 'in-process-unsafe' | 'custom';
+  readonly executorChoice: ReplExecutorName | 'custom';
   private usage: ReplSessionUsage = {
     executions: 0,
     subLlmCalls: 0,
@@ -255,9 +280,22 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
         `ReplSession: unknown executor "${executorChoice}" - expected 'isolated' | 'worker' | ` +
           `'in-process-unsafe' or a ReplExecutor instance`
       );
-    } else {
+    } else if (isReplExecutor(executorChoice)) {
       // Caller passed a custom ReplExecutor instance
       this.executor = executorChoice;
+    } else {
+      // Omitted, null, or some other non-executor value. TypeScript makes this
+      // unreachable in-repo, but an out-of-repo JS consumer that simply never
+      // passed `executor` (the pre-rename shape, where it defaulted) lands
+      // here - and used to fall through to the branch above, assigning
+      // `undefined` and deferring the failure to a bare `Cannot read
+      // properties of undefined (reading 'setTools')` with nothing in it about
+      // the option that was missing.
+      throw new Error(
+        `ReplSession: \`executor\` is required and must be 'isolated' | 'worker' | 'in-process-unsafe' ` +
+          `or a ReplExecutor instance (got ${describeExecutorValue(executorChoice)}). There is no default: ` +
+          `the backend is the sandbox's trust boundary, so the caller has to name it.`
+      );
     }
     this.ctx = this.executor; // back-compat alias
     this.executorChoice = typeof executorChoice === 'string' ? executorChoice : 'custom';
@@ -384,9 +422,20 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
    * real number. Estimating high costs a caller nothing but a slightly
    * earlier cap; estimating at 0 opts out of cost-based admission control
    * and leaves only the call-count cap.
+   *
+   * A NaN or Infinity estimate is refused rather than coerced. Coercing it to
+   * 0 (which is what this used to do) turned an unpriced call - exactly the
+   * case the cap exists for - into the one shape that skips cost admission
+   * control entirely, and did it silently.
    */
   reserveSubLlm(opts: { estimatedCostUsd: number }): SubLlmReservation {
-    const estimate = Number.isFinite(opts.estimatedCostUsd) ? Math.max(0, opts.estimatedCostUsd) : 0;
+    if (!Number.isFinite(opts.estimatedCostUsd)) {
+      throw new BudgetExceededError(
+        `sub-LLM cost estimate is not a finite number (${String(opts.estimatedCostUsd)}); refusing the ` +
+          `call because an unpriced request cannot be capped (reservation refused)`
+      );
+    }
+    const estimate = Math.max(0, opts.estimatedCostUsd);
 
     if (this.usage.subLlmCalls >= this.budget.maxSubLlmCalls) {
       const reason = `sub-LLM calls ${this.usage.subLlmCalls}/${this.budget.maxSubLlmCalls}`;
@@ -422,7 +471,13 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
         this.reservedCostUsd = Math.max(0, this.reservedCostUsd - estimate);
         // The call was counted at reservation time, so book the actuals
         // directly rather than through recordSubLlm (which counts again).
-        this.bookSubLlmActuals(actual);
+        //
+        // A non-finite real cost falls back to the estimate we already
+        // admitted. Booking the NaN instead would make totalCostUsd NaN for
+        // the rest of the session, and every later comparison against the cap
+        // false - so getUsage() would report NaN and the ceiling would be
+        // whatever the last finite call happened to leave behind.
+        this.bookSubLlmActuals(Number.isFinite(actual.costUsd) ? actual : { ...actual, costUsd: estimate });
         this.enforceCostCap();
       },
       release: () => {
@@ -440,6 +495,18 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
    * callers can enforce their caps in their own order.
    */
   private bookSubLlmActuals(opts: { costUsd: number; promptTokens?: number; completionTokens?: number }): void {
+    // Last line of defence for the legacy `recordSubLlm` path, which has no
+    // reservation to fall back on. A non-finite cost is dropped to 0 and
+    // logged: it under-counts by one call's spend, where letting it through
+    // would make the running total NaN and disable the cost cap outright for
+    // every call after it.
+    if (!Number.isFinite(opts.costUsd)) {
+      Logger.globalInstance.warn(
+        `[ReplSession] session "${this.sessionId}" booked a non-finite sub-LLM cost ` +
+          `(${String(opts.costUsd)}); recording $0 for it. The call-count cap still applies.`
+      );
+      opts = { ...opts, costUsd: 0 };
+    }
     this.usage.totalCostUsd += opts.costUsd;
     if (opts.promptTokens) this.usage.promptTokens += opts.promptTokens;
     if (opts.completionTokens) this.usage.completionTokens += opts.completionTokens;
@@ -627,6 +694,33 @@ function evictLruReplSession(): boolean {
   return false;
 }
 
+/**
+ * The session-shaping options a cache hit cannot honour, because the session
+ * they would configure already exists. `executor` is NOT among them - a
+ * mismatch there throws, since it is the trust boundary. These four are
+ * tuning, so first-caller-wins and we log rather than refuse; silently
+ * ignoring them is how a caller ends up believing it set a budget it did not.
+ */
+const REUSE_IGNORED_OPTION_KEYS = ['label', 'perCallTimeoutMs', 'budget', 'executorOptions'] as const;
+
+function warnOnDivergentReuse(existing: ReplSession, opts: ReplSessionOptions): void {
+  const diverged = REUSE_IGNORED_OPTION_KEYS.filter(key => {
+    const requested = opts[key];
+    if (requested === undefined) return false;
+    if (key === 'label') return requested !== existing.label;
+    // perCallTimeoutMs / budget / executorOptions were consumed by the
+    // existing session's constructor and are not retained for comparison, so
+    // any value supplied here is one the reused session is not honouring.
+    return true;
+  });
+  if (diverged.length === 0) return;
+  Logger.globalInstance.warn(
+    `[ReplSession] reusing cached session "${existing.sessionId}"; ignoring ${diverged.join(', ')} ` +
+      `from this call - the existing session's values stand. Use a distinct sessionId if you need ` +
+      `different ones.`
+  );
+}
+
 export function getOrCreateReplSession(opts: ReplSessionOptions): ReplSession {
   const existing = sessionRegistry.get(opts.sessionId);
   if (existing) {
@@ -645,6 +739,19 @@ export function getOrCreateReplSession(opts: ReplSessionOptions): ReplSession {
           `Dispose it first or use a distinct sessionId.`
       );
     }
+    // `'custom'` is not an identity. Two callers passing two different backend
+    // instances both bucket under it, so the name check above passes and the
+    // second caller silently runs on the FIRST caller's executor - sharing its
+    // globals, its tool bindings, and whatever state the first guest left
+    // behind. Compare the instance itself.
+    if (requested === 'custom' && existing.executor !== opts.executor) {
+      throw new Error(
+        `ReplSession registry: session "${opts.sessionId}" already exists on a different custom ` +
+          `ReplExecutor instance than the one requested. Reusing it would run this caller's code in ` +
+          `the other caller's backend. Dispose it first or use a distinct sessionId.`
+      );
+    }
+    warnOnDivergentReuse(existing, opts);
     existing.touch();
     return existing;
   }

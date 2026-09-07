@@ -1,6 +1,7 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { BudgetExceededError, type ReplSession } from './ReplSession';
+import { ReplSandboxRetiredError } from './replExecutor';
 
 /**
  * Factory for the `code_execute` tool exposed to a ReAct agent.
@@ -120,6 +121,23 @@ export function makeCodeExecuteTool(deps: CodeExecuteToolDeps): ICompletionOptio
             budgetExceeded: true,
           });
         }
+        if (e instanceof ReplSandboxRetiredError) {
+          // The sandbox is gone for good - a memory-limit breach, or a host
+          // deadline that could only preempt a pending run by killing the
+          // isolate. Say so in terminal language: the previous wording
+          // ("[unexpected] ... has been disposed") read as transient, so the
+          // agent kept re-calling code_execute and spending an iteration on
+          // each attempt for the rest of the loop.
+          logger?.error?.(`[code_execute] sandbox retired: ${e.message}`);
+          return formatObservation({
+            ok: false,
+            stdout: '',
+            error: e.message,
+            truncated: false,
+            durationMs: 0,
+            sandboxRetired: true,
+          });
+        }
         // Unexpected - propagate as a string so the agent can see it
         const msg = e instanceof Error ? e.message : String(e);
         logger?.error?.(`[code_execute] unexpected: ${msg}`);
@@ -159,6 +177,7 @@ interface ObservationFields {
   truncated: boolean;
   durationMs: number;
   budgetExceeded?: boolean;
+  sandboxRetired?: boolean;
 }
 
 /**
@@ -172,6 +191,15 @@ function formatObservation(o: ObservationFields): string {
   if (o.budgetExceeded) {
     lines.push(`[code_execute] BUDGET EXCEEDED: ${o.error}`);
     lines.push('Cannot execute more code in this session. Provide your final answer now.');
+    return lines.join('\n');
+  }
+
+  if (o.sandboxRetired) {
+    lines.push(`[code_execute] SANDBOX UNAVAILABLE: ${o.error}`);
+    lines.push(
+      'The code sandbox has been shut down for this session and will not come back. ' +
+        'Do not call code_execute again. Continue with your other tools, or answer from what you already have.'
+    );
     return lines.join('\n');
   }
 

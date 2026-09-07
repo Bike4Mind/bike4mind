@@ -108,8 +108,8 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
     expect(u.subLlmCalls).toBe(1);
     expect(u.promptTokens).toBe(100);
     expect(u.completionTokens).toBe(30);
-    // Cost = 100 * 0.8e-6 + 30 * 4e-6 = 0.00008 + 0.00012 = 0.0002
-    expect(u.totalCostUsd).toBeCloseTo(0.0002, 7);
+    // Cost = 100 * 1e-6 + 30 * 5e-6 = 0.0001 + 0.00015 = 0.00025
+    expect(u.totalCostUsd).toBeCloseTo(0.00025, 7);
   });
 
   it('rejects semanticSearch when query is missing', async () => {

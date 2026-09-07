@@ -447,13 +447,44 @@ describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
     await expect(ex.runCode('console.log(1)')).rejects.toThrow(/disposed/);
   });
 
-  it('bounds a run whose tool call never settles', async () => {
+  it('bounds a stalled tool call as a catchable tool error, keeping the isolate alive', async () => {
     const ex = spawn({ timeoutMs: 300 });
     ex.setTools({ stalls: () => new Promise(() => {}) });
     const t0 = Date.now();
     const r = await ex.runCode('await stalls();');
-    expect(r.error).toMatch(/cap|terminated|timed out/i);
+
+    // The host dispatcher gives up at 80% of timeoutMs, so this surfaces as a
+    // failed TOOL call - not as the host deadline, whose only means of
+    // preemption is killing the isolate. That distinction is the whole point:
+    // a slow tool must not cost the session every later code_execute while
+    // the agent loop keeps paying an iteration per attempt.
+    expect(r.error).toMatch(/did not settle within/i);
     expect(Date.now() - t0).toBeLessThan(3000);
+
+    // Same run, caught in-guest: the agent can route around it.
+    const caught = await ex.runCode(`
+      try { await stalls(); } catch (e) { console.log('caught:' + e.message.slice(0, 20)); }
+    `);
+    expect(caught.error).toBeNull();
+    expect(caught.stdout).toMatch(/^caught:/);
+
+    // And the sandbox is still serving other work.
+    const after = await ex.runCode('console.log(1 + 1);');
+    expect(after.error).toBeNull();
+    expect(after.stdout).toBe('2');
+  });
+
+  it('keeps the tool timeout below the host deadline at every timeoutMs', async () => {
+    // A previous revision floored the tool timeout at 1000ms, which for any
+    // timeoutMs under ~1250ms put it AFTER the host deadline and silently
+    // restored the isolate-killing behaviour. The bound has to be
+    // proportional, not absolute.
+    const ex = spawn({ timeoutMs: 200 });
+    ex.setTools({ stalls: () => new Promise(() => {}) });
+
+    const r = await ex.runCode('await stalls();');
+    expect(r.error).toMatch(/did not settle within/i);
+    await expect(ex.runCode('console.log("alive")')).resolves.toMatchObject({ error: null });
   });
 
   it("does not expose the bootstrap's own bindings to guest code", async () => {
@@ -501,6 +532,111 @@ describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
     const r = await ex.runCode('console.log("still capturing");');
     expect(r.error).toBeNull();
     expect(r.stdout).toBe('still capturing');
+  });
+
+  // --- stdout integrity (the observation channel the HOST reports) ---------
+
+  it('survives a guest reassigning globalThis.console', async () => {
+    const ex = spawn();
+    // stdout is what the host hands back as the run's observation. A writable
+    // console let guest code mute or forge it for every LATER run in the
+    // session - stdout="" or spoofed lines, error=null, listGlobals() clean.
+    const hijack = await ex.runCode(`
+      globalThis.console = { log: () => {}, warn: () => {}, error: () => {}, info: () => {} };
+      console.log('should still be captured');
+    `);
+    expect(hijack.stdout).toBe('should still be captured');
+
+    const later = await ex.runCode('console.log("later run still captured");');
+    expect(later.error).toBeNull();
+    expect(later.stdout).toBe('later run still captured');
+  });
+
+  it('survives a guest reassigning console.log on the frozen console', async () => {
+    const ex = spawn();
+    const r = await ex.runCode(`
+      try { console.log = () => {}; } catch (e) { /* strict-mode TypeError is fine too */ }
+      console.log('captured');
+    `);
+    expect(r.stdout).toBe('captured');
+  });
+
+  it('refuses a guest attempt to redefine or delete console', async () => {
+    const ex = spawn();
+    const r = await ex.runCode(`
+      let redefined = 'no';
+      try {
+        Object.defineProperty(globalThis, 'console', { value: { log: () => {} } });
+        redefined = 'yes';
+      } catch (e) { redefined = 'threw'; }
+      const deleted = delete globalThis.console;
+      console.log(redefined + '|' + deleted + '|' + (typeof console.log));
+    `);
+    expect(r.error).toBeNull();
+    expect(r.stdout).toMatch(/^threw\|false\|function$/);
+  });
+
+  // --- the in-isolate tool registrar is host-only ---------------------------
+
+  it('does not expose __registerTools to guest code', async () => {
+    const ex = spawn();
+    ex.setTools({ ping: async () => 'pong' });
+    // Guest-reachable, it was two attacks: __registerTools(['console'])
+    // overwrites the console binding with a tool stub, and `delete`-ing it
+    // makes the host's next setTools() throw.
+    const r = await ex.runCode('console.log(typeof globalThis.__registerTools + "|" + typeof __registerTools);');
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('undefined|undefined');
+  });
+
+  it('keeps setTools working after a guest tries to delete the registrar', async () => {
+    const ex = spawn();
+    ex.setTools({ first: async () => 'a' });
+
+    const attack = await ex.runCode('console.log(delete globalThis.__registerTools);');
+    expect(attack.error).toBeNull();
+
+    // The host holds the registrar through a Reference, so a later setTools
+    // cannot be broken from inside the isolate.
+    expect(() => ex.setTools({ second: async () => 'b' })).not.toThrow();
+    const r = await ex.runCode('console.log(await first(), await second());');
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('a b');
+  });
+
+  it('cannot be made to hang a host setTools() through Array.prototype', async () => {
+    const ex = spawn();
+    // The host calls the registrar with a COPIED array whose iterator comes
+    // from the guest's Array.prototype, so a for..of loop there was a
+    // guest-controlled hang (or hijack) of a host-side call. The registrar
+    // indexes instead.
+    const poison = await ex.runCode(`
+      Array.prototype[Symbol.iterator] = function* () { while (true) yield 'console'; };
+      console.log('poisoned');
+    `);
+    expect(poison.error).toBeNull();
+
+    ex.setTools({ afterPoison: async () => 'ok' });
+    const r = await ex.runCode('console.log(await afterPoison());');
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('ok');
+  });
+
+  // --- WebAssembly is a session-kill primitive in an isolate ---------------
+
+  it('removes WebAssembly, whose promises never settle in an isolate', async () => {
+    const ex = spawn({ timeoutMs: 300 });
+    // WebAssembly.instantiate never settles in-isolate (no host task runner),
+    // so `await` on it parked the run until the host deadline - which kills
+    // the isolate and costs the session its sandbox. One line, from the guest.
+    const r = await ex.runCode('console.log(typeof WebAssembly);');
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('undefined');
+
+    const attempt = await ex.runCode('await WebAssembly.instantiate(new Uint8Array([0,97,115,109]));');
+    expect(attempt.error).toMatch(/WebAssembly is not defined/);
+    // Crucially the isolate is still alive - it was not killed by a deadline.
+    await expect(ex.runCode('console.log("alive")')).resolves.toMatchObject({ error: null });
   });
 
   it('releases the host-side References when the host deadline kills the isolate', async () => {

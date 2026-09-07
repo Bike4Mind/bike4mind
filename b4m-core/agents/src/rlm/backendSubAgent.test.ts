@@ -93,8 +93,8 @@ describe('buildBackendSubAgentQuery', () => {
     });
     await sub({ prompt: 'x' });
 
-    // 1M input * $0.8/M + 500K output * $4/M = $0.80 + $2.00 = $2.80
-    expect(session.getUsage().totalCostUsd).toBeCloseTo(2.8, 5);
+    // 1M input * $1/M + 500K output * $5/M = $1.00 + $2.50 = $3.50
+    expect(session.getUsage().totalCostUsd).toBeCloseTo(3.5, 5);
   });
 
   it('rejects empty prompts with a clear message', async () => {

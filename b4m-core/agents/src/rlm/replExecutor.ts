@@ -1,6 +1,33 @@
 import type { ReplToolMap, ReplRunResult } from './ReplContext';
 
 /**
+ * The built-in backends, by name. Declared here rather than in ReplSession
+ * because this is the file where the three are defined and ordered by
+ * isolation. ReplSession derives both `ReplSessionOptions.executor` and
+ * `ReplSession.executorChoice` from this union, so a fourth backend cannot be
+ * added to one spelling of the list and forgotten in the other.
+ */
+export type ReplExecutorName = 'isolated' | 'worker' | 'in-process-unsafe';
+
+/**
+ * Thrown when a backend is asked to run code after it has been retired -
+ * disposed by its owner, or killed out from under us by a memory-limit breach
+ * or a host deadline.
+ *
+ * Distinct from an ordinary run error because the condition is TERMINAL for
+ * the session: nothing the caller does brings the sandbox back. `code_execute`
+ * reports it to the agent as a capability that is gone rather than a step that
+ * failed, so an agent loop stops re-calling a tool that cannot work and paying
+ * an iteration for each attempt.
+ */
+export class ReplSandboxRetiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReplSandboxRetiredError';
+  }
+}
+
+/**
  * The contract every REPL execution backend implements. ReplSession holds
  * one of these and delegates `setTools` / `runCode` to it.
  *

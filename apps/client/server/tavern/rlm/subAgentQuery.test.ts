@@ -73,8 +73,36 @@ describe('subAgentQuery model allowlist', () => {
 
     await subAgentQuery({ prompt: 'hi' });
 
-    // 100 input at $0.8/M + 30 output at $4/M.
-    expect(session.getUsage().totalCostUsd).toBeCloseTo(100 * 0.8e-6 + 30 * 4e-6, 12);
+    // 100 input at $1/M + 30 output at $5/M - Haiku 4.5 list price. The table
+    // previously carried Haiku 3.5's $0.80 / $4.00, under-counting by 20%.
+    expect(session.getUsage().totalCostUsd).toBeCloseTo(100 * 1e-6 + 30 * 5e-6, 12);
+  });
+
+  // The allowlist and the price table are the same lookup on purpose, so the
+  // lookup itself has to be exact. A plain object resolves inherited keys, so
+  // `model: 'constructor'` returned Object's constructor, passed the
+  // truthiness check, and reached the provider priced at whatever that
+  // function coerced to.
+  it.each([['constructor'], ['toString'], ['valueOf'], ['__proto__'], ['hasOwnProperty']])(
+    'refuses the prototype-chain key %p',
+    async model => {
+      const session = new ReplSession({ sessionId: `proto-${model}`, executor: 'in-process-unsafe' });
+      const { subAgentQuery } = toolsFor(session);
+
+      await expect(subAgentQuery({ prompt: 'hi', model })).rejects.toThrow(/not available/i);
+      expect(createSpy).not.toHaveBeenCalled();
+      expect(session.getUsage().subLlmCalls).toBe(0);
+    }
+  );
+
+  it('refuses a non-string model rather than coercing it', async () => {
+    const session = new ReplSession({ sessionId: 'nonstring-model', executor: 'in-process-unsafe' });
+    const { subAgentQuery } = toolsFor(session);
+
+    await expect(subAgentQuery({ prompt: 'hi', model: { toString: () => HAIKU } } as never)).rejects.toThrow(
+      /not available/i
+    );
+    expect(createSpy).not.toHaveBeenCalled();
   });
 });
 
