@@ -95,6 +95,16 @@ describe('POST /api/sessions/create - corpusGroundingMode gate', () => {
     expect(h.assertLakeAccess).not.toHaveBeenCalled();
   });
 
+  it('strips a client-sent mode when retrievalTags is present but empty', async () => {
+    const { res } = makeRes();
+
+    await run(post({ name: 'N', retrievalTags: [], corpusGroundingMode: 'inline' }), res);
+
+    // An empty array names no lake, so it belongs on the ordinary-session branch rather than the
+    // tags-only exception that trusts the caller's mode.
+    expect('corpusGroundingMode' in paramsOf()).toBe(false);
+  });
+
   it('strips a client-sent mode when dataLakeId is set, even alongside retrievalTags, so the lake wins', async () => {
     h.assertLakeAccess.mockResolvedValue({ datalakeTag: 'datalake:acme', groundingMode: 'inline' });
     const { res } = makeRes();
