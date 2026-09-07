@@ -76,7 +76,9 @@ const NOTE_OPENING = 'NOTE: the retrieved documents below may contradict each ot
  * end-of-string) would re-cost the recall on unterminated bullet text that requiring a unit just
  * bought back. Known and accepted, not overlooked.
  *
- * `nowYear` is a parameter for the same reason the detector takes one: reproducibility under test.
+ * `nowYear` is dead weight today: the only rule that reads it is `expired-claim`, which this surface
+ * filters out. It is passed to keep the detector call total, and goes live the moment a date-bearing
+ * kind joins the asserted list.
  */
 export function buildRetrievalConflictNote(
   passages: RetrievalPassage[],
@@ -101,21 +103,22 @@ export function buildRetrievalConflictNote(
   }
 
   const { findings } = detectCorpusInconsistencies(documents, { nowYear, metricUnitRequired: true });
+  // A widening, not a rename: `.includes` on the source tuple only accepts its own member type.
+  const asserted: readonly InconsistencyKind[] = DISAGREEMENT_INCONSISTENCY_KINDS;
   // `documentCount >= 2` is already guaranteed by the cross-document rules; asserted again here so a
   // future kind joining DISAGREEMENT_INCONSISTENCY_KINDS cannot emit a single-document "disagreement".
-  const asserted: readonly InconsistencyKind[] = DISAGREEMENT_INCONSISTENCY_KINDS;
   const kept = findings.filter(f => asserted.includes(f.kind) && f.documentCount >= 2);
   if (kept.length === 0) return '';
 
-  // Order is the detector's kind order, so the term list is fixed rather than incidental.
-  const kindTerms = asserted
+  // Order is the detector's kind order, so the term list is fixed rather than incidental. A per-kind
+  // count with only one kind in the list restates the headline count, so it is omitted there.
+  const terms = asserted
     .map(kind => ({
       kind,
       count: kept.filter(f => f.kind === kind).length,
     }))
-    .filter(t => t.count > 0)
-    .map(t => `${t.kind}: ${t.count}`)
-    .join(', ');
+    .filter(t => t.count > 0);
+  const kindTerms = terms.length === 1 ? terms[0].kind : terms.map(t => `${t.kind}: ${t.count}`).join(', ');
 
   const ids = [...new Set(kept.flatMap(f => f.evidence.map(e => e.fabFileId)))];
   const overflow = ids.length - RETRIEVAL_CONFLICT_MAX_IDS;
@@ -131,6 +134,7 @@ export function buildRetrievalConflictNote(
     `${idList}. These are heuristic pattern matches over the passage text, not proven contradictions - ` +
     'the same label can be measured over a different scope in each document. Read the passages before ' +
     'relying on either: if they really do disagree, say so rather than silently picking one side, attribute ' +
-    'each conflicting claim to the document it came from, and say which one you relied on and why.\n\n'
+    'each conflicting claim to the document it came from using whatever citation style this context already ' +
+    'specifies, and say which one you relied on and why.\n\n'
   );
 }

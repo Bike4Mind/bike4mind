@@ -2687,14 +2687,14 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
 
   const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
 
-  const makeCtx = (chunks: Array<{ fabFileId: string; text: string }>) => {
+  const makeCtx = (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
     const files = [...new Set(chunks.map(c => c.fabFileId))].map(id => ({ id, fileName: `${id}.pdf`, tags: [] }));
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
-        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore, total: files.length }) },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
           findVectorsByFabFileIds: vi.fn(() =>
@@ -2714,8 +2714,8 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const run = async (chunks: Array<{ fabFileId: string; text: string }>) => {
-    const ctx = makeCtx(chunks);
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+    const ctx = makeCtx(chunks, hasMore);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
@@ -2739,7 +2739,7 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the section
     // headings, so a looser assertion would pass on a note naming the wrong field entirely.
     const noteText = content.slice(note, content.indexOf('\n\n', note));
-    expect(noteText).toContain('metric-disagreement: 1');
+    expect(noteText).toContain('metric-disagreement');
     expect(noteText).toContain('across documents fileA, fileB.');
     // The id the note names is the id the heading renders, so the model can resolve it.
     expect(content).toContain('(ID: fileA)');
@@ -2761,6 +2761,22 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     ]);
 
     expect(content.indexOf('About this library:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
+  });
+
+  // The other column-0 note, which only a partial scan emits: `hasMore` is what makes coverage
+  // partial, and the note ordering is unasserted without a fixture that has it.
+  it('renders after the coverage note as well', async () => {
+    const content = await run(
+      [
+        { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+        { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+      ],
+      true
+    );
+
+    expect(content).toContain('Coverage note:');
+    expect(content.indexOf('Coverage note:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
     expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
   });
 

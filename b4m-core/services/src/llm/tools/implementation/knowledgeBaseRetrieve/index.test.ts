@@ -1333,7 +1333,7 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
     // `### ... (ID: ...)` headings, so a looser assertion would pass on a note naming the wrong
     // field entirely - this channel's chunk ids are `${file.id}-c1`.
     const noteText = out.slice(note, out.indexOf('\n\n', note));
-    expect(noteText).toContain('metric-disagreement: 1');
+    expect(noteText).toContain('metric-disagreement');
     expect(noteText).toContain('across documents file-a, file-b.');
     expect(out).toContain('(ID: file-a)');
   });

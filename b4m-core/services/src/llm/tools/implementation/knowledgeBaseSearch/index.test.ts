@@ -3136,13 +3136,19 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     scan: scanOverride,
   });
 
-  function conflictContext(): ToolContext {
+  function conflictContext(settings: Record<string, string> = {}): ToolContext {
+    const rows = Object.entries(settings).map(([settingName, settingValue]) => ({ settingName, settingValue }));
+    const findBySettingNames = vi.fn().mockResolvedValue(rows);
     return makeContext({
       retrievalFilter: undefined,
       db: {
         fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
         fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
-        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        adminSettings: {
+          getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+          findAll: findBySettingNames,
+          findBySettingNames,
+        },
         apiKeys: {},
         usageEvents: { record: vi.fn() },
       } as never,
@@ -3172,7 +3178,7 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the passage
     // headings, so a looser assertion would pass on a note naming the wrong field entirely.
     const noteText = out.slice(note, out.indexOf('\n\n', note));
-    expect(noteText).toContain('metric-disagreement: 1');
+    expect(noteText).toContain('metric-disagreement');
     expect(noteText).toContain('across documents file-a, file-b.');
   });
 
@@ -3238,6 +3244,29 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     expect(truncationNote).toBeGreaterThanOrEqual(0);
     expect(scanNote).toBeLessThan(truncationNote);
     expect(truncationNote).toBeLessThan(conflict);
+    expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+  });
+
+  // The third column-0 note the ordering test above cannot reach: it emits only under a configured
+  // token budget, so the fixture has to configure one. file-c is dropped by the budget, which is what
+  // emits the note, and the conflicting pair ranks ahead of it and is still served.
+  it('renders after the budget note too', async () => {
+    invalidateSettingsCache();
+    countTokensMock.mockClear().mockResolvedValue(80); // 2 of the 3 passages fit in 170
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([
+        hitOf('file-a', 'Uptime is 99.9%.'),
+        hitOf('file-b', 'Uptime is 95%.'),
+        hitOf('file-c', 'Nothing quantitative here.'),
+      ])
+    );
+
+    const out = await run(conflictContext({ kbSearchResultTokenBudget: '170' }));
+
+    const budgetNote = out.indexOf('further relevant passage(s) matched but were not included');
+    const conflict = out.indexOf(CONFLICT_NOTE);
+    expect(budgetNote).toBeGreaterThanOrEqual(0);
+    expect(budgetNote).toBeLessThan(conflict);
     expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
   });
 });

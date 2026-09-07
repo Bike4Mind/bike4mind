@@ -36,7 +36,7 @@ describe('buildRetrievalConflictNote', () => {
   it('names both documents and the kind on a metric disagreement', () => {
     const note = noteFor(passage('file-a', 'Uptime is 99.9%.'), passage('file-b', 'Uptime is 95%.'));
     expect(note).toContain('1 cross-document conflict(s) detected');
-    expect(note).toContain('(metric-disagreement: 1)');
+    expect(note).toContain('(metric-disagreement)');
     expect(note).toContain('across documents file-a, file-b.');
   });
 
@@ -45,13 +45,13 @@ describe('buildRetrievalConflictNote', () => {
       passage('file-a', 'Uptime is 99.9%.\nLatency is 10 ms.'),
       passage('file-b', 'Uptime is 95%.\nLatency is 40 ms.')
     );
-    expect(note).toContain('(metric-disagreement: 2)');
-    expect(note).toContain('2 cross-document conflict(s) detected');
+    // One kind, so the per-kind count would restate the headline count: named without it.
+    expect(note).toContain('2 cross-document conflict(s) detected (metric-disagreement)');
   });
 
   it('reads one unit written two ways as one unit', () => {
     expect(noteFor(passage('file-a', 'Uptime is 99.9%.'), passage('file-b', 'Uptime is 95 percent.'))).toContain(
-      'metric-disagreement: 1'
+      'metric-disagreement'
     );
   });
 
@@ -67,7 +67,7 @@ describe('buildRetrievalConflictNote', () => {
       passage('file-b', defangRetrievedContent(b))
     );
 
-    expect(raw).toContain('metric-disagreement: 1');
+    expect(raw).toContain('metric-disagreement');
     expect(defanged).toBe(raw);
   });
 
@@ -177,7 +177,7 @@ describe('buildRetrievalConflictNote', () => {
         passage('file-b', 'Uptime is 95%. Latency is 1,200 ms.')
       );
       // Uptime disagrees and is complete in both; the clipped latency fragment contributes nothing.
-      expect(note).toContain('(metric-disagreement: 1)');
+      expect(note).toContain('(metric-disagreement)');
     });
   });
 
@@ -199,6 +199,16 @@ describe('buildRetrievalConflictNote', () => {
     expect(note.toLowerCase()).not.toContain('zorbulax');
     expect(note).not.toContain(sentenceA);
     expect(note).not.toContain(sentenceB);
+  });
+
+  it('counts only the asserted findings, not every finding the detector returned', () => {
+    // The repeated superlative sentence is a second finding the detector returns and this surface
+    // drops, so a count taken from `findings` would claim two conflicts and name one kind.
+    const note = noteFor(
+      passage('file-a', 'Uptime is 99.9%.\nThe largest data center is in Oregon.'),
+      passage('file-b', 'Uptime is 95%.\nThe largest data center is in Oregon.')
+    );
+    expect(note).toContain('1 cross-document conflict(s) detected (metric-disagreement)');
   });
 
   it('caps the id list and reports the overflow as a lower bound', () => {
@@ -228,6 +238,6 @@ describe('buildRetrievalConflictNote', () => {
       passage('file-b', `Uptime is 95%. ${'y'.repeat(200)}`)
     );
     // The second document overran the ceiling and was sliced, keeping its opening claim.
-    expect(note).toContain('(metric-disagreement: 1)');
+    expect(note).toContain('(metric-disagreement)');
   });
 });

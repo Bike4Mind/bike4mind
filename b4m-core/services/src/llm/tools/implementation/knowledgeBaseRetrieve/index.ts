@@ -593,8 +593,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // route the model here for "more detail" - the exact moment a leading question tempts it to
           // top off the answer with an unsupported specific. Same shared const as the other surfaces.
           // The rule is our framing and stays outside the delimited content block.
-          // Last of our column-0 framing, nearest the content it describes: the documents the caller
-          // named disagree with each other, so say so rather than let the model pick a side.
+          //
+          // The conflict note below is last of our column-0 framing, nearest the content it
+          // describes: the documents the caller named disagree, so say so rather than pick a side.
           const result =
             header +
             '\n' +
