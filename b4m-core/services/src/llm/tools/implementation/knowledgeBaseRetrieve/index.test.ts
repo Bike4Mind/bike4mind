@@ -1329,6 +1329,9 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
     const note = out.indexOf(CONFLICT_NOTE);
     expect(note).toBeGreaterThanOrEqual(0);
     expect(note).toBeLessThan(out.indexOf(BEGIN));
+    // Last of our column-0 framing, nearest the content it describes - as the source comment claims
+    // and as the other two channels already pin.
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(note);
     // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the
     // `### ... (ID: ...)` headings, so a looser assertion would pass on a note naming the wrong
     // field entirely - this channel's chunk ids are `${file.id}-c1`.

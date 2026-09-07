@@ -43,6 +43,19 @@ export interface RetrievalPassage {
 export const RETRIEVAL_CONFLICT_MAX_IDS = 10;
 
 /**
+ * `nowYear` is inert here: the only rule reading it is `expired-claim`, which this surface filters
+ * out (see DISAGREEMENT_INCONSISTENCY_KINDS). The detector's parameter is not optional, so a value
+ * must be passed, and a literal keeps this surface off the clock - the convention both other callers
+ * state, so that a finding never depends on when it was computed.
+ *
+ * Past the end of `DATED_CLAIM`'s own `(19|20)\d{2}` range on purpose, so every dated claim reads as
+ * expired and the kind filter stays exercised. A year in the PAST would be equally inert, by
+ * producing no such finding for the filter to drop - and would make a test of that filter vacuous.
+ * If a date-bearing kind ever joins the asserted list this has to become a caller-supplied year.
+ */
+const ALL_DATED_CLAIMS_EXPIRED_YEAR = 9999;
+
+/**
  * Defensive ceiling on text swept per call. Every site today is bounded well under this by its own
  * char budget, so this never fires - it exists so a future budget increase cannot put an unbounded
  * regex sweep on the hot chat path. Biased toward the first documents: once the ceiling is reached
@@ -75,18 +88,12 @@ const NOTE_OPENING = 'NOTE: the retrieved documents below may contradict each ot
  * rather than any offset inside a number, and the code fix (drop a trailing metric whose unit abuts
  * end-of-string) would re-cost the recall on unterminated bullet text that requiring a unit just
  * bought back. Known and accepted, not overlooked.
- *
- * `nowYear` is dead weight today: the only rule that reads it is `expired-claim`, which this surface
- * filters out. It is passed to keep the detector call total, and goes live the moment a date-bearing
- * kind joins the asserted list.
  */
-export function buildRetrievalConflictNote(
-  passages: RetrievalPassage[],
-  nowYear: number = new Date().getUTCFullYear()
-): string {
+export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string {
   const identified = passages.filter(p => p.fabFileId);
   // The common case on the hot path: one document cannot disagree with itself across documents, so
-  // return before paying for the regex sweep.
+  // return before paying for the regex sweep. Behaviourally redundant - the detector's own
+  // cross-document requirement drops the same input - so no test can see it, only a profiler.
   if (new Set(identified.map(p => p.fabFileId)).size < 2) return '';
 
   // One CorpusDocument per passage. Not per document: the detector already groups by `fabFileId` and
@@ -102,7 +109,10 @@ export function buildRetrievalConflictNote(
     chars += Math.min(text.length, remaining);
   }
 
-  const { findings } = detectCorpusInconsistencies(documents, { nowYear, metricUnitRequired: true });
+  const { findings } = detectCorpusInconsistencies(documents, {
+    nowYear: ALL_DATED_CLAIMS_EXPIRED_YEAR,
+    metricUnitRequired: true,
+  });
   // A widening, not a rename: `.includes` on the source tuple only accepts its own member type.
   const asserted: readonly InconsistencyKind[] = DISAGREEMENT_INCONSISTENCY_KINDS;
   // `documentCount >= 2` is already guaranteed by the cross-document rules; asserted again here so a
@@ -129,12 +139,13 @@ export function buildRetrievalConflictNote(
       ? `${ids.slice(0, RETRIEVAL_CONFLICT_MAX_IDS).join(', ')}, and at least ${overflow} more`
       : ids.join(', ');
 
+  const conflicts = `${kept.length} cross-document ${kept.length === 1 ? 'conflict' : 'conflicts'}`;
   return (
-    `${NOTE_OPENING} ${kept.length} cross-document conflict(s) detected (${kindTerms}) across documents ` +
+    `${NOTE_OPENING} ${conflicts} detected (${kindTerms}) across documents ` +
     `${idList}. These are heuristic pattern matches over the passage text, not proven contradictions - ` +
     'the same label can be measured over a different scope in each document. Read the passages before ' +
-    'relying on either: if they really do disagree, say so rather than silently picking one side, attribute ' +
-    'each conflicting claim to the document it came from using whatever citation style this context already ' +
-    'specifies, and say which one you relied on and why.\n\n'
+    'relying on any of them: if they really do disagree, say so rather than silently picking one side, ' +
+    'attribute each conflicting claim to the document it came from using whatever citation style this ' +
+    'context already specifies, and say which one you relied on and why.\n\n'
   );
 }

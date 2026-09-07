@@ -6,11 +6,8 @@ import {
   type RetrievalPassage,
 } from './retrievalConflictNote';
 
-// Fixed so a report is reproducible - the detector takes the year for the same reason.
-const NOW_YEAR = 2026;
-
 const passage = (fabFileId: string, text: string): RetrievalPassage => ({ fabFileId, text });
-const noteFor = (...passages: RetrievalPassage[]) => buildRetrievalConflictNote(passages, NOW_YEAR);
+const noteFor = (...passages: RetrievalPassage[]) => buildRetrievalConflictNote(passages);
 
 describe('buildRetrievalConflictNote', () => {
   it('returns empty for no passages', () => {
@@ -33,9 +30,25 @@ describe('buildRetrievalConflictNote', () => {
     expect(note).toBe('');
   });
 
+  /**
+   * The note ASSERTS that the documents it names disagree, so a document whose claims all match its
+   * sibling's must never be named. A passage set where one document states both figures is the
+   * ordinary case on the always-on channel, which pools several chunks per file.
+   */
+  it('says nothing about two documents that each state both figures', () => {
+    const both = 'Uptime is 99.9%. Uptime is 95%.';
+    expect(noteFor(passage('file-a', both), passage('file-b', both))).toBe('');
+  });
+
+  it('names both documents when one states both figures and the other only one of them', () => {
+    // A real disagreement: file-b's only figure contradicts one of file-a's.
+    const note = noteFor(passage('file-a', 'Uptime is 99.9%. Uptime is 95%.'), passage('file-b', 'Uptime is 95%.'));
+    expect(note).toContain('across documents file-a, file-b.');
+  });
+
   it('names both documents and the kind on a metric disagreement', () => {
     const note = noteFor(passage('file-a', 'Uptime is 99.9%.'), passage('file-b', 'Uptime is 95%.'));
-    expect(note).toContain('1 cross-document conflict(s) detected');
+    expect(note).toContain('1 cross-document conflict detected');
     expect(note).toContain('(metric-disagreement)');
     expect(note).toContain('across documents file-a, file-b.');
   });
@@ -46,7 +59,25 @@ describe('buildRetrievalConflictNote', () => {
       passage('file-b', 'Uptime is 95%.\nLatency is 40 ms.')
     );
     // One kind, so the per-kind count would restate the headline count: named without it.
-    expect(note).toContain('2 cross-document conflict(s) detected (metric-disagreement)');
+    expect(note).toContain('2 cross-document conflicts detected (metric-disagreement)');
+    // Two findings, each naming both documents. Undeduped this reads `file-a, file-b, file-a,
+    // file-b`, and past the id cap the overflow arithmetic then invents documents that do not exist.
+    expect(note).toContain('across documents file-a, file-b.');
+  });
+
+  it('does not count a document once per finding when computing the overflow', () => {
+    // Six conflicting subjects over the same two documents: twelve evidence entries, two documents.
+    // Undeduped the id list fills to the cap of ten and claims "at least 2 more" for a two-document
+    // corpus - our own framing telling the model to look for passages that were never retrieved.
+    const subjects = ['uptime', 'latency', 'margin', 'coverage', 'throughput', 'error rate'];
+    const note = noteFor(
+      passage('file-a', subjects.map(s => `The ${s} is 10%.`).join('\n')),
+      passage('file-b', subjects.map(s => `The ${s} is 90%.`).join('\n'))
+    );
+
+    expect(note).toContain('6 cross-document conflicts detected (metric-disagreement)');
+    expect(note).toContain('across documents file-a, file-b.');
+    expect(note).not.toContain('more');
   });
 
   it('reads one unit written two ways as one unit', () => {
@@ -114,8 +145,11 @@ describe('buildRetrievalConflictNote', () => {
       expect(note).toBe('');
     });
 
+    // One YEAR across both documents, so the detector returns a single expired-claim finding
+    // spanning two documents. Two different years would each span one and be dropped by the
+    // `documentCount` guard instead, leaving the kind filter untested.
     it('ignores expired-claim findings, which are staleness rather than disagreement', () => {
-      const note = noteFor(passage('file-a', 'Available through 2019.'), passage('file-b', 'Supported through 2018.'));
+      const note = noteFor(passage('file-a', 'Available through 2099.'), passage('file-b', 'Supported through 2099.'));
       expect(note).toBe('');
     });
   });
@@ -208,12 +242,12 @@ describe('buildRetrievalConflictNote', () => {
       passage('file-a', 'Uptime is 99.9%.\nThe largest data center is in Oregon.'),
       passage('file-b', 'Uptime is 95%.\nThe largest data center is in Oregon.')
     );
-    expect(note).toContain('1 cross-document conflict(s) detected (metric-disagreement)');
+    expect(note).toContain('1 cross-document conflict detected (metric-disagreement)');
   });
 
   it('caps the id list and reports the overflow as a lower bound', () => {
     const passages = Array.from({ length: 15 }, (_, i) => passage(`file-${i}`, `Uptime is ${i + 1}%.`));
-    const note = buildRetrievalConflictNote(passages, NOW_YEAR);
+    const note = buildRetrievalConflictNote(passages);
 
     // Literals, not the constant: an assertion computed from RETRIEVAL_CONFLICT_MAX_IDS moves with it
     // and holds at any cap. Evidence comes out in insertion order, so file-9/file-10 is the boundary.
@@ -229,6 +263,16 @@ describe('buildRetrievalConflictNote', () => {
       passage('file-c', 'Uptime is 95%.')
     );
     // Only the first document fit, so there is no second document to disagree with.
+    expect(note).toBe('');
+  });
+
+  it('sweeps only the part of a document that fits, not the whole of it', () => {
+    // The last document to fit is sliced rather than dropped, so a claim past the ceiling is not
+    // swept - and a note naming it would rest on text this call never even read.
+    const note = noteFor(
+      passage('file-a', 'Uptime is 99.9%.'),
+      passage('file-b', `${'padding text. '.repeat(RETRIEVAL_CONFLICT_MAX_CHARS / 10)}Uptime is 95%.`)
+    );
     expect(note).toBe('');
   });
 
