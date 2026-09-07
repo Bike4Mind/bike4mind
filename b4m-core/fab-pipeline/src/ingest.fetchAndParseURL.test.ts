@@ -304,3 +304,86 @@ describe('fetchAndParseURL content typing and naming after redirects', () => {
     expect(result.title).toBe('final-document');
   });
 });
+
+/**
+ * Extraction used to collect ONLY `<p>` elements and fall back to the raw HTML string when that
+ * found nothing - so a page whose content sits outside `<p>` (RFC-style `<pre>` pages, or a page
+ * with headings/lists/tables alongside its `<p>`s) either stored markup verbatim or silently
+ * dropped everything but its paragraphs.
+ */
+describe('fetchAndParseURL whole-body text extraction', () => {
+  const html = (body: string) => ({ status: 200, data: body, headers: { 'content-type': 'text/html' } });
+
+  it('extracts readable text from a <pre>-only page instead of falling back to raw markup', async () => {
+    // Shaped after an RFC page: no <p> anywhere, all content inside <pre> with inline markup.
+    const page =
+      '<html><head><title>RFC 7168</title></head><body>' +
+      '<pre><span class="h1">Internet Engineering Task Force</span>\n' +
+      'A silly example: <a href="./rfc2324">RFC 2324</a></pre>' +
+      '</body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/rfc7168.html', { logger });
+
+    expect(result.textContent).toContain('Internet Engineering Task Force');
+    expect(result.textContent).toContain('RFC 2324');
+    // The old fallback stored the raw HTML string, so these tag fragments would be visible bytes.
+    expect(result.textContent).not.toMatch(/<pre|<span|<a\s/i);
+  });
+
+  it('separates adjacent <div>-only content instead of jamming it into one word', async () => {
+    // Many React/SPA-rendered pages use <div> per line rather than <p> - without a break after
+    // each div, "Hello" and "World" concatenate into the unreadable "HelloWorld".
+    const page = '<html><body><div>Hello</div><div>World</div></body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/spa-page', { logger });
+
+    expect(result.textContent).toContain('Hello');
+    expect(result.textContent).toContain('World');
+    expect(result.textContent).not.toContain('HelloWorld');
+  });
+
+  it('captures headings, list items and table cells that live outside <p>', async () => {
+    // Shaped after a Wikipedia-style article: substance in headings/lists/tables, not just <p>.
+    const page =
+      '<html><body>' +
+      '<h2>HTTP 404</h2>' +
+      '<ul><li>Not Found</li><li>Client error response code</li></ul>' +
+      '<table><tr><td>Status code</td><td>404</td></tr></table>' +
+      '</body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/wiki/HTTP_404', { logger });
+
+    expect(result.textContent).toContain('HTTP 404');
+    expect(result.textContent).toContain('Not Found');
+    expect(result.textContent).toContain('Client error response code');
+    expect(result.textContent).toContain('Status code');
+    expect(result.textContent).toContain('404');
+  });
+
+  it('never lets script or style content reach the stored text', async () => {
+    const page =
+      '<html><head><style>.hidden { display: none }</style></head><body>' +
+      '<script>trackPageView("secret-analytics-id");</script>' +
+      '<p>Visible paragraph</p>' +
+      '</body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/article', { logger });
+
+    expect(result.textContent).toContain('Visible paragraph');
+    expect(result.textContent).not.toContain('trackPageView');
+    expect(result.textContent).not.toContain('hidden');
+  });
+
+  it('stores nothing rather than falling back to raw HTML when there is no extractable text', async () => {
+    const page = '<html><head><style>body { color: red }</style></head><body><script>doStuff();</script></body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/empty', { logger });
+
+    expect(result.textContent).toBe('');
+  });
+});
