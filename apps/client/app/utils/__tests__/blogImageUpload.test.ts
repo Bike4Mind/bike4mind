@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: {
+    post: vi.fn(),
+  },
+}));
+
 import { uploadBlogImage, generatePostIdFromTitle } from '../blogImageUpload';
+import { api } from '@client/app/contexts/ApiContext';
 
 describe('blogImageUpload', () => {
   describe('generatePostIdFromTitle', () => {
@@ -43,11 +51,7 @@ describe('blogImageUpload', () => {
   });
 
   describe('uploadBlogImage', () => {
-    const mockBlogApiKey = 'test-api-key-123';
-    // Per-user blog host passed by callers (from blogIntegration.baseUrl).
-    const mockBaseUrl = 'https://blog.example.com';
     const originalFetch = global.fetch;
-    const originalBlogHost = process.env.NEXT_PUBLIC_BLOG_HOST;
 
     beforeEach(() => {
       vi.clearAllMocks();
@@ -55,251 +59,83 @@ describe('blogImageUpload', () => {
 
     afterEach(() => {
       global.fetch = originalFetch;
-      if (originalBlogHost === undefined) delete process.env.NEXT_PUBLIC_BLOG_HOST;
-      else process.env.NEXT_PUBLIC_BLOG_HOST = originalBlogHost;
     });
 
-    it('throws error for invalid file types', async () => {
+    it('throws for invalid file types before touching the network', async () => {
       const invalidFile = new File(['test'], 'test.txt', { type: 'text/plain' });
 
-      await expect(uploadBlogImage(invalidFile, mockBlogApiKey, undefined, mockBaseUrl)).rejects.toThrow(
+      await expect(uploadBlogImage(invalidFile)).rejects.toThrow(
         'Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.'
       );
+      expect(api.post).not.toHaveBeenCalled();
     });
 
-    it('throws when no blog host is configured (no baseUrl, no NEXT_PUBLIC_BLOG_HOST)', async () => {
-      delete process.env.NEXT_PUBLIC_BLOG_HOST;
-      const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
-
-      await expect(uploadBlogImage(file, mockBlogApiKey)).rejects.toThrow('No blog host configured');
-    });
-
-    it('falls back to NEXT_PUBLIC_BLOG_HOST when no baseUrl is passed', async () => {
-      process.env.NEXT_PUBLIC_BLOG_HOST = 'https://operator.example';
+    it('requests the presign server-side (never the blog key) with the file metadata', async () => {
       const file = new File(['test-content'], 'test-image.jpg', { type: 'image/jpeg' });
+      vi.mocked(api.post).mockResolvedValueOnce({
+        data: { uploadUrl: 'https://s3.example.com/upload', imageUrl: 'https://blog/x.jpg', key: 'images/x.jpg' },
+      } as never);
+      global.fetch = vi.fn().mockResolvedValueOnce({ ok: true }) as never;
 
-      global.fetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ uploadUrl: 'https://s3.example.com/upload', imageUrl: 'https://x/y.jpg' }),
-        })
-        .mockResolvedValueOnce({ ok: true });
+      await uploadBlogImage(file, 'my-post');
 
-      await uploadBlogImage(file, mockBlogApiKey);
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://operator.example/api/posts/images/presigned-url',
-        expect.anything()
-      );
-    });
-
-    it('accepts valid image types', async () => {
-      const validTypes = [
-        { type: 'image/jpeg', name: 'test.jpg' },
-        { type: 'image/png', name: 'test.png' },
-        { type: 'image/gif', name: 'test.gif' },
-        { type: 'image/webp', name: 'test.webp' },
-      ];
-
-      for (const { type, name } of validTypes) {
-        const file = new File(['test'], name, { type });
-
-        // Mock fetch to test that it gets past file validation
-        global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
-
-        // Should not throw file type error, will throw network error instead
-        await expect(uploadBlogImage(file, mockBlogApiKey, undefined, mockBaseUrl)).rejects.toThrow('Network error');
-      }
-    });
-
-    it('calls presigned URL endpoint on the passed baseUrl with correct parameters', async () => {
-      const file = new File(['test-content'], 'test-image.jpg', { type: 'image/jpeg' });
-      const postId = 'my-blog-post';
-
-      global.fetch = vi.fn().mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            uploadUrl: 'https://s3.example.com/upload',
-            imageUrl: 'https://blog.example.com/images/test.jpg',
-            key: 'images/test.jpg',
-          }),
-      });
-
-      // Mock the S3 upload
-      (global.fetch as any).mockResolvedValueOnce({
-        ok: true,
-      });
-
-      await uploadBlogImage(file, mockBlogApiKey, postId, mockBaseUrl);
-
-      // Verify first call (presigned URL request) targets the passed baseUrl
-      expect(global.fetch).toHaveBeenCalledWith('https://blog.example.com/api/posts/images/presigned-url', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': mockBlogApiKey,
-        },
-        body: JSON.stringify({
-          fileName: 'test-image.jpg',
-          fileSize: 12, // 'test-content'.length
-          mimeType: 'image/jpeg',
-          postId: postId,
-        }),
+      expect(api.post).toHaveBeenCalledWith('/api/blog/presign-image-upload', {
+        fileName: 'test-image.jpg',
+        fileSize: 12, // 'test-content'.length
+        mimeType: 'image/jpeg',
+        postId: 'my-post',
       });
     });
 
-    it('strips a trailing slash from the baseUrl', async () => {
+    it('throws when the presign response is missing required fields', async () => {
       const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
+      vi.mocked(api.post).mockResolvedValueOnce({ data: { key: 'only-a-key' } } as never);
 
-      global.fetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ uploadUrl: 'https://s3.example.com/upload', imageUrl: 'https://x/y.jpg' }),
-        })
-        .mockResolvedValueOnce({ ok: true });
-
-      await uploadBlogImage(file, mockBlogApiKey, undefined, 'https://blog.example.com/');
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://blog.example.com/api/posts/images/presigned-url',
-        expect.anything()
-      );
-    });
-
-    it('throws error when presigned URL request fails', async () => {
-      const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
-
-      global.fetch = vi.fn().mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: () => Promise.resolve({ message: 'Unauthorized' }),
-      });
-
-      await expect(uploadBlogImage(file, mockBlogApiKey, undefined, mockBaseUrl)).rejects.toThrow('Unauthorized');
-    });
-
-    it('throws error when presigned URL response is missing required fields', async () => {
-      const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
-
-      global.fetch = vi.fn().mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ someOtherField: 'value' }),
-      });
-
-      await expect(uploadBlogImage(file, mockBlogApiKey, undefined, mockBaseUrl)).rejects.toThrow(
+      await expect(uploadBlogImage(file)).rejects.toThrow(
         'Invalid presigned URL response: missing uploadUrl or imageUrl'
       );
     });
 
-    it('uploads file to S3 using presigned URL', async () => {
-      const file = new File(['test-content'], 'test.jpg', { type: 'image/jpeg' });
+    it('PUTs the bytes to the presigned S3 URL and returns url + key', async () => {
+      const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
       const uploadUrl = 'https://s3.example.com/upload?signature=abc';
       const imageUrl = 'https://blog.example.com/images/test.jpg';
+      vi.mocked(api.post).mockResolvedValueOnce({
+        data: { uploadUrl, imageUrl, key: 'images/test.jpg' },
+      } as never);
+      const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true });
+      global.fetch = fetchMock as never;
 
-      global.fetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              uploadUrl,
-              imageUrl,
-              key: 'images/test.jpg',
-            }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-        });
+      const result = await uploadBlogImage(file);
 
-      await uploadBlogImage(file, mockBlogApiKey, undefined, mockBaseUrl);
-
-      // Verify S3 upload call
-      expect(global.fetch).toHaveBeenCalledWith(uploadUrl, {
+      expect(fetchMock).toHaveBeenCalledWith(uploadUrl, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'image/jpeg',
-        },
+        headers: { 'Content-Type': 'image/jpeg' },
         body: file,
       });
+      expect(result).toEqual({ url: imageUrl, key: 'images/test.jpg' });
     });
 
-    it('throws error when S3 upload fails', async () => {
-      const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
+    it('falls back to the file name when the presign omits a key', async () => {
+      const file = new File(['test'], 'photo.png', { type: 'image/png' });
+      vi.mocked(api.post).mockResolvedValueOnce({
+        data: { uploadUrl: 'https://s3/u', imageUrl: 'https://blog/p.png' },
+      } as never);
+      global.fetch = vi.fn().mockResolvedValueOnce({ ok: true }) as never;
 
-      global.fetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              uploadUrl: 'https://s3.example.com/upload',
-              imageUrl: 'https://blog.example.com/images/test.jpg',
-            }),
-        })
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 403,
-        });
+      const result = await uploadBlogImage(file);
 
-      await expect(uploadBlogImage(file, mockBlogApiKey, undefined, mockBaseUrl)).rejects.toThrow(
-        'S3 upload failed with status 403'
-      );
+      expect(result.key).toBe('photo.png');
     });
 
-    it('returns correct result on successful upload', async () => {
+    it('throws when the S3 upload fails', async () => {
       const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
-      const imageUrl = 'https://blog.example.com/images/test.jpg';
-      const key = 'images/test.jpg';
+      vi.mocked(api.post).mockResolvedValueOnce({
+        data: { uploadUrl: 'https://s3/u', imageUrl: 'https://blog/x.jpg' },
+      } as never);
+      global.fetch = vi.fn().mockResolvedValueOnce({ ok: false, status: 403 }) as never;
 
-      global.fetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              uploadUrl: 'https://s3.example.com/upload',
-              imageUrl,
-              key,
-            }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-        });
-
-      const result = await uploadBlogImage(file, mockBlogApiKey, undefined, mockBaseUrl);
-
-      expect(result).toEqual({
-        url: imageUrl,
-        key: key,
-      });
-    });
-
-    it('handles alternative field names in presigned response', async () => {
-      const file = new File(['test'], 'test.jpg', { type: 'image/jpeg' });
-      const imageUrl = 'https://blog.example.com/images/test.jpg';
-
-      // Use alternative field names
-      global.fetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              presignedUrl: 'https://s3.example.com/upload', // Alternative to uploadUrl
-              publicUrl: imageUrl, // Alternative to imageUrl
-            }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-        });
-
-      const result = await uploadBlogImage(file, mockBlogApiKey, undefined, mockBaseUrl);
-
-      expect(result.url).toBe(imageUrl);
+      await expect(uploadBlogImage(file)).rejects.toThrow('S3 upload failed with status 403');
     });
   });
 });

@@ -8,9 +8,6 @@ interface UseBlogImageGenerationProps {
   content: string;
   title: string;
   summary: string;
-  blogApiKey: string;
-  /** Blog host from blogIntegration.baseUrl; falls back to the operator default. */
-  blogBaseUrl?: string;
   onImageGenerated?: (imageUrl: string, prompt: string) => void;
 }
 
@@ -26,14 +23,7 @@ interface GenerateFeaturedImageResponse {
   message?: string;
 }
 
-export const useBlogImageGeneration = ({
-  content,
-  title,
-  summary,
-  blogApiKey,
-  blogBaseUrl,
-  onImageGenerated,
-}: UseBlogImageGenerationProps) => {
+export const useBlogImageGeneration = ({ content, title, summary, onImageGenerated }: UseBlogImageGenerationProps) => {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
 
   // User's preferred image model from the LLM store (last selected in advanced settings).
@@ -102,7 +92,7 @@ export const useBlogImageGeneration = ({
       const file = new File([blob], 'featured-image.png', { type: blob.type || 'image/png' });
 
       const postId = title ? generatePostIdFromTitle(title) : 'featured';
-      const uploadResult = await uploadBlogImage(file, blogApiKey, postId, blogBaseUrl);
+      const uploadResult = await uploadBlogImage(file, postId);
 
       if (onImageGenerated) {
         onImageGenerated(uploadResult.url, imagePrompt);
@@ -132,7 +122,7 @@ export const useBlogImageGeneration = ({
     } finally {
       setIsGeneratingImage(false);
     }
-  }, [content, title, summary, blogApiKey, blogBaseUrl, onImageGenerated, imageModel]);
+  }, [content, title, summary, onImageGenerated, imageModel]);
 
   return {
     generateFeaturedImage,
