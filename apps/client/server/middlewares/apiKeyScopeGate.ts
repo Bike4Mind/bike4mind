@@ -113,6 +113,10 @@ export function parseStagedScopes(raw: string | undefined): {
  * a {@link isConfinedKey} credential, which is denied there: it authorizes its own
  * flow and nothing else. Callers must therefore invoke this even when
  * `requiredScopes` is undefined.
+ *
+ * A confined key can ONLY be allowed by an explicit `requiredScopes` match - the
+ * confinement check sits above both the no-scope and the staged branch, so a
+ * rollout window cannot admit one to a route it has no business on.
  */
 export function decideScopeGate(
   requiredScopes: ApiKeyScope[] | undefined,
@@ -120,7 +124,10 @@ export function decideScopeGate(
   staged: ReadonlySet<string>
 ): ScopeGateDecision {
   if (requiredScopes?.some(scope => heldScopes?.includes(scope))) return { outcome: 'allow' };
-  if (!requiredScopes) return isConfinedKey(heldScopes) ? { outcome: 'deny' } : { outcome: 'allow' };
+  // Above both branches below: neither a missing declaration nor an active staging
+  // window may admit a confined key.
+  if (isConfinedKey(heldScopes)) return { outcome: 'deny' };
+  if (!requiredScopes) return { outcome: 'allow' };
   // An empty `requiredScopes` denies (a route asking for "one of nothing" can
   // satisfy nobody); `every` on [] is true, so guard the length explicitly.
   if (requiredScopes.length > 0 && requiredScopes.every(scope => staged.has(scope))) {

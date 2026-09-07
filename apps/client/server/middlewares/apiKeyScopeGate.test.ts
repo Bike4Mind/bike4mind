@@ -79,6 +79,21 @@ describe('decideScopeGate', () => {
     expect(decideScopeGate([ApiKeyScope.AI_CHAT], mixed, NONE)).toEqual({ outcome: 'allow' });
   });
 
+  it("denies a confined key even while the route's scope is staged", () => {
+    // The staged branch warns-and-passes for grandfathered keys. A confined credential
+    // was never grandfathered, so a rollout window must not become a way in.
+    const staged = new Set<string>([ApiKeyScope.AI_CHAT]);
+    expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
+  });
+
+  it('still stages normally for an ordinary key', () => {
+    const staged = new Set<string>([ApiKeyScope.AI_CHAT]);
+    expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.READ_NOTEBOOKS], staged)).toEqual({
+      outcome: 'stagedAllow',
+      stagedScopes: [ApiKeyScope.AI_CHAT],
+    });
+  });
+
   it('allows when the key holds any one of the required scopes', () => {
     const required = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
     expect(decideScopeGate(required, [ApiKeyScope.OPTIHASHI_COMPUTE], NONE)).toEqual({ outcome: 'allow' });
