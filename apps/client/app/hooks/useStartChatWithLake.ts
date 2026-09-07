@@ -73,6 +73,13 @@ export default function useStartChatWithLake() {
  * lake-defaults merge for it to override. Callers pass the lake's own `groundingMode` (falling back
  * to `DEFAULT_DATA_LAKE_GROUNDING_MODE`, mirroring resolveLakeSessionDefaults) so the test session
  * actually exercises what the lake is configured to do, rather than the size-only deferral default.
+ *
+ * `preauthorizedLakeIds` is the manage-but-not-member admission: a maintainer who is neither the
+ * lake's creator nor a member of its org otherwise gets an empty retrieval here, which is precisely
+ * the state a test session exists to disprove. Callers pass only ids the list marked
+ * `canPreauthorize` - /api/sessions/create re-authorizes each one live and 403s on any it refuses,
+ * so an unfiltered list would fail the whole request rather than degrade. Omitted when empty so an
+ * ordinary test session's body is unchanged.
  */
 export function useStartChatWithLakes() {
   const { setCurrentSession, setCurrentSessionId } = useSessions();
@@ -81,13 +88,18 @@ export function useStartChatWithLakes() {
   const closeManager = useDataLakeWizardStore(s => s.closeManager);
 
   return useCallback(
-    async (params: { retrievalTags: string[]; groundingMode: DataLakeGroundingMode }): Promise<ISessionDocument> =>
+    async (params: {
+      retrievalTags: string[];
+      groundingMode: DataLakeGroundingMode;
+      preauthorizedLakeIds?: string[];
+    }): Promise<ISessionDocument> =>
       createAndOpenSession(
         {
           name: 'New Notebook',
           retrievalTags: params.retrievalTags,
           forceKnowledgeRetrieval: true,
           corpusGroundingMode: params.groundingMode,
+          ...(params.preauthorizedLakeIds?.length ? { preauthorizedLakeIds: params.preauthorizedLakeIds } : {}),
         },
         { queryClient, setCurrentSession, setCurrentSessionId, closeManager, navigate }
       ),

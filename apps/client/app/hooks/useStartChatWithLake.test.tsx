@@ -77,6 +77,46 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
     expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-2' });
   });
 
+  it('sends preauthorizedLakeIds when the caller may admit some of the checked lakes', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'session-3' } });
+    const { result } = renderWithClient(() => useStartChatWithLakes());
+
+    await act(async () => {
+      await result.current({
+        retrievalTags: ['datalake:a', 'datalake:b'],
+        groundingMode: 'retrieve',
+        preauthorizedLakeIds: ['lake-a'],
+      });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
+      name: 'New Notebook',
+      retrievalTags: ['datalake:a', 'datalake:b'],
+      forceKnowledgeRetrieval: true,
+      corpusGroundingMode: 'retrieve',
+      preauthorizedLakeIds: ['lake-a'],
+    });
+  });
+
+  it('omits preauthorizedLakeIds entirely when the admission list is empty', async () => {
+    // An empty array must not appear in the body: the route treats a present-but-empty list as a
+    // request to admit nothing, and an ordinary test session's payload should be byte-identical to
+    // what it was before the admission existed.
+    apiPost.mockResolvedValue({ data: { id: 'session-4' } });
+    const { result } = renderWithClient(() => useStartChatWithLakes());
+
+    await act(async () => {
+      await result.current({ retrievalTags: ['datalake:a'], groundingMode: 'retrieve', preauthorizedLakeIds: [] });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
+      name: 'New Notebook',
+      retrievalTags: ['datalake:a'],
+      forceKnowledgeRetrieval: true,
+      corpusGroundingMode: 'retrieve',
+    });
+  });
+
   it('propagates a request failure so the caller can surface its own error UX', async () => {
     apiPost.mockRejectedValue(new Error('network down'));
     const { result } = renderWithClient(() => useStartChatWithLakes());

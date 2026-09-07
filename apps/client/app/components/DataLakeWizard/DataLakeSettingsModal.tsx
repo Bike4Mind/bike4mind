@@ -302,13 +302,14 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     );
   };
 
-  const handleConfirmTestScope = async (retrievalTags: string[]) => {
+  const handleConfirmTestScope = async (scope: { retrievalTags: string[]; preauthorizedLakeIds: string[] }) => {
     if (!lake) return;
     setStartingTestChat(true);
     try {
       await startChatWithLakes({
-        retrievalTags,
+        retrievalTags: scope.retrievalTags,
         groundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+        preauthorizedLakeIds: scope.preauthorizedLakeIds,
       });
       setTestScopeOpen(false);
     } catch {

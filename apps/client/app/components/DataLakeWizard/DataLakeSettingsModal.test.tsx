@@ -1128,6 +1128,7 @@ describe('DataLakeSettingsModal - Test this lake', () => {
     // lake-under-test's own `groundingMode` rides along, not some other value.
     expect(startChatWithLakesMock).toHaveBeenCalledWith({
       retrievalTags: ['datalake:test-lake', 'datalake:open-lake'],
+      preauthorizedLakeIds: [],
       groundingMode: 'retrieve',
     });
     // The scope dialog is a separate flow from the settings form - confirming it must not also
