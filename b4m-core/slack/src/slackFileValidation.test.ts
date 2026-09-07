@@ -65,6 +65,15 @@ describe('validateSlackFileForIngest', () => {
     }
   );
 
+  it.each(['payload.', '.exe'])(
+    'rejects %s - a dot is present but resolves no extension, so it must not get the extension-less fallback',
+    name => {
+      const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
+
+      expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+    }
+  );
+
   it('holds a real image to the tighter cap even when it claims a non-image mimetype (#2025 sibling)', () => {
     // The extension says PNG; the claimed mimetype tries to dodge the tighter image cap.
     const result = validateSlackFileForIngest(
