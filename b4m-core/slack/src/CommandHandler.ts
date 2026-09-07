@@ -2,7 +2,7 @@
  * Parses, validates, and processes agent commands from Slack messages.
  */
 
-import { SQSService } from '@bike4mind/utils';
+import { SQSService, checkStorageLimitForFile } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { PERSONA_ALLOWED_SUBAGENTS } from '@bike4mind/agents';
 import { SYSTEM_MODEL_DEFAULTS } from './constants/system-model-defaults';
@@ -16,7 +16,7 @@ import { updateUserSlackSettings } from './handlers/notebook-manager';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import { notebookNew } from './tools/notebookNew';
 import { notebookStatus } from './tools/notebookStatus';
-import { IUserDocument } from '@bike4mind/common';
+import { IUserDocument, type IAdminSettingsRepository } from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
 
 const HISTORY_COUNT = 20;
@@ -483,12 +483,62 @@ export class CommandHandler {
         }
         const file = validation.file;
 
+        // Enforce the same MaxFileSize + storage limits fabFilesService.createFabFile applies
+        // on the web upload path (#1685): this path writes the FabFile directly and never
+        // called that service, so neither limit applied here before.
+        const { adminSettingsRepository, Organization } = getSlackDb();
+        // any: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary;
+        // the bound implementation (slackPackageInit.ts) is the real IAdminSettingsRepository.
+        const maxFileSizeMB = await (adminSettingsRepository as any as IAdminSettingsRepository).getSettingsValue(
+          'MaxFileSize'
+        );
+        const maxFileSizeBytes = typeof maxFileSizeMB === 'number' ? maxFileSizeMB * 1024 * 1024 : undefined;
+
+        // Checked against Slack's CLAIMED size before downloading - mirrors
+        // dataLakeFileIngest.ts's own "before it is downloaded" reasoning: an over-limit file
+        // would otherwise be transferred in full for nothing. Re-checked below against the real
+        // buffer length, since a lying client's claim must not be the actual enforcement.
+        if (maxFileSizeBytes !== undefined && file.size >= maxFileSizeBytes) {
+          const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+          // Warning sign, escaped so this source file stays ASCII.
+          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${maxFileSizeMB}MB limit. Skipping.`;
+          this.logger.warn(error);
+          errors.push(error);
+          continue;
+        }
+
         if (statusCallback) {
           await statusCallback(`Downloading file: ${file.name}...`);
         }
 
         // Download file from Slack
         const fileBuffer = await this.slackClient.downloadFile(file.url_private_download, file.name);
+
+        if (maxFileSizeBytes !== undefined && fileBuffer.length >= maxFileSizeBytes) {
+          const sizeMB = (fileBuffer.length / (1024 * 1024)).toFixed(1);
+          // Warning sign, escaped so this source file stays ASCII.
+          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${maxFileSizeMB}MB limit. Skipping.`;
+          this.logger.warn(error);
+          errors.push(error);
+          continue;
+        }
+
+        try {
+          await checkStorageLimitForFile(
+            this.user,
+            fileBuffer.length,
+            this.user.organizationId ?? undefined,
+            (id: string) =>
+              // any: same DI-boundary reason as adminSettingsRepository above.
+              (Organization as any).findById(id)
+          );
+        } catch (limitError) {
+          const message = limitError instanceof Error ? limitError.message : 'Storage limit exceeded';
+          const error = `\u26a0\ufe0f ${message}. Skipping "${file.name}".`;
+          this.logger.warn(error);
+          errors.push(error);
+          continue;
+        }
 
         if (statusCallback) {
           await statusCallback(`Processing file: ${file.name}...`);
