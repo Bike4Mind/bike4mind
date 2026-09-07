@@ -170,14 +170,19 @@ async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   });
 }
 
-// Block-level elements after which we force a line break, since cheerio's `.text()` on the whole
-// body otherwise concatenates every text node with no separator at all - a heading, a list item
-// and the next paragraph would run together as one word-jammed line. Includes the common HTML5
-// semantic containers (article/section/header/footer/main), definition-list terms/definitions,
-// and figure/table captions - any of these sitting directly against a sibling with no intervening
-// div/p/li reproduces the same word-jamming bug for that tag.
-const BLOCK_LEVEL_SELECTOR =
-  'h1, h2, h3, h4, h5, h6, p, li, blockquote, tr, div, article, section, header, footer, main, dt, dd, figcaption, caption';
+// Elements after which we force a line break, since cheerio's `.text()` on the whole body
+// otherwise concatenates every text node with no separator at all - a heading, a list item and
+// the next paragraph would run together as one word-jammed line. Framed as a DENYLIST of inline
+// elements rather than an allowlist of block ones: an allowlist is an open set that keeps
+// drifting as new pages exercise tags it didn't cover (this one already grew twice, from a bare
+// div-only list to adding article/section/header/footer/main/dt/dd/figcaption/caption, and still
+// missed summary/nav/aside/address/option/button). The HTML5 inline-element set is closed by
+// spec, so excluding it closes the gap for good - everything that isn't inline gets a break.
+// `td`/`th` are carved out here since they get their own space-only separator below (same row,
+// not a new line).
+const INLINE_SELECTOR =
+  'a, span, em, strong, b, i, u, code, kbd, samp, var, sub, sup, small, abbr, cite, q, time, mark, s, del, ins, bdi, bdo, wbr, ruby, rt, rp';
+const BLOCK_LEVEL_SELECTOR = `*:not(${INLINE_SELECTOR.split(', ').join('):not(')}):not(td):not(th)`;
 
 /**
  * Extract readable text from the WHOLE document, not just `<p>` elements. The single collector
