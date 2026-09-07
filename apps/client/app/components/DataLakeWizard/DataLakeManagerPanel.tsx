@@ -19,9 +19,9 @@ import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
 import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import { DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
-import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import type { ManagerLake } from './manager/shared';
 import { prefixSegments } from './manager/shared';
+import { selectTaxonomyBatchByLakeId } from './manager/taxonomySlot';
 import ManagerNav from './manager/ManagerNav';
 import { LakeInfoPanel, ManagerOverview } from './manager/LakeInfoPanel';
 
@@ -44,17 +44,7 @@ export default function DataLakeManagerPanel() {
     () => activeBatches?.find(b => b.id === reviewingBatchId) ?? null,
     [activeBatches, reviewingBatchId]
   );
-  // One pass over the batch list, not a per-lake filter/find on every row render. Only batches
-  // whose taxonomy phase actually needs attention are kept - a lake with none just misses the
-  // map entry, which every consumer already treats the same as "nothing to show."
-  const taxonomyBatchByLakeId = useMemo(() => {
-    const map = new Map<string, IDataLakeBatchSummary>();
-    for (const batch of activeBatches ?? []) {
-      if (!batch.taxonomyStatus || batch.taxonomyStatus === 'none') continue;
-      if (!map.has(batch.dataLakeId)) map.set(batch.dataLakeId, batch);
-    }
-    return map;
-  }, [activeBatches]);
+  const taxonomyBatchByLakeId = useMemo(() => selectTaxonomyBatchByLakeId(activeBatches), [activeBatches]);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   // Store-driven so openManager('discover') deep-links land on the public catalog; the
   // sidebar footer's Discover button flips it the same way.

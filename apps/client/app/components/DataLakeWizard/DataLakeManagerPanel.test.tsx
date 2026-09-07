@@ -990,17 +990,35 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-id', 'b1');
   });
 
+  // A batch whose taxonomy phase is already resolved ('applied') but whose ingest is still
+  // running stays in the batches list, and the server's ingest-active finder puts it AHEAD of
+  // the sibling awaiting review. It used to take the lake's one chip slot and render nothing,
+  // so the review surface silently did not exist. Both consumer surfaces are asserted.
   it('prefers the taxonomy-attention batch when a lake has more than one active batch', async () => {
-    // An ingest-only batch (taxonomyStatus 'none') alongside the one actually awaiting review -
-    // the attention-worthy one must win, not whichever happens to come first in the list.
     useActiveDataLakeBatches.mockReturnValue({
-      data: [batch({ id: 'ingest-only', taxonomyStatus: 'none' }), batch({ id: 'b1', taxonomyStatus: 'ready' })],
+      data: [batch({ id: 'still-ingesting', taxonomyStatus: 'applied' }), batch({ id: 'b1', taxonomyStatus: 'ready' })],
     });
     const user = userEvent.setup();
     renderPanel();
 
     await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-id', 'b1');
+
+    await user.click(screen.getByTestId('mock-taxonomy-review-close'));
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.getByTestId('datalake-manager-taxonomy-review-chip-mine')).toBeInTheDocument();
+  });
+
+  // The nastier variant: an in-progress sibling DOES render, so the ready batch was masked
+  // behind a plausible-looking "AI tagging..." state rather than showing nothing.
+  it('does not let an in-progress sibling mask the batch awaiting review', async () => {
+    useActiveDataLakeBatches.mockReturnValue({
+      data: [batch({ id: 'analyzing', taxonomyStatus: 'analyzing' }), batch({ id: 'b1', taxonomyStatus: 'ready' })],
+    });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-manager-taxonomy-review-mine')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-taxonomy-progress-mine')).toBeNull();
   });
 });
 
