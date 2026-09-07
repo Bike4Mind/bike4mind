@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFindByKeyName = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { findByKeyName: (...args: unknown[]) => mockFindByKeyName(...args) },
+  secretRotationRepository: { findByKeyNameWithSecret: (...args: unknown[]) => mockFindByKeyName(...args) },
 }));
 
 const mockIsWithinGraceWindow = vi.fn();

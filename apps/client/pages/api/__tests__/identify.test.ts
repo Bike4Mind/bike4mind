@@ -83,7 +83,7 @@ vi.mock('@bike4mind/database', async orig => {
 });
 
 vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { findByKeyName: (...a: unknown[]) => mockFindByKeyName(...a) },
+  secretRotationRepository: { findByKeyNameWithSecret: (...a: unknown[]) => mockFindByKeyName(...a) },
 }));
 
 vi.mock('@server/auth/issueSession', () => ({
@@ -185,7 +185,9 @@ describe('GET /api/identify', () => {
       expect(user.oauthCredentials).toBeUndefined();
       expect(user.securityQuestions).toBeUndefined();
       expect(user.loginRecords).toBeUndefined();
-      expect(user.authProviders).toBeUndefined();
+      // authProviders is rebuilt per-provider: the OAuth tokens are dropped but the
+      // provider identity survives so the linked-account indicator still renders.
+      expect(user.authProviders).toEqual([{ provider: 'google' }]);
       // googleDrive is rebuilt as status-only metadata, so the tokens are gone but
       // the connected-state the UI reads survives.
       expect(user.googleDrive?.accessToken).toBeUndefined();
