@@ -59,7 +59,7 @@ export function LakeInfoPanel({
   fileCount: number | undefined;
   /** Membership split by arm - meta-tagged vs prefix-only. See lakeArmCounts. */
   armCounts: { metaCount: number; prefixOnlyCount: number } | undefined;
-  /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  /** This lake's attention-worthy taxonomy batch, if any (see manager/taxonomySlot.ts). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
   /** Opens the owner-facing access & membership view (#1672) - manager-only, like settings. */

@@ -74,7 +74,7 @@ interface ManagerNavProps {
   lakesLoading: boolean;
   /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
-  /** Lake id -> its attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  /** Lake id -> its attention-worthy taxonomy batch, if any (see manager/taxonomySlot.ts). */
   taxonomyBatchByLakeId: Map<string, IDataLakeBatchSummary>;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */
