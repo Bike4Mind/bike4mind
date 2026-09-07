@@ -235,37 +235,100 @@ from numpy import array
   });
 });
 
-describe('configure (Pyodide mirror baseUrl)', () => {
-  // Inject a fake worker so spawnWorker() (real `new Worker(new URL(...))`) is skipped, then
-  // assert the message the manager posts. initialize() posts synchronously before awaiting the
-  // 'ready' the fake never sends, so the pending promise is intentionally discarded.
-  const injectWorker = (mgr: unknown) => {
-    const worker = { onmessage: null, onerror: null, postMessage: vi.fn(), terminate: vi.fn() };
-    (mgr as { worker: typeof worker }).worker = worker;
-    return worker;
+describe('sandbox transport', () => {
+  // These drive the real spawnSandbox(): jsdom creates the iframe and gives it a
+  // contentWindow, so the sandbox attribute, the ready handshake and the message-provenance
+  // check are all exercised rather than stubbed. Only the network load is absent.
+  const readySandbox = async () => {
+    vi.resetModules();
+    const { pyodideManager, PYODIDE_SANDBOX_SRC } = await import('../pyodideManager');
+    const pending = pyodideManager.initialize();
+    // Let spawnSandbox() append the frame and register its listener.
+    await Promise.resolve();
+
+    const frame = document.querySelector(`iframe[src="${PYODIDE_SANDBOX_SRC}"]`) as HTMLIFrameElement;
+    const posted: unknown[] = [];
+    Object.defineProperty(frame, 'contentWindow', {
+      configurable: true,
+      value: { postMessage: (message: unknown) => posted.push(message) },
+    });
+
+    window.dispatchEvent(
+      new MessageEvent('message', { data: { type: 'pyodide-sandbox-ready' }, source: frame.contentWindow })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    return { pyodideManager, frame, posted, pending };
   };
 
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
   afterEach(() => {
+    document.querySelectorAll('iframe').forEach(node => node.remove());
     vi.clearAllMocks();
   });
 
-  it('forwards a configured baseUrl to the worker on initialize', async () => {
-    const { pyodideManager } = await import('../pyodideManager');
-    const worker = injectWorker(pyodideManager);
-    pyodideManager.configure('http://mirror.local/pyodide/');
-    void pyodideManager.initialize().catch(() => {});
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'initialize', baseUrl: 'http://mirror.local/pyodide/' });
+  it('frames the sandbox route with allow-scripts and nothing else', async () => {
+    const { frame, pending } = await readySandbox();
+    void pending.catch(() => {});
+
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(frame.getAttribute('sandbox')).not.toContain('allow-same-origin');
   });
 
-  it('sends baseUrl undefined when not configured (worker keeps the default CDN)', async () => {
+  it('forwards a configured baseUrl to the sandbox on initialize', async () => {
+    vi.resetModules();
     const { pyodideManager } = await import('../pyodideManager');
-    const worker = injectWorker(pyodideManager);
-    void pyodideManager.initialize().catch(() => {});
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'initialize', baseUrl: undefined });
+    pyodideManager.configure('http://mirror.local/pyodide/');
+
+    const pending = pyodideManager.initialize();
+    void pending.catch(() => {});
+    await Promise.resolve();
+
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    const posted: unknown[] = [];
+    Object.defineProperty(frame, 'contentWindow', {
+      configurable: true,
+      value: { postMessage: (message: unknown) => posted.push(message) },
+    });
+    window.dispatchEvent(
+      new MessageEvent('message', { data: { type: 'pyodide-sandbox-ready' }, source: frame.contentWindow })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(posted).toContainEqual({ type: 'initialize', baseUrl: 'http://mirror.local/pyodide/' });
+  });
+
+  it('sends baseUrl undefined when not configured (the sandbox keeps the pinned CDN)', async () => {
+    const { posted, pending } = await readySandbox();
+    void pending.catch(() => {});
+
+    expect(posted).toContainEqual({ type: 'initialize', baseUrl: undefined });
+  });
+
+  it('ignores messages that did not come from its own sandbox frame', async () => {
+    const { pyodideManager, pending } = await readySandbox();
+    void pending.catch(() => {});
+
+    // Another frame (or any page) claiming the run finished must not settle our state.
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'error', error: 'spoofed' },
+        source: window as unknown as MessageEventSource,
+      })
+    );
+    await Promise.resolve();
+
+    expect(pyodideManager.getState().error).not.toBe('spoofed');
+  });
+
+  it('interrupt removes the sandbox frame, which destroys the worker inside it', async () => {
+    const { pyodideManager, frame, pending } = await readySandbox();
+    void pending.catch(() => {});
+
+    pyodideManager.interrupt();
+
+    expect(frame.isConnected).toBe(false);
   });
 });
 
