@@ -1343,4 +1343,20 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
 
     expect(out).not.toContain(CONFLICT_NOTE);
   });
+
+  // The note must describe the SERVED text. The char budget is spent across files in key order, so
+  // file-a arrives whole and file-b's figure is past the cut - a note naming it would be a claim
+  // about content the model cannot check.
+  it('says nothing about a conflicting figure the char budget clipped away', async () => {
+    const out = await runQuery({
+      'file-a': 'Uptime is 99.9%.',
+      'file-b': `${'padding text. '.repeat(1000)} Uptime is 95%.`,
+    });
+
+    // Both halves matter: the first proves the padding actually reached the budget (without it the
+    // test passes on a fixture that was never clipped), the second that the surviving half is served.
+    expect(out).not.toContain('Uptime is 95%.');
+    expect(out).toContain('Uptime is 99.9%.');
+    expect(out).not.toContain(CONFLICT_NOTE);
+  });
 });

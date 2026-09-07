@@ -66,8 +66,14 @@ const NOTE_OPENING = 'NOTE: the retrieved documents below may contradict each ot
  * Runs with `metricUnitRequired`, which is what keeps the note honest about a passage the caller
  * clipped to a budget. Every site cuts with a raw `slice`, so a passage can end mid-number - and a
  * bare `1,2` surviving from `1,200,000` would otherwise read as disagreeing with the document stating
- * the full figure. The unit follows the value, so any cut that damages the value takes the unit with
- * it and the fragment stops being a metric at all.
+ * the full figure. The unit follows the value, so any cut INSIDE the value takes the unit with it and
+ * the fragment stops being a metric at all.
+ *
+ * The residual, unfixed: a cut inside the unit WORD can truncate it into a shorter valid unit -
+ * `5 gbps` clipped to `5 gb`, `30 sprints` to `30 s`. That needs one exact offset per such token
+ * rather than any offset inside a number, and the code fix (drop a trailing metric whose unit abuts
+ * end-of-string) would re-cost the recall on unterminated bullet text that requiring a unit just
+ * bought back. Known and accepted, not overlooked.
  *
  * `nowYear` is a parameter for the same reason the detector takes one: reproducibility under test.
  */

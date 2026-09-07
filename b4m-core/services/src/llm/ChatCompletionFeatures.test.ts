@@ -2763,4 +2763,21 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     expect(content.indexOf('About this library:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
     expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
   });
+
+  // The note must describe the SERVED text, and this is the channel where that bites: the char
+  // budget saturates on most turns here, so detection fed the pre-clip text would routinely assert a
+  // conflict whose evidence the model was never shown. Candidates tie on score and sort by
+  // fabFileId, so fileA is injected whole and fileB's figure is what the budget cuts.
+  it('says nothing about a conflicting figure the char budget clipped away', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: `${'padding text. '.repeat(1000)} Uptime is 95%.` },
+    ]);
+
+    // Both halves matter: the first proves the padding actually reached the budget (without it the
+    // test passes on a fixture that was never clipped), the second that the surviving half is served.
+    expect(content).not.toContain('Uptime is 95%.');
+    expect(content).toContain('Uptime is 99.9%.');
+    expect(content).not.toContain(CONFLICT_NOTE);
+  });
 });
