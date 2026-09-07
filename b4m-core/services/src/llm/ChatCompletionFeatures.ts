@@ -55,6 +55,7 @@ import {
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   DATALAKE_TAG_PREFIX,
+  PROMPT_TEXT_MAX,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -84,7 +85,7 @@ import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeServi
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
-import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
+import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
   documentDateClause,
@@ -406,6 +407,8 @@ export const QuestStartBodySchema = z.object({
   enableArtifacts: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   enableAgents: z.boolean().optional(),
   enableLattice: z.boolean().optional(),
   promptMeta: PromptMetaZodSchema,
@@ -1516,7 +1519,11 @@ export class SessionPromptFeature implements ChatCompletionFeature {
     return [
       {
         role: 'system' as const,
-        content: systemPrompt,
+        // Session prompts are author-set (session settings), not model-generated, but this
+        // text still reaches the model unvetted at request time - defang line-initial markers
+        // so it can't forge a header/footer for another block. No deference header is added
+        // here: this channel's precedence relative to other sources is unchanged by this fix.
+        content: defangBlockMarkers(systemPrompt),
       },
     ];
   }
