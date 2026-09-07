@@ -191,14 +191,13 @@ export function redactUserSecretsForSelf(
     const { slackUserToken: _drop, ...rest } = user.slackSettings;
     u.slackSettings = rest;
   }
-  // Auth providers -> keep the identity metadata the settings UI reads (it needs the
-  // linked strategies to show which accounts are connected), drop the OAuth/SAML
-  // tokens. An array, unlike every other entry here, so map rather than reshape once.
+  // Auth providers -> allowlist, like every other block here, so a field added to the
+  // provider type (it already carries samlNameId/samlSessionIndex/oktaIdentityProviderId/
+  // encrypted) does not reach the browser until named on purpose. The settings UI
+  // (ConnectedAppsSection) reads only `strategy`; `id` is kept as a stable identity.
+  // An array, unlike every other entry here, so map rather than reshape once.
   if (user.authProviders) {
-    u.authProviders = user.authProviders.map(provider => {
-      const { accessToken: _at, refreshToken: _rt, ...rest } = provider;
-      return rest;
-    });
+    u.authProviders = user.authProviders.map(provider => ({ id: provider.id, strategy: provider.strategy }));
   }
   // Blog -> keep display/config, drop the API key.
   if (user.blogIntegration) {

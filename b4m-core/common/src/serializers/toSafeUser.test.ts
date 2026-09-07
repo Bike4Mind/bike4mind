@@ -315,12 +315,15 @@ describe('redactUserSecretsForSelf - authProviders', () => {
     expect(JSON.stringify(out)).not.toContain('rt-secret');
   });
 
-  it('keeps the non-token identity metadata', () => {
+  it('allowlists id and strategy only, dropping provider-growth metadata', () => {
     const out = redactUserSecretsForSelf({ authProviders: providers } as never);
     const okta = (out?.authProviders as Array<Record<string, unknown>>)[0];
 
-    expect(okta.id).toBe('okta-sub-1');
-    expect(okta.oktaIdentityProviderId).toBe('idp-1');
+    // Allowlist like every other block in the serializer: a field added to the provider
+    // type does not reach the browser until named here. oktaIdentityProviderId (and the
+    // SAML metadata) are no longer serialized.
+    expect(okta).toEqual({ id: 'okta-sub-1', strategy: 'okta' });
+    expect(okta).not.toHaveProperty('oktaIdentityProviderId');
   });
 
   it('stays a strict subset of USER_SECRET_FIELDS', () => {
