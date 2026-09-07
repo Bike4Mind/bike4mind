@@ -313,9 +313,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       });
       setTestScopeOpen(false);
     } catch (err) {
-      // The route's refusal (unmanaged lake, non-active lake, unbound API key) rides on
-      // response.data.error; axios's own `message` is just "Request failed with status code N",
-      // which renders those very different failures identical to whoever is testing the lake.
+      // The route's refusals (unmanaged lake, non-active lake, over the per-session cap) and any
+      // unexpected server exception both ride on response.data.error; axios's own `message` is just
+      // "Request failed with status code N", which renders those very different failures identical
+      // to whoever is testing the lake.
       const detail = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       toast.error(detail || 'Could not start a test chat for this lake');
     } finally {
