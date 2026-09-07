@@ -182,6 +182,8 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * `enabled: false` is a real state now that archiving/soft-deleting a lake disables its
    * connection, so a caller that must still reach the row - anything that revokes the grant,
    * releases the folder claim, or re-enables - wants findByDataLakeIdAny plus its own org check.
+   * That leaves this one with no production callers today; it survives as the enabled-only
+   * semantic the e2e uses to assert a disabled row really is invisible to the poll's view.
    */
   findByDataLakeId(targetDataLakeId: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 

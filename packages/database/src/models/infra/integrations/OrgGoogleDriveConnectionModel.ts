@@ -157,7 +157,9 @@ class OrgGoogleDriveConnectionRepository
    * The ENABLED connection feeding a given lake in a given org, if any. `enabled: false` is a real
    * state now that archiving/soft-deleting a lake disables its connection, so a caller that must
    * still reach the row - anything that revokes the grant, releases the folder claim, or re-enables
-   * - wants findByDataLakeIdAny plus its own org check instead of this one.
+   * - wants findByDataLakeIdAny plus its own org check instead of this one. That leaves this one
+   * with no production callers today; it survives as the enabled-only semantic the e2e uses to
+   * assert a disabled row really is invisible to the poll's view of the world.
    */
   async findByDataLakeId(
     targetDataLakeId: string,

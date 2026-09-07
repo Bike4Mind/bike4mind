@@ -29,7 +29,10 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
 import defineAbilitiesFor from '@server/auth/ability';
 import { getFilesStorage } from '@server/utils/storage';
-import { getValidConnectionDriveAccessToken } from '@server/integrations/google/drive/common';
+import {
+  disableDriveConnectionForLake,
+  getValidConnectionDriveAccessToken,
+} from '@server/integrations/google/drive/common';
 import { createDriveClient } from '@server/integrations/google/drive/driveClient';
 import { walkFolder, fetchDriveFileContent } from '@server/integrations/google/drive/driveContent';
 import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
@@ -387,14 +390,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       return;
     }
     // Same rule as the web/Slack upload doors: only a draft (first batch) or active lake takes new
-    // files. An archived/deleting (or any other transitional) lake is a no-op here, not a failure -
-    // the connection should already be disabled by the lifecycle transition, but this closes the
-    // window for anything already enqueued or in flight when that transition happened.
+    // files. An archived/deleting (or any other transitional) lake is a no-op here, not a failure.
+    // This is also the convergence point for the enabled flag: the lifecycle transition disables
+    // the connection write-time, but that only covers transitions after this shipped, and its port
+    // is best-effort (see dataLakeService/ports.ts). Having proven the lake is not writable, heal
+    // forward - the disable is idempotent, so one poll retires a connection archived before this
+    // deploy, a lost best-effort disable, or a connect/archive race that re-stamped enabled.
     if (lake.status !== 'draft' && lake.status !== 'active') {
       logger.info('[driveLakeIngest] target data lake is not writable; dropping', {
         connectionId,
         lakeStatus: lake.status,
       });
+      try {
+        await disableDriveConnectionForLake(lake.id);
+      } catch (e) {
+        // Never fail the drop over the heal: the next poll drops again and retries the disable.
+        logger.warn('[driveLakeIngest] could not disable connection for a non-writable lake', {
+          connectionId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await releaseClaim(null);
       return;

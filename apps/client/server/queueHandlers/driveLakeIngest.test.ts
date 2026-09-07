@@ -41,6 +41,7 @@ const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   upload: vi.fn(),
   walkFolder: vi.fn(),
+  disableDriveConnectionForLake: vi.fn(),
   fetchDriveFileContent: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
   sendToQueue: vi.fn(),
@@ -110,6 +111,7 @@ vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
 vi.mock('@server/integrations/google/drive/common', () => ({
   getValidConnectionDriveAccessToken: async () => 'access-token',
+  disableDriveConnectionForLake: h.disableDriveConnectionForLake,
 }));
 vi.mock('@server/integrations/google/drive/driveClient', () => ({ createDriveClient: () => ({}) }));
 vi.mock('@server/integrations/google/drive/driveContent', () => ({
@@ -1214,8 +1216,28 @@ describe('driveLakeIngest consumer', () => {
       // nothing to do, so a lifecycle transition can never leave the connection stuck 'syncing'.
       expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
       expect(h.sendToQueue).not.toHaveBeenCalled();
+      // Heals forward, so a connection whose lake was archived before the write-time disable
+      // shipped (or whose best-effort disable was lost) stops being enqueued after one poll.
+      expect(h.disableDriveConnectionForLake).toHaveBeenCalledWith('lake1');
     }
   );
+
+  it('does not fail the drop when healing the enabled flag throws', async () => {
+    h.lakeFindById.mockResolvedValue({
+      id: 'lake1',
+      status: 'archived',
+      datalakeTag: 'lake-tag',
+      fileTagPrefix: 'demo:',
+      createdByUserId: 'creator1',
+    });
+    h.disableDriveConnectionForLake.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(run()).resolves.toBeUndefined();
+
+    // The claim still has to come back, or a transient failure strands the connection 'syncing'.
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+    expect(h.walkFolder).not.toHaveBeenCalled();
+  });
 
   it('ingests a draft lake (the first sync of a freshly connected folder)', async () => {
     // The 'draft' arm of the guard is load-bearing and self-reinforcing: lakes are seeded 'draft'
@@ -1238,6 +1260,9 @@ describe('driveLakeIngest consumer', () => {
     expect(h.walkFolder).toHaveBeenCalled();
     expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd1' }), expect.anything());
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
+    // The heal belongs to the non-writable arm only - disabling a draft lake's connection here
+    // would switch the poll off for the very lake that is mid-first-sync.
+    expect(h.disableDriveConnectionForLake).not.toHaveBeenCalled();
   });
 
   it('releases the syncing claim (guarded) when the run throws mid-ingest', async () => {
