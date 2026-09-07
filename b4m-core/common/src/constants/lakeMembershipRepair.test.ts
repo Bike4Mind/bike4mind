@@ -57,6 +57,7 @@ const decision = (g: DuplicateGroup, overrides: Partial<MembershipDecisionRecord
   ...overrides,
 });
 
+
 describe('groupIdentity', () => {
   it('is stable regardless of member order', () => {
     const a = groupIdentity(group('f.pdf', 'differing', [member('x', 'h1'), member('y', 'h2')]));

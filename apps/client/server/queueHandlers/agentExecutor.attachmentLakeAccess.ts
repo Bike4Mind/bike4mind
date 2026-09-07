@@ -22,7 +22,10 @@ import type { Logger } from '@bike4mind/observability';
  * `getAccessibleDataLakeAccess`), so the catch is load-bearing: an unhandled throw would fail the
  * whole run rather than degrading to ownership-only.
  */
-export function createAttachmentLakeAccess(user: IUserDocument, logger: Logger): () => Promise<AttachmentLakeAccess> {
+export function createAttachmentLakeAccess(
+  user: IUserDocument,
+  logger: Logger
+): () => Promise<AttachmentLakeAccess> {
   let memo: Promise<AttachmentLakeAccess> | undefined;
 
   return () =>

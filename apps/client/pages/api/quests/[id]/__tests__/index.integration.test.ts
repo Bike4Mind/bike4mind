@@ -253,7 +253,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(body.attachmentDelivery).toMatchObject({ requested: 4, delivered: 4, dropped: 0 });
     });
 
-    it("serves the report to a sharee - it describes the turn, not the owner's private corpus", async () => {
+    it('serves the report to a sharee - it describes the turn, not the owner\'s private corpus', async () => {
       mockQuestFindById.mockResolvedValue({
         id: 'quest-1',
         sessionId: 'sess-1',
