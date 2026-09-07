@@ -77,10 +77,15 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
   // name like ".exe") must still be refused below, not silently coerced to plain text.
   const resolvedMimeType = file.name.includes('.') ? getMimeTypeByExtension(ext) : SupportedFabFileMimeTypes.TXT_PLAIN;
   if (!resolvedMimeType || !SUPPORTED_SLACK_FILE_MIME_TYPES.includes(resolvedMimeType)) {
+    // Name what actually decided the rejection - the resolved (extension-based) type, or the
+    // raw extension if it did not resolve to any known mimetype - never `file.mimetype`, which
+    // is only the client's claim and can name a type that IS on the allow-list (e.g. a `.py`
+    // file claiming `text/plain` would otherwise report "unsupported type text/plain").
+    const reportedType = resolvedMimeType || ext || 'unknown';
     return {
       ok: false,
       reason: 'unsupported_type',
-      message: `File "${file.name}" has unsupported type ${file.mimetype}.`,
+      message: `File "${file.name}" has unsupported type ${reportedType}.`,
     };
   }
 
