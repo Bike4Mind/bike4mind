@@ -952,6 +952,12 @@ export function useAddFileToDataLake() {
  * so a later repair run does not re-ask about a pair the owner deliberately kept. Cancelling is not
  * an answer, so there is nothing to send for it - the caller simply closes the dialog.
  *
+ * Offers Undo on the replacement toast for the same reason `useRemoveFileFromDataLake` does, and
+ * SPENDS the same records: `removedFabFileIds` names every member the ruling removed, and each one
+ * carries a short-TTL restore record on the server. That toast is the only affordance that can spend
+ * them (see UNDO_TOAST_DURATION_MS), and the dialog's copy promises it, so a plain success toast
+ * here would have made a destructive action irreversible for a non-owner in practice.
+ *
  * Invalidates through `invalidateLakeFileMembershipQueries` rather than a bespoke list, because a
  * `keep-newest` genuinely IS a membership change and stales exactly what a removal stales.
  */
@@ -974,6 +980,7 @@ export interface MembershipDecisionResponse {
 
 export function useRecordMembershipDecision() {
   const queryClient = useQueryClient();
+  const addFileToDataLake = useAddFileToDataLake();
   return useMutation({
     mutationFn: async ({ dataLakeId, fileName, decision, keptFabFileId }: MembershipDecisionVariables) => {
       const res = await api.post<MembershipDecisionResponse>(`/api/data-lakes/${dataLakeId}/membership-decisions`, {
@@ -985,10 +992,34 @@ export function useRecordMembershipDecision() {
     },
     onSuccess: (data, { dataLakeId }) => {
       invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
-      toast.success(
-        data.removedFabFileIds.length > 0
-          ? `Replaced: ${data.removedFabFileIds.length} older copy(ies) of "${data.fileName}" left this lake.`
-          : `Kept both copies of "${data.fileName}". You will not be asked again unless they change.`
+
+      const removed = data.removedFabFileIds;
+      if (removed.length === 0) {
+        // "every copy", not "both": a group of three is routine (the duplicated corpus this lane
+        // came from held several generations of one name), and there is nothing to undo here.
+        toast.success(`Kept every copy of "${data.fileName}". You will not be asked again unless they change.`);
+        return;
+      }
+
+      const toastId = toast.success(
+        `Replaced: ${removed.length} older ${removed.length === 1 ? 'copy' : 'copies'} of ` +
+          `"${data.fileName}" left this lake.`,
+        {
+          duration: UNDO_TOAST_DURATION_MS,
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              // One restore per removed member, and no per-call callbacks: this click routinely
+              // happens after the dialog holding the hook has unmounted, which is exactly when those
+              // are dropped. Every restore addresses THIS toast, so the last one to land - a success
+              // or a refusal - is what the manager is left reading. Sequential ordering is not
+              // needed: the restores are independent lake writes over distinct files.
+              for (const fabFileId of removed) {
+                addFileToDataLake.mutate({ dataLakeId, fabFileId, toastId });
+              }
+            },
+          },
+        }
       );
     },
     onError: (error: Error) => {

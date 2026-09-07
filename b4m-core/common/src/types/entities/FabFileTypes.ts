@@ -668,6 +668,12 @@ export type DataLakeMembershipScope =
  * All three fields optional and an absent object means "no lake arms": the fail-safe direction for
  * every door that cannot resolve its buckets is to omit them, never to widen.
  */
+export interface AttachmentLakeAccess {
+  lakeMemberships?: DataLakeMembershipScope[];
+  dataLakeTags?: string[];
+  dataLakeTagPrefixes?: string[];
+}
+
 /**
  * One lake member as the MEMBERSHIP dimension reads it (#2245): who is in the lake, by which arm,
  * what identifies the document, and how confidently two copies can be called identical.
@@ -692,18 +698,16 @@ export interface LakeMembershipMemberRow {
   userId: string | null;
   arm: MembershipArm;
   /**
-   * The two stronger source-identity signals, read only to split a same-name group (#2238). Both are
-   * null on the doors that record neither - a plain single-file upload has no folder path and no
-   * Drive id - which is the file-name tier this report already used before they existed.
+   * The two stronger source-identity signals, read only to split a same-name group (#2238).
+   *
+   * Neither is a "has a folder" / "is from Drive" flag. `relativePath` in particular is populated on
+   * ordinary single-file uploads too - the lake wizard's flat picker sets it to
+   * `webkitRelativePath || file.name` - so only the folder it RESOLVES to counts, which is
+   * `sourceIdentityKeyFor`'s call to make and no reader of this row's. A row where neither signal
+   * denotes anything falls to the file-name tier this report used before they existed.
    */
   relativePath: string | null;
   driveFileId: string | null;
-}
-
-export interface AttachmentLakeAccess {
-  lakeMemberships?: DataLakeMembershipScope[];
-  dataLakeTags?: string[];
-  dataLakeTagPrefixes?: string[];
 }
 
 /**
@@ -1248,11 +1252,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * the admission check runs (the checkpoint is POST-chunk). `detectSameIdentityAdmission` requires
    * the candidate to be absent from its sibling list, so leaving it in reports a member as its own
    * duplicate. OMIT it to read the WHOLE same-name group - what the decision door needs, since a
-   * ruling is stamped over every member the group holds.
+   * ruling is stamped over every member the group holds. Omitting it does NOT omit `limit`.
    *
-   * `limit` bounds one name's set rather than the lake's - a bound this can hit only on a name held
-   * by more copies than any decision surface could present, so it truncates rather than reporting
-   * partiality.
+   * `limit` bounds one name's set rather than the lake's, newest-first, and it truncates silently
+   * rather than reporting partiality. The default suits the report-only admission read; a caller
+   * that stamps or re-derives a `groupIdentity` must pass `DECIDABLE_GROUP_MEMBERS`, since a ruling
+   * computed over a narrower set can never equal the one the repair-plan read recomputes.
    */
   findLakeMemberSiblingsByFileName(
     scope: DataLakeMembershipScope,

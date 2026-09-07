@@ -62,6 +62,7 @@ import {
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
   useAddFileToDataLake,
+  useRecordMembershipDecision,
   useRemoveFileFromDataLake,
   useApplyTaxonomySuggestions,
   useRechunkDataLake,
@@ -446,6 +447,93 @@ describe('useAddFileToDataLake', () => {
  * while afterwards. That is why these tests mock the endpoint to keep returning BOTH lakes - a
  * refetch on the purge path is guaranteed to see the pre-sweep truth and put the row back (#1487).
  */
+describe('useRecordMembershipDecision', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRecordMembershipDecision(), { wrapper });
+  };
+
+  const decided = (removedFabFileIds: string[]) => ({
+    data: {
+      success: true,
+      fileName: 'policy.md',
+      decision: removedFabFileIds.length > 0 ? 'keep-newest' : 'keep-both',
+      tier: 'fileName',
+      bucket: 'differing',
+      removedFabFileIds,
+    },
+  });
+
+  beforeEach(() => {
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+  });
+
+  it('offers Undo on a replacement and restores EVERY copy the ruling removed', async () => {
+    // The dialog's copy promises an Undo and the server already mints a restore record per removed
+    // member; this toast is the only affordance that can spend them (see UNDO_TOAST_DURATION_MS -
+    // there is no list route and no "recently removed" panel). A plain success toast here left a
+    // destructive action with no way back for a non-owner.
+    const successMock = toast.success as ReturnType<typeof vi.fn>;
+    successMock.mockReturnValue('decision-toast');
+    apiPost.mockResolvedValueOnce(decided(['old-1', 'old-2']));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-newest' });
+    });
+
+    const call = successMock.mock.calls.find(c => c[1]?.action?.label === 'Undo') as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    expect(call[0]).toBe('Replaced: 2 older copies of "policy.md" left this lake.');
+
+    apiPost.mockResolvedValue({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+    act(() => {
+      call[1].action.onClick();
+    });
+
+    // One restore per removed member - a single-file Undo would have stranded the rest.
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/old-1');
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/old-2');
+    });
+  });
+
+  it('counts one replaced copy in the singular', async () => {
+    apiPost.mockResolvedValueOnce(decided(['old-1']));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-newest' });
+    });
+
+    expect((toast.success as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      'Replaced: 1 older copy of "policy.md" left this lake.'
+    );
+  });
+
+  it('offers no Undo for keep-both, and does not call a group of three "both copies"', async () => {
+    // QA hit a 3-copy group, where "both" reads as a miscount of what the ruling covered. There is
+    // also nothing to undo: keep-both removes nothing, so no restore record exists to spend.
+    apiPost.mockResolvedValueOnce(decided([]));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-both' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(
+      'Kept every copy of "policy.md". You will not be asked again unless they change.'
+    );
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('useCleanupDataLake queued purge', () => {
   const deletedLake = (id: string) => ({ id, name: `Lake ${id}`, fileTagPrefix: `${id}:` });
   const listing = (...ids: string[]) => ({ data: { data: ids.map(deletedLake) } });

@@ -143,20 +143,36 @@ describe('detectSameIdentityAdmission', () => {
     expect(detectSameIdentityAdmission(memberOf({ fileName: undefined }), [memberOf()])).toBeNull();
   });
 
-  it('matches a renamed Drive file on its stable id', () => {
+  it('reports the driveFileId tier for two copies of one Drive document', () => {
     const incoming = memberOf({
       fileName: 'policy-v3.md',
       driveFileId: 'd1',
       createdAt: new Date('2026-03-01T00:00:00Z'),
     });
-    // Same Drive document, and the name the lake holds it under has since changed. The group is
-    // keyed by the INCOMING name, which is what a decision would be recorded against.
     const existing = memberOf({ fileName: 'policy-v3.md', driveFileId: 'd1' });
 
     const found = detectSameIdentityAdmission(incoming, [existing]);
 
     expect(found?.tier).toBe('driveFileId');
     expect(found?.group.memberCount).toBe(2);
+  });
+
+  it('does NOT match a Drive file across a rename, unlike the retrieval-time collapse', () => {
+    // A stable `driveFileId` is not enough here, and that is deliberate rather than a gap.
+    // `buildDuplicateGroups` keys the OUTER group on the exact file name because a ruling is stored
+    // against (dataLakeId, fileName), so two names cannot share one tombstone key - which means the
+    // driveFileId tier can only ever SPLIT a same-name group, never join two generations filed under
+    // different names. `partitionBySupersession` does no name grouping and so does match across a
+    // rename (see sourceIdentity.test.ts); the two surfaces genuinely differ here, and the previous
+    // version of this test claimed the opposite while giving both fixtures the same name.
+    const renamed = memberOf({
+      fileName: 'policy-v4.md',
+      driveFileId: 'd1',
+      createdAt: new Date('2026-04-01T00:00:00Z'),
+    });
+    const existing = memberOf({ fileName: 'policy-v3.md', driveFileId: 'd1' });
+
+    expect(detectSameIdentityAdmission(renamed, [existing])).toBeNull();
   });
 
   it('describes a finding by id and tier, never by file name', () => {

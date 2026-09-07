@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import type { ILakeMembershipDecision, LakeMembershipMemberRow } from '@bike4mind/common';
+import { DECIDABLE_GROUP_MEMBERS, type ILakeMembershipDecision, type LakeMembershipMemberRow } from '@bike4mind/common';
 import { applyAdmissionDecision, type ApplyAdmissionDecisionAdapters } from './applyAdmissionDecision';
 
 const removeFileFromDataLake = vi.fn(async () => ({ success: true as const, fileCount: 1, totalSizeBytes: 1 }));
@@ -49,10 +49,13 @@ describe('applyAdmissionDecision', () => {
 
     const result = await applyAdmissionDecision(ACTOR, LAKE, { fileName: 'policy.md', decision: 'keep-both' }, bag);
 
-    // Read fresh, and with no exclusion: a ruling covers every member the group holds.
+    // Read fresh, with no exclusion (a ruling covers every member the group holds) and with the
+    // bound passed explicitly - omitting the exclusion does not omit the limit.
     expect(findLakeMemberSiblingsByFileName).toHaveBeenCalledWith(
       { kind: 'owned', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
-      'policy.md'
+      'policy.md',
+      null,
+      DECIDABLE_GROUP_MEMBERS
     );
     expect(upsertDecision).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -69,6 +72,23 @@ describe('applyAdmissionDecision', () => {
     expect(groupIdentity).toContain('new-1');
     expect(groupIdentity).toContain('old-1');
     expect(result.removedFabFileIds).toEqual([]);
+  });
+
+  it('reads the group by the bound the repair-plan door builds its groups with', async () => {
+    // The two doors both derive a `groupIdentity` from a group's members, so they must read the same
+    // number of them. At the repository default of 50, a `keep-both` on a name held by 120 members
+    // stamps an identity the plan's recomputation over 200 can never equal: the group routes to
+    // needsDecision on every render, and re-answering rewrites the same unmatchable string. A
+    // `keep-newest` has the mirror bug - it removes 49 of 120 and reports that as the whole job.
+    //
+    // The literal 200 is deliberate: asserting only against the constant would move with it and
+    // could not observe the two doors drifting apart.
+    const { bag, findLakeMemberSiblingsByFileName } = adapters();
+
+    await applyAdmissionDecision(ACTOR, LAKE, { fileName: 'policy.md', decision: 'keep-both' }, bag);
+
+    expect(findLakeMemberSiblingsByFileName).toHaveBeenCalledWith(expect.anything(), 'policy.md', null, 200);
+    expect(DECIDABLE_GROUP_MEMBERS).toBe(200);
   });
 
   it('keep-both removes nothing', async () => {

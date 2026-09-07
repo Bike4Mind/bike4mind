@@ -184,6 +184,28 @@ export function groupIdentity(group: Pick<DuplicateGroup, 'members'>): string {
     .join('|');
 }
 
+/**
+ * How many members of ONE group a ruling is computed over: the input set of the tombstone key above,
+ * NOT a payload size.
+ *
+ * Every door that stamps a `groupIdentity` or re-derives one to compare against must read the same
+ * number of members, newest-first, or the two strings cannot be equal. Two doors do: the repair-plan
+ * read caps each group's members at this (`summarizeLakeMembership`'s `maxGroupMembers`, which keeps
+ * the newest), and the admission decision door bounds its same-name sibling read by it
+ * (`findLakeMemberSiblingsByFileName`'s `limit`, which is newest-first for exactly this reason).
+ *
+ * Letting them differ is not a rounding error, it is two silent bugs. A `keep-both` stamped over the
+ * narrower set never matches the identity the plan recomputes, so the group routes to
+ * `needsDecision` on every render - the precise re-ask `keep-both` exists to prevent - and it cannot
+ * clear itself through the automatic arm either, since a group anyone has ruled on is barred from it.
+ * A `keep-newest` removes only the members the narrower door happened to see and reports that count
+ * as if it were the whole job.
+ *
+ * Deliberately not `MEMBERSHIP_GROUP_MEMBERS_RETURNED`, whose equal 200 bounds the health report's
+ * payload. Same number today, different contracts; a change to one must not silently move the other.
+ */
+export const DECIDABLE_GROUP_MEMBERS = 200;
+
 /** Worst-understood first: unverified, then differing. Collapsible groups are listed separately. */
 const DECISION_ORDER: Record<DuplicateBucket, number> = { unverified: 0, differing: 1, 'proven-identical': 2 };
 

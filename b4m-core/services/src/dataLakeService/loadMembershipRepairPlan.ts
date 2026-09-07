@@ -1,4 +1,5 @@
 import {
+  DECIDABLE_GROUP_MEMBERS,
   planMembershipRepair,
   summarizeLakeMembership,
   toWireDuplicateGroup,
@@ -8,7 +9,7 @@ import {
   type MembershipRepairPlanRead,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { MEMBER_SCAN_LIMIT, MEMBERSHIP_GROUP_MEMBERS_RETURNED, membershipScopeDisclosure } from './computeLakeHealth';
+import { MEMBER_SCAN_LIMIT, membershipScopeDisclosure } from './computeLakeHealth';
 import { lakeMembershipScope } from './lakeMembershipScope';
 
 /**
@@ -63,10 +64,13 @@ export async function loadMembershipRepairPlan(
   // see every group. Capping first would let a lake whose worst-first head is entirely settled hide
   // its open groups behind the cap - the cap is applied to `open` below instead, where it bounds the
   // payload without deciding what is in it.
+  // `DECIDABLE_GROUP_MEMBERS`, not the health report's payload cap: the groups this door builds are
+  // what `planMembershipRepair` recomputes a `groupIdentity` over, so this number has to be the one
+  // the decision door reads its members by. See the constant.
   const report = summarizeLakeMembership(truncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows, {
     scope: membershipScopeDisclosure(scope),
     scanTruncated: truncated,
-    maxGroupMembers: MEMBERSHIP_GROUP_MEMBERS_RETURNED,
+    maxGroupMembers: DECIDABLE_GROUP_MEMBERS,
   });
   if (report.duplicateGroups.length === 0) {
     return {

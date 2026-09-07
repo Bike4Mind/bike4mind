@@ -33,8 +33,8 @@ const group = (over: Partial<WireDuplicateGroup> = {}): WireDuplicateGroup => ({
   ...over,
 });
 
-const openWith = (groups: WireDuplicateGroup[], openGroupCount = groups.length) => ({
-  data: { open: groups, openGroupCount, settledGroupCount: 0, stalledGroupCount: 0 },
+const openWith = (groups: WireDuplicateGroup[], openGroupCount = groups.length, scanTruncated = false) => ({
+  data: { open: groups, openGroupCount, settledGroupCount: 0, stalledGroupCount: 0, scanTruncated },
 });
 
 beforeEach(() => {
@@ -87,16 +87,22 @@ describe('DuplicateAdmissionDialog', () => {
   });
 
   it('names the tier that matched, since the weakest one can be wrong', () => {
-    renderDialog([group({ tier: 'fileName' })]);
+    // Unmounted between the two renders. `screen` queries document.body, so leaving the first
+    // dialog mounted searches both at once - which passes here only for as long as the two strings
+    // stay disjoint, and turns into a "found multiple elements" failure the moment a third variant
+    // shares any copy with them.
+    const first = renderDialog([group({ tier: 'fileName' })]);
     expect(screen.getByText(/Matched by file name alone/)).toBeInTheDocument();
+    first.unmount();
 
     renderDialog([group({ tier: 'driveFileId' })]);
     expect(screen.getByText(/same Drive document/)).toBeInTheDocument();
   });
 
   it('distinguishes a proven-identical pair from one whose copies differ', () => {
-    renderDialog([group({ bucket: 'proven-identical' })]);
+    const first = renderDialog([group({ bucket: 'proven-identical' })]);
     expect(screen.getByText('Identical')).toBeInTheDocument();
+    first.unmount();
 
     renderDialog([group({ bucket: 'differing' })]);
     expect(screen.getByText('Different content')).toBeInTheDocument();
@@ -109,6 +115,27 @@ describe('DuplicateAdmissionDialog', () => {
 
     expect(screen.getByText('7 copies')).toBeInTheDocument();
     expect(screen.getByText('+5 more')).toBeInTheDocument();
+  });
+
+  it('says when only part of a large lake was scanned, so the list reads as a lower bound', () => {
+    const { unmount } = render(
+      <TestWrapper>
+        <DuplicateAdmissionDialog
+          open
+          onClose={() => {}}
+          dataLakeId="lake-1"
+          lakeName="Acme Policies"
+          groups={[group()]}
+          scanTruncated
+        />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-duplicate-truncated')).toBeInTheDocument();
+    unmount();
+
+    renderDialog();
+    expect(screen.queryByTestId('datalake-duplicate-truncated')).not.toBeInTheDocument();
   });
 
   it('warns about a decision whose removal never finished, and stays quiet otherwise', () => {
@@ -125,11 +152,34 @@ describe('DuplicateAdmissionDialog', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('datalake-duplicate-stalled')).toHaveTextContent('2 earlier decisions did not finish');
+    expect(screen.getByTestId('datalake-duplicate-stalled')).toHaveTextContent(
+      '2 earlier decisions are on record but are not reflected in this lake'
+    );
     unmount();
 
     renderDialog();
     expect(screen.queryByTestId('datalake-duplicate-stalled')).not.toBeInTheDocument();
+  });
+
+  it('agrees in number for a single unreflected decision', () => {
+    // The copy branches on count rather than reaching for "decision(s)", and the singular arm is
+    // the one a manager hits after undoing their own keep-newest.
+    render(
+      <TestWrapper>
+        <DuplicateAdmissionDialog
+          open
+          onClose={() => {}}
+          dataLakeId="lake-1"
+          lakeName="Acme Policies"
+          groups={[group()]}
+          stalledCount={1}
+        />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-duplicate-stalled')).toHaveTextContent(
+      '1 earlier decision is on record but is not reflected in this lake. Answer it again to apply it.'
+    );
   });
 });
 
@@ -185,6 +235,20 @@ describe('DuplicateAdmissionsChip', () => {
     );
 
     expect(screen.getByTestId('datalake-duplicates-chip-lake-1')).toHaveTextContent('60 to resolve');
+  });
+
+  it('marks the count as a lower bound when the member scan was truncated', () => {
+    // `scanTruncated` makes `openGroupCount` a floor (MembershipRepairPlanRead documents it), so a
+    // bare figure would read as the whole job on exactly the lakes where it is not.
+    h.duplicates.mockReturnValue(openWith([group()], 50, true));
+
+    render(
+      <TestWrapper>
+        <DuplicateAdmissionsChip lakeId="lake-1" lakeName="Acme Policies" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-duplicates-chip-lake-1')).toHaveTextContent('50+ to resolve');
   });
 
   it('opens the dialog from the chip for a manager', () => {

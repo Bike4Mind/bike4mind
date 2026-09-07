@@ -208,6 +208,42 @@ describe('source-identity refinement', () => {
     expect(report.duplicateGroups[0].memberCount).toBe(2);
   });
 
+  it('reads a relativePath that is only the file name as no folder at all', () => {
+    // The shape the lake wizard's flat picker actually writes: relativePath = webkitRelativePath ||
+    // file.name (folderTreeParser.ts), so an ordinary single-file upload carries its own bare name.
+    // Every other fixture in this file is a trailing-slash folder prefix, which no producer emits -
+    // which is how a truthiness test on this field survived a green suite.
+    const report = summarize([member({ relativePath: 'report.pdf' }), member({ relativePath: 'report.pdf' })]);
+
+    expect(report.duplicateGroups).toHaveLength(1);
+    expect(report.duplicateGroups[0].tier).toBe('fileName');
+    expect(report.duplicateGroups[0].memberCount).toBe(2);
+  });
+
+  it('groups a flat-picker upload WITH a door that records no relativePath at all', () => {
+    // The asymmetry nothing covered, and the answer this report is pinned to: `report.pdf` admitted
+    // through the wizard and the same document sent in through a door that sets no relativePath
+    // (Send to Data Lake, the single-file presign route, a Files-list join) are one pair. A tier
+    // literal sits at a fixed position in the identity key, so a member on the relativePath tier and
+    // a member on the fileName tier could never share one - the group would drop to a single
+    // survivor and not be reported as a duplicate at all.
+    const report = summarize([member({ relativePath: 'report.pdf' }), member({ relativePath: null })]);
+
+    expect(report.duplicateGroups).toHaveLength(1);
+    expect(report.duplicateGroups[0].tier).toBe('fileName');
+    expect(report.duplicateGroups[0].memberCount).toBe(2);
+  });
+
+  it('groups a full-path spelling with the bare-directory spelling of one folder', () => {
+    // A folder upload writes `docs/report.pdf`, not `docs/`. Both denote the same folder and must
+    // land on one key, or one document's generations split by which producer admitted them.
+    const report = summarize([member({ relativePath: 'docs/report.pdf' }), member({ relativePath: 'docs/' })]);
+
+    expect(report.duplicateGroups).toHaveLength(1);
+    expect(report.duplicateGroups[0].tier).toBe('relativePath');
+    expect(report.duplicateGroups[0].memberCount).toBe(2);
+  });
+
   it('does NOT report two same-named files at different relativePaths', () => {
     // The false pair the bare file-name tier is known to produce. Offering to collapse it is the
     // one error this report cannot afford, since acting on it removes membership.
@@ -244,6 +280,32 @@ describe('source-identity refinement', () => {
     // name cannot pull them together.
     const twoDocs = summarize([member({ driveFileId: 'd1' }), member({ driveFileId: 'd2' })]);
     expect(twoDocs.duplicateNameCount).toBe(0);
+  });
+
+  it('does NOT group a Drive-ingested copy with a same-named manual upload', () => {
+    // The deliberate answer to comparing identity across two different tiers, pinned because it is
+    // a narrowing of the name-only grouping this report used before the tiers existed.
+    //
+    // A `driveFileId` is the stable dedup key within a lake, so a member carrying one is claiming a
+    // specific Drive document; a manual upload that merely shares its name is making no such claim,
+    // and on a connector-synced lake `report.pdf` is exactly the name two unrelated documents
+    // collide on. Same argument as two `report.pdf` under different folders: offering to collapse
+    // the pair is the one error this report cannot afford, since acting on it removes membership.
+    //
+    // Symmetric in the two orderings, which is what makes it an answer rather than an artifact of
+    // whichever copy happens to be newest: the group anchors on the newest member's key, and the
+    // other member's key differs by the tier literal either way.
+    const driveNewest = summarize([
+      member({ driveFileId: 'd1', createdAt: new Date('2026-03-01T00:00:00Z') }),
+      member({ createdAt: new Date('2026-01-01T00:00:00Z') }),
+    ]);
+    expect(driveNewest.duplicateNameCount).toBe(0);
+
+    const manualNewest = summarize([
+      member({ createdAt: new Date('2026-03-01T00:00:00Z') }),
+      member({ driveFileId: 'd1', createdAt: new Date('2026-01-01T00:00:00Z') }),
+    ]);
+    expect(manualNewest.duplicateNameCount).toBe(0);
   });
 
   it('keeps the identity signals out of the wire payload', () => {

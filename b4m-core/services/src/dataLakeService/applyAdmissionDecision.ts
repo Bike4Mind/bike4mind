@@ -5,7 +5,7 @@ import type {
   ILakeMembershipDecisionRepository,
   RepairDecision,
 } from '@bike4mind/common';
-import { buildDuplicateGroups, membersRemovedByDecision } from '@bike4mind/common';
+import { DECIDABLE_GROUP_MEMBERS, buildDuplicateGroups, membersRemovedByDecision } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { recordMembershipDecision } from './recordMembershipDecision';
@@ -85,8 +85,17 @@ export async function applyAdmissionDecision(
   // about two files would silently suppress a question about three. `recordMembershipDecision` names
   // this as its caller's obligation; this is the caller that owes it.
   //
-  // No `excludeFabFileId`: a ruling is stamped over EVERY member of the group.
-  const members = await db.fabFiles.findLakeMemberSiblingsByFileName(lakeMembershipScope(lake), input.fileName);
+  // No `excludeFabFileId`: a ruling is stamped over EVERY member of the group. And the bound is
+  // passed EXPLICITLY, because omitting the exclusion does not omit the limit - the repository
+  // default (50) is narrower than what the repair-plan read offers, and a ruling stamped over 50 of
+  // a name's 120 members can never match the identity that door recomputes over the 200 it built.
+  // See `DECIDABLE_GROUP_MEMBERS` for what each side of that mismatch breaks.
+  const members = await db.fabFiles.findLakeMemberSiblingsByFileName(
+    lakeMembershipScope(lake),
+    input.fileName,
+    null,
+    DECIDABLE_GROUP_MEMBERS
+  );
   const { groups } = buildDuplicateGroups(members);
   // At most one group per name, by construction - see buildDuplicateGroups.
   const group = groups.find(g => g.fileName === input.fileName);

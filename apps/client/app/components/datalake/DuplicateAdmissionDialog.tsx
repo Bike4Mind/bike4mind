@@ -25,7 +25,8 @@ import { useGetLakeMembershipDuplicates, useRecordMembershipDecision } from '@cl
  * only in the `source` stamped on the row:
  *
  *  - Keep newest: the older copies leave the lake. Lake-scoped, so each file stays in its owner's
- *    Files list and in every other lake, and the server's removal record backs an Undo.
+ *    Files list and in every other lake, and the server's removal record backs the Undo that
+ *    `useRecordMembershipDecision`'s toast offers - the only affordance that can spend it.
  *  - Keep both: recorded so the question is not asked again unless the pair changes. Deliberate
  *    retention of a superseded document is a real outcome (`policy-v2.md` beside `policy-v3.md`),
  *    and without a record the next repair plan proposes the same collapse forever.
@@ -141,6 +142,7 @@ export function DuplicateAdmissionDialog({
   lakeName,
   groups,
   stalledCount = 0,
+  scanTruncated = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -149,6 +151,8 @@ export function DuplicateAdmissionDialog({
   groups: WireDuplicateGroup[];
   /** Groups whose recorded ruling was never carried out - see the note where it is rendered. */
   stalledCount?: number;
+  /** The lake exceeded the member scan limit, so what is offered here is a lower bound. */
+  scanTruncated?: boolean;
 }) {
   return (
     <Modal open={open} onClose={onClose}>
@@ -158,16 +162,37 @@ export function DuplicateAdmissionDialog({
           <Typography level="body-sm" textColor="text.secondary">
             These names are held by more than one copy of the same document. Keeping the newest removes the older copies
             from this lake only - each file stays in its owner&apos;s Files list, in any other lake it belongs to, and
-            you can undo it from the toast. Keeping both records your choice so you are not asked again.
+            the confirmation toast offers Undo for a short while afterwards. Keeping both records your choice so you are
+            not asked again.
           </Typography>
           {/* Answers the question a manager would otherwise have no way to answer: "I already
-              decided this one." A ruling is written before the removal it implies, so a removal that
-              failed leaves the ruling on record and the group still duplicated - and this door keeps
-              offering it, because re-answering is what retries the removal. */}
+              decided this one." A ruling is written before the removal it implies, so the lake can
+              hold a ruling it does not reflect - and this door keeps offering the group, because
+              re-answering is what applies it.
+
+              Deliberately does NOT say the removal failed. Two different causes land here and the
+              stored state cannot tell them apart, since both are "a ruling on record whose members
+              are still present": a removal that errored after the ruling was written, and a removal
+              the manager UNDID from its own toast - the ruling stays on record, so the restored
+              members put the group straight back here. Only the first is a failure, and claiming it
+              for the second tells someone their own deliberate reversal went wrong. Separating them
+              would need the restore path to leave a mark; until it does, this says the weaker thing
+              that is true of both. */}
           {stalledCount > 0 && (
             <Typography level="body-sm" textColor="warning.plainColor" data-testid="datalake-duplicate-stalled">
-              {stalledCount} earlier decision{stalledCount === 1 ? '' : 's'} did not finish removing its older copies.
-              Answering again will retry it.
+              {stalledCount === 1
+                ? '1 earlier decision is on record but is not reflected in this lake. Answer it again to apply it.'
+                : `${stalledCount} earlier decisions are on record but are not reflected in this lake. ` +
+                  'Answer them again to apply them.'}
+            </Typography>
+          )}
+          {/* The scan behind this list is bounded, so on a very large lake it holds the groups the
+              scan reached and not every group there is. Said plainly rather than left to the count,
+              which would otherwise read as the whole job. */}
+          {scanTruncated && (
+            <Typography level="body-sm" textColor="text.secondary" data-testid="datalake-duplicate-truncated">
+              This lake is large enough that only part of it was scanned, so there may be more duplicates than are
+              listed here. Resolving these and reopening will show the next set.
             </Typography>
           )}
           <Divider sx={{ my: 1 }} />
@@ -218,10 +243,20 @@ export default function DuplicateAdmissionsChip({
   // `openGroupCount` rather than `groups.length`: the payload caps the list, and a manager told
   // "3 duplicates" on a lake holding 60 would stop looking after the third.
   const openCount = duplicates?.openGroupCount ?? groups.length;
+  // And `openGroupCount` is itself a LOWER BOUND once the member scan was truncated, which is what
+  // the read door sets this flag for - so the figure gets a `+` rather than reading as exact.
+  const scanTruncated = duplicates?.scanTruncated ?? false;
 
   return (
     <>
-      <Tooltip title="Two or more copies of the same document are in this lake. Review and resolve." size="sm">
+      <Tooltip
+        title={
+          scanTruncated
+            ? 'Two or more copies of the same document are in this lake. This lake is too large to scan in full, so there may be more than shown.'
+            : 'Two or more copies of the same document are in this lake. Review and resolve.'
+        }
+        size="sm"
+      >
         <Chip
           size="sm"
           variant="soft"
@@ -234,7 +269,8 @@ export default function DuplicateAdmissionsChip({
           {/* "to resolve", not "duplicates": the health badge beside this counts every member that
               shares a name, ruling-blind and over a different population, so two figures reading as
               the same quantity would look like a contradiction. This one counts open QUESTIONS. */}
-          {openCount} to resolve
+          {openCount}
+          {scanTruncated ? '+' : ''} to resolve
         </Chip>
       </Tooltip>
       <DuplicateAdmissionDialog
@@ -244,6 +280,7 @@ export default function DuplicateAdmissionsChip({
         lakeName={lakeName}
         groups={groups}
         stalledCount={duplicates?.stalledGroupCount ?? 0}
+        scanTruncated={scanTruncated}
       />
     </>
   );

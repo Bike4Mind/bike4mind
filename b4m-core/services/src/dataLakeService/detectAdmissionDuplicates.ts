@@ -58,8 +58,14 @@ export interface DetectAdmissionDuplicatesAdapters {
 
 /**
  * How many copies of ONE name the check reads per lake. Bounds a pathological name (`scan.pdf` on a
- * connector-synced lake) without bounding anything a decision surface could present: the group is
- * shown to a human, and a name held by more copies than this is a repair job, not an offer.
+ * connector-synced lake) at the cost of at most a missed offer on a name held by more copies than
+ * this, which is a repair job rather than a question worth raising at upload time.
+ *
+ * Below `DECIDABLE_GROUP_MEMBERS` deliberately, and the asymmetry is safe in this direction ONLY.
+ * This read is report-only - the finding is logged and the offer left to the manager's door, and the
+ * caller discards the return value - so a truncated group costs nothing durable. A door that STAMPS
+ * a `groupIdentity` or re-derives one to compare against must not be narrowed this way, which is
+ * why `applyAdmissionDecision` passes the wider bound rather than sharing this one.
  */
 const SIBLING_SCAN_LIMIT = 50;
 
