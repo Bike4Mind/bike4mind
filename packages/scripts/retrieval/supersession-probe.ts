@@ -6,9 +6,9 @@
  * WHAT IT SEEDS. A dedicated, gate-less data lake (slug `supersession-probe`, never `system-help`)
  * holding three documents, each uploaded twice under the SAME `fileName` with different content -
  * a policy value that changed. The older generation's `createdAt` is force-backdated ~90 days so
- * the two generations are distinguishable by age, and the identity key `partitionBySupersession`
- * groups them on lands on the weakest (`fileName`) tier, since neither generation carries a
- * `relativePath` or `driveFileId` - see `b4m-core/services/src/dataLakeService/supersession.ts`.
+ * the two generations are distinguishable by age. The identity key that `partitionBySupersession`
+ * groups them on is the weakest (`fileName`) tier, since neither generation carries a
+ * `relativePath` or a `driveFileId` - see `b4m-core/services/src/dataLakeService/supersession.ts`.
  *
  * WHY THE OLDER TEXT SCORES AT LEAST AS WELL. Each query is phrased close to the OLD sentence's own
  * wording, and the NEW generation only appends a trailing clause ("effective 2026"). Without
@@ -82,6 +82,14 @@ import {
   type SettingKey,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
+import {
+  assertAllAttributed,
+  attributeChunks,
+  tallyGenerations,
+  type ChunkAttribution,
+  type Generation,
+  type SeededFile,
+} from './supersessionAttribution';
 
 /** This file is packages/scripts/retrieval/, so the package root is two levels up. */
 const SCRIPTS_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -109,8 +117,6 @@ const COLLAPSE_SETTING: SettingKey = 'EnableRetrievalSupersessionCollapse';
  *  contend with each other over an unrelated setting. */
 const LEASE_SETTING = '__supersessionProbeLease';
 const LEASE_STALE_AFTER_MS = 30 * 60 * 1000;
-
-type Generation = 'OLD' | 'NEW';
 
 /**
  * One document, seeded as two FabFiles under the same `fileName`. `query` is phrased close to
@@ -146,14 +152,6 @@ const PROBE_DOCS: ProbeDoc[] = [
   },
 ];
 
-/** What seeding recorded about one FabFile, so attribution never has to re-derive it from a tag. */
-type SeededFile = {
-  fabFileId: string;
-  fileName: string;
-  generation: Generation;
-  docIndex: number;
-};
-
 // ---------------------------------------------------------------------------
 // Settings lease (single setting) - same mechanics as recall-probe.ts's acquireSettingsLease,
 // narrowed to the one knob this probe touches.
@@ -175,7 +173,11 @@ async function writeSetting(name: string, value: string | null): Promise<void> {
   if (value === null) {
     await AdminSettings.deleteOne({ settingName: name }, { hardDelete: true });
   } else {
-    await AdminSettings.updateOne({ settingName: name }, { $set: { settingValue: value, deletedAt: null } }, { upsert: true });
+    await AdminSettings.updateOne(
+      { settingName: name },
+      { $set: { settingValue: value, deletedAt: null } },
+      { upsert: true }
+    );
   }
   invalidateSettingsCache();
   invalidateScopedSettingsCache();
@@ -183,9 +185,15 @@ async function writeSetting(name: string, value: string | null): Promise<void> {
 
 /**
  * `getSettingsValue` is typed as the union of EVERY admin setting's value shape, so it does not
- * narrow to this setting's boolean on its own. Narrow it here rather than casting: if the row ever
- * holds a non-boolean, the probe must refuse to measure instead of coercing it and reporting a
- * config it never actually exercised.
+ * narrow to this setting's boolean on its own. Narrow it here rather than casting.
+ *
+ * The throw is a TYPE guard, not a data-integrity check, and deliberately promises nothing about the
+ * row: `EnableRetrievalSupersessionCollapse` is a `makeBooleanSetting` (`settings.ts`), whose schema
+ * preprocesses the strings "true"/"false" and prefaults, and `getSettingsValue`
+ * (`AdminSettingsModel.ts`) falls back to `defaultValue` whenever `safeParse` fails - so a garbage
+ * row reads as `false` here rather than surfacing as a string. What actually catches a row this
+ * probe cannot trust is the write-then-read-back assertion in `runOneConfig`, which compares this
+ * value against what was just written.
  */
 async function readCollapseSettingAsBoolean(): Promise<boolean> {
   const raw: unknown = await adminSettingsRepository.getSettingsValue(COLLAPSE_SETTING);
@@ -199,6 +207,11 @@ async function readCollapseSettingAsBoolean(): Promise<boolean> {
   return raw;
 }
 
+/** Mongo duplicate key on the unique `settingName` index - the ONE error that means someone else
+ *  won the race for the lease row. */
+const isDuplicateKeyError = (err: unknown): boolean =>
+  typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
+
 async function acquireCollapseSettingLease(): Promise<{ originalValue: string | null; restore: () => Promise<void> }> {
   const holder = `${process.pid}@supersession-probe`;
   const now = Date.now();
@@ -211,7 +224,11 @@ async function acquireCollapseSettingLease(): Promise<{ originalValue: string | 
       { upsert: true }
     );
     acquired = result.upsertedCount === 1;
-  } catch {
+  } catch (err) {
+    // Only a duplicate key means another run holds the lease. A connection reset, timeout or auth
+    // failure must NOT be reported as a held lease: the operator would be told to go clear a row
+    // that may not exist, with `holder unknown` because the read below failed for the same reason.
+    if (!isDuplicateKeyError(err)) throw err;
     acquired = false;
   }
 
@@ -245,11 +262,19 @@ async function acquireCollapseSettingLease(): Promise<{ originalValue: string | 
       await writeSetting(COLLAPSE_SETTING, originalValue);
       logger.log(`Restored ${COLLAPSE_SETTING} to ${originalValue === null ? '(unset)' : originalValue}.`);
     } catch (err) {
+      // Return WITHOUT releasing the lease. While the setting is stranded, that row is the only
+      // marker that this stage is mid-probe, and it is the only thing stopping the next run from
+      // reading the stranded value as its own `originalValue` and restoring it on exit - which
+      // would flip collapse on permanently for everyone on the stage, with no error anywhere. Same
+      // invariant as recall-probe.ts's "released last" block; it is the part of those mechanics
+      // this narrowing had dropped.
       logger.error(
         `FAILED to restore ${COLLAPSE_SETTING} to ${originalValue === null ? '(unset)' : originalValue} on stage ` +
-          `${Resource.App.stage}. Restore it BY HAND before anyone else relies on this setting.`,
+          `${Resource.App.stage}. Restore it BY HAND, then clear the "${LEASE_SETTING}" row - it is left ` +
+          `behind on purpose to block the next run until you have.`,
         err
       );
+      return;
     }
     try {
       await writeSetting(LEASE_SETTING, null);
@@ -396,7 +421,8 @@ async function resolveEmbeddingHandle(userId: string): Promise<EmbeddingHandle> 
     getSettingsByNames,
   });
   const provider = getProviderFromModel(embeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } = {};
+  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
+    {};
   if (provider === 'openai') {
     embeddingConfig.openaiApiKey = apiKeyTable?.openai;
     if (!embeddingConfig.openaiApiKey) throw new Error(`No OpenAI API key resolved for user ${userId}.`);
@@ -469,10 +495,6 @@ async function seedOneGeneration(
 
   await fabFileChunkRepository.bulkInsert([{ ...chunkPayload, fabFileId: fabFile.id }]);
 
-  if (generation === 'OLD') {
-    await backdateAndVerify(fabFile.id, doc.fileName);
-  }
-
   return { fabFileId: fabFile.id, fileName: doc.fileName, generation, docIndex };
 }
 
@@ -484,10 +506,20 @@ async function seedCorpus(userId: string): Promise<SeededFile[]> {
   for (let docIndex = 0; docIndex < PROBE_DOCS.length; docIndex++) {
     const doc = PROBE_DOCS[docIndex];
     logger.log(`Seeding "${doc.fileName}"...`);
-    // NEW first, then OLD: order does not matter to Mongo, but seeding NEW first means a failure
-    // partway through never leaves an OLD generation backdated with no NEW sibling to compare it to.
-    seeded.push(await seedOneGeneration(doc, 'NEW', doc.newText, userId, embedding, docIndex));
-    seeded.push(await seedOneGeneration(doc, 'OLD', doc.oldText, userId, embedding, docIndex));
+    // OLD first, NEW second, and backdate only once BOTH rows exist. The order is what makes the
+    // measurement attributable: `winsOver` (supersession.ts) compares `createdAt` and falls back to
+    // ASCENDING id on a tie, so whichever generation is inserted first also wins the tiebreaker.
+    // Seeding OLD first therefore points the tiebreaker at OLD while the recency arm points at NEW,
+    // so an observed "0 old / N new" is reachable ONLY through `createdAt`. Seeding NEW first would
+    // aim both arms at NEW: if a refactor ever dropped `createdAt` from the rankable file (it is
+    // threaded through `semanticDataLakeSearch`), every timestamp would read -Infinity, the tie
+    // would fall to id, NEW would still win, and this probe would print the same pass it prints
+    // today while measuring nothing. Backdating last preserves the original reason for NEW-first:
+    // a failure partway through never leaves a backdated OLD with no NEW sibling to compare it to.
+    const older = await seedOneGeneration(doc, 'OLD', doc.oldText, userId, embedding, docIndex);
+    const newer = await seedOneGeneration(doc, 'NEW', doc.newText, userId, embedding, docIndex);
+    await backdateAndVerify(older.fabFileId, doc.fileName);
+    seeded.push(older, newer);
   }
   return seeded;
 }
@@ -552,14 +584,6 @@ async function resolveApiKeyTable(userId: string): Promise<ApiKeyTable> {
 // One query -> chunk-level attribution, via semanticDataLakeSearch directly.
 // ---------------------------------------------------------------------------
 
-type ChunkAttribution = {
-  chunkId: string;
-  fabFileId: string;
-  fileName: string;
-  generation: Generation | 'UNKNOWN';
-  score: number;
-};
-
 type SupersessionSummary = {
   count: number;
   sample: { fileId: string; fileName?: string; tier: string; supersededBy: string }[];
@@ -580,7 +604,8 @@ async function runQuery(
   scope: ProbeScope,
   embeddingModel: SupportedEmbeddingModel,
   apiKeyTable: ApiKeyTable,
-  byFabFileId: Map<string, SeededFile>
+  byFabFileId: Map<string, SeededFile>,
+  collapseEnabled: boolean
 ): Promise<QueryResult> {
   const search = await dataLakeService.semanticDataLakeSearch(
     {
@@ -595,7 +620,7 @@ async function runQuery(
       dataLakeTagPrefixes: scope.dataLakeTagPrefixes,
       lakeMemberships: scope.lakeMemberships,
       lakes: scope.lakes,
-      supersessionCollapseEnabled: await readCollapseSettingAsBoolean(),
+      supersessionCollapseEnabled: collapseEnabled,
       logger,
     },
     {
@@ -603,16 +628,8 @@ async function runQuery(
     }
   );
 
-  const chunks: ChunkAttribution[] = search.results.map(r => {
-    const meta = byFabFileId.get(r.fileId);
-    return {
-      chunkId: r.chunkId,
-      fabFileId: r.fileId,
-      fileName: meta?.fileName ?? r.fileName,
-      generation: meta?.generation ?? 'UNKNOWN',
-      score: r.score,
-    };
-  });
+  const chunks: ChunkAttribution[] = attributeChunks(search.results, byFabFileId);
+  assertAllAttributed(chunks, `collapse=${collapseEnabled ? 'on' : 'off'} query "${doc.query}"`);
 
   return {
     docIndex,
@@ -641,8 +658,6 @@ type ConfigRun = {
 };
 
 function printConfigTable(run: ConfigRun): { oldCount: number; newCount: number; supersededCount: number } {
-  let oldCount = 0;
-  let newCount = 0;
   let supersededCount = 0;
   logger.log(`\n--- collapse=${run.collapseEnabled ? 'on' : 'off'} ---`);
   logger.log(['docIndex', 'fileName', 'generation', 'score', 'fabFileId', 'chunkId'].join('  |  '));
@@ -651,8 +666,6 @@ function printConfigTable(run: ConfigRun): { oldCount: number; newCount: number;
       logger.log(`  (query "${q.query}" -> no chunks served)`);
     }
     for (const c of q.chunks) {
-      if (c.generation === 'OLD') oldCount++;
-      if (c.generation === 'NEW') newCount++;
       logger.log(
         [String(q.docIndex), c.fileName, c.generation, c.score.toFixed(4), c.fabFileId, c.chunkId].join('  |  ')
       );
@@ -667,6 +680,8 @@ function printConfigTable(run: ConfigRun): { oldCount: number; newCount: number;
       );
     }
   }
+  // `runQuery` has already refused any UNKNOWN chunk, so oldCount + newCount is the full total.
+  const { oldCount, newCount } = tallyGenerations(run.queries.flatMap(q => q.chunks));
   logger.log(
     `collapse=${run.collapseEnabled ? 'on ' : 'off'}  ${oldCount + newCount} chunks: ${oldCount} old / ${newCount} new` +
       `  (${supersededCount} superseded across ${run.queries.length} queries)`
@@ -704,7 +719,7 @@ async function runOneConfig(
   const queries: QueryResult[] = [];
   for (let docIndex = 0; docIndex < PROBE_DOCS.length; docIndex++) {
     queries.push(
-      await runQuery(PROBE_DOCS[docIndex], docIndex, user, scope, embeddingModel, apiKeyTable, byFabFileId)
+      await runQuery(PROBE_DOCS[docIndex], docIndex, user, scope, embeddingModel, apiKeyTable, byFabFileId, readBack)
     );
   }
 
@@ -722,10 +737,10 @@ async function runOneConfig(
   return { collapseEnabled, queries };
 }
 
-async function main(): Promise<void> {
-  await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage));
-  logger.log(`Connected (stage: ${Resource.App.stage})`);
-
+/**
+ * The measurement itself. Runs entirely under the settings lease its caller holds - see `main`.
+ */
+async function runProbe(): Promise<void> {
   const user = await findOrCreateProbeUser();
   await findOrCreateProbeLake(user.id);
   await clearPreviousRun();
@@ -750,26 +765,11 @@ async function main(): Promise<void> {
   }
   logger.log(`Lake scope: dataLakeTags=[${scope.dataLakeTags.join(', ')}], embeddingModel=${embeddingModel}`);
 
-  const { originalValue, restore } = await acquireCollapseSettingLease();
-  logger.log(`Leased ${COLLAPSE_SETTING} (was ${originalValue === null ? '(unset)' : originalValue}).`);
+  const offRun = await runOneConfig(false, user, scope, embeddingModel, apiKeyTable, byFabFileId);
+  const offSummary = printConfigTable(offRun);
 
-  // Definite-assignment (`!`): both are set inside the try block below, before any of their reads
-  // - if the try throws before either assignment, `finally` still runs (restoring the setting) and
-  // then the throw propagates, so the reads after the block are never reached in that case.
-  let offRun!: ConfigRun;
-  let onRun!: ConfigRun;
-  let offSummary!: { oldCount: number; newCount: number; supersededCount: number };
-  let onSummary!: { oldCount: number; newCount: number; supersededCount: number };
-
-  try {
-    offRun = await runOneConfig(false, user, scope, embeddingModel, apiKeyTable, byFabFileId);
-    offSummary = printConfigTable(offRun);
-
-    onRun = await runOneConfig(true, user, scope, embeddingModel, apiKeyTable, byFabFileId);
-    onSummary = printConfigTable(onRun);
-  } finally {
-    await restore();
-  }
+  const onRun = await runOneConfig(true, user, scope, embeddingModel, apiKeyTable, byFabFileId);
+  const onSummary = printConfigTable(onRun);
 
   logger.log('\n=== Summary ===');
   logger.log(
@@ -803,6 +803,29 @@ async function main(): Promise<void> {
     )
   );
   logger.log(`Wrote ${outPath}`);
+}
+
+async function main(): Promise<void> {
+  await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage));
+  logger.log(`Connected (stage: ${Resource.App.stage})`);
+
+  // Lease BEFORE any of the run, not just before the setting writes. `clearPreviousRun` deletes
+  // every FabFile carrying this probe's datalake tag and `seedCorpus` spends live embedding calls
+  // recreating them, so a second run that only took the lease later would wipe an in-flight run's
+  // corpus out from under it and refuse to start afterwards. The in-flight run's collapse=on pass
+  // would then be querying the intruder's FabFiles, attribute none of them, and print a
+  // clean-looking "0 old" - a stronger-looking version of the result the probe is trying to
+  // demonstrate, which is the direction a failure must never fall. recall-probe.ts can afford to
+  // acquire late because it only READS an existing lake; this script mutates shared corpus state,
+  // so the lease has to cover the whole run.
+  const { originalValue, restore } = await acquireCollapseSettingLease();
+  logger.log(`Leased ${COLLAPSE_SETTING} (was ${originalValue === null ? '(unset)' : originalValue}).`);
+
+  try {
+    await runProbe();
+  } finally {
+    await restore();
+  }
 }
 
 main()
