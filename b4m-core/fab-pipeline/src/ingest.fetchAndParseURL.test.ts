@@ -375,6 +375,10 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     expect(result.textContent).toContain('Client error response code');
     expect(result.textContent).toContain('Status code');
     expect(result.textContent).toContain('404');
+    // Pins the space-separator behavior itself, not just that both strings appear somewhere -
+    // without this, deleting the td/th separator would still pass (the run-on "Status code404"
+    // still contains both substrings).
+    expect(result.textContent).not.toContain('Status code404');
   });
 
   it('separates adjacent HTML5 semantic containers instead of jamming them together', async () => {
