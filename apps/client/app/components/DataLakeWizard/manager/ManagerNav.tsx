@@ -438,7 +438,10 @@ export default function ManagerNav({
                               )}
                               {/* Background AI-tag suggestion indicator - an independent clock
                                   from ingest, so this can appear well after the lake's files
-                                  are already fully uploaded/searchable. */}
+                                  are already fully uploaded/searchable. Adding or removing a
+                                  taxonomyStatus gate here means revisiting SLOT_PRIORITY in
+                                  manager/taxonomySlot.ts, whose order is argued from which
+                                  statuses these gates render. */}
                               {(taxonomyBatch?.taxonomyStatus === 'queued' ||
                                 taxonomyBatch?.taxonomyStatus === 'analyzing') && (
                                 <Tooltip title="Suggesting tags with AI - usually ready in under a minute" size="sm">
