@@ -82,15 +82,19 @@ describe('validateSlackFileForIngest', () => {
   });
 
   it.each(['Meeting notes 2026.09.07', 'My Report v1.2'])(
-    'rejects %s without naming a bare digit fragment as the type (a date/version suffix is not an extension)',
+    'accepts %s as extension-less - a date/version suffix is not an extension, even though `path.extname` finds a dot (regression: main accepts these)',
     name => {
       const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
 
-      expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
-      if (result.ok) throw new Error('expected rejection');
-      expect(result.message).toBe(`File "${name}" has no recognized file type.`);
+      expect(result.ok).toBe(true);
     }
   );
+
+  it('still refuses movie.mkv - a real extension-shaped tail stays a type decision, not an extension-less name', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'movie.mkv', mimetype: 'text/plain' }));
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+  });
 
   it('accepts an attachment with no client-reported mimetype - nothing downstream reads that field', () => {
     const result = validateSlackFileForIngest(attachment({ name: 'notes.pdf', mimetype: undefined }));
