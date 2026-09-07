@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { IsolatedVmExecutor } from './IsolatedVmExecutor';
 import { ReplSession, _resetReplSessionsForTests } from './ReplSession';
 
@@ -454,5 +454,85 @@ describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
     const r = await ex.runCode('await stalls();');
     expect(r.error).toMatch(/cap|terminated|timed out/i);
     expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it("does not expose the bootstrap's own bindings to guest code", async () => {
+    const ex = spawn();
+    // The bootstrap runs as a script in this context, so without an IIFE its
+    // top-level const/let would bind into the SHARED global lexical scope -
+    // invisible to listGlobals(), which only reads globalThis own-properties.
+    const r = await ex.runCode(`
+      console.log([
+        '__cap', '__callTool', '__RealFunction', '__AsyncFunction',
+        '__GeneratorFunction', '__AsyncGeneratorFunction', '__blockCodegen',
+        '__formatLine', '__jsonReplacer', 'HARD_PER_LINE_BYTES',
+      ].map(n => typeof globalThis[n]).join(',') + '|' + [
+        typeof __cap, typeof __callTool, typeof __RealFunction,
+        typeof __blockCodegen, typeof __formatLine, typeof HARD_PER_LINE_BYTES,
+      ].join(','));
+    `);
+    expect(r.error).toBeNull();
+    const [asGlobals, asBindings] = r.stdout.split('|');
+    expect(asGlobals.split(',').every(t => t === 'undefined')).toBe(true);
+    expect(asBindings.split(',').every(t => t === 'undefined')).toBe(true);
+  });
+
+  it('gives guest code no captured Function constructor to walk around the codegen block', async () => {
+    const ex = spawn();
+    // __RealFunction is the pre-override handle to the intrinsic. If it leaked,
+    // this is a one-liner past the codegen guard.
+    const r = await ex.runCode('console.log(__RealFunction("return 1")());');
+    expect(r.error).toMatch(/__RealFunction is not defined/);
+  });
+
+  it('gives guest code no handle on the stdout capture Reference', async () => {
+    const ex = spawn();
+    // __cap is a host ivm.Reference. Reaching it lets guest code forge stdout
+    // lines with applySync, or permanently kill capture with release() while
+    // the executor keeps reporting healthy.
+    const forged = await ex.runCode(`__cap.applySync(undefined, ['forged'], { arguments: { copy: true } });`);
+    expect(forged.error).toMatch(/__cap is not defined/);
+    expect(forged.stdout).toBe('');
+
+    const killed = await ex.runCode('__cap.release();');
+    expect(killed.error).toMatch(/__cap is not defined/);
+
+    // Capture still works after both attempts.
+    const r = await ex.runCode('console.log("still capturing");');
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('still capturing');
+  });
+
+  it('releases the host-side References when the host deadline kills the isolate', async () => {
+    const ex = spawn({ timeoutMs: 300 });
+    // Private by design; the leak is only observable at this seam. `new
+    // ivm.Reference(fn)` allocates in the HOST isolate, so disposing the guest
+    // isolate does not reclaim it - only release() does.
+    const internals = ex as unknown as {
+      captureRef: { release: () => void };
+      callToolRef: { release: () => void };
+    };
+    // An `ivm.Reference` is non-extensible, so vi.spyOn cannot patch it -
+    // swap the field for a stub that records the call and delegates to the
+    // real handle, so the observation does not itself leak one.
+    const realCapture = internals.captureRef;
+    const realCallTool = internals.callToolRef;
+    const captureRelease = vi.fn(() => realCapture.release());
+    const callToolRelease = vi.fn(() => realCallTool.release());
+    internals.captureRef = { release: captureRelease };
+    internals.callToolRef = { release: callToolRelease };
+
+    const r = await ex.runCode('await new Promise(() => {});');
+    expect(r.error).toMatch(/cap|terminated|timed out/i);
+
+    // runCode sets `disposed` on this path and dispose() early-returns on that
+    // flag, so a release gated behind it would strand both handles plus their
+    // closures for the life of the process.
+    expect(captureRelease).toHaveBeenCalledTimes(1);
+    expect(callToolRelease).toHaveBeenCalledTimes(1);
+
+    ex.dispose();
+    expect(captureRelease).toHaveBeenCalledTimes(1);
+    expect(callToolRelease).toHaveBeenCalledTimes(1);
   });
 });

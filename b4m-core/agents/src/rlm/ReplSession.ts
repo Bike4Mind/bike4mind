@@ -180,6 +180,13 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
    */
   readonly executor: ReplExecutor;
   readonly ctx: ReplExecutor; // alias for back-compat
+  /**
+   * Which backend the constructing caller asked for ('custom' for a
+   * caller-supplied instance). Kept so registry reuse can refuse to hand a
+   * caller a session running a backend it did not ask for - see
+   * `getOrCreateReplSession`.
+   */
+  readonly executorChoice: 'isolated' | 'worker' | 'in-process-unsafe' | 'custom';
   private usage: ReplSessionUsage = {
     executions: 0,
     subLlmCalls: 0,
@@ -236,11 +243,24 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
         timeoutMs: opts.perCallTimeoutMs,
         ...opts.executorOptions,
       });
+    } else if (typeof executorChoice === 'string') {
+      // TypeScript keeps in-repo callers honest, but out-of-repo JS consumers
+      // are not typechecked - and the rename this major forces ('in-process' ->
+      // 'in-process-unsafe') is exactly the string they would still be passing.
+      // Falling through to the custom-instance branch would defer the failure to
+      // `this.executor.setTools is not a function`, which names neither the
+      // rename nor the backend. The whole point of this option is that the
+      // backend choice is unmistakable, so say so here.
+      throw new Error(
+        `ReplSession: unknown executor "${executorChoice}" - expected 'isolated' | 'worker' | ` +
+          `'in-process-unsafe' or a ReplExecutor instance`
+      );
     } else {
       // Caller passed a custom ReplExecutor instance
       this.executor = executorChoice;
     }
     this.ctx = this.executor; // back-compat alias
+    this.executorChoice = typeof executorChoice === 'string' ? executorChoice : 'custom';
 
     this.budget = {
       maxExecutions: opts.budget?.maxExecutions ?? 25,
@@ -610,6 +630,21 @@ function evictLruReplSession(): boolean {
 export function getOrCreateReplSession(opts: ReplSessionOptions): ReplSession {
   const existing = sessionRegistry.get(opts.sessionId);
   if (existing) {
+    // Reuse must not silently downgrade the sandbox. `executor` is mandatory
+    // precisely so the backend is never implicit, and returning a cached
+    // session built on a different one would hand the caller exactly the
+    // implicit choice this option exists to prevent - potentially a
+    // shared-realm backend where it asked for an isolate. Session ids are
+    // per-request UUIDs at both production call sites today, so this is a
+    // latent-collision guard rather than a live path.
+    const requested = typeof opts.executor === 'string' ? opts.executor : 'custom';
+    if (existing.executorChoice !== requested) {
+      throw new Error(
+        `ReplSession registry: session "${opts.sessionId}" already exists on the ` +
+          `"${existing.executorChoice}" executor but was requested with "${requested}". ` +
+          `Dispose it first or use a distinct sessionId.`
+      );
+    }
     existing.touch();
     return existing;
   }

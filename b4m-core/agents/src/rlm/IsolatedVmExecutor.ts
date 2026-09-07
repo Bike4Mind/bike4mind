@@ -136,10 +136,21 @@ export interface IsolatedVmExecutorOptions {
 // with the worker/in-process backends, and defines the tool-stub registry.
 //
 // `_captureLine` and `_callTool` are host `ivm.Reference`s set as globals
-// before this runs. We capture them into module-closure consts and delete
-// the globals so LLM-generated code can't reach the raw host hooks (and so
-// they don't show up in listGlobals()).
+// before this runs. We capture them into the IIFE's closure and delete the
+// globals so LLM-generated code can't reach the raw host hooks (and so they
+// don't show up in listGlobals()).
 const BOOTSTRAP = String.raw`
+// Wrapped in an IIFE deliberately. A script's top-level const/let bind into the
+// context's SHARED global lexical scope (and its function declarations become
+// globalThis properties), so without this wrapper every bootstrap-local name is
+// directly referenceable by LLM-authored code run later in the same context:
+// __RealFunction('...')() walks straight around the codegen block below, and
+// __cap.applySync(...) / __cap.release() forges or permanently kills stdout
+// capture. Function scope keeps them unreachable. Note the leak is invisible to
+// listGlobals(), which reads Object.getOwnPropertyNames(globalThis) and never
+// saw the lexical bindings - so RESERVED_GLOBAL_NAMES cannot backstop it either.
+// Anything guest code IS meant to see is assigned onto globalThis explicitly.
+(function () {
 const __cap = _captureLine;
 const __callTool = _callTool;
 delete globalThis._captureLine;
@@ -273,6 +284,7 @@ globalThis.__registerTools = function (names) {
     };
   }
 };
+})();
 `;
 
 interface ToolEnvelope {
@@ -295,6 +307,7 @@ export class IsolatedVmExecutor implements ReplExecutor {
 
   private tools: ReplToolMap = {};
   private disposed = false;
+  private hostRefsReleased = false;
 
   // stdout capture state (host side, same shape as ReplContext)
   private stdoutChunks: string[] = [];
@@ -392,11 +405,15 @@ export class IsolatedVmExecutor implements ReplExecutor {
       }
     }
 
-    // A memory-limit breach disposes the isolate out from under us. Mark
-    // ourselves disposed so the next runCode/setTools fails fast instead of
-    // throwing opaque "isolate is disposed" errors deep in isolated-vm.
+    // A memory-limit breach - or the host deadline above - disposes the isolate
+    // out from under us. Mark ourselves disposed so the next runCode/setTools
+    // fails fast instead of throwing opaque "isolate is disposed" errors deep in
+    // isolated-vm, and release the host-side References here: dispose() gates on
+    // the `disposed` flag, so once it is set a later dispose() would early-return
+    // and strand them.
     if (this.isolate.isDisposed) {
       this.disposed = true;
+      this.releaseHostRefs();
       if (!error) error = `Error: isolate [${this.label}] disposed (likely exceeded memory limit)`;
     }
 
@@ -416,6 +433,26 @@ export class IsolatedVmExecutor implements ReplExecutor {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.releaseHostRefs();
+    try {
+      if (!this.isolate.isDisposed) this.isolate.dispose();
+    } catch {
+      // isolate already disposed (e.g. memory-limit breach)
+    }
+  }
+
+  /**
+   * Release the two host-side `ivm.Reference` wrappers. `new ivm.Reference(fn)`
+   * allocates its persistent handle in the HOST isolate, so disposing the guest
+   * isolate does not reclaim it - only `release()` does. Idempotent, and called
+   * from every path that retires this executor (`dispose()` and the
+   * isolate-died-under-us branch in `runCode`), because a stranded handle plus
+   * its closure lives for the life of the process - which on a warm Lambda
+   * container means it accumulates per timed-out run.
+   */
+  private releaseHostRefs(): void {
+    if (this.hostRefsReleased) return;
+    this.hostRefsReleased = true;
     try {
       this.captureRef.release();
     } catch {
@@ -425,11 +462,6 @@ export class IsolatedVmExecutor implements ReplExecutor {
       this.callToolRef.release();
     } catch {
       // already released / isolate gone
-    }
-    try {
-      if (!this.isolate.isDisposed) this.isolate.dispose();
-    } catch {
-      // isolate already disposed (e.g. memory-limit breach)
     }
   }
 

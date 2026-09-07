@@ -177,6 +177,18 @@ describe('POST /api/data-lakes/rlm-answer - REPL sandbox posture', () => {
     expect(mockReplSessionCtor.mock.calls[0][0]).toMatchObject({ executor: 'isolated' });
   });
 
+  it("caps a single code_execute step well below the route's own request timeout", async () => {
+    // The REPL-level caps (isolate timeout + host deadline) only mean anything
+    // if they fire BEFORE the 55s request abort. Set above it and a stalled step
+    // costs the caller the whole request instead of costing the agent one
+    // observation it can see and route around.
+    await call({ authorization: 'Bearer caller.jwt.token' });
+
+    const { perCallTimeoutMs } = mockReplSessionCtor.mock.calls[0][0] as { perCallTimeoutMs: number };
+    expect(perCallTimeoutMs).toBeGreaterThan(0);
+    expect(perCallTimeoutMs).toBeLessThanOrEqual(30_000);
+  });
+
   it('refuses the request when the sandbox cannot be constructed, rather than falling back', async () => {
     // A missing native addon is the realistic cause. The endpoint must fail
     // closed: no agent run, no guest code next to the credentials.

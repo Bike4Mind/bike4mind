@@ -87,6 +87,11 @@ const DEFAULT_MAX_ITERATIONS = 25;
 // If we want long-running agent runs in production, that needs its own
 // Lambda with a higher `timeout` (or move to async-job + polling).
 const HARD_TIMEOUT_MS = 55_000;
+// Per `code_execute` step, not per request. Deliberately far enough below
+// HARD_TIMEOUT_MS that a stalled step is reported to the agent as a timed-out
+// observation with budget left to answer, rather than being swallowed by the
+// request-level abort.
+const PER_CALL_REPL_TIMEOUT_MS = 25_000;
 
 const handler = baseApi()
   .use(
@@ -196,7 +201,13 @@ const handler = baseApi()
         sessionId,
         label: 'rlm-answer',
         executor: 'isolated',
-        perCallTimeoutMs: 60_000,
+        // Must stay well under HARD_TIMEOUT_MS: the REPL-level caps only mean
+        // anything if they fire BEFORE the request-level abort. At 60s neither
+        // the isolate timeout nor the host deadline (timeout + grace) could ever
+        // run here, so one hanging step cost the caller the whole request
+        // (`run_error: TIMEOUT`, no answer) instead of costing the agent one step
+        // it can see in an observation and route around.
+        perCallTimeoutMs: PER_CALL_REPL_TIMEOUT_MS,
         budget: {
           maxExecutions: parsed.budget?.max_executions ?? 25,
           maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,

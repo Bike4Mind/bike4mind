@@ -1,5 +1,9 @@
 // @ts-check
 
+import { globSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+
 // Service Worker (Serwist):
 // - Using @serwist/turbopack with route handler at app/serwist/[path]/route.ts
 // - SerwistProvider wraps the app in layout.tsx
@@ -36,7 +40,37 @@ const cdnImageHostname = (() => {
 // REPL - and also hides it from static file tracing. Routes that DO construct a
 // sandbox have to name the prebuild themselves. One constant so the three
 // entries below cannot drift apart.
-const ISOLATED_VM_PREBUILDS = '../../node_modules/.pnpm/isolated-vm@*/node_modules/isolated-vm/**/*.node';
+//
+// Resolved, not hardcoded. The literal this replaces spelled out pnpm's store
+// layout (`node_modules/.pnpm/isolated-vm@*/...`), so a change to `node-linker`
+// - or a self-host build on npm/yarn - silently stopped matching, and the
+// symptom is a feature that ships dead rather than a build error. `isolated-vm`
+// is also a direct dependency of this package now: the requiring module ends up
+// under `.next/server/`, so the bare specifier has to resolve from the app
+// itself rather than only from `b4m-core/agents`.
+//
+// Narrowed to the linux glibc prebuilds because that is every deploy target
+// (Lambda on AL2023; the self-host image on node:24-slim). `**/*.node` also
+// dragged darwin-arm64, win32-x64 and the musl variants along - ~12 MB of
+// binaries where ~4 MB is reachable - into the Next server function, the one
+// artifact whose cold-start parse cost `infra/web.ts` already raises memory for.
+const ISOLATED_VM_PREBUILDS = (() => {
+  const pkgDir = path.dirname(createRequire(import.meta.url).resolve('isolated-vm'));
+  const pattern = path.posix.join(
+    path.relative(import.meta.dirname, pkgDir).split(path.sep).join('/'),
+    'prebuilds/linux-*/isolated-vm.abi*.glibc.node'
+  );
+  // Fail the build rather than the request. Getting this wrong disables every
+  // code_execute surface at runtime (they fail closed), which is silent here.
+  if (globSync(pattern, { cwd: import.meta.dirname }).length === 0) {
+    throw new Error(
+      `next.config.mjs: no isolated-vm linux prebuild matched "${pattern}". The REPL sandbox would ship ` +
+        `without its native binary and every code_execute surface would refuse to run. Check that ` +
+        `isolated-vm is installed and still ships prebuilds/linux-*/isolated-vm.abi*.glibc.node.`
+    );
+  }
+  return pattern;
+})();
 
 const nextConfig = {
   // Self-host build only (open-core #9313): emit a standalone server bundle for

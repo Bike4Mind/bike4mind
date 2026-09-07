@@ -16,6 +16,17 @@ describe('ReplSession', () => {
     await _resetReplSessionsForTests();
   });
 
+  it('rejects an unrecognised executor name instead of treating it as an instance', async () => {
+    // TypeScript covers in-repo callers, but out-of-repo JS consumers are not
+    // typechecked - and 'in-process' is exactly the string this major renamed.
+    // Falling through to the custom-instance branch deferred the failure to
+    // `this.executor.setTools is not a function`, naming neither the rename nor
+    // the backend.
+    expect(
+      () => new ReplSession({ sessionId: 'bad-executor', executor: 'in-process' as unknown as 'in-process-unsafe' })
+    ).toThrow(/unknown executor "in-process"/);
+  });
+
   it('runs code and tracks executions in usage', async () => {
     const session = new ReplSession({ sessionId: 'test-1', executor: 'in-process-unsafe' });
     const r = await session.runCode('console.log("ok");');
@@ -385,5 +396,27 @@ describe('ReplSession sub-LLM budget reservations', () => {
     // runCode must not be admitted onto a budget that is already spent.
     expect(s.budgetReason()).toMatch(/cost/);
     await expect(s.runCode('1 + 1')).rejects.toThrowError(BudgetExceededError);
+  });
+});
+
+describe('getOrCreateReplSession executor pinning', () => {
+  beforeEach(async () => {
+    await _resetReplSessionsForTests();
+  });
+
+  it('reuses a cached session when the requested executor matches', () => {
+    const a = getOrCreateReplSession({ sessionId: 'pinned', executor: 'in-process-unsafe' });
+    const b = getOrCreateReplSession({ sessionId: 'pinned', executor: 'in-process-unsafe' });
+    expect(b).toBe(a);
+  });
+
+  it('refuses to hand back a session running a backend the caller did not ask for', () => {
+    // `executor` is mandatory so the backend is never implicit. Returning a
+    // cached session built on a different one would reintroduce exactly that -
+    // potentially a shared-realm backend where the caller asked for an isolate.
+    getOrCreateReplSession({ sessionId: 'collision', executor: 'in-process-unsafe' });
+    expect(() => getOrCreateReplSession({ sessionId: 'collision', executor: 'isolated' })).toThrow(
+      /already exists on the "in-process-unsafe" executor but was requested with "isolated"/
+    );
   });
 });
