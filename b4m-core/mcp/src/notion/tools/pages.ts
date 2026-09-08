@@ -17,13 +17,19 @@ import type {
   NotionPageParent,
   NotionPageResponse,
   NotionAppendBlocksResponse,
-  NotionRetrieveResponse,
   NotionRichTextWithHref,
 } from '../types.js';
 import { notionRequest } from '../client.js';
-import { getConfig, type AllowedPageEntry } from '../config.js';
+import { getConfig } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { notionPageIdSchema, notionDatabaseIdSchema, startCursorSchema } from '../helpers/schemas.js';
+import {
+  normalizeId,
+  findAllowedPage,
+  findAncestorInSet,
+  buildAllowedIdSet,
+  isDescendantOfRoot,
+} from '../helpers/ancestry.js';
 import { TOOL_NOTION_CREATE_PAGE, TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_READ_PAGE } from '../constants.js';
 import { debug, debugWarn } from '../logger.js';
 
@@ -81,8 +87,10 @@ async function checkPageAccess(
     );
   }
 
-  // Check if the page is explicitly excluded
+  const allowedIdSet = buildAllowedIdSet(config.allowedPages);
   const normalizedExcluded = new Set(config.excludedPageIds.map(normalizeId));
+
+  // Check if the page is explicitly excluded
   if (normalizedExcluded.has(normalizeId(pageId))) {
     return createErrorResponse(new Error(`Access denied: page ${pageId} has been explicitly excluded from access.`));
   }
@@ -98,10 +106,11 @@ async function checkPageAccess(
 
   // Walk ancestry to check if any ancestor is in the allowed list
   debug(`checkPageAccess: walking ancestry for pageId=${pageId}`);
-  const ancestorResult = await findAllowedAncestor(pageId, config.allowedPages, config.excludedPageIds);
-  if (ancestorResult) {
-    debug(`checkPageAccess: ancestor match found`, { ancestorId: ancestorResult.id, access: ancestorResult.access });
-    if (requiredAccess === 'readwrite' && ancestorResult.access !== 'readwrite') {
+  const ancestorId = await findAncestorInSet(pageId, allowedIdSet, normalizedExcluded);
+  if (ancestorId) {
+    const ancestorEntry = findAllowedPage(ancestorId, config.allowedPages);
+    debug(`checkPageAccess: ancestor match found`, { ancestorId, access: ancestorEntry?.access });
+    if (requiredAccess === 'readwrite' && ancestorEntry?.access !== 'readwrite') {
       return createErrorResponse(
         new Error(`Write access denied for page ${pageId}. Its parent scope is configured as read-only.`)
       );
@@ -115,127 +124,6 @@ async function checkPageAccess(
         'Configure page access in your Notion integration settings.'
     )
   );
-}
-
-/**
- * Finds a direct match in the allowed pages list.
- */
-function findAllowedPage(pageId: string, allowedPages: AllowedPageEntry[]): AllowedPageEntry | null {
-  const normalized = normalizeId(pageId);
-  return allowedPages.find(p => normalizeId(p.id) === normalized) ?? null;
-}
-
-/**
- * Walks the parent chain to find if any ancestor is in the allowed pages list.
- * Returns the matching allowed page entry, or null if none found.
- * Respects excluded page IDs - if an ancestor is excluded, stops walking.
- */
-async function findAllowedAncestor(
-  targetId: string,
-  allowedPages: AllowedPageEntry[],
-  excludedPageIds: string[]
-): Promise<AllowedPageEntry | null> {
-  const normalizedExcluded = new Set(excludedPageIds.map(normalizeId));
-
-  let currentId = targetId;
-  for (let depth = 0; depth < MAX_ANCESTRY_DEPTH; depth++) {
-    let item: NotionRetrieveResponse;
-    try {
-      try {
-        item = await notionRequest<NotionRetrieveResponse>(`/pages/${currentId}`);
-      } catch {
-        item = await notionRequest<NotionRetrieveResponse>(`/blocks/${currentId}`);
-      }
-    } catch {
-      return null;
-    }
-
-    const parent = item.parent;
-    if (!parent) return null;
-
-    const parentId = parent.page_id || parent.database_id || parent.block_id;
-    if (!parentId) return null;
-
-    // If parent is explicitly excluded, deny
-    if (normalizedExcluded.has(normalizeId(parentId))) {
-      return null;
-    }
-
-    // Check if parent is in allowed list
-    const match = findAllowedPage(parentId, allowedPages);
-    if (match) return match;
-
-    currentId = parentId;
-  }
-
-  return null;
-}
-
-/** Max parent hops when validating ancestry to prevent infinite loops. */
-const MAX_ANCESTRY_DEPTH = 10;
-
-/**
- * Normalizes a Notion UUID by removing dashes for comparison.
- */
-function normalizeId(id: string): string {
-  return id.replace(/-/g, '').toLowerCase();
-}
-
-/**
- * Validates that a target page/block is a descendant of rootPageId by walking
- * the parent chain via the Notion API. Returns true if the target IS the root
- * page or is nested under it.
- */
-async function isDescendantOfRoot(targetId: string, rootPageId: string): Promise<boolean> {
-  const normalizedRoot = normalizeId(rootPageId);
-
-  // If target is the root page itself, allow it
-  if (normalizeId(targetId) === normalizedRoot) {
-    return true;
-  }
-
-  debug(`isDescendantOfRoot: checking targetId=${targetId} against rootPageId=${rootPageId}`);
-  let currentId = targetId;
-  for (let depth = 0; depth < MAX_ANCESTRY_DEPTH; depth++) {
-    let item: NotionRetrieveResponse;
-    try {
-      // Try as a page first, then as a block
-      try {
-        item = await notionRequest<NotionRetrieveResponse>(`/pages/${currentId}`);
-      } catch {
-        item = await notionRequest<NotionRetrieveResponse>(`/blocks/${currentId}`);
-      }
-    } catch {
-      // Can't retrieve - not accessible or doesn't exist
-      debug(`isDescendantOfRoot: failed to retrieve ${currentId} at depth ${depth}`);
-      return false;
-    }
-
-    const parent = item.parent;
-    if (!parent) {
-      debug(`isDescendantOfRoot: no parent on ${currentId} at depth ${depth}`);
-      return false;
-    }
-
-    const parentId = parent.page_id || parent.database_id || parent.block_id;
-    if (!parentId) {
-      // Reached workspace root without finding rootPageId
-      debug(`isDescendantOfRoot: reached workspace root at depth ${depth}`);
-      return false;
-    }
-
-    debug(`isDescendantOfRoot: depth ${depth}, parentId=${parentId}`);
-    if (normalizeId(parentId) === normalizedRoot) {
-      debug(`isDescendantOfRoot: match found at depth ${depth}`);
-      return true;
-    }
-
-    currentId = parentId;
-  }
-
-  // Exceeded max depth
-  debugWarn(`isDescendantOfRoot: exceeded max ancestry depth (${MAX_ANCESTRY_DEPTH})`);
-  return false;
 }
 
 /**
