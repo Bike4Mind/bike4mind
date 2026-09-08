@@ -366,6 +366,80 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
     });
   });
 
+  // A Map path is not a free-form object: mongoose rejects a key containing `.` or starting with
+  // `$`, and it surfaces as `CastError path='users' kind='embedded'` on the array, not on the key.
+  // The canonical `extraData` is a closed object, so the key is stripped before the `$set` rather
+  // than reaching the cast -- these pin that, since a `z.record` would forward it.
+  describe('agents/[id] share arrays', () => {
+    it.each([
+      ['a Map key containing a dot', 'a.b'],
+      ['a Map key starting with a dollar', '$x'],
+    ])('strips %s from users[].extraData', async (_label, key) => {
+      const { outcome, payload, wrote } = await run(byRoute('agents/[id]'), {
+        users: [{ userId: 'u1', permissions: ['read'], extraData: { [key]: 1 } }],
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+      const written = (payload as { users?: { extraData?: Record<string, unknown> }[] })?.users;
+      expect(written?.[0]?.extraData ?? {}).not.toHaveProperty(key);
+    });
+
+    it.each([
+      ['an out-of-enum permission', { users: [{ userId: 'u1', permissions: ['bogus'] }] }],
+      ['a users entry with no userId', { users: [{ permissions: ['read'] }] }],
+      ['a groups entry with no groupId', { groups: [{ permissions: ['read'] }] }],
+    ])('rejects %s', async (_label, body) => {
+      const { outcome, status, wrote } = await run(byRoute('agents/[id]'), body as Record<string, unknown>);
+
+      const threw400 = outcome !== null && (outcome as { statusCode?: number }).statusCode === 400;
+      const sent400 = status.mock.calls.some(call => call[0] === 400);
+      expect(threw400 || sent400).toBe(true);
+      expect(wrote).toBe(false);
+    });
+
+    it('still accepts a well-formed share pair', async () => {
+      const { outcome, wrote } = await run(byRoute('agents/[id]'), {
+        users: [{ userId: 'u1', permissions: ['read', 'update'] }],
+        groups: [{ groupId: 'g1', permissions: ['read'] }],
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+    });
+  });
+
+  // `z.coerce.date()` on its own runs `new Date(x)`, which makes these silently valid Dates rather
+  // than rejections. The reject case that was here before ('not-a-date') did not discriminate:
+  // plain `z.date()` rejects that too, so it passed either way.
+  describe('agents/[id] Date paths reject a non-date that coercion would accept', () => {
+    it.each([
+      ['null', null],
+      ['true', true],
+      ['false', false],
+      ['0', 0],
+      ['1', 1],
+    ])('rejects %s', async (_label, value) => {
+      const { outcome, status, wrote } = await run(byRoute('agents/[id]'), {
+        lastSystemPromptGeneratedAt: value,
+      });
+
+      const threw400 = outcome !== null && (outcome as { statusCode?: number }).statusCode === 400;
+      const sent400 = status.mock.calls.some(call => call[0] === 400);
+      expect(threw400 || sent400).toBe(true);
+      expect(wrote).toBe(false);
+    });
+
+    it('still accepts the ISO string a JSON body carries', async () => {
+      const { outcome, wrote } = await run(byRoute('agents/[id]'), {
+        lastSystemPromptGeneratedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+    });
+  });
+
   // The scope discriminator is not in the accepted schema, so these are stripped rather than
   // rejected -- asserting on the payload, because a 200 that quietly wrote `userId: ''` is exactly
   // the failure being guarded. An empty string casts cleanly on a String path and leaves the agent

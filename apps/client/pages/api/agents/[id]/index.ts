@@ -14,6 +14,8 @@ import {
   supportedImageModels,
   CreditHolderType,
   isImageServeable,
+  groupShareSchema,
+  userShareSchema,
 } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
@@ -90,9 +92,12 @@ const identitySchema = z.object({
   customPronouns: z.string().optional(),
 });
 
-// `z.coerce.date()` accepts the ISO strings a JSON body carries as well as a Date, and rejects
-// anything unparseable -- which is exactly the Date-path cast this guard exists to prevent.
-const dateParamSchema = z.coerce.date();
+// Accepts the ISO strings a JSON body carries plus a real Date, and nothing else. The input type
+// is constrained before coercion on purpose: bare `z.coerce.date()` runs `new Date(x)` on whatever
+// it is given, so `null`, `false` and `0` become the epoch and `true`/`1` become epoch+1ms -- all
+// silently valid Dates on a Date path rather than the 400 they should be. `z.date()` alone is not
+// the answer either, because it rejects every ISO string, which is the only form a JSON body has.
+const dateParamSchema = z.union([z.string(), z.date()]).pipe(z.coerce.date());
 
 const memoryJournalEntrySchema = z.object({
   id: z.string(),
@@ -114,14 +119,6 @@ const worldMemoryEntrySchema = z.object({
   floorId: z.string(),
   location: z.object({ col: z.number(), row: z.number() }),
   area: z.object({ width: z.number().optional(), height: z.number().optional() }).optional(),
-});
-
-const shareEntrySchema = z.object({
-  groupId: z.string().optional(),
-  userId: z.string().optional(),
-  permissions: z.array(z.string()),
-  projectId: z.string().optional(),
-  extraData: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateBodySchema = z.object({
@@ -251,8 +248,18 @@ const updateBodySchema = z.object({
   // Spread into `AgentSchema` from `ShareableDocumentSchema`.
   isGlobalRead: z.boolean().optional(),
   isGlobalWrite: z.boolean().optional(),
-  groups: z.array(shareEntrySchema).optional(),
-  users: z.array(shareEntrySchema).optional(),
+  // `groupShareSchema`/`userShareSchema` from `@bike4mind/common` rather than a local shape: they
+  // are the declared contract for these two arrays, and a local copy drifts. The earlier copy did,
+  // in two ways that both reached mongoose. Its `extraData: z.record(z.string(), z.unknown())`
+  // admitted any key, but the stored path is `{type: Map, of: Mixed}` and mongoose rejects a Map
+  // key containing `.` or starting with `$` -- `{"users":[{"extraData":{"a.b":1}}]}` threw
+  // `CastError path='users' kind='embedded'` (verified on 8.24.1), a 500 on a caller-supplied key.
+  // The canonical `extraData` is a closed object, so such a key is stripped before the `$set`. It
+  // also types `permissions` as `z.enum(Permission)` and requires the id, where the copy took any
+  // string and made both ids optional; the schema's own `enum` and `required` never fire here,
+  // because this route writes through `findOneAndUpdate` without `runValidators`.
+  groups: z.array(groupShareSchema).optional(),
+  users: z.array(userShareSchema).optional(),
 });
 
 // Helper function to refresh avatar URL for a single agent
