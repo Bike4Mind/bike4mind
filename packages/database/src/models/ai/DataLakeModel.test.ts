@@ -707,54 +707,78 @@ describe('DataLakeRepository.findBySlug', () => {
     expect(resolved?.organizationId).toBe('org-a');
   });
 
-  // #2425: a lake scoped to an org the caller does NOT belong to is invisible to the own-org and
-  // org-less arms above. A real owner/curator grant on it (e.g. after a cross-org
-  // transferLakeOwnership) is still legitimate access, so a third, last-resort arm tries the
-  // caller's granted lake ids - fed in lazily, exactly as `assertLakeAccess` wires it.
-  it('resolves a foreign-org lake by slug when the caller has a granted lake id (#2425)', async () => {
+  // #2425 review: null and '' are both stored as "org-less" but are distinct index keys, so two
+  // org-less lakes CAN share a slug - this had no tie-break at all before this fix.
+  it('resolves org-less lakes deterministically when organizationId is null vs empty string', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'orgless-tie', organizationId: '', createdByUserId: 'someone' }));
+    await dataLakeRepository.create(baseLake({ slug: 'orgless-tie', createdByUserId: 'someone-else' }));
+
+    const resolved = await dataLakeRepository.findBySlug('orgless-tie');
+
+    // Both are legitimately org-less; the assertion is determinism (same winner every call),
+    // not which one - repeat to catch a naive unsorted `$in` returning either at random.
+    for (let i = 0; i < 3; i++) {
+      expect((await dataLakeRepository.findBySlug('orgless-tie'))?.createdByUserId).toBe(resolved?.createdByUserId);
+    }
+  });
+});
+
+describe('DataLakeRepository.findBySlugAmongIds', () => {
+  setupMongoTest();
+
+  // #2425: a lake scoped to an org the caller does NOT belong to is invisible to `findBySlug`'s
+  // own-org and org-less arms. A real owner/curator grant on it (e.g. after a cross-org
+  // transferLakeOwnership) is still legitimate access, so `assertLakeAccess` resolves the
+  // caller's granted lake ids itself and retries here, with this method taking the id set as an
+  // already-resolved argument rather than a thunk (#2425 review - keeps the "when to pay for the
+  // extra grants query" decision in the service layer, not hidden inside this repository method).
+  it('resolves a foreign-org lake by slug when the given id set includes it', async () => {
     const created = await dataLakeRepository.create(
       baseLake({ slug: 'foreign-org-lake', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
     );
 
-    // Caller belongs only to org-b, so neither the own-org nor org-less arm can match; the grant
-    // is what makes the lake reachable.
-    const resolved = await dataLakeRepository.findBySlug('foreign-org-lake', ['org-b'], async () => [created.id]);
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake', [created.id]);
 
     expect(resolved?.id).toBe(created.id);
   });
 
-  it('returns null for a foreign-org lake when the caller holds no grant on it - no enumeration widening', async () => {
+  it('returns null when the given id set is empty - no enumeration widening', async () => {
     await dataLakeRepository.create(
       baseLake({ slug: 'foreign-org-lake-2', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
     );
 
-    const resolved = await dataLakeRepository.findBySlug('foreign-org-lake-2', ['org-b'], async () => []);
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake-2', []);
 
     expect(resolved).toBeNull();
   });
 
-  it('never invokes resolveGrantedLakeIds when the own-org arm already resolves the lake', async () => {
+  it('returns null when no id in the given set matches the slug - no enumeration widening', async () => {
     await dataLakeRepository.create(
-      baseLake({ slug: 'own-org-lake', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+      baseLake({ slug: 'foreign-org-lake-3', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
     );
-    const resolveGrantedLakeIds = async (): Promise<string[]> => {
-      throw new Error('resolveGrantedLakeIds should not be called on an own-org hit');
-    };
 
-    const resolved = await dataLakeRepository.findBySlug('own-org-lake', ['org-a'], resolveGrantedLakeIds);
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake-3', [
+      new mongoose.Types.ObjectId().toString(),
+    ]);
 
-    expect(resolved?.organizationId).toBe('org-a');
+    expect(resolved).toBeNull();
   });
 
-  it('never invokes resolveGrantedLakeIds when the org-less arm already resolves the lake', async () => {
-    await dataLakeRepository.create(baseLake({ slug: 'orgless-lake', createdByUserId: 'someone' }));
-    const resolveGrantedLakeIds = async (): Promise<string[]> => {
-      throw new Error('resolveGrantedLakeIds should not be called on an org-less hit');
-    };
+  it('resolves the lowest lake id when two granted lakes across different orgs share a slug', async () => {
+    // Mirrors the own-org arm's N5 test above: input order deliberately reversed from the
+    // expected winner so a naive "first in ids" bug (rather than the sort) would fail.
+    const second = await dataLakeRepository.create(
+      baseLake({ slug: 'shared-grant-slug', organizationId: 'org-b', createdByUserId: 'org-b-owner' })
+    );
+    const first = await dataLakeRepository.create(
+      baseLake({ slug: 'shared-grant-slug', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+    const [lower, higher] = [first.id, second.id].sort();
 
-    const resolved = await dataLakeRepository.findBySlug('orgless-lake', ['org-a'], resolveGrantedLakeIds);
+    const resolved = await dataLakeRepository.findBySlugAmongIds('shared-grant-slug', [second.id, first.id]);
 
-    expect(resolved?.slug).toBe('orgless-lake');
+    expect(resolved?.id).toBe(lower);
+    expect(resolved?.id).not.toBe(higher);
   });
 });
 
