@@ -7,7 +7,7 @@ import type { ILakeUsageSummary } from './UsageEventTypes';
 
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
- * states (archiving/restoring/deleting/purging) that exist to drive UI and make a crashed
+ * states (archiving/unarchiving/restoring/deleting/purging) that exist to drive UI and make a crashed
  * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
  * holds its first member file (see `activateIfDraft` below), and unconditionally when an
  * archived or deleted lake is restored, which is how an empty lake can end up active.
@@ -43,8 +43,83 @@ export const DATA_LAKE_STATUSES = [
  */
 export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
-/** Stable (non-transitional) lake statuses. */
-export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
+/**
+ * Stable (non-transitional) lake statuses - a lake sitting in one of these is at rest, not
+ * mid-operation. Load-bearing as the INPUT to `DATA_LAKE_TRANSITIONAL_STATUSES` below, which is
+ * what drives the needs-attention list; it is not itself a filter any list path applies.
+ */
+export const DATA_LAKE_STABLE_STATUSES = [
+  'draft',
+  'active',
+  'archived',
+  'deleted',
+] as const satisfies readonly DataLakeStatus[];
+
+/**
+ * Derived as the complement of the stable set, NOT a hand-listed second tuple: a status added to
+ * `DATA_LAKE_STATUSES` without being declared stable becomes transitional by construction, so it
+ * shows up in the needs-attention list rather than falling out of every list. Every list path asks
+ * for a disjoint set of stable statuses, so a lake left here by a crashed lifecycle call renders
+ * nowhere else.
+ */
+export const DATA_LAKE_TRANSITIONAL_STATUSES: readonly DataLakeStatus[] = DATA_LAKE_STATUSES.filter(
+  s => !(DATA_LAKE_STABLE_STATUSES as readonly DataLakeStatus[]).includes(s)
+);
+
+/**
+ * The lifecycle action that re-enters and settles a lake stranded in each transitional status. Each
+ * of these services re-admits its own transitional status for exactly this crash re-entry, so the
+ * retry is the SAME call that stranded it, not a repair path.
+ *
+ * `purging` is deliberately absent, per the irreversibility note on `DATA_LAKE_STATUSES` above:
+ * its sweep is already accepted and the cleanup route refuses it, so there is nothing to retry.
+ * Read it through `retryActionFor` below rather than indexing this table directly.
+ */
+export const TRANSITIONAL_RETRY_ACTION = {
+  archiving: 'archive',
+  unarchiving: 'unarchive',
+  restoring: 'restore',
+  deleting: 'delete',
+} as const satisfies Partial<Record<DataLakeStatus, 'archive' | 'unarchive' | 'restore' | 'delete'>>;
+
+export type TransitionalRetryAction = (typeof TRANSITIONAL_RETRY_ACTION)[keyof typeof TRANSITIONAL_RETRY_ACTION];
+
+/**
+ * The retry action for a status, or `undefined` when there is none - the single predicate both
+ * "may this row offer Retry" and "what does Retry post" read, so a status can never be offered a
+ * retry the mutation would then refuse. Indexing TRANSITIONAL_RETRY_ACTION directly needs a cast
+ * that claims every status has an entry; this states the truth once, here.
+ */
+export const retryActionFor = (status: DataLakeStatus): TransitionalRetryAction | undefined =>
+  (TRANSITIONAL_RETRY_ACTION as Partial<Record<DataLakeStatus, TransitionalRetryAction>>)[status];
+
+/**
+ * How long a lake may sit in a transitional status before it counts as stranded rather than busy.
+ * Measured against `updatedAt`, which is the only status-move signal on the document today - any
+ * other write to the lake bumps it too, so a background writer touching a mid-transition lake can
+ * reset this clock. A dedicated `statusChangedAt` stamped by each lifecycle claim is the durable
+ * fix.
+ */
+export const STRANDED_LAKE_CUTOFF_MS = 5 * 60_000;
+
+/**
+ * One lake stranded mid-lifecycle, as `listTransitionalDataLakes` and the needs-attention list
+ * render it. Deliberately narrower than the archived/deleted views' redacted documents: the only
+ * affordance offered on such a row is a retry, so the consumer needs the name to recognize the
+ * lake, the status to know what to retry, and the id to retry with - nothing else, and so nothing
+ * to redact.
+ *
+ * `updatedAt` is a `Date` in-process and an ISO string once it has crossed the wire; both shapes
+ * are declared because both are real and `new Date(...)` takes either.
+ */
+export interface TransitionalDataLakeSummary {
+  id: string;
+  name: string;
+  slug: string;
+  fileTagPrefix: string;
+  status: DataLakeStatus;
+  updatedAt: Date | string;
+}
 
 /**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent

@@ -8,8 +8,16 @@ import type {
   IFallbackLakeSettingsRepository,
   DataLakeConfig,
   ManageableDataLakeConfig,
+  TransitionalDataLakeSummary,
 } from '@bike4mind/common';
-import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  DATA_LAKE_TRANSITIONAL_STATUSES,
+  STRANDED_LAKE_CUTOFF_MS,
+  toDataLakeConfig,
+  lakeMatchesAccess,
+  normalizeEntitlementKey,
+} from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
 import { grantedLakeIdsFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
@@ -447,4 +455,54 @@ export const listDeletedDataLakes = async (
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
+};
+
+/**
+ * Lakes stranded in a transitional status (see DATA_LAKE_TRANSITIONAL_STATUSES) - the one list
+ * that surfaces a lake a crashed or timed-out lifecycle call left mid-operation. Every other list
+ * path asks for a disjoint set of STABLE statuses, so without this view such a lake renders
+ * nowhere and can only be found by reading its id out of the datastore.
+ *
+ * Narrowed three ways against the archived/deleted views it otherwise mirrors:
+ * - MANAGE-scoped, not read-scoped. The only action offered is a retry, which each lifecycle
+ *   service restricts to owner/admin/org-manager, so a caller who cannot manage the lake could do
+ *   nothing with the row. Filtering on `canManageLake` here also means nothing needs redacting.
+ * - includePublic:false, for the same reason the archived view passes it: a stranger holds no
+ *   management role on someone else's public lake.
+ * - Cutoff-filtered. A lake that entered 'archiving' seconds ago is working, not stranded, so a
+ *   list that showed it would mean "is busy" rather than "needs attention".
+ */
+export const listTransitionalDataLakes = async (
+  ctx: AccessContext,
+  { db }: ListDataLakesAdapters
+): Promise<TransitionalDataLakeSummary[]> => {
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: [...DATA_LAKE_TRANSITIONAL_STATUSES],
+    includePublic: false,
+    grantedLakeIds,
+  });
+  const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
+  const strandedBefore = Date.now() - STRANDED_LAKE_CUTOFF_MS;
+  return (
+    lakes
+      .filter(lake => canManageLake(lake, ctx, grantsByLake.get(lake.id)))
+      // `new Date(...)`, not `.getTime()` on the field: it is a Date in-process but an ISO string
+      // once it has crossed a wire, and both shapes reach this function.
+      .filter(lake => new Date(lake.updatedAt).getTime() <= strandedBefore)
+      .map(lake => ({
+        id: lake.id,
+        name: lake.name,
+        slug: lake.slug,
+        fileTagPrefix: lake.fileTagPrefix,
+        status: lake.status,
+        updatedAt: lake.updatedAt,
+      }))
+  );
 };
