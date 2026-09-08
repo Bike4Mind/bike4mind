@@ -448,7 +448,9 @@ export async function recordCircuitBreakerRejection(integration: string): Promis
 // Data Lake Batch Metrics - Namespace: Lumina5/DataLakeBatch
 // ReconcilerForcedTerminal (a stuck batch the reconciler forced terminal - work lost),
 // BatchCompleted (normal pipeline completion, split by outcome), StuckBatches (gauge sampled by
-// the reconciler cron), ReconcileRuns (cron heartbeat, emitted even on zero work for alarm-on-silence).
+// the reconciler cron), ReconcileRuns (cron heartbeat, emitted even on zero work for alarm-on-silence),
+// ChunkRescueRuns/ChunkRescueEnqueued/ChunkRescueFailures (the un-chunked rescue sweep - the Runs
+// metric carries the outcome dimension that tells a gated-off sweep from an idle or failing one).
 // Dimensions stay low-cardinality on purpose - batchId/dataLakeId live in logs, never in metrics.
 
 const DATA_LAKE_BATCH_NAMESPACE = 'Lumina5/DataLakeBatch';
@@ -460,7 +462,21 @@ export const DataLakeBatchMetrics = {
   RECONCILE_RUNS: 'ReconcileRuns',
   TAXONOMY_DAILY_CAP_EXCEEDED: 'TaxonomyDailyCapExceeded',
   TAXONOMY_TAGS_APPLY_SKIPPED: 'TaxonomyTagsApplySkipped',
+  CHUNK_RESCUE_RUNS: 'ChunkRescueRuns',
+  CHUNK_RESCUE_ENQUEUED: 'ChunkRescueEnqueued',
+  CHUNK_RESCUE_FAILURES: 'ChunkRescueFailures',
 } as const;
+
+/**
+ * How one un-chunked-rescue tick ended. Low-cardinality on purpose (three values), so it is safe
+ * as a metric dimension: `disabled` = the enableAutoChunk gate short-circuited the sweep,
+ * `swept` = it ran (finding nothing is still a sweep), `failed` = it threw and the caller caught.
+ *
+ * Kept here rather than imported from the worker so a metrics module never depends on a worker:
+ * `ChunkRescueSweepResult` in server/worker/chunkRescueSweep.ts declares the first two and the
+ * reconciler cron supplies the third, and assignability to this union is what keeps them in sync.
+ */
+export type ChunkRescueOutcome = 'disabled' | 'swept' | 'failed';
 
 export async function emitDataLakeBatchMetric(
   metricName: string,
@@ -499,6 +515,34 @@ export async function recordTaxonomyDailyCapExceeded(): Promise<void> {
 /** Heartbeat: the reconciler cron ran. Emit even on zero work so absence-of-data can alarm. */
 export async function recordReconcileRun(): Promise<void> {
   return emitDataLakeBatchMetric(DataLakeBatchMetrics.RECONCILE_RUNS, 1, {}, StandardUnit.Count);
+}
+
+/**
+ * One un-chunked rescue tick: its outcome, and what it moved. Emitted every run including the
+ * zero-work ones, because "no files needed rescuing" and "the sweep is switched off or broken"
+ * are the two readings an operator has to be able to tell apart, and both report zero enqueued.
+ *
+ * One PutMetricData call for all three datapoints - the sweep runs on a daily cron, so there is
+ * no reason to spend three API calls on it. Dimensions stay off the two counters: their sum is
+ * the question, and the outcome is already carried by the Runs metric alongside them.
+ *
+ * Alarm on ChunkRescueFailures: infra/alarms.ts -> dataLakeChunkRescueFailuresHigh.
+ */
+export async function recordChunkRescueSweep(
+  outcome: ChunkRescueOutcome,
+  enqueued: number,
+  failed: number
+): Promise<void> {
+  return emitMetrics(DATA_LAKE_BATCH_NAMESPACE, [
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_RUNS,
+      value: 1,
+      dimensions: { outcome },
+      unit: StandardUnit.Count,
+    },
+    { name: DataLakeBatchMetrics.CHUNK_RESCUE_ENQUEUED, value: enqueued, unit: StandardUnit.Count },
+    { name: DataLakeBatchMetrics.CHUNK_RESCUE_FAILURES, value: failed, unit: StandardUnit.Count },
+  ]);
 }
 
 /**

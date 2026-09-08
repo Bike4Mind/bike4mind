@@ -70,11 +70,25 @@ export interface ChunkRescueSweepOptions {
   logger: Logger;
 }
 
+/**
+ * Why the counts alone are not enough: a sweep that is GATED OFF and a sweep that ran and found
+ * nothing both enqueue zero, and so does one that threw (the callers catch it). Three states, one
+ * value - which is exactly what made a stalled rescue backlog indistinguishable from a healthy
+ * idle install in the reconciler's metrics. `outcome` is the discriminator that separates them;
+ * `failed` is contributed by the CALLER, since a sweep that threw never reached its own return.
+ *
+ * Keep in sync with `ChunkRescueOutcome` in server/utils/cloudwatch.ts, which is the dimension
+ * vocabulary these outcomes are reported under.
+ */
+export type ChunkRescueSweepResult =
+  { outcome: 'disabled'; enqueued: 0; failed: 0 } | { outcome: 'swept'; enqueued: number; failed: number };
+
 export async function runChunkRescueSweep({
   limit,
   logger: runLogger,
-}: ChunkRescueSweepOptions): Promise<{ enqueued: number; failed: number }> {
-  if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return { enqueued: 0, failed: 0 };
+}: ChunkRescueSweepOptions): Promise<ChunkRescueSweepResult> {
+  if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk')))
+    return { outcome: 'disabled', enqueued: 0, failed: 0 };
 
   const now = Date.now();
   const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
@@ -150,7 +164,7 @@ export async function runChunkRescueSweep({
   if (enqueued > 0 || failed > 0) {
     runLogger.info(`[fabFileChunkScan] enqueued ${enqueued} un-chunked file(s), ${failed} failed`);
   }
-  return { enqueued, failed };
+  return { outcome: 'swept', enqueued, failed };
 }
 
 /**

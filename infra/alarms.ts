@@ -138,6 +138,10 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
   : undefined;
 
+export const dataLakeChunkRescueFailuresAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('DataLakeChunkRescueFailuresAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -1201,6 +1205,42 @@ if (isMonitoredStage) {
     alarmActions: [dataLakeStuckBatchesAlarm!.arn],
     tags: {
       Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Data Lake un-chunked rescue sweep, failing enqueues
+   *
+   * Every failure here is a file that stayed un-chunked for another day: the sweep found it,
+   * could not hand it to the queue, and the next run has to find it again. A file left
+   * un-chunked is invisible to retrieval, so this is silent data loss from a user's point of
+   * view, which is why the threshold is low rather than proportional to the run budget.
+   *
+   * Deliberately NOT alarmed on: a run reporting zero rescues. That is the healthy steady state
+   * on most installs. The gated-off and threw cases are what a zero used to hide, and they are
+   * readable off ChunkRescueRuns's `outcome` dimension instead of by inference from a silent
+   * counter - alarming on the counter's absence would page every quiet day.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
+   * server/cron/dataLakeBatchReconcile.ts's rescue sweep.
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueFailuresHigh', {
+    name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-failures-high`,
+    alarmDescription:
+      'Data lake un-chunked rescue sweep is failing to enqueue - files are staying un-chunked and unretrievable',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ChunkRescueFailures',
+    namespace: 'Lumina5/DataLakeBatch',
+    period: 86400, // 1 day - matches the daily cron that emits it
+    statistic: 'Sum', // a counter per run, unlike StuckBatches' gauge sample
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dataLakeChunkRescueFailuresAlarm!.arn],
+    tags: {
+      Application: 'DataLakeBatch',
       Severity: 'Medium',
     },
   });
