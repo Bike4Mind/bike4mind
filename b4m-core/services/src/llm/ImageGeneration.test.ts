@@ -15,12 +15,13 @@ vi.mock('../apiKeyService', async importOriginal => {
   return { ...actual, getEffectiveLLMApiKeys: vi.fn(async () => ({ gemini: 'gemini-key' })) };
 });
 
+const mockGeminiEdit = vi.fn();
 const mockGeminiGenerate = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
-    aiImageService: vi.fn(() => ({ generate: mockGeminiGenerate })),
+    aiImageService: vi.fn(() => ({ edit: mockGeminiEdit, generate: mockGeminiGenerate })),
     getSettingsMap: vi.fn().mockResolvedValue({}),
     ClientMessageSender: vi.fn().mockImplementation(function () {
       return { sendToClient: vi.fn().mockResolvedValue(undefined) };
@@ -368,6 +369,75 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
         prompt_upsampling: true,
         output_format: 'jpeg',
       })
+    );
+  });
+});
+
+describe('ImageGenerationService.process (Gemini edit-path model passthrough)', () => {
+  // Regression: process()'s Gemini edit branch (fired on any continuation/edit turn - a workbench
+  // image or carried-forward prior image) never passed `model` to geminiService.edit(), so it
+  // silently ran on GeminiImageService's hardcoded default (GEMINI_2_5_FLASH_IMAGE) regardless of
+  // which Gemini model the user actually selected. The sibling generate() call (fresh, no input
+  // image) already passed model correctly - this only affected the edit path.
+  const geminiModelInfo = {
+    id: ImageModels.GEMINI_3_PRO_IMAGE,
+    type: 'image',
+    name: ImageModels.GEMINI_3_PRO_IMAGE,
+    backend: ModelBackend.Gemini,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: true,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const makeEditService = () => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    const findById = vi.fn(async () => quest as any);
+    const update = vi.fn(async () => undefined);
+    const updateMany = vi.fn(async () => undefined);
+    const findAllInIds = vi.fn(async () => [
+      { id: 'f1', filePath: 'data:image/png;base64,AAAA', mimeType: 'image/png', moderationStatus: 'clean' },
+    ]);
+    const service = new ImageGenerationService({
+      db: {
+        quests: { findById, update, updateMany },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAllInIds },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: { upload: vi.fn().mockResolvedValue('generated/output.png') } as any,
+      fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => path) } as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+    return service;
+  };
+
+  it('forwards the selected model to GeminiImageService.edit on a continuation/edit turn', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
+
+    const service = makeEditService();
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'make it blue',
+        model: ImageModels.GEMINI_3_PRO_IMAGE,
+        fabFileIds: ['f1'],
+        intent: 'continuation',
+      } as any,
+      logger: silentLogger,
+    });
+
+    expect(mockGeminiEdit).toHaveBeenCalledWith(
+      expect.any(String),
+      'make it blue',
+      expect.objectContaining({ model: ImageModels.GEMINI_3_PRO_IMAGE })
     );
   });
 });
