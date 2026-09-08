@@ -44,8 +44,9 @@ import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { IAgent } from '@bike4mind/common';
+import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
+import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -67,6 +68,7 @@ import CitableSources from './CitableSources';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
+import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
@@ -456,16 +458,6 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
   return result;
 }
 
-// Generated audio (music_generation) rides quest.images alongside images/xlsx; this
-// splits it out for the inline player and excludes it from the download-chip list.
-// Kept to the formats music_generation actually emits: .webm and .ogg are omitted
-// because both are predominantly video containers, so a future generated-video path
-// routed through quest.images must not be claimed here for the <audio> player.
-const GENERATED_AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac)$/i;
-// Actual raster/vector images belong in the inline grid; anything else (e.g. an .xlsx
-// from excel_generation) would render as a broken <img>.
-const GENERATED_IMAGE_EXT = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i;
-
 /**
  * Partition the files a tool dropped into `quest.images` this turn into three disjoint
  * buckets by extension: the inline <img> grid, inline <audio> players, and download
@@ -482,8 +474,8 @@ export function classifyGeneratedFiles(files: string[]): {
   const audio: string[] = [];
   const others: string[] = [];
   for (const file of files) {
-    if (GENERATED_IMAGE_EXT.test(file)) images.push(file);
-    else if (GENERATED_AUDIO_EXT.test(file)) audio.push(file);
+    if (GENERATED_IMAGE_EXTENSION_RE.test(file)) images.push(file);
+    else if (GENERATED_AUDIO_EXTENSION_RE.test(file)) audio.push(file);
     else others.push(file);
   }
   return { images, audio, others };
@@ -585,6 +577,8 @@ const PromptReplies: FC<PromptReplyProps> = ({
         pendingAction={messageData.pendingAction}
         attachmentList={messageData.attachmentList}
         navigationIntents={messageData.navigationIntents}
+        attachmentNotices={messageData.attachmentNotices}
+        attachmentDelivery={messageData.attachmentDelivery}
         uiSideEffects={messageData.uiSideEffects}
         jupyterNotebook={messageData.jupyterNotebook}
         notebookContent={notebookContent}
@@ -1133,6 +1127,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   pendingAction,
   attachmentList,
   navigationIntents,
+  attachmentNotices,
+  attachmentDelivery,
   uiSideEffects,
   jupyterNotebook,
   notebookContent,
@@ -1566,18 +1562,26 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncation that landed before any artifact tag was emitted. Without this the
           bubble renders blank (or stops mid-sentence) with no explanation at all. */}
-      {(truncationNotice === 'reply-empty' || truncationNotice === 'reply-partial') && (
+      {(truncationNotice === 'reply-empty' ||
+        truncationNotice === 'reply-partial' ||
+        truncationNotice === 'reply-degenerate') && (
         <Alert
           data-testid="reply-truncated-warning"
           color="warning"
           variant="soft"
           sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
         >
-          <Typography level="title-sm">⚠️ Response was cut off</Typography>
+          <Typography level="title-sm">
+            {truncationNotice === 'reply-degenerate' ? '⚠️ Response stopped early' : '⚠️ Response was cut off'}
+          </Typography>
           <Typography level="body-sm">
-            {truncationNotice === 'reply-empty'
-              ? 'This response reached the output length limit before it produced any content. Try a smaller or more focused request, or ask for the work in parts.'
-              : 'This response reached the output length limit and stopped early. Ask me to continue, or try a smaller or more focused request.'}
+            {truncationNotice === 'reply-degenerate'
+              ? // Deliberately does NOT say "ask me to continue": continuing from a
+                // degenerated tail is what tends to reproduce the loop.
+                'This response began repeating itself, so it was stopped early rather than run to the output length limit. The reply above is what completed before that point - rephrasing the request usually works better than continuing.'
+              : truncationNotice === 'reply-empty'
+                ? 'This response reached the output length limit before it produced any content. Try a smaller or more focused request, or ask for the work in parts.'
+                : 'This response reached the output length limit and stopped early. Ask me to continue, or try a smaller or more focused request.'}
           </Typography>
         </Alert>
       )}
@@ -1587,6 +1591,14 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           defined). Deliberately softer than the truncation copy above - this is a heuristic,
           and the artifact below is shown exactly as generated. */}
       {isElidedArtifact && <ArtifactElisionBanner />}
+
+      {/* Partial grounding coverage: the knowledge-base scan behind this reply stopped short of
+          the library (a candidate cap, a per-turn chunk budget, or documents excluded for an
+          embedding-model mismatch). Sits with the banners above because it reports the same class
+          of fact - the output is less complete than it looks. */}
+      {promptMeta?.retrievalCoverage?.partial && (
+        <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
+      )}
 
       {showSyntaxHighlight ? (
         <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>
@@ -1788,7 +1800,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                                 },
                               }}
                             />
-                            <Typography level="body-sm" sx={{ color: 'primary.700' }}>
+                            <Typography
+                              level="body-sm"
+                              sx={{ color: 'primary.700' }}
+                              data-testid="generating-artifact-indicator"
+                            >
                               Generating artifact...
                             </Typography>
                           </Box>
@@ -1899,6 +1915,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {navigationIntents && navigationIntents.length > 0 && completed && (
         <NavigationButtons navigationIntents={navigationIntents} />
       )}
+
+      {/* Deliberately not gated on `completed`: a failed attachment is known before the reply
+          starts, and waiting hides it for exactly as long as the model is answering without it. */}
+      <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
 
       {uiSideEffects && uiSideEffects.length > 0 && completed && (
         <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />

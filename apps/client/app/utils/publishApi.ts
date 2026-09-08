@@ -29,6 +29,11 @@ export interface ManagedArtifact {
   size?: { totalBytes: number; fileCount: number };
   viewCount?: number;
   publishedAt?: string;
+  updatedAt?: string;
+  /** accessGate.kind, projected without the passphrase hash. Absent = ungated. */
+  gateKind?: 'passphrase' | 'domain';
+  /** Freeform owner labels, stored normalized. */
+  tags?: string[];
   previousVersionMeta?: { sha256Index?: string };
   /** Number of entries in the published version history (drives the version switcher
    *  and the single-version hint). 0/1 means no switcher yet; 2+ shows the switcher. */
@@ -43,10 +48,98 @@ export function toArtifactSharePath(tier: PublishScopeTier, scopeId: string, slu
   return `${SCOPE_URL_PREFIX[tier]}/${scopeId}/${slug}`;
 }
 
-/** List the caller's OWN published artifacts (the manageable set). */
-export async function listMyPublishedArtifacts(): Promise<ManagedArtifact[]> {
-  const { data } = await api.get<{ artifacts: ManagedArtifact[] }>('/api/publish/artifacts?mine=true');
-  return data.artifacts ?? [];
+/** Search / filter / sort / page the management list. Every field optional; omitting all of
+ *  them reproduces the previous behaviour (newest first, one large page). */
+export interface ManagedListQuery {
+  q?: string;
+  /** Ask the server to compute facet counts. Off by default - they are group-bys over the whole
+   *  library, and a caller that only needs a page (or an existence check) should not pay for them. */
+  facets?: boolean;
+  /** A single tag, matched exactly against the normalized stored form. */
+  tag?: string;
+  kind?: string;
+  visibility?: string;
+  gate?: string;
+  comments?: 'on' | 'off';
+  sort?: string;
+  limit?: number;
+  skip?: number;
+}
+
+/** Counts over the caller's whole library, independent of the current filter selection, so a
+ *  facet chip keeps showing its count after you click it. */
+export interface ManagedListFacets {
+  kind: Record<string, number>;
+  visibility: Record<string, number>;
+  gate: Record<string, number>;
+  comments: number;
+  /** Use counts per tag, most-used first, capped by the endpoint. */
+  tag: Record<string, number>;
+}
+
+export interface ManagedListPage {
+  artifacts: ManagedArtifact[];
+  /** Rows matching the current filter, which is what the pager needs - NOT the library size. */
+  total: number;
+  limit: number;
+  skip: number;
+  facets: ManagedListFacets;
+}
+
+const EMPTY_FACETS: ManagedListFacets = { kind: {}, visibility: {}, gate: {}, comments: 0, tag: {} };
+
+/** List a page of the caller's OWN published artifacts (the manageable set). */
+export async function listMyPublishedArtifacts(query: ManagedListQuery = {}): Promise<ManagedListPage> {
+  const params = new URLSearchParams({ mine: 'true' });
+  // Only send what is actually set: an empty `q` or a default sort would otherwise become part
+  // of the react-query cache key and split the cache for no reason.
+  if (query.q?.trim()) params.set('q', query.q.trim());
+  if (query.kind) params.set('kind', query.kind);
+  if (query.visibility) params.set('visibility', query.visibility);
+  if (query.gate) params.set('gate', query.gate);
+  if (query.comments) params.set('comments', query.comments);
+  if (query.tag) params.set('tag', query.tag);
+  if (query.sort) params.set('sort', query.sort);
+  if (query.facets) params.set('facets', 'true');
+  if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.skip) params.set('skip', String(query.skip));
+
+  const { data } = await api.get<Partial<ManagedListPage>>(`/api/publish/artifacts?${params.toString()}`);
+  const artifacts = data.artifacts ?? [];
+  return {
+    artifacts,
+    // Fall back to the page length rather than 0 so a response from an older server (no total)
+    // shows the rows it did return instead of an empty pager claiming nothing matched.
+    total: data.total ?? artifacts.length,
+    limit: data.limit ?? artifacts.length,
+    skip: data.skip ?? 0,
+    facets: data.facets ?? EMPTY_FACETS,
+  };
+}
+
+/** Replace an artifact's tags. Full replace, not a merge - `[]` clears them, which is the only
+ *  way an owner can REMOVE a tag. */
+export async function updatePublishedTags(publicId: string, tags: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { tags });
+}
+
+export interface TagSuggestion {
+  tag: string;
+  /** Uses among published artifacts. 0 means the tag comes from the caller's AppFile vocabulary
+   *  and is not yet on anything published. */
+  count: number;
+}
+
+/** The caller's own tag vocabulary for autocomplete, merged across published artifacts and
+ *  AppFile tags so one label means one thing across the app. Best-effort: autocomplete failing
+ *  must never block typing a tag, since tags are freeform anyway. */
+export async function fetchMyTagVocabulary(): Promise<TagSuggestion[]> {
+  try {
+    const { data } = await api.get<{ tags: TagSuggestion[] }>('/api/publish/tags');
+    return data.tags ?? [];
+  } catch {
+    return [];
+  }
 }
 
 /**

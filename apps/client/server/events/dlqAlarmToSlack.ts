@@ -1,9 +1,10 @@
 /**
- * DLQ Alarm -> Slack Notifier
+ * Alarm -> Slack Notifier
  *
- * Subscribes to the shared DLQ alarm SNS topic and posts a formatted
- * message to the error-reporting Slack channel whenever a DLQ alarm
- * transitions to ALARM state.
+ * Subscribes to the shared alarm SNS topic (originally DLQ-only, now also carries
+ * non-DLQ operational alarms such as feedbackDeliveryFailures - see infra/alarms.ts)
+ * and posts a formatted message to the error-reporting Slack channel whenever a
+ * subscribed alarm transitions to ALARM state.
  *
  * Only ALARM transitions are reported; OK (resolved) transitions are
  * suppressed to avoid channel noise.
@@ -28,7 +29,7 @@ export const handler = async (event: SNSEvent): Promise<void> => {
     if (alarm.NewStateValue !== 'ALARM') continue;
 
     const text = [
-      `🚨 *DLQ Alarm — ${alarm.AlarmName}*`,
+      `🚨 *Alarm - ${alarm.AlarmName}*`,
       alarm.AlarmDescription ?? '',
       `Reason: ${alarm.NewStateReason}`,
       `Time: ${alarm.StateChangeTime}`,

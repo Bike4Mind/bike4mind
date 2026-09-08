@@ -33,6 +33,7 @@ import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -143,7 +144,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     }
 
     // Build callback URL for token exchange - in dev, derive from request host
-    const callbackBase = process.env.APP_URL?.includes('localhost')
+    const callbackBase = isLocalAppUrl()
       ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
       : appUrl;
     const callbackUrl = new URL(`${callbackBase}/api/auth/okta/callback`);

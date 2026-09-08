@@ -8,6 +8,7 @@ import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
+import { toolRuntimeAssets } from './toolRuntimeAssets';
 
 // Re-export imageProcessor for other files that import from functions.ts
 export { imageProcessor };
@@ -77,10 +78,5 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     },
     { actions: ['events:PutEvents'], resources: ['*'] },
   ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
+  copyFiles: toolRuntimeAssets(),
 });

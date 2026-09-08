@@ -470,8 +470,12 @@ describe('updateUser', () => {
     // The benign field is applied; the injected tags are stripped (untouched).
     expect(result.name).toBe('Renamed');
     expect(result.tags).toEqual(['Customer']);
+    // Targeted write: an unchanged field is not written at all. `tags` is left untouched
+    // in the DB rather than round-tripped, which is also what stops a concurrent admin
+    // tag change from being reverted by a self-service profile save.
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.tags).toEqual(['Customer']);
+    expect(persisted).not.toHaveProperty('tags');
+    expect(persisted.name).toBe('Renamed');
   });
 
   it('strips `photoUrl` from a self-update - cannot point the profile photo at a foreign S3 key', async () => {
@@ -505,10 +509,12 @@ describe('updateUser', () => {
     );
 
     expect(result.name).toBe('Renamed');
-    // The injected foreign key is stripped; the caller's own key is preserved.
+    // The injected foreign key is stripped, so it is not a changed field and the targeted
+    // write never touches photoUrl - the caller's own stored key is left untouched in the DB.
     expect(result.photoUrl).toBe('profile-photos/user-photo/own.png');
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.photoUrl).toBe('profile-photos/user-photo/own.png');
+    expect(persisted).not.toHaveProperty('photoUrl');
+    expect(persisted.name).toBe('Renamed');
   });
 
   it('strips `preferences.docxTemplateFileId` from a self-update - cannot point the template at a foreign file', async () => {

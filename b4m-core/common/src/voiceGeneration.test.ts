@@ -3,6 +3,7 @@ import {
   VOICE_VENDOR_SUPPORTED_FORMATS,
   voiceOutputFormatSchema,
   supportedVoiceGenerationVendor,
+  ttsRequestSchema,
 } from './voiceGeneration';
 
 describe('VOICE_VENDOR_SUPPORTED_FORMATS', () => {
@@ -32,5 +33,33 @@ describe('VOICE_VENDOR_SUPPORTED_FORMATS', () => {
     expect(VOICE_VENDOR_SUPPORTED_FORMATS.elevenlabs).not.toContain('flac');
     expect(VOICE_VENDOR_SUPPORTED_FORMATS.elevenlabs).not.toContain('wav');
     expect(VOICE_VENDOR_SUPPORTED_FORMATS.elevenlabs).not.toContain('aac');
+  });
+});
+
+describe('ttsRequestSchema languageCode', () => {
+  it('accepts a lowercase ISO 639-1 code and passes it through unchanged', () => {
+    for (const code of ['en', 'ja', 'pt']) {
+      expect(ttsRequestSchema.parse({ text: 'hi', languageCode: code }).languageCode).toBe(code);
+    }
+  });
+
+  it('stays optional', () => {
+    expect(ttsRequestSchema.parse({ text: 'hi' }).languageCode).toBeUndefined();
+  });
+
+  it('rejects anything that is not a two-letter code', () => {
+    // Fails locally rather than costing an ElevenLabs round-trip.
+    for (const code of ['english', 'en-US', 'EN', 'e', 'en ', '', 'eng']) {
+      expect(ttsRequestSchema.safeParse({ text: 'hi', languageCode: code }).success).toBe(false);
+    }
+  });
+
+  it('names the offending field so the client error is actionable', () => {
+    const result = ttsRequestSchema.safeParse({ text: 'hi', languageCode: 'english' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].path).toEqual(['languageCode']);
+      expect(result.error.issues[0].message).toMatch(/ISO 639-1/);
+    }
   });
 });

@@ -36,7 +36,25 @@ export const generateTools = (
     db,
     retrievalFilter,
     kbScope,
-  }: { db: ToolContext['db']; retrievalFilter?: ToolContext['retrievalFilter']; kbScope?: ToolContext['kbScope'] },
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
+    suppressLakeArms,
+    sessionRetrievalTags,
+    sessionPreauthorizedLakeIds,
+    questId,
+    getAbortSignal,
+  }: {
+    db: ToolContext['db'];
+    retrievalFilter?: ToolContext['retrievalFilter'];
+    kbScope?: ToolContext['kbScope'];
+    inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+    fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+    suppressLakeArms?: ToolContext['suppressLakeArms'];
+    sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+    sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
+    questId?: ToolContext['questId'];
+    getAbortSignal?: ToolContext['getAbortSignal'];
+  },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
@@ -62,6 +80,7 @@ export const generateTools = (
     userId,
     user,
     sessionId,
+    questId,
     logger,
     db,
     storage,
@@ -76,9 +95,15 @@ export const generateTools = (
     entitlementKeys,
     retrievalFilter,
     kbScope,
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
+    suppressLakeArms,
+    sessionRetrievalTags,
+    sessionPreauthorizedLakeIds,
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    getAbortSignal,
   };
 
   return Object.entries(tools).reduce(

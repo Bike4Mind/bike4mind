@@ -17,10 +17,16 @@ export const DATA_LAKE_REPL_TOOLS: ReplToolDescriptor[] = [
     description:
       'Vector / semantic search across chunked articles in the data lake. ' +
       'Returns { results: [{ file_id, file_name, file_tags, chunk_text, score }, ...], total_chunks_searched, ' +
-      'files_in_scope, chunks_scored, partial_results, embedding_mismatch, ' +
-      'scan: { truncated, files_scanned, files_matching, ... }, ... }. ' +
-      'If partial_results is true some content could not be compared (embedding_mismatch says what ' +
-      'and why) - say so in your answer instead of presenting the result as complete. ' +
+      'files_in_scope, chunks_scored, partial_results, embedding_mismatch, retrieval_unavailable, ' +
+      'warning, scan: { truncated, files_scanned, files_matching, ... }, ... }. ' +
+      'If partial_results is true some content was WITHHELD, for one of three reasons: it could not be ' +
+      'compared (embedding_mismatch says what and why); it is mid-re-index and temporarily unsearchable ' +
+      '(retrieval_unavailable.indexing_files); or a paused re-process left it with no searchable passages ' +
+      'and it is not coming back on its own (retrieval_unavailable.paused_files). `warning` states which and ' +
+      'names the files. Say so instead of presenting the result as complete. The remedies differ: re-indexing ' +
+      "files just need the search re-run later, whereas paused ones need the lake's passages rebuilt or the " +
+      'files reprocessed - do NOT tell the reader to wait, and do not assume the kill switch is still on, ' +
+      'because the marker outlives the pause that caused it. ' +
       'If scan.truncated is true the search covered only part of the lake, so widen with ' +
       'listArticles or keywordSearch before concluding something is absent.',
   },

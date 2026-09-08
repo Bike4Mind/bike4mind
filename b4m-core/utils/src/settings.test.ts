@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { getSettingsValue, getSettingByName } from './settings';
+import { getSettingsValue, getSettingByName, getSettingsByNames } from './settings';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
 
@@ -82,5 +82,29 @@ describe('getSettingByName - stored boolean false survives the round-trip', () =
     const db = { adminSettings: repoReturning(false) };
     const v: unknown = await cache.getSettingByName('EnableFalseFlagRegression', db);
     expect(v).toBe(false);
+  });
+});
+
+// Same regression class as above, one function over: getSettingsByNames' cached path used
+// `|| null`, so a stored numeric 0 (e.g. a spend budget meaning "stop") or boolean false
+// collapsed to null and read as "absent" - the caller then resumed at its coded default.
+describe('getSettingsByNames - stored falsy values survive the cached path', () => {
+  it('returns 0 and false as themselves, and null only for truly absent settings', async () => {
+    const db = {
+      adminSettings: {
+        findAll: vi.fn().mockResolvedValue([
+          { settingName: 'zeroBudgetRegression', settingValue: 0 },
+          { settingName: 'falseSwitchRegression', settingValue: false },
+        ]),
+        findBySettingNames: vi.fn(),
+      },
+    };
+    const values: Record<string, unknown> = await getSettingsByNames(
+      ['zeroBudgetRegression', 'falseSwitchRegression', 'absentRegression'] as never,
+      db as never
+    );
+    expect(values.zeroBudgetRegression).toBe(0);
+    expect(values.falseSwitchRegression).toBe(false);
+    expect(values.absentRegression).toBeNull();
   });
 });

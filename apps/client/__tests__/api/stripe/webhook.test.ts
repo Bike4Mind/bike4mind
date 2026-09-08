@@ -22,6 +22,7 @@ const mockFindByOrgStripeCustomerId = vi.fn();
 const mockFindById = vi.fn();
 const mockUserUpdate = vi.fn();
 const mockSubtractCredits = vi.fn();
+const mockAddCredits = vi.fn();
 const mockStampCreditLot = vi.fn();
 const mockClawbackCreditLotsByStripeRef = vi.fn();
 const mockUpdateTransactionStatus = vi.fn();
@@ -51,6 +52,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   creditService: {
+    addCredits: (...args: unknown[]) => mockAddCredits(...args),
     subtractCredits: (...args: unknown[]) => mockSubtractCredits(...args),
     stampCreditLot: (...args: unknown[]) => mockStampCreditLot(...args),
     clawbackCreditLotsByStripeRef: (...args: unknown[]) => mockClawbackCreditLotsByStripeRef(...args),
@@ -198,6 +200,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockUpdateByStripeSubscriptionId.mockResolvedValue(undefined);
     mockUpdateTransactionStatus.mockResolvedValue(undefined);
     mockStampCreditLot.mockResolvedValue(undefined);
+    mockAddCredits.mockResolvedValue(undefined);
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
   });
 
@@ -218,21 +221,26 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       },
     };
 
-    it('grants credits and stamps a pack credit lot with the payment intent as stripeRef', async () => {
+    it('grants credits through the atomic credit ledger keyed on the payment intent', async () => {
       mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
 
       await invokeWebhookWithEvent(packEvent);
 
-      expect(mockUserUpdate).toHaveBeenCalledWith(expect.objectContaining({ currentCredits: 600 }));
-      expect(mockStampCreditLot).toHaveBeenCalledWith(
+      // The purchase path now delegates to creditService.addCredits, which records the
+      // transaction, atomically increments the balance, and stamps the pack lot - keyed
+      // idempotently on stripePaymentIntentId. No whole-document balance overwrite.
+      expect(mockAddCredits).toHaveBeenCalledWith(
         expect.objectContaining({
+          type: 'purchase',
           ownerId: 'user123',
-          amount: 500,
-          grantType: 'purchase',
-          stripeRef: 'pi_pack',
+          credits: 500,
+          amount: 999,
+          stripePaymentIntentId: 'pi_pack',
+          packageId: 'pkg_1',
         }),
         expect.anything()
       );
+      expect(mockUserUpdate).not.toHaveBeenCalled();
     });
   });
 

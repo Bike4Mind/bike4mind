@@ -7,8 +7,8 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import DockedChatPanel from './DockedChatPanel';
 
 // The control cluster reaches SessionsContext/react-query through useCopySessionMarkdown,
-// which is irrelevant to the header's minimize wiring.
-vi.mock('./ChatPanelControls', () => ({ default: () => null }));
+// which is irrelevant to the header's Hide chat wiring.
+vi.mock('./ChatPanelControls', () => ({ default: () => null, chatHeaderToolButtonSx: {} }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -17,10 +17,10 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('DockedChatPanel', () => {
   beforeEach(() => {
-    setSessionLayout({ layout: 'dockRight', floatingChatMinimized: false, previousLayout: undefined });
+    setSessionLayout({ layout: 'dockRight', floatingChatMinimized: false });
   });
 
-  it('minimizes to the AI Chat launcher instead of switching to the floating window', () => {
+  it('hides to the AI Chat launcher instead of switching to the floating window', () => {
     render(
       <Wrapper>
         <DockedChatPanel>chat</DockedChatPanel>
@@ -34,8 +34,10 @@ describe('DockedChatPanel', () => {
     expect(state.layout).toBe('floatingChat');
   });
 
-  it('records the dock it was minimized from so the float window can close back to it', () => {
-    setSessionLayout({ layout: 'dockBottom' });
+  // Hiding is a round trip, not a move: the pill has to know where to put the panel back,
+  // and 'floatingChat' on its own is a layout the chat was never in.
+  it.each(['dockRight', 'dockBottom'] as const)('remembers %s as the dock to come back to', dock => {
+    setSessionLayout({ layout: dock });
     render(
       <Wrapper>
         <DockedChatPanel>chat</DockedChatPanel>
@@ -44,6 +46,20 @@ describe('DockedChatPanel', () => {
 
     fireEvent.click(screen.getByTestId('docked-chat-close'));
 
-    expect(useSessionLayout.getState().previousLayout).toBe('dockBottom');
+    expect(useSessionLayout.getState().hiddenFromLayout).toBe(dock);
+  });
+
+  it('forgets the dock once the user picks a layout themselves', () => {
+    render(
+      <Wrapper>
+        <DockedChatPanel>chat</DockedChatPanel>
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('docked-chat-close'));
+
+    // What the layout menu does - a deliberate choice, which ends the hide episode.
+    setSessionLayout({ layout: 'floatingChat' });
+
+    expect(useSessionLayout.getState().hiddenFromLayout).toBeUndefined();
   });
 });

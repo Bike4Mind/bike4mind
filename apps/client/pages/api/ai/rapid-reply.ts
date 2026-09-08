@@ -9,8 +9,9 @@ import {
 } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { StatusManager } from '@bike4mind/services';
-import { BadRequestError, ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
-import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
+import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
+import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
 import { ChatModels } from '@bike4mind/common';
 import { Resource } from 'sst';
 
@@ -91,24 +92,27 @@ const handler = baseApi()
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         getSettingsByNames,
       };
-      const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
+      // Through buildApiKeyTable, not a literal: getEffectiveLLMApiKeys returns a
+      // provider-keyed shape and getAvailableModels reads a backend-keyed one, and that
+      // helper is the ratchet that keeps every new provider from being silently absent here.
+      const apiKeyTable = buildApiKeyTable(await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters));
       const models = await getAvailableModels(apiKeyTable);
-      const rapidModelId = rapidReplyMapping.rapidModelId;
+      // Degrades a rotted mapping to a reachable fast model instead of throwing; see
+      // resolveRapidModel for why a sunset rapid model must never fail the request.
+      const resolution = resolveRapidModel({
+        mappedModelId: rapidReplyMapping.rapidModelId,
+        models,
+        apiKeyTable,
+        logger: req.logger,
+        endUserId: userId,
+        mappingId: rapidReplyMapping.id,
+      });
 
-      const modelInfo = models.find(m => m.id === rapidModelId);
-      if (!modelInfo) {
-        throw new BadRequestError(
-          `Model "${rapidModelId}" is not available. Please select a different model or check your API keys.`
-        );
+      if (resolution.status === 'unavailable') {
+        return res.json({ success: false, reason: 'model_unavailable' });
       }
 
-      const rapidLlm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: userId });
-
-      if (!rapidLlm) {
-        throw new BadRequestError(
-          `Model "${rapidModelId}" is not available. Please select a different model or check your API keys.`
-        );
-      }
+      const { modelId: rapidModelId, llm: rapidLlm } = resolution;
 
       // 5. Generate rapid reply
       const rapidSystemPrompt =
@@ -230,6 +234,10 @@ const handler = baseApi()
         latency: Date.now() - startTime,
       });
     } catch (error) {
+      // Deliberately error-severity: everything routinely-degradable (no mapping, a sunset or
+      // disabled rapid model, no reachable fallback) now returns early at info/warn above, so
+      // only genuine faults reach here - a DB write failure, an unexpected throw from the
+      // provider. Do not downgrade this to hide a noisy model-availability case; fix the case.
       req.logger.error('⚠️ [RapidReply] Failed:', error);
 
       return res.json({

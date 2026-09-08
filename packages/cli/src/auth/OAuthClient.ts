@@ -16,6 +16,13 @@ export interface TokenResponse {
   expires_in: number;
 }
 
+/**
+ * A refresh-grant response. Unlike the authorization-code and device grants, `refresh_token` is
+ * OPTIONAL here (RFC 6749 s6): the server omits it when this refresh did not rotate the chain, and
+ * an absent value means "keep the token you already have" - never "you no longer have one".
+ */
+export type RefreshTokenResponse = Omit<TokenResponse, 'refresh_token'> & { refresh_token?: string };
+
 export interface TokenError {
   error: string;
   error_description: string;
@@ -144,8 +151,8 @@ export class OAuthClient {
   /**
    * Refresh an expired access token
    */
-  async refreshToken(refreshToken: string): Promise<TokenResponse> {
-    const response = await this.apiClient.post<TokenResponse>('/api/oauth/refresh', {
+  async refreshToken(refreshToken: string): Promise<RefreshTokenResponse> {
+    const response = await this.apiClient.post<RefreshTokenResponse>('/api/oauth/refresh', {
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
       client_id: this.clientId,

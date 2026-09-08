@@ -70,6 +70,19 @@ describe('buildSubagentLatticeToolPool', () => {
     );
   });
 
+  it('forwards the caller-resolved availability map into buildSharedTools', () => {
+    // Pass-through only, deliberately: no LATTICE_TOOL_NAMES entry is key-gated, so this map can
+    // never drop a Lattice tool today. The assertion exists so the pool cannot become the one path
+    // that skips the filter if a gated tool is ever added to it.
+    buildSharedToolsMock.mockReturnValue(LATTICE_TOOL_NAMES.map(tool));
+    buildSubagentLatticeToolPool(deps, callbacks, undefined, { weather_info: false });
+    expect(buildSharedToolsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      callbacks,
+      expect.objectContaining({ toolAvailability: { weather_info: false } })
+    );
+  });
+
   it('keeps ONLY Lattice tools, dropping delegate/coordinate that buildSharedTools injects', () => {
     // The pool builder clears agentStore to avoid delegate/coordinate injection,
     // but this filter still defensively drops them if they ever reach the pool.

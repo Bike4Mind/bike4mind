@@ -6,6 +6,8 @@ import { PromptMeta } from './PromptMetaTypes';
 import { SearchOptions } from '../../search';
 import { ChatModelName } from '../../models';
 import { MessageContentObject } from './MessageTypes';
+import type { DataLakeGroundingMode } from '../../constants/dataLakes';
+import type { ApiErrorCode } from '../../apiErrorCodes';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -83,9 +85,45 @@ export type SessionProps = {
  * so the client can branch to a targeted error UI (see `IChatHistoryItem.errorCode`).
  * Single source of truth: the streamed-action Zod enum in `schemas/actions.ts`
  * derives its values from this tuple, so the two can never drift.
+ *
+ * SSE-frame scoped, and a NARROWING of the platform-wide `API_ERROR_CODES`: a
+ * quest fails for billing reasons, never for the provider-configuration reasons
+ * the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
+ * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
+ * fails the build.
  */
-export const QUEST_ERROR_CODES = ['insufficient_credits', 'spend_cap_exceeded'] as const;
+export const QUEST_ERROR_CODES = [
+  'insufficient_credits',
+  'spend_cap_exceeded',
+] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
+
+/**
+ * Requested-vs-delivered counts for one turn's attachments. `IChatHistoryItem.attachmentNotices`
+ * explains the failures; this is the affirmative half, and it is the only thing that separates
+ * "nothing was attached" from "everything attached was refused" - a distinction
+ * `promptMeta.context.tokensBySource.fabFiles` cannot make, because it aggregates session,
+ * message and system files into one count alongside the turn's own attachments.
+ */
+export interface IAttachmentDelivery {
+  /**
+   * Ids the turn tried to inline, after dedup - NOT just what the caller attached. The chat door
+   * counts session and message fab files plus the user's enabled and the admin's global system
+   * files plus the inline knowledge subset; the agent door counts message and session fab files
+   * plus every session knowledge id, and no system files. So `requested` is a denominator for
+   * "what this turn tried to put in the prompt", and the two doors do not compute it the same way.
+   * `droppedIds` is what answers "did MY file arrive" exactly, and is per-id exact on both.
+   */
+  requested: number;
+  /** Of `requested`, how many placed any content into the prompt. */
+  delivered: number;
+  /** Of `delivered`, how many placed their ENTIRE content - the rest are excerpts or head slices. */
+  fullyDelivered: number;
+  /** `requested - delivered`. Every one of these also has a line in `attachmentNotices`. */
+  dropped: number;
+  /** The undelivered ids, so a caller can react without parsing the notice prose. */
+  droppedIds: string[];
+}
 
 export interface IChatHistoryItem {
   id?: string;
@@ -292,6 +330,21 @@ export interface IChatHistoryItem {
     messageTs: string; // Message timestamp to edit
     isPaintCommand?: boolean; // Whether this quest was triggered by /paint command
   };
+
+  /**
+   * User-facing lines for attachments submitted with this turn that did not arrive intact - not
+   * found, unreadable, unsupported, or delivered only in part. Rendered under the reply; the same
+   * text is also given to the model in a system message, so an attachment failure is never silent
+   * and never surface-specific.
+   */
+  attachmentNotices?: string[];
+
+  /**
+   * Affirmative delivery report for this turn's attachments - see {@link IAttachmentDelivery}.
+   * Written whenever the turn carried any attachment, including the all-succeeded case that
+   * produces no notices at all; that case is exactly the one nothing else records.
+   */
+  attachmentDelivery?: IAttachmentDelivery;
 
   /**
    * Navigation intents from the navigate_view tool.
@@ -549,6 +602,26 @@ export interface ISession {
    * Generic capability - lets a surface focus the grounded tutor on one topic.
    */
   retrievalTags?: string[];
+  /**
+   * Lake ids a manager was admitted to for THIS session even though they are not a member of the
+   * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its
+   * own canManageLake check, as a write separate from session creation. Never part of
+   * createSession's input type (fork/clone/snip cannot copy it - a type error, not a runtime
+   * check) and never part of SessionUpdateRequestSchema (no session can grant itself this after
+   * the fact). Consumed only by the retrieval/injection widening in getDynamicDataLakeTags and
+   * getDataLakePrompts, and only once re-vetted against the request's authenticated principal -
+   * see ToolContext.sessionPreauthorizedLakeIds. Absent/empty = no widening.
+   */
+  preauthorizedLakeIds?: string[];
+  /**
+   * How this session grounds an attached data-lake corpus (inline vs retrieve vs auto-by-size),
+   * resolved ONCE at create time from the lake this session was created for (see
+   * resolveLakeSessionDefaults). The completion path's corpus defer plan reads this to decide
+   * whether to keep the corpus inlined or defer the tool-retrievable subset to
+   * search_knowledge_base, generalizing the size-only rule to an explicit per-lake choice. Unset on
+   * a session not created for a lake, which the plan treats as its pre-existing size-only behavior.
+   */
+  corpusGroundingMode?: DataLakeGroundingMode;
   /**
    * Generic retrieval exclusion: filename markers (case-insensitive, matched as a LEADING
    * marker at a word boundary - the marker must start the name and be followed by end-of-string

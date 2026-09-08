@@ -117,6 +117,26 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
 }
 
 /**
+ * Reduce a fully-built user document to the targeted write partial: the id, a fresh
+ * updatedAt, and ONLY the fields the request actually changed. Persisting this instead
+ * of the whole built document is what stops a profile or admin save from round-tripping
+ * (and thereby reverting a concurrent write to) currentCredits, tokenVersion, isBanned,
+ * tags and every other field the caller never sent. `params` supplies the changed-field
+ * keys; `built` supplies their post-merge values (hashed password, merged preferences).
+ */
+export function toUserUpdatePartial(
+  built: IUserDocument,
+  params: Record<string, unknown>
+): Partial<IUserDocument> & { id: string } {
+  const write: Record<string, unknown> = { id: built.id, updatedAt: built.updatedAt };
+  for (const key of Object.keys(params)) {
+    if (key === 'id') continue;
+    write[key] = (built as unknown as Record<string, unknown>)[key];
+  }
+  return write as Partial<IUserDocument> & { id: string };
+}
+
+/**
  * `preferences` is merged onto the stored object, not replaced, so a partial write cannot
  * silently drop keys the caller omitted. An explicit `null` still clears the whole object -
  * that is the only way to remove individual keys. `experimentalFeatures` is merged one level
@@ -146,6 +166,9 @@ export async function updateUser(userId: string, parameters: UpdateUserParameter
 
   const updatedUser = applyBaseUserUpdates(userPassword, params);
 
-  await db.users.update(updatedUser);
+  // Persist ONLY the fields this request changed. Writing the whole built document
+  // (a spread of the read snapshot) is what let a routine profile save revert a
+  // concurrent credit deduction, tokenVersion bump or admin tag/ban change.
+  await db.users.update(toUserUpdatePartial(updatedUser, params));
   return updatedUser;
 }

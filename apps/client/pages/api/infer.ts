@@ -2,12 +2,14 @@ import { Request, Response } from 'express';
 import { ApiKeyType, IMessage } from '@bike4mind/common';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
-import { AdminSettings, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 
 const handler = baseApi().post(async (req: Request, res: Response) => {
   const { model, prompt, stream } = req.body as Record<string, string>;
-  const settings = await AdminSettings.find({ settingName: { $in: ['EnableOllama', 'ollamaBackend'] } });
+  // ollamaBackend is isSensitive (encrypted at rest); read through the repository so it is
+  // decrypted before it becomes the ollama entry of apiKeyTable, matching getEffective*.
+  const settings = await adminSettingsRepository.findBySettingNames(['EnableOllama', 'ollamaBackend']);
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } };
   const userIdForService = req.user?.id || 'system';
   const apiKeyTable = {

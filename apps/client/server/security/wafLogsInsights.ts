@@ -14,6 +14,7 @@ import {
   resolveTimeWindow,
   type WafRangeInput,
 } from './wafSharedHelpers';
+import { maskWafRequestHeaders } from './wafHeaderRedaction';
 import { WAF_CACHE_TTL, wafQueryCache } from './wafQueryCache';
 
 export interface WafLogsTopItem {
@@ -185,6 +186,10 @@ export interface WafBlockedRequest {
   terminatingRuleId: string;
   clientIp: string;
   country: string;
+  /**
+   * Request headers as served to the client: diagnostic headers carry their value, everything else
+   * is masked. See wafHeaderRedaction.ts for why the API does not serve the log record verbatim.
+   */
   headers: Array<{ name: string; value: string }>;
   uri: string;
   args: string;
@@ -288,7 +293,7 @@ async function fetchWafBlockedRequests(params: {
         terminatingRuleId: typeof parsed.terminatingRuleId === 'string' ? parsed.terminatingRuleId : '',
         clientIp: typeof httpRequest.clientIp === 'string' ? httpRequest.clientIp : '',
         country: typeof httpRequest.country === 'string' ? httpRequest.country : '',
-        headers,
+        headers: maskWafRequestHeaders(headers),
         uri: typeof httpRequest.uri === 'string' ? httpRequest.uri : '',
         args: typeof httpRequest.args === 'string' ? httpRequest.args : '',
         httpVersion: typeof httpRequest.httpVersion === 'string' ? httpRequest.httpVersion : '',

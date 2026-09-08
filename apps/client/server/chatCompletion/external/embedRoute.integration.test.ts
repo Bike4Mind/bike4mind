@@ -128,10 +128,17 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%', STAGE: 'test' } }));
 
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../../packages/database/src/__test__/createMongoServer';
 import { Organization, AdminSettings, Agent, Project, FabFile, FabFileChunk, UsageEvent } from '@bike4mind/database';
 import { User } from '../../../../../packages/database/src/models/auth/UserModel';
 import { registerEmbedRoutes } from './embedRoute';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryServer;
 let server: Server;
@@ -151,7 +158,7 @@ beforeAll(async () => {
       resolve();
     });
   });
-}, 60000);
+});
 
 afterAll(async () => {
   server?.close();
@@ -161,7 +168,7 @@ afterAll(async () => {
     mkdirSync(process.env.B4M_EVIDENCE_OUT, { recursive: true });
     writeFileSync(join(process.env.B4M_EVIDENCE_OUT, 'cases.json'), JSON.stringify(evidence, null, 2));
   }
-}, 30000);
+});
 
 afterEach(async () => {
   await mongooseDirect.connection.dropDatabase();
@@ -189,7 +196,12 @@ async function seed(overrides: SeedOverrides = {}) {
     name: 'Embed Org',
     userId: owner.id,
     currentCredits: 100000,
-    // Org membership lives here (a User doc carries no org field). Both are members.
+    // Membership is the authoritative users[] ACL (a User doc carries no org field). Both are members.
+    users: [
+      { userId: owner.id, permissions: ['read'] },
+      { userId: teammate.id, permissions: ['read'] },
+    ],
+    // Credit side-table, seeded in parallel but NOT the membership source of truth.
     userDetails: [
       { id: owner.id, email: 'owner@example.com', name: 'Embed Owner' },
       { id: teammate.id, email: 'teammate@example.com', name: 'Teammate' },
@@ -290,7 +302,7 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     expect(text).toContain('42 gold pieces');
     expect(text).not.toContain('SECRET-OUT-OF-SCOPE-DELTA');
     expect(text).toContain('[DONE]');
-  }, 30000);
+  });
 
   it('rejects retrieve_knowledge_content for an out-of-scope file id owned by the SAME user', async () => {
     const { outScope } = await seed();
@@ -300,7 +312,7 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
 
     expect(text).toContain('No document found with ID');
     expect(text).not.toContain('SECRET-OUT-OF-SCOPE-DELTA');
-  }, 30000);
+  });
 
   it('serves a file curated into the project even when owned by another user (curation is the grant)', async () => {
     const { curatedForeign } = await seed();
@@ -309,7 +321,7 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     const { text } = await post('curated not-owned file is readable');
 
     expect(text).toContain('curated by a teammate');
-  }, 30000);
+  });
 
   it('a denied KB tool never reaches the backend tool list', async () => {
     await seed({ agent: { deniedTools: ['search_knowledge_base'] } });
@@ -322,7 +334,7 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     expect(names).toContain('retrieve_knowledge_content');
     expect(text).toContain('TOOL_UNAVAILABLE:search_knowledge_base');
     expect(text).not.toContain('42 gold pieces');
-  }, 30000);
+  });
 
   it('an opted-in curated tool is materialized and executable alongside the KB defaults', async () => {
     await seed({ agent: { allowedTools: ['current_datetime'] } });
@@ -336,7 +348,23 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     );
     expect(text).toContain('ANSWER::');
     expect(text).not.toContain('TOOL_UNAVAILABLE');
-  }, 30000);
+  });
+
+  it('an opted-in key-gated tool with no configured key never reaches the backend tool list', async () => {
+    // weather_info is in the embed curated universe (embedToolResolver.ts) and the agent opts
+    // it in below, but no OpenWeather key is seeded anywhere in this test's real Mongo - this is
+    // the case the tool-availability filter (toolAvailability.ts + sharedToolBuilder.ts) exists
+    // for: allowed by the curated allowlist, still dropped for having no working key/config.
+    await seed({ agent: { allowedTools: ['weather_info'] } });
+    h.script = { toolName: 'weather_info', args: { location: 'San Francisco' } };
+
+    const { text } = await post('unavailable weather_info is absent from the materialized set');
+
+    const names = h.lastBackendTools.map(t => t.toolSchema.name);
+    expect(names).not.toContain('weather_info');
+    expect(names).toContain('search_knowledge_base');
+    expect(text).toContain('TOOL_UNAVAILABLE:weather_info');
+  });
 
   it('an agent with no project gets an empty KB: search returns nothing, never the owner corpus', async () => {
     await seed({ skipProject: true });
@@ -347,7 +375,7 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     expect(text).toContain('No documents found');
     expect(text).not.toContain('42 gold pieces');
     expect(text).not.toContain('SECRET-OUT-OF-SCOPE-DELTA');
-  }, 30000);
+  });
 
   it('an org-owned agent whose project belongs to an org teammate still gets its KB', async () => {
     await seed({ projectOwnedByTeammate: true });
@@ -357,7 +385,7 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
 
     expect(text).toContain('42 gold pieces');
     expect(text).not.toContain('SECRET-OUT-OF-SCOPE-DELTA');
-  }, 30000);
+  });
 
   it('meters the multi-turn tool run against the owner org', async () => {
     const { org, owner } = await seed();
@@ -375,12 +403,17 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
         expect(found).toHaveLength(1);
         return found;
       },
-      { timeout: 5000, interval: 50 }
+      // Scaled off the suite budget, not a flat 5s: this poll waits on real DB work under the same
+      // contention the budget exists to absorb, so a fixed 5s window turns a slow runner into a
+      // "expected length 1, got 0" assertion failure that does not even look like a timeout. A
+      // fraction rather than the whole budget, so this poll's own failure surfaces (with the
+      // useful message) before the test-level timeout fires.
+      { timeout: MONGO_TEST_TIMEOUT_MS / 2, interval: 50 }
     );
     expect(String(events[0].ownerId)).toBe(org.id);
     expect(events[0].ownerType).toBe('Organization');
     expect(String(events[0].userId)).toBe(owner.id);
     expect(events[0].inputTokens).toBe(120);
     expect(events[0].outputTokens).toBe(40);
-  }, 30000);
+  });
 });

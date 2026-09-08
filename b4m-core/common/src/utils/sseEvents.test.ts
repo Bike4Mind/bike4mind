@@ -53,6 +53,22 @@ describe('buildSSEEvent', () => {
     const e = buildSSEEvent(['', 'the answer'], { creditsUsed: 2, usdCost: 0.0123 });
     expect(e.credits).toMatchObject({ used: 2, usdCost: 0.0123 });
   });
+
+  it('projects tools down to name/arguments/id, dropping returnValue and success', () => {
+    const e = buildSSEEvent(['', 'the answer'], {
+      toolsUsed: [
+        {
+          name: 'web_search',
+          arguments: '{}',
+          id: 't1',
+          returnValue: 'a very long tool result',
+          success: true,
+        } as never,
+      ],
+    });
+    expect(e.tools).toEqual([{ name: 'web_search', arguments: '{}', id: 't1' }]);
+    expect(serializeSSEEvent(e)).not.toContain('returnValue');
+  });
 });
 
 describe('buildMetaEvent', () => {

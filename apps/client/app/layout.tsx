@@ -8,7 +8,10 @@ import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
 import { Metadata } from 'next';
 
-// Configure Poppins font
+// Pins the GA cookie to an apex instead of gtag's 'auto' default; unset is a
+// deliberate no-op. See infra/web.ts for why a wrong value is worse than unset.
+const GA_COOKIE_DOMAIN = process.env.NEXT_PUBLIC_GA_COOKIE_DOMAIN;
+
 const poppins = Poppins({
   weight: ['400', '500', '600'],
   subsets: ['latin'],
@@ -46,7 +49,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 function gtag(){dataLayer.push(arguments);}
                 gtag('consent', 'default', { analytics_storage: 'denied' });
                 gtag('js', new Date());
-                gtag('config', '${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}');
+                gtag('config', '${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}'${
+                  GA_COOKIE_DOMAIN ? `, { cookie_domain: '${GA_COOKIE_DOMAIN}' }` : ''
+                });
               `}
             </Script>
           </>

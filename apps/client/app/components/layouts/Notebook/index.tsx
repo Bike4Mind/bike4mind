@@ -19,7 +19,6 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { keyframes } from '@mui/system';
 import NotebookHeader from './Header';
 import { gray } from '@client/app/utils/themes/colors';
-import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 export interface NotebookLayoutProps {
@@ -71,29 +70,22 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
   const openSideNav = useNotebookLayout(s => s.openSideNav);
   const isMobile = useIsMobile();
   const isImpersonating = useAccessToken(s => s.impersonating);
-  const layout = useSessionLayout(s => s.layout);
 
   // Global keyboard shortcuts
   useHelpKeyboardShortcut();
   useCommandPaletteShortcut();
-
-  // Knowledge viewer is open when layout is not 'hide'
-  const isKnowledgeViewerOpen = layout !== 'hide';
 
   // Mirrors useOptiAccess's route check: '/opti' only exists in overlay builds.
   const { pathname } = useLocation();
   const isOptiRoute = pathname.startsWith('/opti');
   const dataLakeModeOn = useDataLakeMode(s => s.enabled);
 
+  // Opti hub / in-chat Data Lake mode own their edge-to-edge layout; the notebook gutter
+  // would double up as a visible frame around the docked chat + splitter. The 36px left is
+  // clearance for the collapsed sidenav's floating expand control, not a gutter.
   const getContentPadding = (): string => {
-    if (isMobile) return '0px';
-    // Opti hub / in-chat Data Lake mode own their edge-to-edge layout; the
-    // notebook gutter would double up as a visible frame around the docked chat + splitter.
-    if (isOptiRoute || dataLakeModeOn) return '0px';
-    if (openSideNav && isKnowledgeViewerOpen) return '12px 12px 12px 12px';
-    if (openSideNav) return '12px 12px 12px 12px';
-    if (isKnowledgeViewerOpen) return '12px 12px 12px 36px';
-    return '12px 12px 12px 36px';
+    if (isMobile || isOptiRoute || dataLakeModeOn) return '0px';
+    return openSideNav ? '8px' : '8px 8px 8px 36px';
   };
 
   return (

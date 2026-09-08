@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User, Session, Agent, Project } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError } from '@server/utils/errors';
 
 const KeywordRoutingRuleSchema = z.object({
@@ -107,7 +107,7 @@ const handler = baseApi()
         // later dereferenced by Slack handlers (/notebook status, quick-ask routing) with no
         // ownership re-check, so a foreign notebook id must be rejected at write time.
         if (slackSettings.defaultNotebookId) {
-          if (!Types.ObjectId.isValid(slackSettings.defaultNotebookId)) {
+          if (!isValidObjectId(slackSettings.defaultNotebookId)) {
             return res.status(400).json({ error: 'Invalid notebook ID format' });
           }
           const notebook = await Session.findOne({
@@ -123,7 +123,7 @@ const handler = baseApi()
 
         // Validate defaultProjectId access (owner or member, mirroring the customAgentId check).
         if (slackSettings.defaultProjectId) {
-          if (!Types.ObjectId.isValid(slackSettings.defaultProjectId)) {
+          if (!isValidObjectId(slackSettings.defaultProjectId)) {
             return res.status(400).json({ error: 'Invalid project ID format' });
           }
           const project = await Project.findOne({
@@ -159,7 +159,7 @@ const handler = baseApi()
 
         // Validate custom agent exists and is accessible to user
         if (slackSettings.customAgentId) {
-          if (!Types.ObjectId.isValid(slackSettings.customAgentId)) {
+          if (!isValidObjectId(slackSettings.customAgentId)) {
             throw new BadRequestError('Invalid agent ID format');
           }
 

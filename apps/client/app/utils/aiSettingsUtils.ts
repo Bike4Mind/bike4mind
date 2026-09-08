@@ -125,19 +125,10 @@ export const getChipStyles = (variant: ChipVariant, isMaximum: boolean, mode: st
   return { ...baseStyles, ...variantStyles[variant] };
 };
 
-// Stats-based helpers (used by non-admin components with pre-aggregated data from /api/models/stats).
+// Stats-based helper (used by non-admin components with pre-aggregated data from /api/models/stats).
 // Keyed by model id like the stats payload and the callers' comparisons - never by display name.
-// Empty stats yield an empty result, not a seed: popularity and speed are claims about observed
-// usage, and a hardcoded seed would go stale silently while still looking authoritative.
-export const getTopUsedModelsFromStats = (popularity: Record<string, number>, count: number = 3): string[] => {
-  if (!popularity) return [];
-
-  return Object.entries(popularity)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, count)
-    .map(([modelId]) => modelId);
-};
-
+// Empty stats yield null, not a seed: speed is a claim about observed usage, and a hardcoded seed
+// would go stale silently while still looking authoritative.
 export const getModelSpeedFromStats = (
   modelId: string,
   avgResponseTime: Record<string, number>
@@ -245,4 +236,8 @@ export const buildModelSelectionPatch = (modelInfo: ModelInfo) => ({
   model: modelInfo.id,
   max_tokens: computeDefaultMaxTokens(modelInfo),
   ...(FIXED_TEMPERATURE_MODELS.has(modelInfo.id) && { temperature: 1.0 }),
+  // Per-kind memory, so switching between a text and an image model returns you to the last one
+  // you used of that kind rather than a default. Keyed on the catalog's type instead of the
+  // IMAGE_MODELS name list; video and speech-to-text land on the text slot, as before.
+  ...(modelInfo.type === 'image' ? { lastUsedImageModel: modelInfo.id } : { lastUsedTextModel: modelInfo.id }),
 });

@@ -7,10 +7,13 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  *
  * This is the ONLY author-facing JS that runs on a published bundle page -
  * author inline scripts are stripped at serve time. The widget therefore must
- * be self-contained vanilla JS (no framework), build its DOM with
+ * be self-contained vanilla JS (no framework) and build its DOM with
  * createElement/textContent (NEVER innerHTML on user data - comment bodies are
- * untrusted user input rendered on the app origin), and read the viewer's B4M
- * token from localStorage to authenticate writes.
+ * untrusted user input rendered on the app origin).
+ *
+ * It runs in the WRAPPER page on the app origin (see buildAnnotateOverlayHtml in
+ * serve/[...path].ts), never inside the sandboxed bundle iframe - which is what
+ * makes the same-origin cookie exchange in `ensureToken` reachable at all.
  *
  * Config (publicId, commentPolicy) is read from the #b4m-annotate-root mount
  * node's data-* attributes; the widget talks to /api/publish/annotations/*.
@@ -40,20 +43,125 @@ const WIDGET_JS = String.raw`(function () {
   var PENDING_TTL_MS = 300000;
   var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
 
-  function getToken() {
-    try {
-      var raw = localStorage.getItem('access-token-storage');
-      if (!raw) return null;
-      var p = JSON.parse(raw);
-      return (p && p.state && p.state.accessToken) || null;
-    } catch (e) { return null; }
+  // ---- credential ----
+  // The viewer's session lives in an HttpOnly refresh cookie; the access token is memory-only
+  // and nothing is readable from script storage (see app/hooks/useAccessToken.ts partialize).
+  // So a token is OBTAINED, not read: POST /api/auth/refreshToken exchanges the cookie, exactly
+  // as the app's own cold load (app/utils/sessionBootstrap.ts) and the gated-bundle loader shell
+  // (server/services/publish/renderBundleLoaderShell.ts) do. MUST STAY IN SYNC with those two.
+  //
+  // Acquired LAZILY, unlike the loader shell's unconditional exchange. This widget loads on every
+  // published-artifact view, and the overwhelming majority are anonymous readers of public
+  // artifacts who need no credential at all - /api/auth/refreshToken is rate-limited per IP, so
+  // an exchange on every view would let one widely-shared artifact behind a NAT exhaust the limit
+  // and break real logins from that address. Instead the token is fetched only when something
+  // actually needs it: a list request that came back gated, or the panel being opened.
+  var token = null;
+  var tokenPromise = null;
+  /**
+   * Latched once a request has 401ed with a FRESH token AND the gate-proof cookie attached -
+   * i.e. nothing this page can hold will satisfy it (a passphrase gate the viewer has not
+   * unlocked, a revoked session). Without this the retry ladder restarts on every poll, and
+   * because a token IS held each cycle takes the force branch and mints a NEW one: one exchange
+   * per poll, forever, which is precisely the rate-limit exhaustion the lazy design exists to
+   * prevent. A page reload clears it, which is the right granularity - if the viewer unlocks the
+   * gate in another tab, they reload to see comments anyway.
+   *
+   * NOTE it is a single page-lifetime latch shared by the list, can-comment and the POST, not
+   * one per endpoint: a 401 no credential can fix on any of them stops the others retrying too.
+   */
+  var authCannotFix = false;
+
+  /** Single-flight cookie exchange. Caches the NEGATIVE result too, so an anonymous viewer
+   *  makes exactly one attempt per page. The force flag re-arms it after a 401 (expired mid-session). */
+  function ensureToken(force) {
+    if (force) { token = null; tokenPromise = null; }
+    if (token) return Promise.resolve(token);
+    tokenPromise = tokenPromise || fetch(origin + '/api/auth/refreshToken', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: '{}'
+    })
+      .then(function (r) { return r.status === 200 ? r.json() : null; })
+      .then(function (d) { token = (d && d.accessToken) || null; return token; })
+      .catch(function () { token = null; return null; });
+    return tokenPromise;
   }
+
   function headers(json) {
     var h = {};
     if (json) h['Content-Type'] = 'application/json';
-    var t = getToken();
-    if (t) h['Authorization'] = 'Bearer ' + t;
+    if (token) h['Authorization'] = 'Bearer ' + token;
     return h;
+  }
+
+  /**
+   * The lowest stage known to be NECESSARY on this artifact, learned once per page. Without it
+   * the ladder is re-climbed on every request, and since stage 0 always sees a token held by
+   * then, each cycle takes the force branch and mints a fresh one - the same runaway
+   * authCannotFix exists to end, relocated out of the failure case and into the SUCCESS case.
+   * The reachable configuration is a passphrase-gated artifact the viewer has already unlocked:
+   * the proof is a cookie, so stages 0 and 1 both 401 and only stage 2 ever gets in.
+   *
+   * Only ever latches to 2, never 1. Stages 0 and 1 send byte-identical requests - headers()
+   * reads the module-level token either way - so remembering 1 would save no traffic while
+   * permanently skipping the only branch that re-exchanges a stale token, and a published
+   * artifact page routinely outlives the 30-minute access-token TTL more than once.
+   */
+  var baseStage = 0;
+
+  /**
+   * Fetch, escalating only as far as a 401 forces. This is the single place a gated artifact is
+   * discovered: the widget is never told the artifact's visibility, it learns from a 401 that
+   * the request needed something it had not yet presented.
+   *
+   *   stage 0  Bearer only, credentials omitted
+   *   stage 1  same, after obtaining/refreshing the token (a stale token is the usual 401)
+   *   stage 2  plus credentials: 'same-origin', so a passphrase gate's per-artifact proof
+   *            cookie can ride along (it is HttpOnly + SameSite=Lax + Path=/, and
+   *            requestHasGateProof reads it straight off the request)
+   *
+   * Escalating rather than sending cookies from the start keeps the OPEN-public path - the
+   * overwhelming majority of views, and the only one whose list is shared-cacheable
+   * (s-maxage=5; gated lists are no-store) - byte-for-byte as it was: those requests never
+   * 401, so they never leave stage 0 and stay cookie-free.
+   *
+   * Sending the cookie creates no auth-by-cookie path and no CSRF surface: optionalAuth
+   * authenticates ONLY from X-API-Key or Authorization: Bearer, never from a cookie.
+   *
+   * A 401 that survives stage 2 latches authCannotFix, because at that point no credential this
+   * page can produce will help and retrying is pure cost.
+   *
+   * The headers and credentials keys on init are OWNED by this function and overwritten - the
+   * whole point is that the stage decides them. Pass anything else (method, body, cache) freely.
+   */
+  function authedFetch(url, init, stage) {
+    var s = Math.max(stage || 0, baseStage);
+    // Copy rather than mutate: opts IS init when init is truthy, so writing headers/credentials
+    // onto it would scribble on the caller's object and on the retry's own input.
+    var opts = init ? Object.assign({}, init) : {};
+    opts.headers = headers(opts.method === 'POST');
+    opts.credentials = s >= 2 ? 'same-origin' : 'omit';
+    return fetch(url, opts).then(function (r) {
+      // A stage we had to climb to that WORKED is where every later request should start.
+      if (r.ok && s >= 2) baseStage = 2;
+      if (r.status !== 401 || authCannotFix) return r;
+      if (s === 0) {
+        // Force a re-exchange only when we HELD a token that went stale. Holding none means the
+        // cached negative stands, so a signed-out viewer makes one attempt per page, not one per
+        // poll.
+        return ensureToken(!!token).then(function (t) {
+          // Escalate to the cookie even with NO token: a passphrase proof needs no session
+          // (checkAccessGate admits on passphraseVerified alone), so an anonymous viewer who
+          // unlocked the gate must reach stage 2 as well.
+          return authedFetch(url, init, t ? 1 : 2);
+        });
+      }
+      if (s === 1) return authedFetch(url, init, 2);
+      authCannotFix = true;
+      return r;
+    });
   }
   // Server clock minus client clock, learned from the initial list response's Date
   // header. Timestamps come from the server but were being compared against the
@@ -176,7 +284,13 @@ const WIDGET_JS = String.raw`(function () {
     launch.appendChild(d);
   }
 
-  function openPanel() { state.open = true; render(); }
+  // Opening the panel is the first moment the composer matters, so it is where the credential
+  // is acquired on a public artifact. lastCanComment gates it to one fetch per page.
+  function openPanel() {
+    state.open = true;
+    render();
+    if (lastCanComment === null) loadCanComment();
+  }
   function closePanel() { state.open = false; panel.classList.remove('b4m-open'); ov.style.display = ''; }
 
   function render() {
@@ -250,7 +364,11 @@ const WIDGET_JS = String.raw`(function () {
       actions.appendChild(send);
       compose.appendChild(actions);
       panel.appendChild(compose);
-    } else if (policy !== 'none' && !getToken()) {
+    // Only once capability is KNOWN: openPanel renders synchronously, before the credential
+    // exists, so gating on !token alone painted "Sign in to comment" at a signed-in viewer for
+    // the round trip - the exact string this change exists to stop showing them. A genuinely
+    // signed-out viewer sees a bare footer for that beat instead, the better failure direction.
+    } else if (policy !== 'none' && !token && lastCanComment !== null) {
       var si = el('div'); si.id = 'b4m-signin';
       si.appendChild(document.createTextNode('Want to leave feedback? '));
       var a = el('a', null, 'Sign in to comment'); a.href = origin + '/login'; si.appendChild(a);
@@ -325,19 +443,38 @@ const WIDGET_JS = String.raw`(function () {
     // else did) would otherwise be served their own stale pre-comment copy. The
     // in-memory justPosted guard below cannot help here - a reload wipes it.
     // Polls keep the default cache mode, so the fan-out collapse is preserved.
-    return fetch(API, { headers: headers(false), credentials: 'omit', cache: 'no-store' })
+    //
+    // On a GATED artifact this 401s, and authedFetch obtains a credential and retries - which
+    // is how a gated artifact's comments become visible to an authorized reader at all. That
+    // failure used to be swallowed here, leaving the panel saying "No comments yet".
+    return authedFetch(API, { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); noteServerClock(r); return r.json(); })
       .then(function (data) {
         state.comments = data.annotations || [];
         policy = data.commentPolicy || policy;
         render();
       })
-      .catch(function () { /* artifact may be private to this viewer; stay quiet */ render(); });
+      .catch(function () { /* genuinely not readable by this viewer; stay quiet */ render(); });
   }
 
   function loadCanComment() {
-    fetch(CAN_API, { headers: headers(false), credentials: 'omit' })
-      .then(function (r) { return r.ok ? r.json() : null; })
+    // Needs a credential by definition (an anonymous viewer can never comment), so acquire
+    // first. Only ever called once the panel is open - see openPanel.
+    return ensureToken()
+      .then(function (t) {
+        // No session -> can-comment can only answer false, so skip the round trip. It must still
+        // RECORD that false rather than just returning: render() gates the sign-in prompt on
+        // capability being known, so leaving lastCanComment null would suppress the prompt for
+        // exactly the signed-out viewer it is meant for.
+        if (!t) {
+          state.canComment = false;
+          lastCanComment = false;
+          render();
+          return null;
+        }
+        return authedFetch(CAN_API, {});
+      })
+      .then(function (r) { return r && r.ok ? r.json() : null; })
       .then(function (data) {
         if (!data) return;
         if (data.commentPolicy) policy = data.commentPolicy;
@@ -350,13 +487,18 @@ const WIDGET_JS = String.raw`(function () {
       .catch(function () {});
   }
 
-  function load() { loadList(); loadCanComment(); }
+  // Only the LIST runs on load. can-comment is deferred to the first panel open (openPanel):
+  // it is the only thing on a public artifact that needs a credential, and a reader who never
+  // opens the panel - the common case by a wide margin - should cost zero auth traffic.
+  function load() { loadList(); }
 
   function postComment(body, anchor) {
     var payload = { body: body };
     if (anchor) payload.anchor = anchor;
-    return fetch(API, { method: 'POST', headers: headers(true), credentials: 'omit', body: JSON.stringify(payload) })
+    return authedFetch(API, { method: 'POST', body: JSON.stringify(payload) })
       .then(function (r) {
+        // authedFetch already re-exchanged the cookie and retried once, so a 401 here means the
+        // session is genuinely gone rather than merely stale.
         if (r.status === 401) throw new Error('Please sign in again');
         if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); });
         return r.json();
@@ -380,8 +522,13 @@ const WIDGET_JS = String.raw`(function () {
   function poll() {
     if (document.visibilityState !== 'visible') return;
     // Polls hit the cacheable LIST endpoint only (no per-viewer data) so the CDN
-    // can collapse the fan-out across viewers.
-    fetch(API, { headers: headers(false), credentials: 'omit' })
+    // can collapse the fan-out across viewers. Sends whatever credential we already hold and
+    // refreshes it on a 401 (the access token's TTL is far shorter than a page can stay open),
+    // but does not acquire one once the page has settled - a poll must not start auth traffic
+    // the page had not already earned by opening the panel or loading a gated list. (A poll CAN
+    // acquire in one narrow case: if loadList's first request died on a network error rather
+    // than a 401, tokenPromise is still null and stage 0's ensureToken will start an exchange.)
+    authedFetch(API, {})
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         if (!data) return;
@@ -425,7 +572,9 @@ const WIDGET_JS = String.raw`(function () {
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState !== 'visible') return;
     poll();
-    loadCanComment();
+    // Only re-check capability if we already established it once - otherwise a backgrounded
+    // tab on a public artifact whose panel was never opened would start auth traffic on refocus.
+    if (lastCanComment !== null) loadCanComment();
   });
 
   updateLaunch();

@@ -44,7 +44,7 @@ The User Ops section contains tabs focused on user and account management:
 |-----|-------------|
 | Users | Search, view, edit, and manage user accounts |
 | Email Verification | Monitor and manage email verification status |
-| Feedbacks | Review and triage user-submitted feedback |
+| Feedback | Review and triage user-submitted feedback |
 | Migration | Bulk migrate users into the platform (conditional, requires feature flag) |
 | Analytics | View user activity reports and analytics |
 | Invite Codes | Manage registration invite codes |
@@ -115,5 +115,5 @@ The Subscribers tab displays a red notification badge when there are waiting sub
 
 - [User Management](./user-management.md) - Managing user accounts
 - [Email Verification](./email-verification.md) - Email verification administration
-- [Feedbacks](./feedbacks.md) - Feedback triage and management
+- [Feedback](./feedback.md) - Feedback triage and management
 - [Analytics](./analytics.md) - Platform analytics and reporting

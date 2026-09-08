@@ -197,3 +197,23 @@ export function buildBundleScriptSrc(hostHeader?: string, forwardedProtoHeader?:
   }
   return Array.from(new Set(tokens)).join(' ');
 }
+
+/**
+ * Sandbox token list for every viewer iframe that hosts a bundle (wrapper srcdoc,
+ * Approach-B cross-origin embed, loader shell, reply `?a=` frames) and for the CSP
+ * `sandbox` directive on the documents those frames load.
+ *
+ * `allow-popups` is what lets an artifact link off-origin at all: the wrapper's
+ * `frame-src` refuses to frame another origin, so an in-frame off-origin link replaces
+ * the artifact with the browser's "content is blocked" page. `allow-popups-to-escape-sandbox`
+ * makes the opened tab a NORMAL browsing context - without it the popup inherits these
+ * flags and lands on an opaque origin, where the linked site has no cookies or storage
+ * and is unusable. The escaped tab is a plain top-level navigation the viewer could have
+ * typed themselves; the bundle cannot script it (opaque origin -> cross-origin), and
+ * `renderSandboxedBundle` adds `rel="noopener"` on top.
+ *
+ * `allow-same-origin` is NEVER part of this list - the srcdoc/reply frames must stay on an
+ * opaque origin. Approach B adds it at its own call site, where it resolves to the isolated
+ * usercontent origin rather than the app's.
+ */
+export const VIEWER_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';

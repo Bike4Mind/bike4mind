@@ -1,4 +1,10 @@
-import { IChatHistoryItemDocument, IFabFileRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IChatHistoryItemRepository,
+  IFabFileRepository,
+  ISessionRepository,
+  IUserRepository,
+  rebindPromptMetaSession,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
@@ -15,14 +21,10 @@ type SnipSessionAdapters = {
     users: Pick<IUserRepository, 'findById'>;
     sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
     fabFiles: IFabFileRepository;
-    chatHistories: {
-      findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (
-        sessionId: string,
-        timestamp: Date
-      ) => Promise<IChatHistoryItemDocument[]>;
-      findById: (id: string) => Promise<IChatHistoryItemDocument | null>;
-      create: (chat: Omit<IChatHistoryItemDocument, 'id'>) => Promise<IChatHistoryItemDocument>;
-    };
+    chatHistories: Pick<
+      IChatHistoryItemRepository,
+      'findBySessionIdAndId' | 'findAllBySessionIdAndGreaterThanOrEqualToTimestamp' | 'create'
+    >;
   };
 } & CreateSessionAdapters;
 
@@ -36,7 +38,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
   const session = await db.sessions.findByIdAndUserId(sessionId, userId);
   if (!session) throw new NotFoundError('Session not found');
 
-  const message = await db.chatHistories.findById(messageId);
+  const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
 
   const newSession = await createSession(
@@ -47,6 +49,13 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       tags: session.tags,
       summary: session.summary,
       summaryAt: session.summaryAt,
+      // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
+      // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
+      // threaded to this path), which cannot see a teammate-authored organization-lake file. That
+      // derives an EMPTY list, and an empty list is not a narrow scope - fabFileSearchQuery skips its
+      // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
+      // takes createSession's "explicit wins" arm, so it costs no DB read.
+      retrievalTags: session.retrievalTags,
     },
     adapters
   );
@@ -57,10 +66,13 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
   );
 
   await Promise.all(
-    messagesToSnip.map(async ({ id, ...messageData }) => {
+    messagesToSnip.map(async ({ id, promptMeta, ...messageData }) => {
       await db.chatHistories.create({
         ...messageData,
         sessionId: newSession.id,
+        // See forkSession: create() validates promptMeta.session.{id,userId} and the live
+        // update() path does not, so a copied quest must bring its own session block.
+        promptMeta: rebindPromptMetaSession(promptMeta, { sessionId: newSession.id, userId }),
       });
     })
   );

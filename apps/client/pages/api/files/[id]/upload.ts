@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFilesStorage } from '@server/utils/storage';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import type { Request, Response } from 'express';
 
 /**
@@ -87,7 +88,14 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
 
     // Same reason the status write does not wait for the webhook: the PUT succeeded, so the file
     // is really in its lakes now. The webhook's own recompute, when it arrives, is idempotent.
-    await recomputeStatsForUploadedFile(fabFile, { logger: req.logger });
+    await recomputeStatsForUploadedFile(fabFile, {
+      logger: req.logger,
+      actor: {
+        userId: req.user!.id,
+        isAdmin: !!req.user!.isAdmin,
+        auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
+      },
+    });
 
     return res.status(200).json({ ok: true, fabFileId: fabFile.id });
   })

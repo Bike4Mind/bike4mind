@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import { IGroupShare, IShareableStaticMethods, IUserDocument, IUserShare, Permission } from '@bike4mind/common';
+import { usableObjectIds } from '../../utils/mongo';
 
 export const GroupShareableSchema = new Schema<IGroupShare>({
   groupId: { type: String, required: true },
@@ -79,9 +80,17 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
     });
   }
 
+  /**
+   * Ids reach here from `session.knowledgeIds` and `project.fileIds`/`sessionIds`, all declared
+   * `[{ type: String }]` - see usableObjectIds. Guarded here rather than in the nine callers
+   * (projectService add/remove files|sessions|systemPrompts, fabFileService list|toggleTags,
+   * sessionService update), since /api/files/byIds turns the CastError into a 404 on the
+   * notebook file list. Every `shareable` repository shares this method - Session, FabFile,
+   * Project, Agent, Skill, Tool, Organization - and all of them are ObjectId-keyed.
+   */
   async findAllAccessibleByIds(user: IUserDocument, ids: string[]): Promise<T[]> {
     return this.model.where({
-      _id: { $in: ids },
+      _id: { $in: usableObjectIds(ids, `${this.model.modelName}.findAllAccessibleByIds`) },
       $or: [
         { userId: user.id },
         { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },

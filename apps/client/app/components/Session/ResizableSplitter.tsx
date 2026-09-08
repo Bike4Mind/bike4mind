@@ -1,6 +1,5 @@
 import React, { useCallback, useState, useTransition } from 'react';
-import { Box, Tooltip } from '@mui/joy';
-import { DragIndicator } from '@mui/icons-material';
+import { Box } from '@mui/joy';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 
 interface ResizableSplitterProps {
@@ -54,7 +53,9 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         const parentRect = parent.getBoundingClientRect();
         const deltaX = e.clientX - dragState.startX;
         const deltaPercent = (deltaX / parentRect.width) * 100;
-        const newWidth = Math.max(20, Math.min(80, dragState.startWidth + deltaPercent));
+        // Minus, not plus: SessionContainer renders the split row-reversed, so the viewer
+        // sits to the RIGHT of this handle and dragging right has to shrink it.
+        const newWidth = Math.max(20, Math.min(80, dragState.startWidth - deltaPercent));
 
         dragState.currentWidth = newWidth;
 
@@ -98,8 +99,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
   return (
     <Box
       sx={{
-        width: '12px',
-        marginX: '-3px',
+        // Negative margin so the handle overlaps BOTH panes evenly and reads as the boundary
+        // between them rather than as chrome belonging to either pane.
+        width: '8px',
+        marginX: '-6px',
         cursor: 'col-resize',
         display: 'flex',
         alignItems: 'center',
@@ -107,41 +110,30 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         position: 'relative',
         zIndex: 10,
         touchAction: 'none', // Prevent touch scrolling during drag
+        // The visible mark is a short centered bar, not a full-height rule. It lives on
+        // ::before so the element itself stays a full-height 8px grab strip -- a 2px-wide
+        // hit area would be near-impossible to catch with a pointer.
         '&::before': {
           content: '""',
           position: 'absolute',
-          top: 0,
-          bottom: 0,
+          top: '50%',
           left: '50%',
-          transform: 'translateX(-50%)',
-          width: '1px',
+          transform: 'translate(-50%, -50%)',
+          width: '2px',
+          height: '32px',
           backgroundColor: 'divider',
-          transition: 'all 0.2s ease',
+          transition: 'background-color 0.2s ease',
         },
         '&:hover::before, &[data-dragging="true"]::before': {
-          width: '3px',
-          backgroundColor: 'primary.main',
+          // primary.500, not primary.main: Joy's palette has no `main` key (that is Material
+          // UI), so the string falls through as an invalid CSS value and nothing happens.
+          backgroundColor: 'primary.500',
         },
       }}
       onPointerDown={handlePointerDown}
       data-dragging={isDragging}
-    >
-      <Tooltip title="Drag to resize" placement="top">
-        <DragIndicator
-          sx={{
-            fontSize: '16px',
-            color: isDragging ? 'primary.main' : 'text.secondary',
-            opacity: isDragging ? 1 : 0.6,
-            transform: 'rotate(90deg)',
-            transition: 'all 0.2s ease',
-            pointerEvents: 'none',
-            '&:hover': {
-              opacity: 1,
-            },
-          }}
-        />
-      </Tooltip>
-    </Box>
+      aria-label="Drag to resize"
+    />
   );
 };
 

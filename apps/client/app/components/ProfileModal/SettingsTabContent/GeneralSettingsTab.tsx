@@ -41,6 +41,7 @@ import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyle
 import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
+import ActiveSessionsSection from './ActiveSessionsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
@@ -546,6 +547,8 @@ const GeneralSettingsTab = () => {
               </Box>
             </Grid>
           </Grid>
+
+          <ActiveSessionsSection />
         </SectionContainer>
       </Box>
 

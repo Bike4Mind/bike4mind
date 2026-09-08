@@ -3,7 +3,7 @@ import { websocketApi } from './websocket';
 import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
-import { router } from './router';
+import { appUrlForLambdaEnv } from './router';
 
 /**
  * Email Marketing Infrastructure
@@ -39,7 +39,7 @@ export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // APP_URL is needed for tracking links in emails
-      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
   },
   {

@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
+import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
+import { BFLSafetyToleranceSchema } from './schemas/bfl';
+import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -58,6 +61,10 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
+  safety_tolerance: BFLSafetyToleranceSchema,
+  prompt_upsampling: z.boolean().optional(),
+  seed: z.number().nullable().optional(),
+  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
   intent: PromptIntentSchema.optional(),
   promptEnhancement: z
@@ -89,6 +96,35 @@ export const GenerateImageToolCallSchema = OpenAIImageGenerationInput.extend({
   prompt: true,
 });
 export type GenerateImageToolCall = z.infer<typeof GenerateImageToolCallSchema>;
+
+/**
+ * Current audio-generation selections threaded into chat dispatch so the
+ * `audio_generation` tool has defaults without the model having to pick a
+ * provider/voice. Mirrors how `imageConfig` (GenerateImageToolCall) threads the
+ * image selections. Assembled client-side from the `useAudioGenSettings` store
+ * (the single source of truth - see #1055/PR #1183); every field is optional so
+ * the tool falls back to its own defaults when a caller sends nothing.
+ */
+export const AudioGenerationToolCallSchema = z.object({
+  /** TTS provider for speech. Defaults to openai when unset. */
+  ttsProvider: supportedVoiceGenerationVendor.optional(),
+  /** Provider voice id/name; empty/unset falls back to the provider default. */
+  voice: z.string().optional(),
+  /** Output container for speech. Defaults to mp3. */
+  format: voiceOutputFormatSchema.optional(),
+  /** ISO 639-1 language pin for ElevenLabs speech; unset lets the provider auto-detect. */
+  languageCode: z.string().optional(),
+  /**
+   * Sound-effect clip length in seconds; null/unset lets the provider auto-select.
+   * Bounded to the same 0.5-30 range the direct sound-effects endpoint enforces
+   * (`soundGeneration.ts`) so a crafted client can't ship a huge duration that
+   * scales the per-second credit charge linearly.
+   */
+  durationSeconds: z.number().min(0.5).max(30).nullable().optional(),
+  /** Sound-effect prompt adherence (0-1), matching the direct endpoint's bound. */
+  promptInfluence: z.number().min(0).max(1).optional(),
+});
+export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSchema>;
 
 export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -148,6 +184,7 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   /** Epoch ms when the client submitted the prompt (for the request-lifecycle status log). */
   clientSubmittedAt: z.number().optional(),
   imageConfig: GenerateImageToolCallSchema.optional(),
+  audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
       maxDepth: z.number().optional(),
@@ -185,6 +222,16 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * in-app completion wants. See PROMPT_MODE_SOURCES in services/llm/systemPromptSources.
    */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /**
+   * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
+   * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm.
+   *
+   * This cap is the universal backstop, not a duplicate of a route check: the parse that opens
+   * invoke() runs outside any try and before a quest row is written, so it holds for every caller
+   * including ones that pass through no route schema. Do not drop it on the assumption that
+   * whoever called validated first.
+   */
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */

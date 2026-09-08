@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { assertUniqueOperations } from './assertUniqueOperations';
+import { CONTRACTS } from '../api-contract';
 
 describe('assertUniqueOperations', () => {
   it('accepts a set of distinct operations', () => {
@@ -49,5 +50,13 @@ describe('assertUniqueOperations', () => {
         { operationId: '', method: 'get', path: '/api/b' },
       ])
     ).toThrow(/Duplicate operationId/);
+  });
+
+  // This guard is load-bearing on the real surface (operations.ts), but every case
+  // above is synthetic - so nothing proved the published contracts satisfy it.
+  it('accepts the real published surface', () => {
+    expect(() =>
+      assertUniqueOperations(CONTRACTS.map(c => ({ operationId: c.operationId, method: c.method, path: c.path })))
+    ).not.toThrow();
   });
 });

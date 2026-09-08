@@ -4,8 +4,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { getSettingsByNames } from '@bike4mind/utils';
-
-const BACKEND_TIMEOUT_MS = 2_000;
+import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
 
 // Short floor for cross-tab / fresh page loads. The dominant repeat-open case is
 // already absorbed by useModelInfo's 1h client staleTime; this just bounds how
@@ -26,13 +25,7 @@ async function buildModelsResponse(userId: string | null) {
   // provider missing from the table is a provider no user can select.
   const apiKeys = buildApiKeyTable(coreKeys);
 
-  const models = await getAvailableModels(apiKeys, {
-    perBackendTimeoutMs: BACKEND_TIMEOUT_MS,
-    // The picker is the one consumer that must not see private models; every
-    // other getAvailableModels caller resolves pinned private models by id.
-    includePrivate: false,
-    isSelfHost: process.env.B4M_SELF_HOST === 'true',
-  });
+  const models = await getAvailableModels(apiKeys, modelCatalogListingOptions());
 
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
   // through the same catalog-overlay-then-static-map chain a pinned request takes.

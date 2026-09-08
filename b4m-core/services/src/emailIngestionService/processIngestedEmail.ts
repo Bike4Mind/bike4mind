@@ -180,6 +180,7 @@ export async function processIngestedEmail(
           fabFiles: adapters.db.fabFiles,
           adminSettings: adapters.db.adminSettings,
           users: adapters.db.users,
+          dataLakes: adapters.db.dataLakes,
         },
       },
       validated.organizationId
@@ -198,6 +199,7 @@ export async function processIngestedEmail(
           fabFiles: adapters.db.fabFiles,
           adminSettings: adapters.db.adminSettings,
           users: adapters.db.users,
+          dataLakes: adapters.db.dataLakes,
         },
       },
       validated.organizationId

@@ -102,6 +102,11 @@ const PublishedArtifactSchema = new Schema(
 
     title: { type: String, required: true, maxlength: 200 },
     description: { type: String, maxlength: 1000 },
+    // Freeform owner labels. Normalized (trimmed/collapsed/lowercased, deduped, capped) by
+    // normalizePublishTags at every write site, so the stored form is canonical and the filter
+    // can be a plain equality match. No `index: true` here per the repo's index guidelines - the
+    // multikey index is declared with the others at the bottom.
+    tags: { type: [String], default: [] },
 
     visibility: {
       type: String,
@@ -234,6 +239,13 @@ PublishedArtifactSchema.index({ 'source.artifactId': 1, ownerId: 1, deletedAt: 1
 PublishedArtifactSchema.index({ publishedAt: -1 }); // recency
 PublishedArtifactSchema.index({ moderationStatus: 1, reportCount: -1 }); // admin moderation queue
 PublishedArtifactSchema.index({ tier: 1, scopeId: 1, deletedAt: 1 }); // org-scope quota aggregation
+// Multikey over tags[] for the management tab's tag filter, which is owner-scoped - hence the
+// ownerId prefix. Its rows+total query applies the filter in a LEADING $match for exactly this
+// reason; a narrowing inside a $facet sub-pipeline cannot reach an index at all.
+// NOT for the tag-vocabulary lookup: that one matches { ownerId, deletedAt } with no tag predicate,
+// which { ownerId: 1, deletedAt: 1 } above serves - and serves better, since deletedAt there does
+// not sit behind a multikey field.
+PublishedArtifactSchema.index({ ownerId: 1, tags: 1, deletedAt: 1 });
 
 PublishedArtifactSchema.virtual('isDeleted').get(function () {
   return this.deletedAt != null;

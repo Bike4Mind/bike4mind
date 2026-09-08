@@ -79,7 +79,15 @@ const handler = baseApi().get(
 
     const isDeveloper = hasDeveloperUserTag(tags);
 
-    const rows: EntitlementRow[] = allKnownEntitlementKeys().map(key => {
+    // The catalog (`allKnownEntitlementKeys`) deliberately excludes pattern-matched families
+    // like `datalake:<slug>` (see registry.ts) - there is no fixed row to list. Widen the
+    // reported key set to also cover any partner-granted key outside the catalog, so a
+    // `datalake:` grant still gets a row (with its real sources, bypass included) instead of
+    // being invisible to this "why does this user have access" report.
+    const knownKeys = allKnownEntitlementKeys();
+    const reportedKeys = [...knownKeys, ...[...partnerKeys].filter(key => !knownKeys.includes(key))];
+
+    const rows: EntitlementRow[] = reportedKeys.map(key => {
       const sources: EntitlementSource[] = [];
 
       for (const tag of tags) {

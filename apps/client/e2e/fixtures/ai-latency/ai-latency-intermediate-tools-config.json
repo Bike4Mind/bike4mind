@@ -14,12 +14,14 @@
     {
       "id": "childrens-storybook",
       "prompt": "Make a 10-page children's story book with a picture for the cover and each page",
-      "expectedKeywords": ["page", "story", "once upon", "illustration", "children"]
+      "expectedKeywords": ["page", "story", "once upon", "illustration", "children"],
+      "generatesArtifact": true
     },
     {
       "id": "taipei-night-markets",
       "prompt": "Create an article about the 3 most popular night markets in Taipei and add images for each market",
-      "expectedKeywords": ["Shilin", "Raohe", "Tonghua", "night market", "Taipei"]
+      "expectedKeywords": ["Shilin", "Raohe", "Tonghua", "night market", "Taipei"],
+      "generatesArtifact": true
     },
     {
       "id": "smartphone-comparison",

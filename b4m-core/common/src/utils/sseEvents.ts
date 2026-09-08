@@ -36,6 +36,15 @@ export interface SSEContentEvent {
    * `X-B4M-Response-Format-Mode` HTTP header semantics for the SSE channel.
    */
   responseFormatMode?: 'native' | 'tool_use' | 'best-effort';
+  /**
+   * Why generation stopped, on the terminal event of a stream. Normalized to the
+   * `CompletionInfo.stopReason` vocabulary (see llm-adapters/stopReason.ts), so
+   * 'max_tokens' means the reply was CUT OFF rather than finished. Without this on the
+   * wire a truncated answer is indistinguishable from a complete one, which is exactly
+   * how a starved output budget stayed invisible to CLI users. Absent on interim
+   * chunks and whenever the provider reports nothing.
+   */
+  stopReason?: string;
 }
 
 export interface SSEErrorEvent {
@@ -88,6 +97,11 @@ export interface CompletionInfo {
    * How the backend honored response_format ('native' | 'tool_use' | 'best-effort').
    */
   responseFormatMode?: 'native' | 'tool_use' | 'best-effort';
+  /**
+   * Why generation stopped, in the vocabulary normalized by llm-adapters/stopReason.ts.
+   * Mirrored onto SSEContentEvent.stopReason by buildSSEEvent.
+   */
+  stopReason?: string;
 }
 
 /**
@@ -106,7 +120,12 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   };
 
   if (info?.toolsUsed && info.toolsUsed.length > 0) {
-    event.tools = info.toolsUsed;
+    // Project rather than pass the array through by reference: toolsUsed is re-emitted on
+    // every streaming callback (not just the terminal one), and once a backend attaches a
+    // returnValue (up to several KB, see recordToolResult) that reference would put the full
+    // tool output on every SSE frame. SSEContentEvent.tools is the declared wire contract and
+    // stays narrow regardless of what CompletionInfo.toolsUsed later grows.
+    event.tools = info.toolsUsed.map(t => ({ name: t.name, arguments: t.arguments, id: t.id }));
   }
 
   if (
@@ -136,6 +155,10 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
 
   if (info?.responseFormatMode) {
     event.responseFormatMode = info.responseFormatMode;
+  }
+
+  if (info?.stopReason) {
+    event.stopReason = info.stopReason;
   }
 
   return event;

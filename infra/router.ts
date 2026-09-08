@@ -204,6 +204,27 @@ export function cdnUrlForLambdaEnv() {
 // Export router for other infrastructure to use
 export const router = routerInstance;
 
+/**
+ * `router.url` with any trailing slash removed, so APP_URL is always a bare origin.
+ *
+ * `Router.url` can carry a trailing slash. Every consumer of APP_URL treats it as an
+ * origin and appends its own path, so the slash is wrong everywhere it lands:
+ *
+ *   - `csrfProtection` compares it against `new URL(header).origin`, which is always
+ *     normalized. A trailing slash makes the allow-list entry unmatchable, so every
+ *     state-changing request is rejected while reads keep working.
+ *   - `auth.ts` builds OAuth and SAML callback URLs as `APP_URL + '/api/auth/...'`,
+ *     producing a double slash. Providers match callback URLs exactly.
+ *   - `oauthServer.ts` uses it as the OIDC issuer, where the exact string is a
+ *     spec-level identity rather than a formatting detail.
+ *
+ * Normalizing once here keeps all four injection sites agreeing on one value, rather
+ * than each deciding for itself.
+ */
+export function appUrlForLambdaEnv() {
+  return routerInstance.url.apply(u => u.replace(/\/+$/, ''));
+}
+
 export const whatsNewDistributionId = new sst.Linkable('whatsNewDistributionId', {
   properties: {
     value: router.distributionID,

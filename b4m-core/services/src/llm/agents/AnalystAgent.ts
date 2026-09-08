@@ -6,7 +6,7 @@ export const AnalystAgent = (config?: ServerAgentConfig): ServerAgentDefinition 
   description:
     'Data analysis, pattern recognition, metrics, and business insights. Delegate when users ask for analysis, trends, metrics, or data-driven questions.',
   model: config?.model ?? ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
-  fallbackModels: [ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
+  fallbackModels: [ChatModels.CLAUDE_4_6_SONNET, ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
   defaultThoroughness: config?.defaultThoroughness ?? 'medium',
   maxIterations: { quick: 3, medium: 5, very_thorough: 15 },
   deniedTools: ['image_generation', 'edit_image', 'delegate_to_agent', ...(config?.extraDeniedTools ?? [])],

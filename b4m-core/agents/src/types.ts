@@ -82,6 +82,14 @@ export interface AgentResult {
     reachedMaxIterations: boolean;
     /** Whether the cumulative token ceiling (maxTotalTokens) was reached */
     reachedMaxTotalTokens?: boolean;
+    /**
+     * Provider stop reason of the last completion, in the normalized vocabulary shared via
+     * `@bike4mind/common` (isEarlyStop / EARLY_STOP_FINISH_REASONS). Already tracked
+     * internally for the checkpoint's `finishReason`; surfaced here so a non-chat caller
+     * can tell a finished answer from one cut off against the output ceiling. Undefined
+     * when the backend reported nothing.
+     */
+    finishReason?: string;
     /** Average confidence score across all tool executions (0.0 - 1.0) */
     averageConfidence?: number;
     /** Minimum confidence score encountered during execution */
@@ -112,7 +120,12 @@ export interface AgentContext {
   tools: ICompletionOptionTools[];
   /** Maximum number of reasoning iterations (default: 50) */
   maxIterations?: number;
-  /** Maximum tokens per completion (default: 4096) */
+  /**
+   * Maximum tokens per completion. Leave unset unless the caller genuinely wants a
+   * specific ceiling: absence is meaningful and lets the server size the budget for
+   * the model (see resolveOutputMaxTokens). Pinning a small number here starves
+   * models that spend reasoning tokens inside the output budget.
+   */
   maxTokens?: number;
   /**
    * Cumulative cap on total tokens (input + output) across the entire run.

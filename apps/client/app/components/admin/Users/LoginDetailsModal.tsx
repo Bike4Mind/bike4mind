@@ -1,6 +1,7 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import React from 'react';
 import { Box, Card, DialogContent, Modal, ModalDialog, Typography, Divider, Stack, Avatar } from '@mui/joy';
-import { ILoginRecord, IUserDocument, WithOrgRef } from '@bike4mind/common';
+import { ILoginRecord } from '@bike4mind/common';
 import PersonIcon from '@mui/icons-material/Person';
 import BusinessIcon from '@mui/icons-material/Business';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
@@ -20,7 +21,7 @@ import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 interface LoginDetailsModalProps {
   open: boolean;
   onClose: () => void;
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
   lastLoginRecord: ILoginRecord | undefined;
 }
 

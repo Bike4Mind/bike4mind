@@ -4,6 +4,7 @@ import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
+import { MemberCreditCapError } from '../../creditService';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -276,6 +277,18 @@ export interface ServerOrchestratorDeps {
    * child's tool list to enforce the UI depth cap. Defaults to 1.
    */
   depth?: number;
+  /**
+   * Returns true when the delegating user is at or over their organization's
+   * per-member credit cap. Checked before any in-process delegation starts -
+   * unlike the Lambda-dispatched path (`processSubagentDispatch`), an in-process
+   * run has no separate pre-flight gate of its own. Omitted (no-op) by callers
+   * with no organization context (Slack, voice API, embed) or that already gate
+   * the whole request upstream (ChatCompletionProcess's credit reservation).
+   * May return a Promise: a caller whose only fresh usage figure lives in the
+   * database (rather than an in-memory snapshot already known not to be stale)
+   * needs to read it at call time, not just close over one fetched earlier.
+   */
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -324,11 +337,91 @@ export class ServerSubagentOrchestrator {
     this.deps = deps;
   }
 
+  /**
+   * Pick the model a subagent runs on, together with a backend that can serve it.
+   *
+   * The two must always travel together. Pairing a model id with a provider that
+   * cannot serve it - e.g. an agent defaulting to a Bedrock inference-profile id
+   * (`global.anthropic.*`) on a deployment whose catalog carries only the
+   * direct-vendor rows - sends a foreign id to the parent's provider, which
+   * rejects it (404 not_found_error) and kills the subagent before its first
+   * step. So we walk `fallbackModels` and finally degrade to the parent's model
+   * as well as its backend. Degrading is always preferable: a subagent on a
+   * weaker model still returns work, whereas a 404 loses the whole delegation.
+   *
+   * `resolveBackend` signals "not serviceable" three ways, all treated alike:
+   * null (no catalog row backs the id), `UnsupportedAdapterFamilyError` (a
+   * family this build cannot construct - deliberately loud so it is not confused
+   * with a missing credential), and `<provider> API key is expired`. The latter
+   * two THROW, so the loop catches per candidate - letting one escape would
+   * discard every remaining rung including the degradation this exists for.
+   * See `getLlmByModel` + `backendForAdapterFamily` in @bike4mind/llm-adapters.
+   */
+  private resolveAgentRuntime(agentDef: ServerAgentDefinition): { llm: ICompletionBackend; model: string } {
+    const parent = { llm: this.deps.llm, model: this.deps.llm.currentModel };
+    if (!agentDef.model || agentDef.model === parent.model) return parent;
+
+    // No resolver wired: serviceability can't be tested, so keep the historical
+    // same-provider assumption. Every production construction site now passes one
+    // (delegateToAgent, coordinateTask, and the dispatched-subagent handler), so
+    // this is the harness/test path - if a new caller omits it, an agent on a
+    // foreign model id reaches this branch and 404s exactly as before.
+    if (!this.deps.resolveBackend) return { llm: parent.llm, model: agentDef.model };
+
+    const candidates = [agentDef.model, ...(agentDef.fallbackModels ?? [])];
+    for (const model of candidates) {
+      // The parent's own backend already serves this id; no need to build another.
+      if (model === parent.model) return parent;
+      let backend: ICompletionBackend | null;
+      try {
+        backend = this.deps.resolveBackend(model);
+      } catch (err) {
+        // An expired key or unknown adapter family means this candidate is not
+        // serviceable here - the same signal as null, so keep walking.
+        this.deps.logger.warn(
+          `🤖⚠️ [SubagentOrchestrator] "${model}" is not serviceable ` +
+            `(${err instanceof Error ? err.message : String(err)}); trying the next candidate`
+        );
+        continue;
+      }
+      if (!backend) continue;
+      backend.currentModel = model;
+      if (model === agentDef.model) {
+        this.deps.logger.info(
+          `🤖🔄 [SubagentOrchestrator] Resolved fresh backend for agent model "${model}" ` +
+            `(parent uses "${parent.model}")`
+        );
+      } else {
+        this.deps.logger.warn(
+          `🤖⚠️ [SubagentOrchestrator] "${agentDef.model}" is not serviceable; ` +
+            `"${agentDef.name}" falling back to "${model}"`
+        );
+      }
+      return { llm: backend, model };
+    }
+
+    this.deps.logger.warn(
+      `🤖⚠️ [SubagentOrchestrator] No serviceable model for "${agentDef.name}" ` +
+        `(tried ${candidates.join(', ')}); running on the parent's model "${parent.model}"`
+    );
+    return parent;
+  }
+
   async delegateToAgent(options: ServerSpawnOptions): Promise<ServerAgentExecutionResult> {
     const { task, agentDef, thoroughness, variables, attachedFiles } = options;
 
-    // Use the agent's preferred model if specified, fall back to parent's model
-    const effectiveModel = agentDef.model || this.deps.llm.currentModel;
+    if (await this.deps.checkMemberCreditCap?.()) {
+      this.deps.logger.warn('[Credits] Member credit cap reached; refusing in-process delegation', {
+        agent: agentDef.name,
+      });
+      throw new MemberCreditCapError();
+    }
+
+    // Resolved BEFORE the dispatch decision below: the Lambda paths persist
+    // `effectiveModel` on the child doc, and the child re-resolves its backend
+    // from that id alone - so an unserviceable id has to be replaced here or
+    // the child Lambda dies on "Failed to create LLM backend".
+    const { llm: effectiveLlm, model: effectiveModel } = this.resolveAgentRuntime(agentDef);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
 
@@ -375,26 +468,6 @@ export class ServerSubagentOrchestrator {
     if (variables) {
       for (const [key, value] of Object.entries(variables)) {
         systemPrompt = systemPrompt.split(`$${key}`).join(value);
-      }
-    }
-
-    // Resolve the LLM backend: if the agent's model differs from the parent's,
-    // create a fresh backend for the correct provider (e.g., Bedrock vs OpenAI).
-    let effectiveLlm = this.deps.llm;
-    if (agentDef.model && agentDef.model !== this.deps.llm.currentModel && this.deps.resolveBackend) {
-      const agentBackend = this.deps.resolveBackend(agentDef.model);
-      if (agentBackend) {
-        agentBackend.currentModel = agentDef.model;
-        effectiveLlm = agentBackend;
-        this.deps.logger.info(
-          `🤖🔄 [SubagentOrchestrator] Resolved fresh backend for agent model "${agentDef.model}" ` +
-            `(parent uses "${this.deps.llm.currentModel}")`
-        );
-      } else {
-        this.deps.logger.warn(
-          `🤖⚠️ [SubagentOrchestrator] Could not resolve backend for "${agentDef.model}", ` +
-            `falling back to parent's backend ("${this.deps.llm.currentModel}")`
-        );
       }
     }
 
@@ -692,7 +765,11 @@ export class ServerSubagentOrchestrator {
       );
     }
 
-    const effectiveModel = agentDef.model || this.deps.llm.currentModel;
+    // Same resolution as the sync path: the background child re-resolves its
+    // backend from the persisted model id, so it must be one this deployment
+    // can actually serve. The backend built here is discarded - the child
+    // Lambda constructs its own.
+    const { model: effectiveModel } = this.resolveAgentRuntime(agentDef);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
 
