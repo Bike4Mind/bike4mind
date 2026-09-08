@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import {
   DATA_LAKES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
-  STRANDED_LAKE_CUTOFF_MS,
+  strandedCutoffMsFor,
   UpdateDataLakeRequestInput,
   type AccessContext,
+  type DataLakeStatus,
   type IDataLakeDocument,
   type IDataLakeBatchDocument,
 } from '@bike4mind/common';
@@ -3934,9 +3935,11 @@ describe('terminal lifecycle settles are conditional on the claimed transitional
 });
 
 describe('listTransitionalDataLakes - the only list a stranded lake appears in', () => {
-  const STALE = new Date(Date.now() - STRANDED_LAKE_CUTOFF_MS - 1_000);
+  // Per status, since `purging` sweeps on a queue consumer and gets a longer cutoff than the four
+  // that run inline in the request Lambda.
+  const staleFor = (status: DataLakeStatus) => new Date(Date.now() - strandedCutoffMsFor(status) - 1_000);
   const stranded = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
-    lake({ updatedAt: STALE, ...overrides });
+    lake({ updatedAt: staleFor(overrides.status ?? 'archiving'), ...overrides });
   const dbWith = (lakes: IDataLakeDocument[]) => ({
     dataLakes: { findAccessible: vi.fn().mockResolvedValue(lakes), find: vi.fn() },
   });
@@ -3973,8 +3976,23 @@ describe('listTransitionalDataLakes - the only list a stranded lake appears in',
     expect(listed.map(l => l.id)).toEqual(['lake1']);
   });
 
+  // The one transitional status whose work does NOT run inline in the request Lambda: it is swept
+  // on the cleanup consumer (12-minute visibility x 3 attempts), so the inline cutoff would flag a
+  // healthy long purge in a list whose whole meaning is "something is wrong".
+  it('holds a purging lake past the inline cutoff, and lists it only past the consumer budget', async () => {
+    const midSweep = lake({ status: 'purging', updatedAt: new Date(Date.now() - 6 * 60_000) });
+    expect(await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([midSweep]) })).toEqual([]);
+
+    const abandoned = stranded({ status: 'purging' });
+    const listed = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([abandoned]) });
+    expect(listed.map(l => l.id)).toEqual(['lake1']);
+  });
+
   it('accepts an ISO-string timestamp, not only a Date', async () => {
-    const wireShaped = stranded({ status: 'deleting', updatedAt: STALE.toISOString() as unknown as Date });
+    const wireShaped = stranded({
+      status: 'deleting',
+      updatedAt: staleFor('deleting').toISOString() as unknown as Date,
+    });
     const result = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([wireShaped]) });
     expect(result).toHaveLength(1);
   });

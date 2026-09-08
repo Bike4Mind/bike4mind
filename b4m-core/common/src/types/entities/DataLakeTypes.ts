@@ -133,13 +133,23 @@ export const resolveRetryAction = (lake: {
 };
 
 /**
- * How long a lake may sit in a transitional status before it counts as stranded rather than busy.
- * Measured against `updatedAt`, which is the only status-move signal on the document today - any
- * other write to the lake bumps it too, so a background writer touching a mid-transition lake can
- * reset this clock. A dedicated `statusChangedAt` stamped by each lifecycle claim is the durable
- * fix.
+ * How long a lake may sit in this transitional status before it counts as stranded rather than
+ * busy. Measured against `updatedAt`, which is the only status-move signal on the document today -
+ * any other write to the lake bumps it too, so a background writer touching a mid-transition lake
+ * can reset this clock. A dedicated `statusChangedAt` stamped by each lifecycle claim is the
+ * durable fix.
+ *
+ * Two values, because the transitional statuses do not share one execution ceiling. Four of them
+ * run inline in the request Lambda, capped at 60 seconds (infra/web.ts), so five minutes is well
+ * past any window in which one can still legitimately be in flight. `purging` is the exception: it
+ * is claimed at accept time and swept on the data-lake cleanup consumer, whose queue allows a
+ * 12-minute visibility timeout x 3 attempts (infra/queues.ts), so a healthy sweep of a large lake -
+ * or one SQS is legitimately retrying - can still be running more than half an hour in. Flagging
+ * that would cry wolf on a normal path in a list whose whole value is that a row in it means
+ * something is wrong, and `purging` is offered no retry to act on anyway.
  */
-export const STRANDED_LAKE_CUTOFF_MS = 5 * 60_000;
+export const strandedCutoffMsFor = (status: DataLakeStatus): number =>
+  status === 'purging' ? 40 * 60_000 : 5 * 60_000;
 
 /**
  * One lake stranded mid-lifecycle, as `listTransitionalDataLakes` and the needs-attention list

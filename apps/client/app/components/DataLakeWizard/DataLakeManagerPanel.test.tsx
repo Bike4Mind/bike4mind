@@ -1275,6 +1275,20 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
     expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('archiving');
   });
 
+  // The service deliberately lists a lake whose `updatedAt` it could not parse (an absent
+  // timestamp proves nothing about being busy), so the tooltip must not then advertise the gap.
+  it('drops the since clause for a lake with an unparseable timestamp', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({
+      data: [{ ...strandedLake('archiving', 'stuck', 'archive'), updatedAt: undefined }],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.hover(screen.getByTestId('datalake-transitional-status-stuck'));
+    expect(await screen.findByText("In 'archiving'")).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
+  });
+
   it('retries with the action the row carries, not one derived from the status', async () => {
     useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('deleting', 'stuck', 'delete')] });
     const user = userEvent.setup();

@@ -544,22 +544,26 @@ export default function ManagerNav({
                 testid="datalake-transitional-section"
                 lakes={strandedLakes}
                 hoverBg={hoverBg}
-                renderRowTrailing={lake => (
-                  <Tooltip
-                    title={`In '${lake.status}' since ${new Date(lake.updatedAt).toLocaleString()}`}
-                    placement="top"
-                  >
-                    <Chip
-                      size="sm"
-                      variant="soft"
-                      color="warning"
-                      sx={COUNT_CHIP_SX}
-                      data-testid={`datalake-transitional-status-${lake.id}`}
-                    >
-                      {lake.status}
-                    </Chip>
-                  </Tooltip>
-                )}
+                renderRowTrailing={lake => {
+                  // The service deliberately lists a lake whose `updatedAt` is missing or
+                  // unparseable, so the `since` clause is dropped rather than rendering
+                  // "since Invalid Date" - the row's presence is the signal, not the stamp.
+                  const movedAt = new Date(lake.updatedAt).getTime();
+                  const since = Number.isNaN(movedAt) ? '' : ` since ${new Date(movedAt).toLocaleString()}`;
+                  return (
+                    <Tooltip title={`In '${lake.status}'${since}`} placement="top">
+                      <Chip
+                        size="sm"
+                        variant="soft"
+                        color="warning"
+                        sx={COUNT_CHIP_SX}
+                        data-testid={`datalake-transitional-status-${lake.id}`}
+                      >
+                        {lake.status}
+                      </Chip>
+                    </Tooltip>
+                  );
+                }}
                 // Withheld for a row the server named no retry action for (a purge, whose sweep is
                 // already accepted and irreversible, or a 'restoring' lake whose axis is not
                 // provable), which leaves that row status-only - the section drops its menu trigger

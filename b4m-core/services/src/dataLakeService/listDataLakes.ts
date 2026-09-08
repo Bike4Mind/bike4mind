@@ -14,7 +14,7 @@ import type {
 import {
   DATA_LAKES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
-  STRANDED_LAKE_CUTOFF_MS,
+  strandedCutoffMsFor,
   resolveRetryAction,
   toDataLakeConfig,
   lakeMatchesAccess,
@@ -535,8 +535,9 @@ export const listDeletedDataLakes = async (
  *   nothing with the row. Filtering on `canManageLake` here also means nothing needs redacting.
  * - includePublic:false, for the same reason the archived view passes it: a stranger holds no
  *   management role on someone else's public lake.
- * - Cutoff-filtered. A lake that entered 'archiving' seconds ago is working, not stranded, so a
- *   list that showed it would mean "is busy" rather than "needs attention".
+ * - Cutoff-filtered, per status (see strandedCutoffMsFor). A lake that entered 'archiving'
+ *   seconds ago is working, not stranded, so a list that showed it would mean "is busy" rather
+ *   than "needs attention".
  */
 export const listTransitionalDataLakes = async (
   ctx: AccessContext,
@@ -555,7 +556,7 @@ export const listTransitionalDataLakes = async (
     grantedLakeIds,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
-  const strandedBefore = Date.now() - STRANDED_LAKE_CUTOFF_MS;
+  const now = Date.now();
   return lakes
     .filter(lake => canManageLake(lake, ctx, grantsByLake.get(lake.id)))
     .filter(lake => {
@@ -565,7 +566,7 @@ export const listTransitionalDataLakes = async (
       // NaN - a lake with no or an unparseable timestamp - is SHOWN, not hidden: the cutoff is
       // there to withhold a lake we can prove is still busy, and an absent timestamp proves
       // nothing. Failing closed would hide exactly the lake this list exists to surface.
-      return Number.isNaN(movedAt) || movedAt <= strandedBefore;
+      return Number.isNaN(movedAt) || movedAt <= now - strandedCutoffMsFor(lake.status);
     })
     .map(lake => ({
       id: lake.id,

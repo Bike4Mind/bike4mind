@@ -5,6 +5,7 @@ import {
   DATA_LAKE_TRANSITIONAL_STATUSES,
   TRANSITIONAL_RETRY_ACTION,
   resolveRetryAction,
+  strandedCutoffMsFor,
   type DataLakeStatus,
 } from './DataLakeTypes';
 
@@ -109,5 +110,22 @@ describe('resolveRetryAction', () => {
     for (const status of DATA_LAKE_STABLE_STATUSES) {
       expect(resolveRetryAction(lake(status))).toBeUndefined();
     }
+  });
+});
+
+describe('strandedCutoffMsFor', () => {
+  // The four inline statuses share the request Lambda's 60-second ceiling, so one number is right
+  // for all of them; `purging` sweeps on a queue consumer and must not be judged by that clock.
+  it('gives every inline status the same cutoff and purging a longer one', () => {
+    const inline = DATA_LAKE_TRANSITIONAL_STATUSES.filter(s => s !== 'purging');
+    const cutoffs = new Set(inline.map(strandedCutoffMsFor));
+    expect(cutoffs.size).toBe(1);
+    expect(strandedCutoffMsFor('purging')).toBeGreaterThan([...cutoffs][0]);
+  });
+
+  // Past the consumer's own budget: a 12-minute visibility timeout x 3 attempts (infra/queues.ts).
+  // A cutoff inside that window would flag a purge SQS is still legitimately retrying.
+  it('puts the purging cutoff past the cleanup consumer retry budget', () => {
+    expect(strandedCutoffMsFor('purging')).toBeGreaterThanOrEqual(36 * 60_000);
   });
 });
