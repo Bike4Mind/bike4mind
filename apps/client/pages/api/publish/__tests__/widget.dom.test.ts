@@ -487,6 +487,20 @@ describe('publish widget - Save as PDF binder', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it('does not hijack the shortcut while typing in the comment box', () => {
+    const { post } = mountWrapper('b4m-bar-print');
+    const box = document.createElement('textarea');
+    document.body.appendChild(box);
+
+    eval(widgetSource());
+    // macOS: Ctrl+P inside a text field is cursor-up, not print.
+    const ctrl = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true, cancelable: true });
+    box.dispatchEvent(ctrl);
+
+    expect(post).not.toHaveBeenCalled();
+    expect(ctrl.defaultPrevented).toBe(false);
+  });
+
   it('does not throw on a wrapper with no iframe at all', () => {
     document.body.innerHTML = '<button class="b4m-bar-print" type="button" hidden></button>';
 

@@ -52,11 +52,16 @@ const WIDGET_JS = String.raw`(function () {
       buttons[i].addEventListener('click', requestPrint);
       buttons[i].hidden = false; // server ships it hidden so there is no dead button without JS
     }
+    function isEditing(t) {
+      return !!t && (t.isContentEditable === true || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''));
+    }
     // Claim the shortcut while focus is on the WRAPPER: the browser would otherwise print
-    // this page, which paginates only the frame's visible first screen.
+    // this page, which paginates only the frame's visible first screen. Not while typing
+    // (the comment box): on macOS Ctrl+P is cursor-up inside a text field.
     document.addEventListener('keydown', function (e) {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       if (e.key !== 'p' && e.key !== 'P') return;
+      if (isEditing(e.target)) return;
       e.preventDefault();
       requestPrint();
     });

@@ -97,4 +97,16 @@ describe('print bridge (in-frame)', () => {
     expect(print).not.toHaveBeenCalled();
     expect(plain.defaultPrevented).toBe(false);
   });
+
+  it('does not hijack the shortcut while the viewer is typing in an author text field', () => {
+    runBridge();
+    const field = document.createElement('textarea');
+    document.body.appendChild(field);
+    // macOS: Ctrl+P inside a text field is cursor-up, not print.
+    const ctrl = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true, cancelable: true });
+    field.dispatchEvent(ctrl);
+
+    expect(print).not.toHaveBeenCalled();
+    expect(ctrl.defaultPrevented).toBe(false);
+  });
 });

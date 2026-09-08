@@ -37,6 +37,7 @@ export const PRINT_BRIDGE_JS = String.raw`(function(){
   'use strict';
   var PO=(function(){try{return document.referrer?new URL(document.referrer).origin:'*';}catch(e){return '*';}})();
   function doPrint(){try{window.focus();window.print();}catch(e){}}
+  function isEditing(t){return !!t&&(t.isContentEditable===true||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName||''));}
   window.addEventListener('message',function(e){
     if(e.source!==window.parent){return;}
     if(PO!=='*'&&e.origin!==PO){return;}
@@ -46,6 +47,7 @@ export const PRINT_BRIDGE_JS = String.raw`(function(){
   document.addEventListener('keydown',function(e){
     if(!(e.metaKey||e.ctrlKey)||e.altKey||e.shiftKey){return;}
     if(e.key!=='p'&&e.key!=='P'){return;}
+    if(isEditing(e.target)){return;}
     e.preventDefault();
     doPrint();
   },true);
@@ -55,7 +57,8 @@ export const PRINT_BRIDGE_JS = String.raw`(function(){
  * Print stylesheet + trigger, appended to every rendered bundle. Capture phase on the
  * keydown so the shortcut is claimed before author handlers: with focus inside the
  * frame the browser would otherwise print the wrapper, which is the clipped render this
- * whole bridge exists to avoid.
+ * whole bridge exists to avoid. Editable targets are left alone: on macOS Ctrl+P is a
+ * cursor movement inside text fields, and a shortcut that hijacks typing is a bug.
  */
 export function buildPrintBridgeTag(): string {
   return `<style>${PRINT_BRIDGE_CSS}</style><script>${PRINT_BRIDGE_JS}</script>`;
