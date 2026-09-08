@@ -13,6 +13,7 @@ import {
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
   ABSTENTION_PROMPT,
+  WEB_SEARCH_FRESHNESS_PROMPT,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -24,7 +25,13 @@ import {
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
 } from '../constants/lakeAccessAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import {
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+} from '../constants/knowledgeBaseSearch';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
+import { SettingScopeLevel } from '../types/entities/ScopedSettingTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
   // Test using contextTelemetryAlerts as a representative object setting
@@ -277,6 +284,13 @@ describe('public settings projection (M2.5 security boundary)', () => {
       expect(redactSettingSecrets({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe('');
     });
 
+    it('masks a settingName absent from settingsMap instead of returning it in cleartext (fail closed)', () => {
+      const secret = 'sk-live-orphaned-credential-tail';
+      const redacted = redactSettingSecrets({ settingName: 'someRemovedOrRenamedKey', settingValue: secret });
+      expect(redacted.settingValue).not.toBe(secret);
+      expect(redacted.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
+    });
+
     it('every isSensitive setting is a plain free-text string setting', () => {
       // The whole mask/preserve protocol assumes a string. A sensitive setting that is a
       // number, boolean, object, or a string with `options` breaks three ways at once: it
@@ -329,6 +343,14 @@ describe('public settings projection (M2.5 security boundary)', () => {
     it('passes a non-sensitive setting through untouched', () => {
       const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
       expect(redactSettingSecretsForBroadcast(setting)).toEqual(setting);
+    });
+
+    it('masks a settingName absent from settingsMap instead of broadcasting it in cleartext (fail closed)', () => {
+      const redacted = redactSettingSecretsForBroadcast({
+        settingName: 'someRemovedOrRenamedKey',
+        settingValue: 'a'.repeat(32) + ':' + 'b'.repeat(32) + ':deadbeef',
+      });
+      expect(redacted.settingValue).toBe(SENSITIVE_SETTING_MASK);
     });
   });
 });
@@ -507,6 +529,116 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
   });
 });
 
+describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
+  // Same drift class as forcedRetrievalCharBudget above: before this setting existed,
+  // KB_SEARCH_DEFAULT_RESULTS was a hand-copied literal (5) local to the tool's own file. Both now
+  // import KB_SEARCH_DEFAULT_RESULTS_DEFAULT from the same constants module, so this pins that the
+  // setting's default cannot silently diverge from the coded fallback a settings outage returns to.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchDefaultResults.defaultValue).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+  });
+
+  it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#1955)', () => {
+    // A knowledge-base search spans a mixed multi-lake corpus plus the caller's own/shared files -
+    // there is no single lake for a Lake rung to key on, unlike dataLakeSearchMaxFiles/MaxChunks
+    // (which scan one lake at a time and do declare Lake). Pinned so adding Lake later is a
+    // deliberate decision rather than silent drift.
+    expect(settingsMap.kbSearchDefaultResults.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(undefined)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+  });
+
+  it('rejects a value below the declared floor at write time', () => {
+    expect(settingsMap.kbSearchDefaultResults.min).toBe(1);
+    expect(() => settingsMap.kbSearchDefaultResults.schema.parse(0)).toThrow();
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(1)).toBe(1);
+  });
+
+  it('rejects a value above the tool ceiling at write time', () => {
+    // Without this, an admin could store a default above KB_SEARCH_MAX_RESULTS (10) that the tool
+    // would then clamp down on every call, making the stored value silently misleading.
+    expect(settingsMap.kbSearchDefaultResults.max).toBe(10);
+    expect(() => settingsMap.kbSearchDefaultResults.schema.parse(11)).toThrow();
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(10)).toBe(10);
+  });
+});
+
+describe('kbSearchResultTokenBudget (#1955)', () => {
+  it('defaults to the shared off-sentinel constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.defaultValue).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+    // The constant IS 0 today, so the assertion above alone would pass even if someone hand-wrote
+    // a literal 0 instead of importing the constant. Pin the value directly too, with the intent
+    // spelled out: 0 is a deliberate "no budget" sentinel, not "forgot to set a default".
+    expect(settingsMap.kbSearchResultTokenBudget.defaultValue).toBe(0);
+  });
+
+  it('is settable at the org/owner (caller) altitude, not Lake', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(undefined)).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+  });
+
+  it('accepts 0 (the off sentinel) at write time without throwing', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.min).toBe(0);
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(0)).toBe(0);
+  });
+
+  it('rejects a negative value and enforces the declared ceiling at write time', () => {
+    expect(() => settingsMap.kbSearchResultTokenBudget.schema.parse(-1)).toThrow();
+    expect(settingsMap.kbSearchResultTokenBudget.max).toBe(20_000);
+    expect(() => settingsMap.kbSearchResultTokenBudget.schema.parse(20_001)).toThrow();
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(20_000)).toBe(20_000);
+  });
+});
+
+describe('kbSearchMinRelevancePct (#1955)', () => {
+  it('defaults to the shared off-sentinel constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.defaultValue).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT);
+    // Same vacuous-drift-guard caveat as the token budget above: the constant is 0 today, so pin
+    // the literal too and say why - 0 matches today's hardcoded minScore: 0, not an oversight.
+    expect(settingsMap.kbSearchMinRelevancePct.defaultValue).toBe(0);
+  });
+
+  it('is settable at the org/owner (caller) altitude, not Lake', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(undefined)).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT);
+  });
+
+  it('accepts 0 and 100 at write time; rejects outside that range', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.min).toBe(0);
+    expect(settingsMap.kbSearchMinRelevancePct.max).toBe(100);
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(0)).toBe(0);
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(100)).toBe(100);
+    expect(() => settingsMap.kbSearchMinRelevancePct.schema.parse(-1)).toThrow();
+    expect(() => settingsMap.kbSearchMinRelevancePct.schema.parse(101)).toThrow();
+  });
+});
+
+describe('EMBEDDING settings group registration (#1955)', () => {
+  it('lists kbSearchDefaultResults, kbSearchResultTokenBudget and kbSearchMinRelevancePct with unique order values', () => {
+    const keys = ['kbSearchDefaultResults', 'kbSearchResultTokenBudget', 'kbSearchMinRelevancePct'];
+    const entries = API_SERVICE_GROUPS.EMBEDDING.settings.filter(s => keys.includes(s.key));
+    expect(entries.map(s => s.key).sort()).toEqual([...keys].sort());
+    expect(new Set(entries.map(s => s.order)).size).toBe(entries.length);
+  });
+});
+
 describe('LakeAccessAuditRetentionDays cannot be configured below the floor', () => {
   // Same drift class as DefaultChunkSize: the floor is enforced in two places (this schema's
   // `min`, and the write path's unconditional clamp), and both must agree with the exported
@@ -552,4 +684,44 @@ describe('AbstentionPrompt default carries the anti-invention licence', () => {
   it('ships as the AbstentionPrompt setting default (no drift between const and setting)', () => {
     expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
   });
+});
+
+describe('WebSearchFreshnessPrompt default tells the model when to search', () => {
+  // The measured failure it exists to fix is under-SELECTION, not weak search: web_search was
+  // offered on every turn of a 200-question internal eval and called on 16% of them, and the
+  // tool prompt instructed the model about clock time and chess and nothing about staleness.
+  // Two clauses carry the whole effect, so pin both.
+  it('directs the model to search before answering a time-sensitive question', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/web_search/);
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/training data has a cutoff/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a search it did
+  // not need; on the same eval it held the rate to 31% on questions with nothing to look up.
+  it('names the cases that do NOT need a search', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/do not need to search/i);
+  });
+
+  it('requires an as-of date on any time-sensitive fact it reports', () => {
+    // Not /as of/i - that also matches "as of today" in the search-trigger list, so the pin would
+    // survive deleting the reporting clause this test is named for.
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/state what it is as of/i);
+  });
+
+  it('ships as the WebSearchFreshnessPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.WebSearchFreshnessPrompt.defaultValue).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
+  });
+});
+
+describe('bflApiKey spells the vendor the way the rest of the app does', () => {
+  // The vendor's own name is three words, and two client surfaces already render it that way
+  // (ApiKeysSection.tsx's PROVIDER_LABELS, ModelSelection.tsx's FLUX section header). This admin
+  // label is a third independent hardcoding of the same string with nothing forcing it to agree,
+  // so pin the spelling here rather than let it drift back.
+  for (const field of ['name', 'description'] as const) {
+    it(`${field} says "Black Forest Labs", not "BlackForest"`, () => {
+      expect(settingsMap.bflApiKey[field]).toContain('Black Forest Labs');
+      expect(settingsMap.bflApiKey[field]).not.toContain('BlackForest');
+    });
+  }
 });

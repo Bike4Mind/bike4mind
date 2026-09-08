@@ -19,6 +19,7 @@ import {
 import {
   usdToCredits,
   usdToCreditsStochastic,
+  reservationOutputTokens,
   getSettingsMap,
   getSettingsValue,
   getSettingsByNames,
@@ -27,6 +28,7 @@ import {
 import {
   getLlmByModel,
   getAvailableModels,
+  reasonsWithinOutputBudget,
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
@@ -281,22 +283,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let reservedCredits = 0;
 
   if (enforceCredits && modelInfo) {
-    // Estimate cost based on input message length + expected output.
+    // Estimate cost from the input message length plus a realistic output size. The basis is
+    // the caller's own budget when they named one and DEFAULT_OUTPUT_MAX_TOKENS when they did
+    // not, then shrunk to a realistic reply length (see reservationOutputTokens) - maxTokens is
+    // a ceiling, and holding it gates the request on a cost it will not incur. The per-member
+    // cap below is gated on the unshrunk ceiling instead, so a shrunk hold cannot wave a member
+    // past an administrator-configured cap. Settlement below charges actual usage.
     //
-    // The basis is the caller's own budget when they named one, and DEFAULT_OUTPUT_MAX_TOKENS
-    // when they did not - i.e. exactly what this path reserved against before the ceiling
-    // became model-sized. An explicit budget MUST size its own hold: the reservation is
-    // atomically deducted and is also what isMemberCreditCapExceeded below is checked
-    // against, so estimating a large explicit request at 4096 would let a member clear an
-    // administrator-configured per-member cap in a single turn.
-    //
-    // Deliberately not the resolved ceiling for the absent case: that is now up to 64K on an
-    // adaptive reasoner and a ceiling-sized hold rejects short prompts outright for anyone
-    // near their balance. Settlement further down trues the ledger up to actual usage, so the
-    // estimate only needs to stay a sane guard. Clamped by `maxTokens` either way, since the
-    // model cannot emit past its own cap.
+    // `?? DEFAULT_OUTPUT_MAX_TOKENS` must stay: with no explicit budget, maxTokens can be up to
+    // 64K on an adaptive reasoner, and reservationOutputTokens alone would still let a 32K hold
+    // through - 8x what this keeps - and reject short prompts outright for anyone near their
+    // balance. That also makes the reservationOutputTokens term inert on this no-budget path -
+    // it only binds once a caller passes an explicit options.maxTokens above the ceiling.
     const estimatedInputTokens = estimateInputTokens(messages);
-    const estimatedOutputTokens = Math.min(maxTokens, options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
+    const estimatedOutputTokens = Math.min(
+      maxTokens,
+      options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS,
+      reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
+    );
     const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
     reservedCredits = usdToCredits(estimatedUsdCost);
 
@@ -315,9 +319,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
 
     // Org-billed keys: enforce the per-member cap before touching the shared pool.
-    // Uses the estimate; settlement records the actual usage against the member below.
-    if (billToOrg && isMemberCreditCapExceeded(organization!, userId, reservedCredits)) {
-      throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
+    // Priced on the unshrunk ceiling rather than the hold, because unlike the balance
+    // reservation this gate has no settlement counterpart to correct an under-estimate.
+    // Still not an upper bound on the turn: it prices one round at the uncached input
+    // rate, so a multi-round tool loop or a cache-write turn can settle above it.
+    if (billToOrg) {
+      const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, estimatedInputTokens, maxTokens));
+      if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
+        throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
+      }
     }
 
     // Atomically reserve credits using incrementCredits with negative value

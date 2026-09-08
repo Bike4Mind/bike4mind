@@ -2,6 +2,10 @@ import {
   dataLakeRepository,
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
+  dataLakeProposalRepository,
+  dataLakeResearchConfigRepository,
+  dataLakeResearchRunRepository,
+  lakeMembershipDecisionRepository,
   fabFileRepository,
   fabFileChunkRepository,
   memoryLedgerRepository,
@@ -12,6 +16,7 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { createKeyProvider } from '@server/memory/factCipher';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
@@ -47,6 +52,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        dataLakeProposals: dataLakeProposalRepository,
+        dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+        dataLakeResearchRuns: dataLakeResearchRunRepository,
+        lakeMembershipDecisions: lakeMembershipDecisionRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
@@ -74,7 +83,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           { kind: 'lake', id: datalakeTag },
           ownerUserId
         );
+        // Raise the purge fence too, so an extraction already in flight stops instead of re-appending
+        // facts under a fresh DEK for the rest of the sweep. The lake RECORD is what the fence lives
+        // on and it survives until step 5, several unbounded chunked deletes from here, so `exists`
+        // alone does not cover this window. Best-effort: the shred above is the irreversible half and
+        // has already succeeded, so a failed stamp must not abort the sweep and send it to the DLQ.
+        await dataLakeRepository.stampLakeMemoryPurge(dataLakeId, new Date()).catch(error => {
+          logger.error('[lakeMemory] could not raise the purge fence for a lake being deleted', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            dataLakeId,
+          });
+        });
         logger.info('[lakeMemory] crypto-shredded the lake memory profile', { datalakeTag, ownerUserId });
+      },
+      // Release the lake's Drive folder claim as part of the purge. Wired here for the same reason as
+      // shredMemory: the revoke needs the app layer's crypto. LOG IT - the row's driveFolderId is
+      // globally unique and unreachable once the lake is gone, so "the folder is free again" is a
+      // claim an operator has to be able to check after the fact.
+      releaseDriveConnection: async ({ dataLakeId }) => {
+        const released = await releaseDriveConnectionForLake(dataLakeId);
+        if (released) {
+          logger.info('[driveLake] released the purged lake Drive connection and its folder claim', { dataLakeId });
+        }
       },
       logger,
     });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { FEEDBACK_CONTENT_MAX_CHARS } from '@bike4mind/common';
 
 /**
  * Each of the four independent delivery gates (EnableFeedBackToSlack, EnableFeedBackToEmail +
@@ -41,6 +42,11 @@ function FeedbackModelMock(this: any, data: unknown) {
 
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: FeedbackModelMock,
+  FeedbackTextModel: {
+    create: vi.fn().mockResolvedValue({}),
+    deleteOne: vi.fn().mockResolvedValue({}),
+    find: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+  },
   User: { findOne: vi.fn().mockReturnValue({ populate: vi.fn().mockResolvedValue(null) }) },
   adminSettingsRepository: {},
 }));
@@ -75,20 +81,21 @@ vi.mock('@bike4mind/utils', () => ({
 const mockConfig = vi.hoisted(() => ({ STAGE: 'production' as string | undefined }));
 vi.mock('@server/utils/config', () => ({
   Config: mockConfig,
-  classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
 }));
 
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 const mockRecordSuccess = vi.fn();
 const mockRecordFailure = vi.fn();
-const mockRecordSkipped = vi.fn();
+const mockEmitMetrics = vi.fn();
 vi.mock('@server/utils/cloudwatch', async () => {
   const actual = await vi.importActual<typeof import('@server/utils/cloudwatch')>('@server/utils/cloudwatch');
   return {
     recordFeedbackDeliverySuccess: (...args: unknown[]) => mockRecordSuccess(...args),
     recordFeedbackDeliveryFailure: (...args: unknown[]) => mockRecordFailure(...args),
-    recordFeedbackDeliverySkipped: (...args: unknown[]) => mockRecordSkipped(...args),
+    // Pure builder - safe to pass through unmocked; only the AWS-calling emit needs a mock.
+    buildFeedbackDeliverySkippedMetrics: actual.buildFeedbackDeliverySkippedMetrics,
+    emitFeedbackDeliveryMetrics: (...args: unknown[]) => mockEmitMetrics(...args),
     ALARM_WORTHY_SKIP_REASONS: actual.ALARM_WORTHY_SKIP_REASONS,
   };
 });
@@ -132,6 +139,16 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(body.delivery.channels.slack).toEqual({ outcome: 'skipped', reason: 'disabled' });
   });
 
+  it('batches the Slack and email disabled-skip metrics into one emitFeedbackDeliveryMetrics call', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockEmitMetrics).toHaveBeenCalledTimes(1);
+    const [metrics] = mockEmitMetrics.mock.calls[0];
+    const channels = metrics.map((m: { dimensions?: { channel?: string } }) => m.dimensions?.channel).filter(Boolean);
+    expect(channels).toEqual(expect.arrayContaining(['slack', 'email']));
+  });
+
   it('calls postFeedbackToSlack once when enabled and reports its outcome verbatim', async () => {
     mockSettings.EnableFeedBackToSlack = true;
     mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'skipped', reason: 'unconfigured_webhook' });
@@ -141,6 +158,39 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(mockPostFeedbackToSlack).toHaveBeenCalledTimes(1);
     const body = res._getJSONData();
     expect(body.delivery.channels.slack).toEqual({ outcome: 'skipped', reason: 'unconfigured_webhook' });
+  });
+
+  it('sends the truncated content to Slack and email, not the raw over-cap submission', async () => {
+    mockSettings.EnableFeedBackToSlack = true;
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'team@example.com';
+    mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'delivered' });
+    mockEmailPublish.mockResolvedValue(undefined);
+
+    const overLong = 'x'.repeat(FEEDBACK_CONTENT_MAX_CHARS + 500);
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: 'user-1',
+        content: overLong,
+        tags: [],
+        username: 'reporter',
+        userEmail: 'reporter@example.com',
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => false;
+    await mockRefs.postHandler!(req, res);
+
+    const slackContentArg = mockPostFeedbackToSlack.mock.calls[0][5];
+    expect(slackContentArg).toHaveLength(FEEDBACK_CONTENT_MAX_CHARS);
+    expect(slackContentArg).not.toContain('x'.repeat(FEEDBACK_CONTENT_MAX_CHARS + 1));
+
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).toContain('x'.repeat(FEEDBACK_CONTENT_MAX_CHARS));
+    expect(emailBody).not.toContain('x'.repeat(FEEDBACK_CONTENT_MAX_CHARS + 1));
+
+    const body = res._getJSONData();
+    expect(body.contentTruncated).toBe(true);
   });
 
   it('reports delivered:true via Slack alone when it is the only channel that actually fires', async () => {
@@ -321,6 +371,25 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(mockEmailPublish.mock.calls[0][0].to).toBe('staging-team@example.com');
     const body = res._getJSONData();
     expect(body.delivery.channels.email).toEqual({ outcome: 'delivered' });
+  });
+
+  it('sends via FeedbackReceiveEmail on a self-host install (B4M_SELF_HOST=true) even though its stage classifies nonprod', async () => {
+    const previousSelfHost = process.env.B4M_SELF_HOST;
+    process.env.B4M_SELF_HOST = 'true';
+    mockConfig.STAGE = 'selfhost';
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'selfhost-admin@example.com';
+    try {
+      const { req, res } = run();
+      await mockRefs.postHandler!(req, res);
+
+      expect(mockEmailPublish).toHaveBeenCalledTimes(1);
+      expect(mockEmailPublish.mock.calls[0][0].to).toBe('selfhost-admin@example.com');
+      const body = res._getJSONData();
+      expect(body.delivery.channels.email).toEqual({ outcome: 'delivered' });
+    } finally {
+      process.env.B4M_SELF_HOST = previousSelfHost;
+    }
   });
 
   it('never falls back to FeedbackReceiveEmail when a non-production stage has no non-prod address set, and logs at warn not error', async () => {

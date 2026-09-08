@@ -52,9 +52,16 @@ const makeAdapters = (opts?: {
   lakeDoc?: IDataLakeDocument | null;
   files?: ReturnType<typeof file>[];
   bulkUpdateTagsResult?: number;
+  /** Other lakes in the prefix-collision scope `decideStampPrefix` queries. */
+  scopeLakes?: IDataLakeDocument[];
 }) => ({
   db: {
-    dataLakes: { findById: vi.fn().mockResolvedValue(opts && 'lakeDoc' in opts ? opts.lakeDoc : lake()) },
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(opts && 'lakeDoc' in opts ? opts.lakeDoc : lake()),
+      // `decideStampPrefix`'s dynamic overlap lookup. Empty by default: the fixture lake's `acme:`
+      // prefix collides with nothing, so the gate permits and every other test reads as before.
+      find: vi.fn().mockResolvedValue(opts?.scopeLakes ?? []),
+    },
     batches: {
       findById: vi.fn().mockResolvedValue(opts && 'batchDoc' in opts ? opts.batchDoc : batch()),
       setTaxonomyStatusIfActive: vi.fn().mockResolvedValue(batch({ taxonomyStatus: 'applying' })),
@@ -83,7 +90,7 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
-    expect(result).toEqual({ success: true, filesUpdated: 1 });
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
     const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
     expect(updates).toHaveLength(1);
     expect(updates[0].id).toBe('f1');
@@ -107,6 +114,94 @@ describe('applyTaxonomySuggestions', () => {
     expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
   });
 
+  it('counts a file that already carries every tag as unchanged, and writes nothing for it (#2093)', async () => {
+    // The idempotent re-apply. Reachable only through the documented retry in the catch below: a
+    // successful apply leaves the batch 'applied', which both apply ('ready') and re-analyze
+    // ('ready'|'failed') refuse.
+    //
+    // Emitting an op here did NOT under-report. An identical-value write still bumps `updatedAt`
+    // (FabFileSchema has timestamps: true), so it counted as modified and the batch reported every
+    // file as freshly tagged. Suppressing the op is what stops that over-report, stops the
+    // pointless updatedAt churn, and leaves `skipped` meaning only "lost a CAS race".
+    const alreadyTagged = file({
+      tags: [
+        { name: 'acme:legal', strength: 1 },
+        { name: 'acme:type:contract', strength: 1 },
+      ],
+    });
+    const adapters = makeAdapters({ files: [alreadyTagged] });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 0, unchanged: 1, skipped: 0 });
+    // No op emitted at all - a write that cannot change anything is not worth a round trip.
+    expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
+    // Still no lost-race warning and no metric - same as `main`, and it has to stay that way now
+    // that `skipped` reaches the user.
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+    expect(adapters.metrics.recordTagsApplySkipped).not.toHaveBeenCalled();
+  });
+
+  it('separates unchanged files from genuinely updated ones in the same batch', async () => {
+    // The mixed case a single counter cannot express: one file gains the tag, one already had it.
+    const adapters = makeAdapters({
+      files: [
+        file({ id: 'f1', tags: [{ name: 'acme:legal', strength: 1 }] }),
+        file({
+          id: 'f2',
+          tags: [
+            { name: 'acme:legal', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+          ],
+        }),
+      ],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 1, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates.map((u: { id: string }) => u.id)).toEqual(['f1']);
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still writes a file whose stored tags hold a duplicate name, since the merge dedupes it', async () => {
+    // A legacy row carrying the same name twice collapses in the merge Map, so the arrays differ in
+    // length. That must read as a CHANGE, not as unchanged - otherwise the dedupe never lands.
+    const adapters = makeAdapters({
+      files: [
+        file({
+          tags: [
+            { name: 'acme:legal', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+          ],
+        }),
+      ],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates[0].tags).toHaveLength(2);
+  });
+
   it('rejects a non-owner, non-admin caller', async () => {
     const adapters = makeAdapters();
 
@@ -116,15 +211,44 @@ describe('applyTaxonomySuggestions', () => {
     expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
   });
 
-  // A prefix colliding with a static-registry lake (opti:) has no owning document, so its read
-  // arm is an ownership bypass - create() already refuses such a prefix, so this only fires for
-  // a row that predates that check.
-  it('refuses to apply tags for a lake whose prefix overlaps a static-registry lake', async () => {
-    const adapters = makeAdapters({ lakeDoc: lake({ fileTagPrefix: 'opti:' }) });
+  // The four `decideStampPrefix` refusals, each of which this door used to ignore except the
+  // registry one (#2398). Refused BEFORE the guarded claim, so a bad prefix cannot leave the batch
+  // parked in 'applying'. `tagWriteDoorPrefixGate.test.ts` is what pins these to the identical
+  // refusal from `setDataLakeFileTags`; these cases pin that this door reaches the gate at all.
+  it.each([
+    // No owning document behind a static-registry prefix, so its read arm is an ownership bypass.
+    ['registry-prefix-overlap', 'opti:', /registry-prefix-overlap/],
+    // Would be dropped by every read arm, so the tags would be invisible to every query.
+    ['unusable-prefix', 'acme', /unusable-prefix/],
+    // Reaches the `datalake:` membership namespace.
+    ['reserved-namespace', 'datalake:acme:', /reserved-namespace/],
+  ])('refuses to apply tags for a lake whose prefix is %s', async (_reason, fileTagPrefix, expected) => {
+    const adapters = makeAdapters({ lakeDoc: lake({ fileTagPrefix }) });
 
     await expect(
       applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
-    ).rejects.toThrow(/overlaps a built-in data lake/i);
+    ).rejects.toThrow(expected);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  it('refuses to apply tags for a lake whose prefix overlaps another lake in scope', async () => {
+    const adapters = makeAdapters({
+      scopeLakes: [lake({ id: 'lake2', name: 'Lake Two', fileTagPrefix: 'acme:sub:' })],
+    });
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/prefix-overlap.*Lake Two/i);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the overlap check itself fails, rather than writing across an unverified overlap', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.find = vi.fn().mockRejectedValue(new Error('boom'));
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/could not verify/i);
     expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
   });
 
@@ -245,15 +369,22 @@ describe('applyTaxonomySuggestions', () => {
       bulkUpdateTagsResult: 1, // 2 files matched, only 1 actually written - 1 lost a concurrency race
     });
 
-    await applyTaxonomySuggestions(
+    const result = await applyTaxonomySuggestions(
       { userId: 'owner', isAdmin: false },
       'b1',
       [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
       adapters as any
     );
 
+    // The cause clause is the half an operator reads: '1/2' alone survives a rewrite that drops it.
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('1/2'));
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('tags changed or file deleted since read')
+    );
     expect(adapters.metrics.recordTagsApplySkipped).toHaveBeenCalledWith(1);
+    // Returned, not only logged: the caller has no other way to know the run was incomplete, and
+    // the batch is 'applied' afterwards so there is no in-product retry.
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 1 });
   });
 
   it('does not warn or record a metric when every matched file was actually updated', async () => {

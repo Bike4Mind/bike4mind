@@ -8,7 +8,7 @@ import {
   ISessionRepository,
   SearchOptions,
 } from '@bike4mind/common';
-import { softDeletePlugin } from '../../utils/mongo';
+import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
 import { NotFoundError } from '@bike4mind/utils';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -53,6 +53,11 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     disableUserIntegrations: { type: Boolean, required: false },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
+    // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
+    // member admission, distinct from an ordinary session that never went through it. Written ONLY
+    // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake
+    // check - never part of session creation's own input, so fork/clone/snip cannot copy it.
+    preauthorizedLakeIds: { type: [String], default: undefined },
     // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
     // a session not created for a lake must read back undefined, which the completion path's corpus
     // defer plan treats as its pre-existing size-only behavior (a default here would change that).
@@ -364,8 +369,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
   }
+  /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[]) {
-    return this.sessionModel.find({ _id: { $in: ids } });
+    return this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
   }
 
   async attachAgent(sessionId: string, agentId: string) {
@@ -397,7 +403,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (!session) {
       throw new NotFoundError('Session not found');
     }
-    return session.agentIds || [];
+    // Callers resolve each entry with agentRepository.findById, so one legacy entry that cannot
+    // address a row took the whole attached-agent list down with it.
+    return usableObjectIds(session.agentIds, 'SessionModel.getAttachedAgents');
   }
 
   async addArtifact(sessionId: string, artifactId: string) {

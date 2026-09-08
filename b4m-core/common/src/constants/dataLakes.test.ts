@@ -4,8 +4,10 @@ import {
   DataLakeConfig,
   getAccessibleDataLakes,
   getDataLakeTags,
+  getFileMembershipArm,
   lakeMatchesAccess,
   isReservedTagPrefix,
+  effectiveTagPrefixArm,
   normalizeEntitlementKey,
   normalizeTagPrefix,
   toDataLakeConfig,
@@ -15,6 +17,9 @@ import {
   MAX_TAG_PREFIX_LENGTH,
   hasBlankTagPrefixSegment,
   satisfiesTagPrefix,
+  MIN_DATA_LAKE_SLUG_LENGTH,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  DATA_LAKE_SLUG_REGEX,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -222,6 +227,46 @@ describe('isReservedTagPrefix', () => {
   });
 });
 
+describe('effectiveTagPrefixArm - the one decision the filter and its disclosure share', () => {
+  it('returns the normalized prefix for an owned scope with a creator', () => {
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: ' acme: ', creatorUserId: 'u1' })).toBe('acme:');
+  });
+
+  it('drops the arm for an owned scope with no creator to anchor to', () => {
+    // The reachable case, and the one that made a registry lake's report lie: a hardcoded lake's
+    // synthetic document carries createdByUserId '', so an `owned` scope fails closed to meta-tag
+    // only - while a disclosure read off the lake document still named the prefix.
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: 'acme:', creatorUserId: '' })).toBeNull();
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: 'acme:', creatorUserId: null })).toBeNull();
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: 'acme:' })).toBeNull();
+  });
+
+  it('keeps the arm for a registry scope, which needs no anchor', () => {
+    // A registry prefix is compile-time config, so its arm is open by design.
+    expect(effectiveTagPrefixArm({ kind: 'registry', fileTagPrefix: 'opti:' })).toBe('opti:');
+  });
+
+  it('fails closed on a scope that names no kind at all', () => {
+    // Caught by fabFileSearchQuery's own test, which builds a scope literal without `kind`. Testing
+    // "is owned" rather than "is not registry" let such a scope keep an UNANCHORED prefix arm, which
+    // widens the predicate to every file carrying the prefix whoever owns it - on a path that also
+    // drives permanent deletion. Pinned here so the helper carries its own guard.
+    expect(effectiveTagPrefixArm({ fileTagPrefix: 'orphan:', creatorUserId: '' } as never)).toBeNull();
+    expect(effectiveTagPrefixArm({ fileTagPrefix: 'orphan:' } as never)).toBeNull();
+    // A creator still anchors it, kind or no kind.
+    expect(effectiveTagPrefixArm({ fileTagPrefix: 'orphan:', creatorUserId: 'u1' } as never)).toBe('orphan:');
+  });
+
+  it('drops an unusable or reserved-namespace prefix for either kind', () => {
+    for (const kind of ['owned', 'registry'] as const) {
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: 'datalake:', creatorUserId: 'u1' })).toBeNull();
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: 'no-colon', creatorUserId: 'u1' })).toBeNull();
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: '  ', creatorUserId: 'u1' })).toBeNull();
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: null, creatorUserId: 'u1' })).toBeNull();
+    }
+  });
+});
+
 describe('tagPrefixesOverlap', () => {
   it.each([
     ['identical prefixes', 'acme:', 'acme:'],
@@ -286,6 +331,57 @@ describe('satisfiesTagPrefix', () => {
   it('ignores malformed entries rather than throwing', () => {
     expect(satisfiesTagPrefix([null, undefined, 42, { name: 'acme:legal' }], 'acme:')).toBe(false);
     expect(satisfiesTagPrefix([null, 'acme:legal'], 'acme:')).toBe(true);
+  });
+});
+
+describe('getFileMembershipArm', () => {
+  const scope = {
+    kind: 'owned' as const,
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    creatorUserId: 'creator-1',
+  };
+
+  it('is "meta" for a file carrying only the membership tag', () => {
+    const file = { userId: 'creator-1', tags: [{ name: 'datalake:acme' }] };
+    expect(getFileMembershipArm(file, scope)).toBe('meta');
+  });
+
+  it('is "prefix" for a creator-owned file carrying only a content-prefix tag', () => {
+    const file = { userId: 'creator-1', tags: [{ name: 'acme:legal' }] };
+    expect(getFileMembershipArm(file, scope)).toBe('prefix');
+  });
+
+  it('is "both" when a file carries the meta-tag and a content-prefix tag', () => {
+    const file = { userId: 'creator-1', tags: [{ name: 'datalake:acme' }, { name: 'acme:legal' }] };
+    expect(getFileMembershipArm(file, scope)).toBe('both');
+  });
+
+  it('ignores the prefix arm on a file owned by someone else - not membership, matching buildDataLakeMembershipFilter', () => {
+    const file = { userId: 'someone-else', tags: [{ name: 'acme:legal' }] };
+    expect(getFileMembershipArm(file, scope)).toBe(null);
+  });
+
+  it('is null for a file with neither signal', () => {
+    const file = { userId: 'creator-1', tags: [{ name: 'unrelated' }] };
+    expect(getFileMembershipArm(file, scope)).toBe(null);
+  });
+
+  it('is null (never "prefix") when an owned scope has no creator to anchor the prefix arm to', () => {
+    const file = { userId: 'creator-1', tags: [{ name: 'acme:legal' }] };
+    expect(getFileMembershipArm(file, { ...scope, creatorUserId: undefined })).toBe(null);
+  });
+
+  it('is "prefix" for a registry lake regardless of file ownership - no ownership conjunct', () => {
+    const registryScope = { kind: 'registry' as const, datalakeTag: 'datalake:public-docs', fileTagPrefix: 'docs:' };
+    const file = { userId: 'someone-else', tags: [{ name: 'docs:legal' }] };
+    expect(getFileMembershipArm(file, registryScope)).toBe('prefix');
+  });
+
+  it('is "both" for a registry lake when a file carries the meta-tag and a content-prefix tag', () => {
+    const registryScope = { kind: 'registry' as const, datalakeTag: 'datalake:public-docs', fileTagPrefix: 'docs:' };
+    const file = { userId: 'someone-else', tags: [{ name: 'datalake:public-docs' }, { name: 'docs:legal' }] };
+    expect(getFileMembershipArm(file, registryScope)).toBe('both');
   });
 });
 
@@ -407,5 +503,38 @@ describe('tagPrefixIssue - blank segments', () => {
   // the same culprit for an input that trips both rules.
   it('names the blank segment before the reserved namespace for "datalake::"', () => {
     expect(tagPrefixIssue('datalake::')).toMatch(/visible character/);
+  });
+});
+
+// These three are the SINGLE copy of a rule CreateDataLakeRequestInput enforces and the wizard
+// produces against, so pin the literals here: a change to any of them is a change to what the
+// create endpoint accepts, and must be a deliberate edit to this test rather than a silent drift.
+describe('data lake slug bounds', () => {
+  it('holds the bounds the create schema enforces', () => {
+    expect(MIN_DATA_LAKE_SLUG_LENGTH).toBe(2);
+    expect(MAX_DATA_LAKE_SLUG_LENGTH).toBe(60);
+  });
+
+  it('accepts a lowercase alphanumeric slug with interior hyphens', () => {
+    expect('my-data-lake').toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('ab').toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('a1').toMatch(DATA_LAKE_SLUG_REGEX);
+  });
+
+  it('rejects edge hyphens, uppercase, and other separators', () => {
+    for (const bad of ['-lake', 'lake-', 'My-Lake', 'my_lake', 'my lake', 'my.lake']) {
+      expect(bad).not.toMatch(DATA_LAKE_SLUG_REGEX);
+    }
+  });
+
+  // The pattern needs a leading AND a trailing alphanumeric in SEPARATE positions, so it
+  // already refuses a 1-char slug - the schema's minimum is belt-and-braces there. The client
+  // is why the minimum still has to be shared: isValidDataLakeSlug gates on LENGTH alone
+  // (slugifyDataLakeName's output satisfies the pattern by construction), so length is the
+  // only rule the wizard actually applies.
+  it('refuses a single character on its own, matching MIN_DATA_LAKE_SLUG_LENGTH', () => {
+    expect('a').not.toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('a'.length).toBeLessThan(MIN_DATA_LAKE_SLUG_LENGTH);
+    expect('ab'.length).toBe(MIN_DATA_LAKE_SLUG_LENGTH);
   });
 });

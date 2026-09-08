@@ -367,7 +367,10 @@ export class GeminiBackend implements ICompletionBackend {
         rank: 8,
         trainingCutoff: '2025-01-31',
         releaseDate: '2025-06-01',
-        deprecationDate: '2026-10-16',
+        // Retired upstream ahead of Google's published 2026-10-16 date: the model now 404s with
+        // "no longer available to new users". A past deprecationDate hides it from the picker;
+        // resolveDeprecatedModelId upgrades any session/agent still pinned to it.
+        deprecationDate: '2026-09-02',
         description:
           "Google's Gemini 2.5 Flash, offering well-rounded price-performance. Best for large scale processing, low-latency, high volume tasks that require thinking, and agentic use cases",
       },

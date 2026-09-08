@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
 } from '@client/lib/subscriptions/constants';
@@ -22,11 +23,11 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
   requireStripeWebhook: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-// Deliberately NOT mocking @bike4mind/utils: the real BadRequestError carries
-// statusCode 400, which lets the rejection test assert the status the client would
-// actually receive rather than only the message.
-import { BadRequestError } from '@bike4mind/utils';
-import { HttpStatus } from '@bike4mind/common';
+// Deliberately NOT mocking the error classes: the real BadRequestError carries statusCode
+// 400, which lets the rejection test assert the status the client would actually receive
+// rather than only the message. Imported from @bike4mind/common, the sole declaration site -
+// @bike4mind/utils is a @deprecated re-export (same class identity, non-canonical path).
+import { BadRequestError, HttpStatus } from '@bike4mind/common';
 
 const mockOrgFindById = vi.fn();
 const mockOrgUpdate = vi.fn();
@@ -86,13 +87,17 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     vi.clearAllMocks();
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindByPriceIdAndOwner.mockResolvedValue(null); // no active org subscription
+    // No stripeCustomerId: the route must therefore run createCustomer AND persist via
+    // organizationRepository.update, which is what makes the "no side effect on rejection"
+    // assertions below capable of failing. With a customer id pre-set the route skipped that
+    // whole branch, so those assertions held whether the guard ran or not.
     mockOrgFindById.mockResolvedValue({
       id: 'org_1',
       name: 'Org One',
       billingContact: 'billing@example.com',
-      stripeCustomerId: 'cus_existing',
       users: [{ userId: 'user_1' }],
     });
+    mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
     mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
   });
 
@@ -102,14 +107,16 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     mockIsAllowedCallbackOrigin.mockReturnValue(false);
     const { req, res } = makeReq('https://attacker.example.net/phish');
 
-    await expect((handler as HandlerFn)(req, res)).rejects.toThrow(
-      'callbackUrl must point to the deployed application origin'
-    );
-    // Assert the status the caller actually gets, not just the message: a regression in
-    // which error class is thrown would keep the message and silently change the response.
+    // Asserted in ONE throw: message and status together, so the handler runs once. It used
+    // to be invoked twice for these two assertions - harmless only while nothing sits above
+    // the guard, since a second run would double every mock's call log below.
+    // `constructor:` rather than `toBeInstanceOf` is deliberate - it pins the exact class,
+    // where toBeInstanceOf would also accept a SUBCLASS of BadRequestError carrying a
+    // different status. Do not "simplify" it.
     await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
       constructor: BadRequestError,
       statusCode: HttpStatus.BadRequest,
+      message: 'callbackUrl must point to the deployed application origin',
     });
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith('https://attacker.example.net/phish');
@@ -124,6 +131,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     expect(mockFindByPriceIdAndOwner).not.toHaveBeenCalled();
     expect(mockOrgFindById).not.toHaveBeenCalled();
     expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockOrgUpdate).not.toHaveBeenCalled(); // the DB write the guard now provably precedes
     expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 
@@ -133,6 +141,8 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     await (handler as HandlerFn)(req, res);
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith(CALLBACK_URL);
+    expect(mockCreateCustomer).toHaveBeenCalledTimes(1);
+    expect(mockOrgUpdate).toHaveBeenCalledTimes(1);
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toEqual({ sessionUrl: 'https://checkout.stripe/session' });
@@ -151,5 +161,65 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     );
     expect(args.success_url).not.toContain('%7B');
     expect(args.cancel_url).toBe(CALLBACK_URL);
+  });
+
+  // The #1424 clamp: minSeats = min(max(MIN, members + 1), MAX). Both bounds need a fixture
+  // where they actually bite - with the default one-member org the floor coincides with MIN,
+  // so asserting `minimum: MIN` passes even if the whole expression is deleted.
+  it.each([
+    { members: 10, expected: 11, why: 'floor tracks members + 1 once it exceeds MIN' },
+    {
+      members: 150,
+      expected: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+      why: 'ceiling clamps at MAX so minimum can never exceed maximum (#1424 wedge)',
+    },
+  ])('clamps the adjustable-quantity floor: $why', async ({ members, expected }) => {
+    mockOrgFindById.mockResolvedValue({
+      id: 'org_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      users: Array.from({ length: members }, (_, i) => ({ userId: `user_${i}` })),
+    });
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    const args = mockSessionsCreate.mock.calls[0][0] as {
+      line_items: { adjustable_quantity: unknown }[];
+    };
+    expect(args.line_items[0].adjustable_quantity).toEqual({
+      enabled: true,
+      minimum: expected,
+      maximum: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('creates a customer with no org lookup on the new-organization branch', async () => {
+    // organizationData instead of organizationId is the shape CreateTeamModal sends, and it
+    // was unexercised: no org exists yet, so createCustomer runs unconditionally and the
+    // metadata carries newOrganizationName rather than an organizationId.
+    const { req, res } = createMocks({ method: 'POST' });
+    (req as Record<string, unknown>).body = {
+      priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+      quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+      organizationData: { name: 'Brand New Org' },
+      callbackUrl: CALLBACK_URL,
+    };
+    (req as Record<string, unknown>).user = { id: 'user_1', email: 'buyer@example.com', name: 'Buyer' };
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockOrgFindById).not.toHaveBeenCalled();
+    expect(mockOrgUpdate).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).toHaveBeenCalledTimes(1);
+    const args = mockSessionsCreate.mock.calls[0][0] as {
+      customer: string;
+      subscription_data: { metadata: Record<string, unknown> };
+    };
+    expect(args.customer).toBe('cus_new');
+    expect(args.subscription_data.metadata).toMatchObject({ newOrganizationName: 'Brand New Org' });
+    expect(args.subscription_data.metadata).not.toHaveProperty('organizationId');
+    expect(res.statusCode).toBe(200);
   });
 });

@@ -94,6 +94,57 @@ describe('removeFileFromLake', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
   });
 
+  // #2248: the return value carries what the removal pulled, so a restore can push back the real
+  // tags rather than a placeholder. Widened from `void`; every existing caller ignores the return.
+  it('returns the pulled content tags with their stored strengths, excluding the meta-tag', async () => {
+    const adapters = makeAdapters();
+
+    const result = await removeFileFromLake(owner, lake(), 'f1', adapters);
+
+    expect(result).toEqual({ contentTags: [{ name: 'lk:invoices', strength: 1 }] });
+  });
+
+  it('returns empty contentTags for a meta-tag-only member (nothing to restore)', async () => {
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'f1', userId: 'owner', tags: [{ name: 'datalake:lake', strength: 1 }] }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    const result = await removeFileFromLake(owner, lake(), 'f1', adapters);
+
+    expect(result).toEqual({ contentTags: [] });
+  });
+
+  it('returns empty contentTags for a file the lake creator does not own, even when admitted by meta-tag', async () => {
+    // Same fixture as "strips only the meta-tag" above: admitted via the meta-tag arm only, so the
+    // prefix-matching tag is a bystander this lake never actually held as content.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'victim',
+            tags: [
+              { name: 'datalake:lake', strength: 1 },
+              { name: 'lk:invoices', strength: 1 },
+            ],
+          }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    const result = await removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters);
+
+    expect(result).toEqual({ contentTags: [] });
+  });
+
   it('refuses a caller who cannot manage the lake', async () => {
     const adapters = makeAdapters();
 

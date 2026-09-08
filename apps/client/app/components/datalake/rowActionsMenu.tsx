@@ -2,6 +2,7 @@ import { Box, Dropdown, IconButton, Menu, MenuButton, MenuItem, Typography } fro
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import {
   MENU_ROW_ICON_SX,
+  menuListSx,
   menuRowSx,
   menuSurfaceSx,
 } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
@@ -126,17 +127,13 @@ export function RowActionsMenu({
         placement="bottom-end"
         sx={menuTheme => ({
           ...menuSurfaceSx(menuTheme),
-          borderRadius: '8px',
+          // 2px, not the Select listbox's 4px: these rows are 32px in a narrow rail.
+          ...menuListSx({ gap: '2px' }),
           minWidth: 180,
           // Above a Joy Modal: the manager panel is modal-hosted, and this menu portals to body,
           // so at the default z-index it opens BEHIND the dialog and reads as a dead button.
           // Same remedy the organizations member menu uses; matches the sidebar's floating layers.
           zIndex: 10001,
-          // Joy's List vars, pinned for the same reason as the row's: p:1 from the shared recipe
-          // would otherwise fight --List-padding.
-          '--List-padding': '8px',
-          '--List-radius': '8px',
-          '--List-gap': '2px',
         })}
       >
         {children}

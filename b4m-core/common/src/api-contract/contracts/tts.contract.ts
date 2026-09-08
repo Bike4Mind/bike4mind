@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Import the specific schema files, NOT the barrel (`../../schemas`) - see the
 // note in tools.contract.ts (the barrel drags in an unbuilt dist in the CI
 // openapi job).
@@ -12,9 +13,8 @@ import {
 /**
  * Contract for POST /api/ai/tts - multi-provider text-to-speech.
  *
- * Deliberately carries NO `scopes`: the route has always accepted any valid API
- * key, and adding a scope gate here would 403 keys that work today. Unlike the
- * music/sound-effects endpoints, which shipped scope-gated from the start.
+ * Gated on `ai:generate`, matching /api/ai/music and /api/ai/sound-effects: all
+ * three are credit-metered audio generation, so all three take the same scope.
  */
 export const synthesizeSpeechContract = defineEndpoint({
   method: 'post',
@@ -34,6 +34,7 @@ export const synthesizeSpeechContract = defineEndpoint({
     'Authenticate with an API key (`b4m_live_`) or a JWT.',
   tags: ['Audio'],
   auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.AI_GENERATE],
   request: ttsRequestSchema,
   requestExample: { text: 'Your password has been reset.', provider: 'openai', voice: 'alloy', format: 'mp3' },
   responses: {
@@ -74,7 +75,6 @@ export const synthesizeSpeechContract = defineEndpoint({
       description: 'Missing/invalid credentials, or no provider has a usable key (`provider_not_configured`).',
       schema: ttsErrorResponseSchema,
     },
-    402: { description: 'Not enough credits to cover the synthesis.', schema: ttsErrorResponseSchema },
     413: {
       description:
         'The audio was generated (and billed) but is too large to return over this endpoint. Retrieve it ' +
@@ -83,21 +83,14 @@ export const synthesizeSpeechContract = defineEndpoint({
     },
     422: {
       description:
-        'Request body failed validation, the text exceeds the provider character limit, or the provider ' +
-        'cannot produce the requested `format`.',
+        'Request body failed validation, the text exceeds the provider character limit, the provider ' +
+        'cannot produce the requested `format`, or the caller cannot afford the synthesis - the last of ' +
+        'those is the only one tagged `errorCode: "insufficient_credits"`, so match on the classifier ' +
+        'rather than the status to tell a billing failure from a bad request.',
       schema: ttsErrorResponseSchema,
     },
     429: { description: 'The provider rate-limited the request.', schema: ttsErrorResponseSchema },
     502: { description: 'The provider failed to generate speech.', schema: ttsErrorResponseSchema },
-  },
-  // Both exemptions are live-caller compatibility, not oversight: a 402 -> 422 move
-  // and a newly required scope are the two kinds of change that cannot be aliased.
-  // Removing either needs a published sunset. See CONVENTIONS.md.
-  conventionExemptions: {
-    'status-table': {
-      402: 'Insufficient credits is 402 here and 422 everywhere else; changing it breaks live callers.',
-    },
-    'scope-required': 'The route has always accepted any valid API key; gating it now would 403 keys that work today.',
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

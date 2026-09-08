@@ -1,9 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { resolveEmptyVariant, type EmptyVariantInputs } from './resolveEmptyVariant';
 
-/** Page mode, lakes read fine, one lake present, something to browse. Cases override one axis. */
+/** Lakes read fine, one lake present, something to browse. Cases override one axis. */
 const base: EmptyVariantInputs = {
-  chatMode: false,
   lakesError: false,
   lakesLoading: false,
   lakeCount: 1,
@@ -87,15 +86,13 @@ describe('resolveEmptyVariant', () => {
     );
   });
 
-  it('never consults the lake list in chat mode, whatever it says', () => {
-    // Chat mode has no rail and no create-first affordance, so every lake signal is irrelevant.
-    for (const override of [
-      { lakesError: true },
-      { lakesLoading: true },
-      { lakeCount: 0, manageableLakeCount: 0 },
-      { hasSelectedLake: true, isScopeEmpty: true },
-    ]) {
-      expect(resolveEmptyVariant({ ...base, chatMode: true, ...override })).toBe('no-selection');
-    }
+  it('reports every lake signal now that the in-chat surface has a lake picker (#1943)', () => {
+    // The old chat-mode short-circuit answered 'no-selection' to all of these, because the in-chat
+    // tree had no lake list to be honest about. It has one now, so each signal must come through.
+    expect(resolveEmptyVariant({ ...base, lakesError: true })).toBe('lakes-error');
+    expect(resolveEmptyVariant({ ...base, lakeCount: 0, manageableLakeCount: 0 })).toBe('no-lakes');
+    expect(resolveEmptyVariant({ ...base, hasSelectedLake: true, isScopeEmpty: true })).toBe('lake-empty');
+    // The one that stays neutral, and for the same reason it always did: nothing is known yet.
+    expect(resolveEmptyVariant({ ...base, lakesLoading: true })).toBe('no-selection');
   });
 });

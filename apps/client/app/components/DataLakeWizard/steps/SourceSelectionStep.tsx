@@ -25,11 +25,13 @@ import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { countExcludedFiles, formatBytes } from '@client/app/utils/folderTreeParser';
-import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
+import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import DriveConnectAction from './DriveConnectAction';
+import DrivePendingConnectAction from './DrivePendingConnectAction';
 
 const supportsWebkitDirectory =
   typeof HTMLInputElement !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
@@ -70,8 +72,9 @@ export default function SourceSelectionStep() {
             (lake.organizationId || undefined) === scopeOrgId && normalizeName(lake.name) === normalizeName(config.name)
         );
 
-  // Client mirror of the server's slug.min(2) rule so a name that slugifies to empty/too-short
-  // is caught before the user commits files, instead of failing at the final upload step.
+  // Gates on the same MIN_DATA_LAKE_SLUG_LENGTH the create schema validates against, so a name
+  // that slugifies to empty/too-short is caught before the user commits files instead of failing
+  // at the final upload step.
   const slug = slugifyDataLakeName(config.name);
   const slugTooShort = config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
 
@@ -304,7 +307,9 @@ export default function SourceSelectionStep() {
           </Dropdown>
         </Box>
 
-        <DriveConnectAction lake={targetLake} />
+        {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
+            does not, so the selection is parked and connected on commit (#1916). */}
+        {targetLake ? <DriveConnectAction lake={targetLake} /> : <DrivePendingConnectAction />}
       </Stack>
 
       {/* Once files are in hand: what was picked up, plus the two opt-in steps. Both default

@@ -20,7 +20,7 @@
  * session transport and cannot notice on its own when that transport changes.
  *
  * The opaque-origin model is preserved: the bundle still runs in
- * `<iframe sandbox="allow-scripts">` with NO `allow-same-origin`, so it can't read the
+ * `<iframe sandbox={VIEWER_SANDBOX}>` with NO `allow-same-origin`, so it can't read the
  * app's localStorage/cookies. The token is held only by THIS trusted shell on the app
  * origin and sent only as a fetch header - it is never placed into the iframe or srcdoc.
  *
@@ -38,6 +38,7 @@
  * business in a search index. Mirrors the header the serve route already sets.
  */
 import { HASH_BRIDGE_JS } from './fragmentNav';
+import { VIEWER_SANDBOX } from './viewerSecurity';
 
 export function renderBundleLoaderShell(): string {
   // Bootstrap script: no server-interpolated values.
@@ -115,7 +116,7 @@ export function renderBundleLoaderShell(): string {
   authenticate();
 })();`;
 
-  // SECURITY: `sandbox="allow-scripts"` WITHOUT `allow-same-origin` - identical to the
+  // SECURITY: `VIEWER_SANDBOX` WITHOUT `allow-same-origin` - identical to the
   // wrapped render. The bundle runs on an opaque origin; never add `allow-same-origin`.
   // The iframe starts hidden so a slow `?raw=1` round-trip shows "Loading..." instead of a
   // blank viewport; it's revealed once srcdoc is set. Title is a constant (see header).
@@ -140,7 +141,7 @@ export function renderBundleLoaderShell(): string {
 </style>
 </head>
 <body>
-<iframe id="b4m-frame" sandbox="allow-scripts" title="${sharedTitle}" style="display:none"></iframe>
+<iframe id="b4m-frame" sandbox="${VIEWER_SANDBOX}" title="${sharedTitle}" style="display:none"></iframe>
 <div id="b4m-msg"></div>
 <noscript><div style="max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;font-family:system-ui,sans-serif">This is a private item. <a href="/login">Sign in</a> to view it.</div></noscript>
 <script>${bootstrap}</script>

@@ -12,7 +12,7 @@
  * Idempotent: dismissing an already-dismissed doc returns 200 with no-op.
  */
 
-import mongoose from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -30,7 +30,7 @@ const handler = baseApi().post(
     if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
 
     const { id } = req.query as Record<string, string>;
-    if (typeof id !== 'string' || !mongoose.Types.ObjectId.isValid(id)) {
+    if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new NotFoundError('Invalid tracking ID');
     }
 

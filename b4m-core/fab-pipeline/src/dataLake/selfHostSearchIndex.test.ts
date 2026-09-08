@@ -8,12 +8,14 @@ const mockOsClient = {
   deleteDocumentByQuery: vi.fn(),
 };
 
-vi.mock('./opensearchClient', () => ({
+// Fake only the OpenSearchClient; keep the real pure predicates
+// (isIndexAlreadyExistsError / isIndexNotFoundError) so these tests exercise the
+// shipped logic rather than a hand-copied fork that can drift (#2130).
+vi.mock('./opensearchClient', async importActual => ({
+  ...(await importActual<typeof import('./opensearchClient')>()),
   OpenSearchClient: vi.fn(function MockOpenSearchClient() {
     return mockOsClient;
   }),
-  isIndexAlreadyExistsError: (error: Error & { statusCode?: number; body?: { error?: { type?: string } } }) =>
-    error.statusCode === 400 && error.body?.error?.type === 'resource_already_exists_exception',
 }));
 
 import { FabFileChunkSearchIndex, selfHostVectorIndexName } from './selfHostSearchIndex';
@@ -299,6 +301,34 @@ describe('FabFileChunkSearchIndex.deleteByFabFileIdOrThrow', () => {
   it('no-ops for an unregistered model', async () => {
     await FabFileChunkSearchIndex.deleteByFabFileIdOrThrow('file-1', 'not-a-real-model');
     expect(mockOsClient.deleteDocumentByQuery).not.toHaveBeenCalled();
+  });
+
+  // #2087: only indexChunks calls ensureIndexForModel, so an install that turned OpenSearch on after
+  // chunks already existed has embeddingModel set in Mongo with no index behind it. The 404 is
+  // non-transient, so it escaped withRetry, and the phase-2 purge does not catch - it aborted the
+  // sweep and wedged the lake in 'purging' with every DLQ replay failing the same way.
+  it('treats a missing index as a satisfied removal, so the purge is not wedged (#2087)', async () => {
+    const notFound = Object.assign(new Error('index_not_found_exception'), {
+      statusCode: 404,
+      body: { error: { type: 'index_not_found_exception' } },
+    });
+    mockOsClient.deleteDocumentByQuery.mockRejectedValueOnce(notFound);
+
+    await expect(FabFileChunkSearchIndex.deleteByFabFileIdOrThrow('file-1', MODEL)).resolves.toBeUndefined();
+  });
+
+  it('still propagates a 404 that is NOT index_not_found, so the swallow stays narrow', async () => {
+    // The guard must key off the error TYPE, not the status code: a 404 from anything else is a real
+    // failure the purge has to see, or it would hard-delete Mongo rows whose vectors are still live.
+    const otherNotFound = Object.assign(new Error('resource_not_found_exception'), {
+      statusCode: 404,
+      body: { error: { type: 'resource_not_found_exception' } },
+    });
+    mockOsClient.deleteDocumentByQuery.mockRejectedValueOnce(otherNotFound);
+
+    await expect(FabFileChunkSearchIndex.deleteByFabFileIdOrThrow('file-1', MODEL)).rejects.toThrow(
+      'resource_not_found_exception'
+    );
   });
 });
 

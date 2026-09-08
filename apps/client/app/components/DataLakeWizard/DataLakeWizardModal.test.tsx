@@ -13,9 +13,10 @@ import DataLakeWizardModal from './DataLakeWizardModal';
  * check vs. a retry that calls mutate() directly) stay in sync.
  */
 
-const { toastMock, batchUploadMutate } = vi.hoisted(() => ({
+const { toastMock, batchUploadMutate, driveCommitMutate } = vi.hoisted(() => ({
   toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
   batchUploadMutate: vi.fn(),
+  driveCommitMutate: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -23,6 +24,7 @@ vi.mock('sonner', () => ({ toast: toastMock }));
 // module so the config gate is checked against the real validation logic.
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useBatchUpload: () => ({ mutate: batchUploadMutate, isPending: false }),
+  useCreateLakeFromDrive: () => ({ mutate: driveCommitMutate, isPending: false }),
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
   useCheckDuplicates: () => ({ mutate: vi.fn(), isPending: false }),
   OFFLINE_MESSAGE: 'No internet connection. Check your network and try again.',
@@ -38,6 +40,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
 // SourceSelectionStep now renders DriveConnectAction, which pulls in React Query (useConfig /
 // lake-connection hooks); stub it so this wizard test needs no QueryClientProvider.
 vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+  default: () => null,
+}));
+vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
   default: () => null,
 }));
 // ConfigStep's embedding-cost estimate reads admin settings via react-query; stub it so this
@@ -57,11 +62,14 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     prefixClash.current = undefined;
     toastMock.error.mockClear();
     batchUploadMutate.mockClear();
+    driveCommitMutate.mockClear();
     useDataLakeWizardStore.setState({
       isOpen: true,
       step: 'config',
       targetLake: null,
-      allFiles: [],
+      // Configure is only reachable with a source in hand, and the button gates on that too - so
+      // seed one file, or every prefix assertion below would be measuring the missing-source gate.
+      allFiles: [{ relativePath: 'a.txt', size: 1, excluded: false }] as never,
       config: {
         name: 'Test Lake',
         description: '',
@@ -384,5 +392,112 @@ describe('DataLakeWizardModal - streamlined step order', () => {
     const state = useDataLakeWizardStore.getState();
     expect(state.step).toBe('config');
     expect(state.config.tagPrefix).toBe('legal-contracts:');
+  });
+});
+
+/**
+ * A lake whose only source is a Google Drive folder (#1916). Every step used to gate on local
+ * files, so this path was unreachable: with zero files the source step's Next never enabled, and
+ * the commit threw before it created anything.
+ */
+describe('DataLakeWizardModal - Drive-only create', () => {
+  const driveFolder = { driveFolderId: 'FOLDER1', folderName: 'Contracts' };
+
+  const seedDriveOnly = (over: { step?: 'source' | 'config'; name?: string } = {}) =>
+    useDataLakeWizardStore.setState(state => ({
+      isOpen: true,
+      step: over.step ?? 'source',
+      targetLake: null,
+      allFiles: [],
+      pendingDriveFolder: driveFolder,
+      config: { ...state.config, name: over.name ?? 'Drive Only Lake', tagPrefix: 'drive:' },
+    }));
+
+  const renderModal = () =>
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+
+  beforeEach(() => {
+    prefixClash.current = undefined;
+    batchUploadMutate.mockClear();
+    driveCommitMutate.mockClear();
+    toastMock.error.mockClear();
+  });
+
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('advances past the source step on a Drive folder alone, with no files', () => {
+    seedDriveOnly();
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).not.toBeDisabled();
+  });
+
+  it('still requires a usable name, which the lake is created with either way', () => {
+    seedDriveOnly({ name: 'x' }); // slugifies below the server's 2-character minimum
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+  });
+
+  it('offers a create action rather than an upload, and runs the fileless commit', () => {
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toHaveTextContent('Create and sync');
+    commitBtn.click();
+    expect(driveCommitMutate).toHaveBeenCalledTimes(1);
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  it('runs the upload commit when files are present too, Drive folder or not', () => {
+    seedDriveOnly({ step: 'config' });
+    useDataLakeWizardStore.setState({
+      allFiles: [{ relativePath: 'a.txt', size: 1, excluded: false }] as never,
+    });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toHaveTextContent('Start Upload');
+    commitBtn.click();
+    expect(batchUploadMutate).toHaveBeenCalledTimes(1);
+    expect(driveCommitMutate).not.toHaveBeenCalled();
+  });
+
+  it('treats a picked folder as unsaved progress and discards it on close, creating nothing', () => {
+    // The whole point of deferring the connect: abandoning the wizard must leave no lake and no
+    // connection row, because neither was ever created.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    seedDriveOnly();
+
+    renderModal();
+    screen.getByText('Cancel').click();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(useDataLakeWizardStore.getState().pendingDriveFolder).toBeNull();
+    expect(driveCommitMutate).not.toHaveBeenCalled();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('keeps the picked folder when the discard is declined', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    seedDriveOnly();
+
+    renderModal();
+    screen.getByText('Cancel').click();
+
+    expect(useDataLakeWizardStore.getState().pendingDriveFolder).toEqual(driveFolder);
+    confirmSpy.mockRestore();
   });
 });

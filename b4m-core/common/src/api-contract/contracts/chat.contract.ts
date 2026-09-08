@@ -16,8 +16,10 @@ export const chatContract = defineEndpoint({
   description:
     'Sends a message to the AI and creates a quest to process it. By default (async) the call ' +
     'returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send ' +
-    '`wait: true` to block until the reply is ready and receive it inline. Authenticate with an ' +
-    'API key (`b4m_live_`) or a JWT.',
+    '`wait: true` to block until the reply is ready and receive it inline. A tool that produced ' +
+    'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
+    'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
+    'body and on the polled quest. Authenticate with an API key (`b4m_live_`) or a JWT.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -30,12 +32,14 @@ export const chatContract = defineEndpoint({
     200: {
       description:
         'Message accepted. The default (async) path returns this queued ACK. With `wait: true` the ' +
-        'body additionally carries the completed reply (`response`/`responses`), `createdAt`, and ' +
-        '`performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.',
+        'body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, ' +
+        '`createdAt`, and `performance` timings - fields not modelled here yet; the synchronous ' +
+        'response shape is a follow-up.',
       schema: ChatAckSchema,
     },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
+    422: { description: 'Request body failed schema validation.', schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {

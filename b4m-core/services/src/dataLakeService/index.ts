@@ -14,7 +14,13 @@ export * from './assembleLakeAccessView';
 export * from './authorizeLakeWrite';
 // canManageLake + ManageActor are already surfaced via authorizeLakeWrite's re-export; export the
 // rest of the pure decision core (owner resolution) by name to avoid a duplicate-export clash.
-export { isEffectiveOwner, isLakeCreator, resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
+export {
+  canShredLakeMemory,
+  isEffectiveOwner,
+  isLakeCreator,
+  resolveEffectiveOwnerIds,
+  type LakeGrant,
+} from './manageRule';
 export * from './authorizeLakeManage';
 export * from './transferLakeOwnership';
 export * from './lakeOwnershipCandidates';
@@ -22,11 +28,15 @@ export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';
 export * from './lakeMembershipScope';
 export * from './computeLakeHealth';
+export * from './applyAdmissionDecision';
+export * from './detectAdmissionDuplicates';
+export * from './detectLakeInconsistencies';
 export * from './convergeLakePolicy';
 export * from './rebuildLakePassages';
 export * from './tagPrefixCollision';
 export * from './createDataLake';
 export * from './updateDataLake';
+export * from './updateFallbackLakeSettings';
 export * from './setLakeVisibility';
 export * from './listDataLakes';
 export * from './redactLakeForActor';
@@ -40,8 +50,13 @@ export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
 export * from './admissionContract';
 export * from './lakeAdmissionGate';
+export * from './loadMembershipRepairPlan';
+export * from './recordMembershipDecision';
 export * from './removeFileFromDataLake';
+export * from './addFileToDataLake';
+export * from './setDataLakeFileTags';
 export * from './acceptDataLakePurge';
+export * from './purgeDataLakeDocument';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';
 export * from './reconcileStuckBatches';
@@ -51,11 +66,13 @@ export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
+export * from './supersession';
 export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
 export * from './boundedTopK';
 export * from './resolveSearchBudgets';
 export * from './resolveSpendLevers';
+export * from './resolveIngestSpendScope';
 export * from './enforceEmbeddingSpendGate';
 export * from './resolveLakeSpendAddressees';
 export * from './spendNotificationKeys';
@@ -67,3 +84,7 @@ export * from './openSearchChunkAdapter';
 export * from './openSearchRetrievalIndex';
 export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
+export * from './assembleLakeConfigHistory';
+export * from './canonicalSourceKey';
+export * from './proposeDataLakeContent';
+export * from './reviewDataLakeProposal';

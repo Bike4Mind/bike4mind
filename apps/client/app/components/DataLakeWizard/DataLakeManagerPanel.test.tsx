@@ -3,9 +3,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeManagerPanel from './DataLakeManagerPanel';
+
+// The purge gate reads BOTH lake ownership and FILE ownership, so the viewer's identity has to be
+// real here: unmocked, `currentUser` is null and an untagged fixture's `userId` is undefined, and
+// the file-ownership conjunct passes on `undefined === undefined` - pinning nothing.
+const userState = vi.hoisted(() => ({
+  isAdmin: false,
+  currentUser: { id: 'u-owner' } as { id: string } | null,
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector?: (state: typeof userState) => unknown) => (selector ? selector(userState) : userState),
+}));
 
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
 const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
@@ -17,23 +29,22 @@ const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
 // Stable spy (not the shared `mutation` stub, which mints a fresh vi.fn per call) so the tests
 // below can assert WHAT the convergence action sent - specifically that `confirm: true` only ever
 // leaves the dialog.
-const convergeMutate = vi.fn(
-  (_vars?: { limit?: number; confirm?: boolean }, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.()
+const convergeMutate = vi.fn((_vars?: { limit?: number; confirm?: boolean }, opts?: { onSuccess?: () => void }) =>
+  opts?.onSuccess?.()
 );
 // Lifecycle lists default to in-flight (undefined); a test can resolve them to drive the
 // empty-section rendering.
 const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+// The needs-attention list defaults to EMPTY, not in-flight: its section renders only when
+// non-empty, so an empty default is what keeps every other case in this file unaffected.
+const useGetTransitionalDataLakes = vi.fn(() => ({ data: [] as unknown[] | undefined }));
+const retryMutate = vi.fn();
 // LakeInfoPanel's Drive chip and the purge dialog's warning both read the connection. Default to
 // "no connection" so existing cases are unaffected; the Drive-specific cases override it.
 const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: false, isLoading: false }));
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => useLakeDriveConnection(),
-  DRIVE_STATUS_BADGE: {
-    connected: { label: 'Connected', color: 'success' },
-    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-    credential_error: { label: 'Credential error', color: 'danger' },
-  },
 }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
@@ -45,10 +56,19 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
     useGetArchivedDataLakes: () => useGetArchivedDataLakes(),
     useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
+    useGetTransitionalDataLakes: () => useGetTransitionalDataLakes(),
+    useRetryLakeLifecycle: () => ({ mutate: retryMutate, isPending: false }),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
     // LakeInfoPanel renders <LakeHealthBadge> unconditionally; the badge renders null on no data.
     useGetDataLakeHealth: () => ({ data: undefined, isLoading: false }),
+    useGetLakeMemoryHealth: () => ({ data: undefined, isLoading: false }),
+    useBuildLakeMemory: mutation,
+    usePurgeLakeMemory: mutation,
+    // The duplicates chip in the info panel reads this. A factory mock replaces the whole module,
+    // so an unlisted export is `undefined` and every render here throws - not a missing assertion
+    // but 41 broken tests.
+    useGetLakeMembershipDuplicates: () => ({ data: undefined, isLoading: false }),
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),
@@ -74,6 +94,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
         lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
       },
     }),
+    // The nav's in-lake tree is DataLakeTreeView, which calls this even with no `source` (the
+    // manager passes none, so cross-tree search stays off) - it still has to exist on the mock.
+    useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
     // The access modal (mounted by the panel) pulls these from this module; the modal itself is
     // covered by its own suite, so a quiet stub keeps this mock complete (see the missing-export trap).
     useLakeAccessView: () => ({ data: undefined, isLoading: false, isError: false }),
@@ -107,8 +130,9 @@ vi.mock('./TaxonomyReviewPanel', () => ({
 }));
 
 const lakeFiles = [
-  { id: 'f1', fileName: 'war.md', tags: [{ name: 'lk:genre:war' }] },
-  { id: 'f2', fileName: 'peace.md', tags: [{ name: 'lk:genre:peace' }] },
+  { id: 'f1', fileName: 'war.md', userId: 'u-owner', tags: [{ name: 'lk:genre:war' }] },
+  // Uploaded by someone else: a lake owner may remove it, but never destroy it.
+  { id: 'f2', fileName: 'peace.md', userId: 'u-contributor', tags: [{ name: 'lk:genre:peace' }] },
   // No prefix-matching tag -> must surface under the Uncategorized bucket.
   { id: 'f3', fileName: 'loose.md', tags: [{ name: 'datalake:mine' }] },
   // A BARE prefix is not a category anyone can navigate to, so the server counts this file as
@@ -146,11 +170,27 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 // The right-pane reader and the settings editor have their own suites - stub them so this
 // one exercises only the manager's navigation/affordance wiring.
 vi.mock('./DataLakeArticlePanel', () => ({
-  default: ({ file }: { file: { fileName: string } | null }) => <div data-testid="mock-article">{file?.fileName}</div>,
+  default: ({
+    file,
+    canManage,
+    canPurge,
+  }: {
+    file: { fileName: string } | null;
+    canManage?: boolean;
+    canPurge?: boolean;
+  }) => (
+    <div data-testid="mock-article" data-can-manage={String(!!canManage)} data-can-purge={String(!!canPurge)}>
+      {file?.fileName}
+    </div>
+  ),
 }));
 vi.mock('./DataLakeSettingsModal', () => ({
   DataLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
     lake ? <div data-testid="mock-settings">{lake.name}</div> : null,
+}));
+vi.mock('./FallbackLakeSettingsModal', () => ({
+  FallbackLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
+    lake ? <div data-testid="mock-fallback-settings">{lake.name}</div> : null,
 }));
 // The public catalog has its own suite; here we only assert the manager routes to it.
 vi.mock('./DataLakeDiscoverPanel', () => ({
@@ -224,6 +264,8 @@ const rerenderPanel = (rerender: (ui: ReactNode) => void) =>
   );
 
 beforeEach(() => {
+  userState.isAdmin = false;
+  userState.currentUser = { id: 'u-owner' };
   isFeatureEnabled.mockReset();
   isFeatureEnabled.mockReturnValue(true);
   useGetDataLakes.mockReset();
@@ -249,6 +291,9 @@ beforeEach(() => {
   useGetArchivedDataLakes.mockReturnValue({ data: undefined });
   useGetDeletedDataLakes.mockReset();
   useGetDeletedDataLakes.mockReturnValue({ data: undefined });
+  useGetTransitionalDataLakes.mockReset();
+  useGetTransitionalDataLakes.mockReturnValue({ data: [] });
+  retryMutate.mockClear();
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
   useDataLakeWizardStore.setState({ managerTab: 'mine' });
@@ -401,6 +446,44 @@ describe('DataLakeManagerPanel - root view', () => {
     renderPanel();
     await user.click(screen.getByTestId('field-tooltip-data-lake-panel'));
     expect(screen.getByTestId('datalake-manager-lake-mine')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeManagerPanel - pending-proposal chip', () => {
+  it('advertises the waiting review count on the lake row', () => {
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 4 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 to review');
+  });
+
+  it('omits the chip at zero, so a row with nothing waiting is unchanged', () => {
+    // The guard is truthiness, not presence: a `!== undefined` check would render "0 to review"
+    // and invent a queue for every lake that has ever been reviewed clean.
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 0 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-mine')).not.toBeInTheDocument();
+    // The row still renders its ordinary content - the chip's absence costs nothing else.
+    expect(screen.getByTestId('datalake-manager-lake-mine')).toHaveTextContent('Mine');
+  });
+
+  it('omits the chip when the server sends no count at all', () => {
+    // The server omits the field for a lake the caller cannot manage, so a reader must see nothing.
+    renderPanel();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-mine')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-theirs')).not.toBeInTheDocument();
+  });
+
+  it('says "source is" for one and "sources are" for many', async () => {
+    const user = userEvent.setup();
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 1 }], isLoading: false });
+    const { rerender } = renderPanel();
+    await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
+    expect(await screen.findByText('1 source is waiting for your review')).toBeInTheDocument();
+
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 3 }], isLoading: false });
+    rerenderPanel(rerender);
+    await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
+    expect(await screen.findByText('3 sources are waiting for your review')).toBeInTheDocument();
   });
 });
 
@@ -636,6 +719,67 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-settings-btn-adminview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-adminview')).toBeInTheDocument();
   });
+
+  it('withholds the permanent-delete door from a non-owning manager, who can still manage', async () => {
+    // The rung split that matters: a curator or org admin manages membership (canManage) but must
+    // not be shown a destructive button the service will refuse - purge follows ownership.
+    const curatorView = { ...mineLake, canManage: true, isOwn: false };
+    useGetDataLakes.mockReturnValue({ data: [curatorView], isLoading: false });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-war'));
+    await user.click(screen.getByTestId('datalake-manager-file-f1'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-manage', 'true');
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'false');
+  });
+
+  it('gives the owner the permanent-delete door on their own file', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-war'));
+    await user.click(screen.getByTestId('datalake-manager-file-f1'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'true');
+  });
+
+  it("withholds it from the LAKE owner on a contributor's file, which they can still manage", async () => {
+    // The half of the rule `isOwn` alone cannot cover, and the reachable one: `restrictToDataLake`
+    // drops the ownership arms from the browse, so a lake owner really does see files they did not
+    // upload. Destroying one would take it out of that contributor's own Files list and chats -
+    // `purgeDataLakeDocument` refuses it, and the button must not be there to refuse.
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-peace'));
+    await user.click(screen.getByTestId('datalake-manager-file-f2'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-manage', 'true');
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'false');
+  });
+
+  it('gives a platform admin the door on a file they do not own', async () => {
+    // The deliberate escape hatch the service allows; without this case the `|| isAdmin` arm could
+    // be deleted and every other purge case here would stay green.
+    userState.isAdmin = true;
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-peace'));
+    await user.click(screen.getByTestId('datalake-manager-file-f2'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'true');
+  });
 });
 
 /**
@@ -705,13 +849,59 @@ describe('DataLakeManagerPanel - canRebuild is narrower than canManage (fallback
   });
 });
 
+describe('DataLakeManagerPanel - canManageSettings gates the fallback-lake settings editor', () => {
+  it('shows the fallback Settings button (not the DB-lake one) for an admin, and opens the narrower modal', async () => {
+    useGetDataLakes.mockReturnValue({
+      data: [{ ...fallbackLakeAsAdmin, canManageSettings: true }],
+      isLoading: false,
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+    expect(screen.queryByTestId('datalake-settings-btn-opti-knowledge')).toBeNull();
+
+    const fallbackSettingsBtn = screen.getByTestId('datalake-fallback-settings-btn-opti-knowledge');
+    await user.click(fallbackSettingsBtn);
+
+    expect(screen.getByTestId('mock-fallback-settings')).toHaveTextContent('Optimization Knowledge Base');
+  });
+
+  it('hides the fallback Settings button for a non-admin on the same lake (canManageSettings false)', async () => {
+    useGetDataLakes.mockReturnValue({
+      data: [{ ...fallbackLakeAsAdmin, canManageSettings: false }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    await screen.findByTestId('datalake-manager-lake-opti-knowledge');
+    fireEvent.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+
+    expect(await screen.findByTestId('datalake-manager-nav')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-fallback-settings-btn-opti-knowledge')).toBeNull();
+  });
+
+  it('does NOT show the fallback Settings button on a DB lake the caller manages (it already has the full editor)', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-fallback-settings-btn-mine')).toBeNull();
+  });
+});
+
 /**
  * The taxonomy-status UI (queued/analyzing/ready/failed chips + review panel) used to live only
  * in the orphaned DataLakeListPanel - this is the port of that functionality into the panel
  * that's actually reachable in the app.
  */
 describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
-  const batch = (overrides: Record<string, unknown> = {}) => ({
+  // Typed rather than Record<string, unknown>: a misspelt override there is an inert extra
+  // property that silently leaves the default in force. Note this is an editor-and-review guard
+  // only - apps/client/tsconfig.json excludes *.test.ts(x), so CI never typechecks this file.
+  const batch = (overrides: Partial<IDataLakeBatchSummary> = {}) => ({
     id: 'b1',
     dataLakeId: 'mine',
     taxonomyStatus: 'ready',
@@ -728,15 +918,18 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     expect(screen.queryByTestId('datalake-manager-taxonomy-review-chip-mine')).toBeNull();
   });
 
-  it('shows the in-progress indicator in the sidebar and the right pane while queued/analyzing', async () => {
-    useActiveDataLakeBatches.mockReturnValue({ data: [batch({ taxonomyStatus: 'analyzing' })] });
-    const user = userEvent.setup();
-    renderPanel();
+  it.each(['queued', 'analyzing'] as const)(
+    'shows the in-progress indicator in the sidebar and the right pane while %s',
+    async status => {
+      useActiveDataLakeBatches.mockReturnValue({ data: [batch({ taxonomyStatus: status })] });
+      const user = userEvent.setup();
+      renderPanel();
 
-    expect(screen.getByTestId('datalake-manager-taxonomy-progress-mine')).toBeInTheDocument();
-    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
-    expect(screen.getByTestId('datalake-manager-taxonomy-progress-chip-mine')).toHaveTextContent('AI tagging');
-  });
+      expect(screen.getByTestId('datalake-manager-taxonomy-progress-mine')).toBeInTheDocument();
+      await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+      expect(screen.getByTestId('datalake-manager-taxonomy-progress-chip-mine')).toHaveTextContent('AI tagging');
+    }
+  );
 
   it('opens the review panel with the right batch and prefix from the sidebar indicator', async () => {
     useActiveDataLakeBatches.mockReturnValue({ data: [batch()] });
@@ -785,7 +978,7 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toBeInTheDocument();
 
-    // 'applied' isn't in the attention set, so the batch disappears from the list response.
+    // Once ingest also finishes, an applied batch is in neither server finder and leaves the list.
     useActiveDataLakeBatches.mockReturnValue({ data: [] });
     rerenderPanel(rerender);
 
@@ -813,19 +1006,48 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     expect(screen.getByTestId('datalake-manager-taxonomy-failed-mine')).toBeInTheDocument();
     await user.click(screen.getByTestId('datalake-manager-taxonomy-failed-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-id', 'b1');
+
+    await user.click(screen.getByTestId('mock-taxonomy-review-close'));
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.getByTestId('datalake-manager-taxonomy-failed-chip-mine')).toBeInTheDocument();
   });
 
+  // A batch whose taxonomy phase is already resolved ('applied') but whose ingest is still
+  // running stays in the batches list, and the server's ingest-active finder puts it AHEAD of
+  // the sibling awaiting review. It used to take the lake's one chip slot and render nothing,
+  // so the review surface silently did not exist. Both consumer surfaces are asserted. The
+  // squatter's id sorts before the winner's on purpose, so a selector that ranked nothing and fell
+  // through to the id tie-break would answer 'a-still-ingesting' and fail here.
   it('prefers the taxonomy-attention batch when a lake has more than one active batch', async () => {
-    // An ingest-only batch (taxonomyStatus 'none') alongside the one actually awaiting review -
-    // the attention-worthy one must win, not whichever happens to come first in the list.
     useActiveDataLakeBatches.mockReturnValue({
-      data: [batch({ id: 'ingest-only', taxonomyStatus: 'none' }), batch({ id: 'b1', taxonomyStatus: 'ready' })],
+      data: [
+        batch({ id: 'a-still-ingesting', taxonomyStatus: 'applied' }),
+        batch({ id: 'b1', taxonomyStatus: 'ready' }),
+      ],
     });
     const user = userEvent.setup();
     renderPanel();
 
     await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-id', 'b1');
+
+    await user.click(screen.getByTestId('mock-taxonomy-review-close'));
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.getByTestId('datalake-manager-taxonomy-review-chip-mine')).toBeInTheDocument();
+  });
+
+  // The nastier variant: an in-progress sibling DOES render, so the ready batch was masked
+  // behind a plausible-looking "AI tagging..." state rather than showing nothing. As in the
+  // test above, the sibling's id sorts before the winner's on purpose - rename it after 'b1'
+  // and a selector that ranked nothing would pass here on the id tie-break alone.
+  it('does not let an in-progress sibling mask the batch awaiting review', async () => {
+    useActiveDataLakeBatches.mockReturnValue({
+      data: [batch({ id: 'analyzing', taxonomyStatus: 'analyzing' }), batch({ id: 'b1', taxonomyStatus: 'ready' })],
+    });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-manager-taxonomy-review-mine')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-taxonomy-progress-mine')).toBeNull();
   });
 });
 
@@ -1047,5 +1269,135 @@ describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
     expect(screen.getByTestId('datalake-converge-confirm')).toHaveTextContent(
       '4 file(s) are excluded because another data lake requires a different passage target'
     );
+  });
+});
+
+describe('DataLakeManagerPanel - needs-attention section', () => {
+  /** A lake stranded mid-lifecycle, as GET /api/data-lakes/transitional serves it. `retryAction`
+   *  is resolved server-side, so the fixture states it rather than deriving it from the status -
+   *  which is the point: for 'restoring' the two differ per axis. */
+  const strandedLake = (status: string, id = 'stuck', retryAction?: string) => ({
+    id,
+    name: `Stuck ${id}`,
+    slug: id,
+    fileTagPrefix: 'st:',
+    status,
+    updatedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+    retryAction,
+  });
+
+  it('renders no section at all when nothing is stranded', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [] });
+    renderPanel();
+    // Absent, not an empty "No files" header like Archived/Deleted: on a healthy install this
+    // section is not part of the app's furniture.
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+
+  it('renders no section while the list is still in flight', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: undefined });
+    renderPanel();
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+
+  it('shows a stranded lake with the status it is stuck in', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving', 'stuck', 'archive')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-section')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-transitional-section-toggle')).toHaveTextContent('Needs attention');
+    // The status is the row's whole point: without it the reader cannot tell what Retry will do.
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('archiving');
+  });
+
+  // The service deliberately lists a lake whose `updatedAt` it could not parse (an absent
+  // timestamp proves nothing about being busy), so the tooltip must not then advertise the gap.
+  it('drops the since clause for a lake with an unparseable timestamp', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({
+      data: [{ ...strandedLake('archiving', 'stuck', 'archive'), updatedAt: undefined }],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.hover(screen.getByTestId('datalake-transitional-status-stuck'));
+    expect(await screen.findByText("In 'archiving'")).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
+  });
+
+  it('retries with the action the row carries, not one derived from the status', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('deleting', 'stuck', 'delete')] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-stuck'));
+    const retry = screen.getByTestId('datalake-retry-btn-stuck');
+    // The action is named on the item, not left as a bare "Retry" - the reader is about to re-run
+    // a lifecycle operation and must see which one.
+    expect(retry).toHaveTextContent('Retry delete');
+    await user.click(retry);
+
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', action: 'delete' });
+  });
+
+  // 'restoring' is held by both reversal axes, so the row must post whatever the server resolved -
+  // a client that mapped the status to a fixed action would send an archive-axis lake through the
+  // delete-axis recovery, which strands it past any UI path back.
+  it.each([
+    ['unarchive', 'Retry unarchive'],
+    ['restore', 'Retry restore'],
+  ])('posts %s for a restoring row the server resolved that way', async (action, label) => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('restoring', 'stuck', action)] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-stuck'));
+    expect(screen.getByTestId('datalake-retry-btn-stuck')).toHaveTextContent(label);
+    await user.click(screen.getByTestId('datalake-retry-btn-stuck'));
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', action });
+  });
+
+  it('lists a restoring lake the server could not resolve an axis for, read-only', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('restoring')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('restoring');
+    expect(screen.queryByTestId('datalake-retry-btn-stuck')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-stuck')).not.toBeInTheDocument();
+  });
+
+  it('lists a purging lake read-only, with no retry and no dead menu trigger', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('purging')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('purging');
+    // A purge is already accepted and its sweep irreversible, so there is nothing to retry - and
+    // the row must not offer a menu trigger that would open empty.
+    expect(screen.queryByTestId('datalake-retry-btn-stuck')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-stuck')).not.toBeInTheDocument();
+  });
+
+  it('keeps the retryable rows actionable when a purging lake is listed beside them', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({
+      data: [strandedLake('purging', 'purger'), strandedLake('archiving', 'archiver', 'archive')],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-purger')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-archiver'));
+    await user.click(screen.getByTestId('datalake-retry-btn-archiver'));
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'archiver', action: 'archive' });
+  });
+
+  // The section gates on non-empty, and the sidebar search narrows it: gating on the unfiltered
+  // list would render a header with an empty body and no empty-state label.
+  it('drops the whole section when the search matches no stranded lake', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving', 'stuck', 'archive')] });
+    const user = userEvent.setup();
+    renderPanel();
+    expect(screen.getByTestId('datalake-transitional-section')).toBeInTheDocument();
+
+    await user.type(screen.getByTestId('datalake-manager-search').querySelector('input')!, 'zzz');
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
   });
 });

@@ -8,6 +8,7 @@ import {
   DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX,
   DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT,
   DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
+  DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
   DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT,
   DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
   DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
@@ -39,6 +40,7 @@ const settings = (overrides: Record<string, string | null> = {}): Record<string,
   dataLakeEmbeddingBudgetPerPeriodUsd: null,
   dataLakeEmbeddingBudgetPeriodHours: null,
   dataLakeEmbeddingMaxCallsPerMinute: null,
+  dataLakeEmbeddingMaxTokensPerMinute: null,
   dataLakeVectorizeChunkBatchSize: null,
   dataLakeEmbeddingTierMultiplierIndividual: null,
   dataLakeEmbeddingTierMultiplierOrganization: null,
@@ -60,6 +62,7 @@ describe('resolveSpendLevers', () => {
       perPeriodBudgetMicroUsd: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT * MICRO_USD_PER_USD,
       periodHours: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT,
       maxCallsPerMinute: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
+      maxTokensPerMinute: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
       vectorizeChunkBatchSize: DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
       // No owner passed, so the more restrictive tier applies - which is the individual one
       // while the individual default is the smaller of the two.

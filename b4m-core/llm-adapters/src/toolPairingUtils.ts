@@ -335,3 +335,49 @@ export const stripAllToolBlocks = (
 
   return result;
 };
+
+/**
+ * Restores `input: {}` on any `tool_use` block that reached us without one.
+ *
+ * `MessageContentToolUse.input` is non-optional in the type system, so nothing upstream checks it -
+ * but a message that round-trips through a persistence or serialization layer can lose it. The
+ * known offender is Mongoose's default `minimize`, which deletes empty objects on
+ * `toObject()`/`toJSON()`: a zero-argument tool call (`current_datetime`, `mission_status`, ...)
+ * stores `input: {}` and reads back with the key gone. Anthropic then rejects the whole request
+ * with "messages.N.content.M.tool_use.input: Field required", killing a resumed agent run or a
+ * chat turn that replays history.
+ *
+ * The schema that caused it is fixed at the source (`minimize: false` on AgentExecutionModel), so
+ * this is the last line of defense for every other store that replays blocks verbatim -
+ * `QuestModel.structuredReplies[].content` is the same Mixed-under-default-minimize shape and is
+ * deliberately covered here rather than by widening that hot collection's schema. The cost of a
+ * miss is a hard 400, and `{}` is the only value a zero-argument call could have had.
+ *
+ * Returns the input array unchanged (same reference) when nothing needed repair.
+ */
+export const normalizeToolUseInputs = (messages: IMessage[], logger?: { warn: (msg: string) => void }): IMessage[] => {
+  let repaired = 0;
+
+  const result = messages.map(message => {
+    if (!Array.isArray(message.content)) return message;
+    let messageChanged = false;
+
+    const content = message.content.map(block => {
+      if (block.type !== 'tool_use') return block;
+      const toolUse = block as MessageContentToolUse;
+      if (toolUse.input !== null && typeof toolUse.input === 'object') return block;
+      repaired++;
+      messageChanged = true;
+      return { ...toolUse, input: {} };
+    });
+
+    return messageChanged ? { ...message, content } : message;
+  });
+
+  if (repaired === 0) return messages;
+
+  logger?.warn(
+    `[Tool Input Repair] Restored empty input on ${repaired} tool_use block(s) that lost it in serialization`
+  );
+  return result;
+};

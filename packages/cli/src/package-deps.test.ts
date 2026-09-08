@@ -21,6 +21,7 @@ const pkg = JSON.parse(readFileSync(join(CLI_ROOT, 'package.json'), 'utf-8')) as
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 };
 
 const productionDeps = new Set([
@@ -103,5 +104,20 @@ describe('CLI dependency audit', () => {
           `Move them from devDependencies to dependencies in packages/cli/package.json.`
       );
     }
+  });
+
+  // The inverse of the audit above, and the cheaper half: workspace packages are bundled
+  // into dist/, not published, so declaring one as installable makes `npm install
+  // @bike4mind/cli` 404 for every consumer. The audit above cannot catch it -- its
+  // isExternalPackage filter short-circuits the @bike4mind scope before the
+  // declared-deps comparison runs. Keep them as devDependencies.
+  it('declares no @bike4mind/* package as an installable dependency', () => {
+    const declared = (['dependencies', 'optionalDependencies', 'peerDependencies'] as const).flatMap(field =>
+      Object.keys(pkg[field] ?? {})
+        .filter(name => name.startsWith('@bike4mind/'))
+        .map(name => `${name} (in "${field}")`)
+    );
+
+    expect(declared).toEqual([]);
   });
 });

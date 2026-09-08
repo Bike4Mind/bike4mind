@@ -288,4 +288,92 @@ describe('assertLakeAdmission', () => {
     ];
     await expect(assertLakeAdmission(lakes, [{ userId: 'u1' }], { db })).rejects.toThrow(/Strict/);
   });
+
+  // #2248's restore path: not a join, so it must never be blockable regardless of the install's
+  // own EnforceLakeAdmission lever.
+  describe('forceReportOnly', () => {
+    it('grades report-only even when EnforceLakeAdmission is true for the lake, and never resolves it', async () => {
+      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake-1')]);
+
+      const verdict = await assertLakeAdmission(
+        [lake({ requiredPassageTokenTarget: 1000 })],
+        [{ userId: 'u1' }],
+        { db },
+        { forceReportOnly: true }
+      );
+
+      expect(verdict.status).toBe('quarantined');
+      expect(verdict.status === 'quarantined' && verdict.enforced).toBe(false);
+      const resolvedKeys = db.scopedSettings.findOverrides.mock.calls.map(([, names]) => (names as string[]).join(','));
+      expect(resolvedKeys).not.toContain('EnforceLakeAdmission');
+    });
+
+    it('still logs the violation as a warning', async () => {
+      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' });
+      const warn = vi.fn();
+
+      await assertLakeAdmission(
+        [lake({ requiredPassageTokenTarget: 1000 })],
+        [{ userId: 'u1' }],
+        { db, logger: { warn } },
+        { forceReportOnly: true }
+      );
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('report-only'));
+    });
+
+    // The lever is ON for this lake, which is what makes the `false` case discriminating: with no
+    // `enforcingLake` in the fixture both branches of the short-circuit return an empty enforcing
+    // set, so the assertion held whichever one ran. `false` is a LIVE production value - cold add
+    // passes `forceReportOnly: isRestore` with `isRestore === false` (addFileToDataLake.ts) - so
+    // "an explicit false still enforces" is a real contract and not a hypothetical.
+    it('ENFORCES when omitted or explicitly false, even though `true` on the same lake grades report-only', async () => {
+      const enforcing = () =>
+        settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake-1')]);
+
+      await expect(
+        assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], { db: enforcing() })
+      ).rejects.toThrow(/requires passages of 1000 tokens/);
+
+      await expect(
+        assertLakeAdmission(
+          [lake({ requiredPassageTokenTarget: 1000 })],
+          [{ userId: 'u1' }],
+          { db: enforcing() },
+          { forceReportOnly: false }
+        )
+      ).rejects.toThrow(/requires passages of 1000 tokens/);
+
+      // Same lake, same lever, only the flag differs - so the pair pins the flag itself rather than
+      // the fixture.
+      const forced = await assertLakeAdmission(
+        [lake({ requiredPassageTokenTarget: 1000 })],
+        [{ userId: 'u1' }],
+        { db: enforcing() },
+        { forceReportOnly: true }
+      );
+      expect(forced.status === 'quarantined' && forced.enforced).toBe(false);
+    });
+
+    // The whole point of moving this off `LakeAdmissionAdapters`: the adapters bag is spread (by
+    // callers, and by this module when it settles `embeddingModel`), so a flag living there could
+    // ride a `{ ...adapters }` into a door that never asked to disable enforcement. It is now
+    // positional, and a stray property on the adapters object must do nothing at all.
+    it('IGNORES forceReportOnly smuggled in via the adapters bag - it is positional policy, not an adapter', async () => {
+      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake-1')]);
+
+      // Still THROWS - i.e. still enforced. Passing the same flag positionally makes this resolve
+      // report-only (the first test in this block), so the rejection is what proves the adapters
+      // bag is not a second, silent way in.
+      await expect(
+        assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
+          db,
+          // any: deliberately passing a property the adapter type no longer declares, which is the
+          // exact smuggling this test exists to reject - a typed object could not express it.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ...({ forceReportOnly: true } as any),
+        })
+      ).rejects.toThrow(/requires passages of 1000 tokens/);
+    });
+  });
 });

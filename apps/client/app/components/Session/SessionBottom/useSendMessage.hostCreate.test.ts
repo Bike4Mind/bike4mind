@@ -43,7 +43,8 @@ describe('useSendMessage — host-managed first-message creation (regression)', 
   });
 
   it('resets submitting state on the host-create early-return path', () => {
-    // setSubmitting(true) is a re-entrancy lock at the top of handleSendClick.
+    // setSubmitting(true) is a re-entrancy lock at the top of runSendClick (the
+    // send body that `handleSendClick` wraps).
     // The host-create path must call setSubmitting(false) before returning so the
     // UI is not left stuck in a submitting state.
     expect(source).toMatch(/await hostCreateSession\(prompt\);[\s\S]*?setSubmitting\(false\);[\s\S]*?return;/);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { distinctIdCount } from '../utils/objectIds';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import {
   IAdminSettingsRepository,
@@ -13,7 +14,7 @@ import {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import { assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
-import { canManageLake } from '../dataLakeService/manageRule';
+import { canManageLake, isEffectiveOwner, resolveEffectiveOwnerIds } from '../dataLakeService/manageRule';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
@@ -51,12 +52,32 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
+  /**
+   * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
+   * does). It cannot be read off the user document, so omitting it drops the two org rungs of
+   * `canManageLake` from every gate below - making this door strictly narrower than the route gate
+   * in front of it. Same adapter, for the same reason, as `createFabFile`'s and `updateFabFile`'s.
+   */
+  administeredOrgIds?: string[];
 }
 
 const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
   (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
 
 const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DATALAKE_TAG_PREFIX);
+
+/**
+ * How many lakes this call joined a file to solely by a `fileTagPrefix` content tag, with no
+ * `datalake:*` meta-tag ever applied - the trap this field exists to surface. A count, not the
+ * joined lakes' ids/tags: the batch is resolved against `shareable.findAllAccessibleByIds`, which
+ * admits read-share access, so the caller applying the tag may not be entitled to see the lake
+ * this file's OWNER was joined to (it is resolved from the file's owner, not the caller - see
+ * `loadPrefixArmCandidateLakes`). The one consumer only ever reduces this to "did anything join,
+ * and roughly how much", so a count is all it needs.
+ */
+export type ToggledFabFile = IFabFileDocument & {
+  prefixArmJoinedLakeCount?: number;
+};
 
 /**
  * The one toggle decision `toggleOrdinaryTag` (the real write) and `predictToggleResult` (its
@@ -91,7 +112,11 @@ const matchingStoredNames = (storedNames: readonly string[], tag: string): strin
  * file fails mid-batch, the files already written stay written. Every write is idempotent, so
  * retrying the same call converges rather than double-applying.
  */
-export const toggleTags = async (userId: string, params: unknown, { db, logger }: FabFileToggleTagsAdapters) => {
+export const toggleTags = async (
+  userId: string,
+  params: unknown,
+  { db, logger, administeredOrgIds }: FabFileToggleTagsAdapters
+): Promise<ToggledFabFile[]> => {
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
 
   // Toggling one tag twice in a request is meaningless, and acting on it twice is harmful: the
@@ -112,16 +137,22 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   // Only get files that the user has update access to
   const fabFiles = await db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
 
-  // Check if user has permission to update all requested files
-  if (fabFiles.length !== ids.length) {
-    throw new Error('Some files are not accessible or you do not have permission to edit them');
+  // Check if user has permission to update all requested files. Counted as a Set for the same
+  // reason `tags` is deduped above: the reader returns distinct rows, so a file sent twice is not
+  // one that could not be reached, and every write here is idempotent.
+  if (fabFiles.length !== distinctIdCount(ids)) {
+    // BadRequestError, not a bare Error - see projectService/addFiles.
+    throw new BadRequestError('Some files are not accessible or you do not have permission to edit them');
   }
 
-  const actor = { userId, isAdmin: !!user.isAdmin };
+  const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
   // Grant-aware manage gates below: consult each lake's active grants so a transferred lake's
   // superseded creator does not still pass. Batched + cached across both prefix-arm gate passes.
-  // (This file-tag door is file-owner-centric and does not resolve the org-admin rung; org admins
-  // manage lakes through the dedicated data-lake endpoints.)
+  // The org rungs fire only when the caller resolved `administeredOrgIds` for us - the route door
+  // does, so an org admin the route just authorized is not refused by `addFileToLake` one call
+  // later. This actor gates every hop `canManageLake` admits, not only the join above: the
+  // prefix-arm removal gate below and both `removeFileFromLake` calls widen the same way, so an
+  // org admin can now strip a file out of an org lake, not just add one.
   const grantResolver = makeLakeGrantResolver({ db });
 
   // A lake a file belongs to ONLY via its prefix arm (no meta-tag) is invisible to
@@ -255,6 +286,7 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   // every lake it is handed, so flattening this would check file A against a lake only file B is
   // joining and invent violations that do not exist.
   if (tags.some(isDataLakeTag)) {
+    const metaJoinsByFile = new Map<string, MembershipLake[]>();
     for (const file of fabFiles) {
       const currentNames = storedTagNames(file);
       const joiningLakes: MembershipLake[] = [];
@@ -263,7 +295,35 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
         const lake = await resolveLake(tag);
         if (!currentNames.includes(lake.datalakeTag)) joiningLakes.push(lake);
       }
-      if (joiningLakes.length === 0) continue;
+      if (joiningLakes.length > 0) metaJoinsByFile.set(file.id, joiningLakes);
+    }
+    await grantResolver.prime([...metaJoinsByFile.values()].flat());
+
+    // Same cold-add ownership conjunct `addFileToDataLake` applies before its call into this same
+    // `addFileToLake` write (see its docblock): membership IS read access (the meta-tag arm of
+    // `buildDataLakeMembershipFilter` carries no ownership conjunct), so admitting any manage-gate
+    // rung to stamp the tag on a file it does not own would publish a non-consenting owner's
+    // private, merely read-shared file to every reader of the lake. `addFileToLake` itself cannot
+    // carry this check - `addFileToDataLake`'s restore path calls it deliberately WITHOUT one - so
+    // it is graded here, in the same all-or-nothing pre-write pass as the admission contract below.
+    for (const file of fabFiles) {
+      const joiningLakes = metaJoinsByFile.get(file.id);
+      if (!joiningLakes) continue;
+      for (const lake of joiningLakes) {
+        const grants = grantResolver.get(lake.id);
+        const isOwner =
+          file.userId === actor.userId ||
+          ((actor.isAdmin || isEffectiveOwner(lake, actor, grants)) &&
+            resolveEffectiveOwnerIds(lake, grants).includes(file.userId));
+        if (!isOwner) {
+          throw new BadRequestError('You do not have permission to add files to this data lake');
+        }
+      }
+    }
+
+    for (const file of fabFiles) {
+      const joiningLakes = metaJoinsByFile.get(file.id);
+      if (!joiningLakes) continue;
       await assertLakeAdmission(
         joiningLakes,
         [{ id: file.id, userId: file.userId, chunkedPassageTokenTarget: file.chunkedPassageTokenTarget }],
@@ -432,5 +492,26 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
 
   // Re-read: the writes above are element-level, so the documents loaded earlier no longer
   // reflect what is stored.
-  return db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+  const freshFiles = await db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+
+  // Surfaces the trap: a content-prefix tag can join a file to a lake with no
+  // `datalake:*` meta-tag ever applied, and the caller who reached for an ordinary tag has no way
+  // to know that happened. Attached per-file rather than returned as a separate list, since the
+  // route's response shape is an `IFabFileDocument[]` other callers already depend on - this rides
+  // along as an extra property on the documents they already receive instead of changing it.
+  //
+  // `.toJSON()` FIRST: `freshFiles` are hydrated Mongoose documents (`shareable.findAllAccessibleByIds`
+  // does not lean or serialize them), and `res.json` on the route above serializes via the schema's
+  // `toJSON`, which only sees `_doc` plus declared virtuals - a bare own-property assigned onto the
+  // live document is silently dropped before it reaches the wire. Converting to a plain object first
+  // makes the property an ordinary key that survives JSON.stringify.
+  return freshFiles.map(file => {
+    const joins = prefixJoinsByFile.get(file.id);
+    // `IFabFileDocument` is a plain-data interface with no `toJSON` of its own - the runtime value
+    // here is the hydrated Mongoose document `shareable.findAllAccessibleByIds` actually returns.
+    const plain = (file as unknown as { toJSON(): IFabFileDocument }).toJSON() as ToggledFabFile;
+    if (!joins || joins.length === 0) return plain;
+    plain.prefixArmJoinedLakeCount = joins.length;
+    return plain;
+  });
 };

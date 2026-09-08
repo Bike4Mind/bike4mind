@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { ApiErrorCode } from '../apiErrorCodes';
+import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -63,6 +65,25 @@ export const SimplifiedChatRequestSchema = z.object({
   // Returned inline on this response only and never persisted, since a stored prompt would
   // reach every reader of the quest. Server-authored blocks stay redacted even here.
   includeSystemPrompt: z.boolean().optional(),
+  // Caller-supplied system-prompt text. No SPA control authors this, but it is not exclusive to
+  // this route: /api/ai/llm spreads its body into the same invoke params, so the browser-facing
+  // path reaches the field too.
+  //
+  // Rendered as a defended, deference-postured block appended after every other system-prompt
+  // source. The block's prose instructs the model to defer to org/session/lake guidance; that is
+  // instruction authority, NOT budget retention - under system-budget pressure this block is
+  // retained ahead of retrieval (SYSTEM_PROMPT_PRIORITY in systemPromptSources.ts), so it can
+  // outlive the lake grounding rather than yield to it.
+  systemPrompt: z
+    .string()
+    .max(PROMPT_TEXT_MAX)
+    .optional()
+    .describe(
+      'System-prompt text for this request only, never persisted. Rendered as a defended block ' +
+        'appended after every other system-prompt source, with prose instructing the model to ' +
+        'defer to organization, session and data-lake guidance. Over the cap is a 422, never ' +
+        'truncated.'
+    ),
 });
 
 export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
@@ -88,10 +109,24 @@ export const ChatAckSchema = z.object({
 
 export type ChatAck = z.infer<typeof ChatAckSchema>;
 
-/** Reusable JSON error envelope (plain; the OpenAPI layer annotates it). */
+/**
+ * Reusable JSON error envelope (plain; the OpenAPI layer annotates it).
+ *
+ * Must stay in sync with the published `ErrorResponse` component
+ * (../openapi/schemas.ts) - `openapi/errorEnvelopeParity.test.ts` pins the two
+ * together, and apps/client's errorHandler test uses this shape as the stand-in for
+ * the component, which is generate-time only and cannot be imported at runtime.
+ */
 export const ApiErrorSchema = z.object({
   error: z.string(),
   request_id: z.string().optional(),
+  /**
+   * Deprecated, sunset 2026-12-01. The `name` of whatever was thrown - our own error
+   * classes usually, a library/driver class name on an unhandled 500 - added to every
+   * body by apps/client's errorHandler. Documented here so the runtime and the spec
+   * agree while it is still served; do not build on it. See CONVENTIONS.md section 1.
+   */
+  name: z.string().optional(),
 });
 
 /**
@@ -99,9 +134,14 @@ export const ApiErrorSchema = z.object({
  * reasons: "your body is invalid" and "you cannot afford this". `errorCode` is
  * what separates them - `insufficientCreditsError` (see insufficientCredits.ts)
  * tags the credit case, so its absence means an ordinary validation failure.
+ *
+ * Derived from `ApiErrorSchema` rather than re-declaring `error`/`request_id`:
+ * both of those 422s are *thrown*, so errorHandler serves the body and adds
+ * `name`. Extending is what keeps that documented here (and what drops it again
+ * on the sunset date) instead of leaving a bespoke copy behind to drift.
  */
-export const InsufficientCreditsErrorSchema = z.object({
-  error: z.string(),
-  errorCode: z.literal('insufficient_credits').optional(),
-  request_id: z.string().optional(),
+export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
+  // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts,
+  // so a rename there breaks this rather than silently publishing a dead code.
+  errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
 });

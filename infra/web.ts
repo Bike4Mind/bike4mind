@@ -39,6 +39,8 @@ import {
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
   dataLakeTaxonomyQueueDLQ,
+  dataLakeResearchQueue,
+  dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
   driveLakeIngestQueue,
@@ -127,6 +129,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'bob-run': bobRunQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
+    'data-lake-research': dataLakeResearchQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
   },
@@ -182,6 +185,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
+    dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
   },
@@ -237,6 +241,12 @@ export const web = new sst.aws.Nextjs(
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
+      // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
+      // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
+      // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy
+      // THROWS on an unlinked key rather than returning undefined - so the route's optional-chained
+      // guard would never run and every start would 500.
+      dataLakeResearchQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
@@ -376,6 +386,13 @@ export const web = new sst.aws.Nextjs(
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.
       DISABLE_RESPONSE_GZIP: process.env.DISABLE_RESPONSE_GZIP || '',
+      // Comma-separated API-key scopes whose route gates are still rolling out
+      // (apps/client/server/middlewares/apiKeyScopeGate.ts). While a scope is listed,
+      // a route requiring it logs a missing-scope key instead of 403ing it, so
+      // production keys can be re-minted before enforcement starts. Empty (the
+      // default) enforces every declared gate. Declared here so the lever is
+      // greppable from infra; see docs/architecture/api-key-scope-rollout.md.
+      API_KEY_SCOPE_STAGING: process.env.API_KEY_SCOPE_STAGING || '',
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the

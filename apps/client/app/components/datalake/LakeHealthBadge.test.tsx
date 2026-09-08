@@ -89,6 +89,7 @@ const health = (over?: Record<string, unknown>) => ({
   affectedMembers: [],
   affectedMemberCount: 0,
   scanTruncated: false,
+  duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
   ...over,
 });
 

@@ -30,6 +30,11 @@ function isReasoningBlock(
 }
 
 export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
+  /** Reports done only on event.messageStop, so a missing terminal event means a truncated stream. */
+  protected override get signalsStreamTermination(): boolean {
+    return true;
+  }
+
   /** Suppresses reasoning/thinking output for summary and title generation calls. */
   private isSpecialTask = false;
   /** Tracks whether the stream is currently inside a reasoning span, to emit one <think>/</think> pair per span. */

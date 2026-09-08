@@ -1,3 +1,5 @@
+import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
  * `datalake:<org>:<slug>`). This meta-tag is what makes a file a MEMBER of a lake, so it is
@@ -118,6 +120,71 @@ export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix:
   prefixArmTagNames(tagNames, fileTagPrefix).length > 0;
 
 /**
+ * The prefix arm a membership scope RESOLVES TO, or null when the membership predicate drops it.
+ *
+ * The single decision behind two things that must never disagree: `buildDataLakeMembershipFilter`
+ * (`@bike4mind/database`) builds its prefix arm from this, and any caller that DISCLOSES the scope it
+ * queried reports it. Deriving a disclosure from the lake document instead is the bug this exists to
+ * prevent - it claims an arm the filter dropped, so a number computed over the meta-tag alone is
+ * presented as though the prefix arm had run (#2243). A registry lake is the reachable case: it has no
+ * backing document, so `createdByUserId` is `''` and an `owned` scope fails closed to meta-tag-only
+ * while the document still carries a real `fileTagPrefix`.
+ *
+ * Three reasons the arm is dropped, and the caller cannot tell them apart from the scope alone:
+ * an unusable prefix, a reserved-namespace one, and an `owned` scope with no creator to anchor to.
+ */
+export const effectiveTagPrefixArm = (scope: {
+  kind: 'owned' | 'registry';
+  fileTagPrefix?: string | null;
+  creatorUserId?: string | null;
+}): string | null => {
+  const prefix = normalizeTagPrefix(scope.fileTagPrefix);
+  if (!prefix || isReservedTagPrefix(prefix)) return null;
+  // An owned lake's prefix is user-chosen and unique only per creator, so with no creator there is
+  // nothing safe to match on. A registry prefix is compile-time config and needs no anchor.
+  //
+  // Tested as "not registry" rather than "is owned" so a scope that names NO kind fails closed. The
+  // type requires one, but callers build these by hand and an unrecognised kind must never be the
+  // thing that keeps an unanchored prefix arm alive - that arm widens the predicate to every file
+  // carrying the prefix, whoever owns it, on a path that also drives permanent deletion.
+  if (scope.kind !== 'registry' && !scope.creatorUserId) return null;
+  return prefix;
+};
+
+/**
+ * Which membership signal(s) a file carries for a lake: the `datalake:*` meta-tag ('meta'),
+ * a `fileTagPrefix` content tag ('prefix'), both, or neither (null - not a member). Exact JS
+ * mirror of `buildDataLakeMembershipFilter` (`@bike4mind/database`) so a UI badge and the
+ * read/lifecycle predicate can never disagree about why a file is a member.
+ *
+ * This closes a visibility gap: the two arms behave differently (an OWNED lake's prefix arm
+ * requires creator ownership; a REGISTRY lake's does not, and the meta-tag never does) but
+ * neither Files nor the lake manager UI previously surfaced which one applied.
+ */
+export type DataLakeMembershipArm = 'meta' | 'prefix' | 'both';
+
+export function getFileMembershipArm(
+  file: { userId: string; tags?: readonly { name?: unknown }[] },
+  scope: DataLakeMembershipScope
+): DataLakeMembershipArm | null {
+  const tagNames = (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
+  const hasMeta = tagNames.includes(scope.datalakeTag);
+  // Whether the prefix arm survives at all is `effectiveTagPrefixArm`'s decision, not a second copy
+  // of it - re-deriving it here is the exact disagreement this function exists to rule out. All that
+  // is left is the ownership conjunct buildDataLakeMembershipFilter pairs with the arm on an OWNED
+  // scope; a REGISTRY lake's prefix is compile-time config and carries no such conjunct.
+  const prefixArm = effectiveTagPrefixArm(scope);
+  const hasPrefix =
+    !!prefixArm &&
+    (scope.kind === 'registry' || file.userId === scope.creatorUserId) &&
+    matchesTagPrefixArm(tagNames, prefixArm);
+  if (hasMeta && hasPrefix) return 'both';
+  if (hasMeta) return 'meta';
+  if (hasPrefix) return 'prefix';
+  return null;
+}
+
+/**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
  * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
  * deleting either would take files the other holds.
@@ -161,6 +228,21 @@ export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
 };
 
 /**
+ * Storage-time bounds for one AI-inferred taxonomy category, shared by `sanitizeCategories`
+ * (utils/dataLakeTaxonomy.ts, the write path) and `ApplyTaxonomyRequestInput`'s Zod schema
+ * (schemas/dataLake.ts, the apply request's validation). These MUST agree: a category
+ * `sanitizeCategories` accepts and stores as `taxonomyStatus: 'ready'` has to be one apply's
+ * request schema will also accept, or the batch becomes permanently un-applyable - accepted at
+ * analysis time, then rejected on every apply attempt. Importing one shared source instead of
+ * two independently-hardcoded numbers is what keeps that from silently drifting.
+ */
+export const MAX_TAXONOMY_TAGS = 100;
+export const MAX_TAXONOMY_TAG_SUFFIX_LENGTH = 100;
+export const MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH = 150;
+export const MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG = 100;
+export const MAX_TAXONOMY_MATCHING_FOLDER_LENGTH = 512;
+
+/**
  * Length bounds for a `fileTagPrefix`, measured on the TRIMMED value INCLUDING its trailing ":" -
  * the same string `CreateDataLakeRequestInput` sizes after its own `.trim()`, so a value that is
  * exactly at the limit is judged identically on both sides.
@@ -173,6 +255,33 @@ export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
  */
 export const MIN_TAG_PREFIX_LENGTH = 2;
 export const MAX_TAG_PREFIX_LENGTH = 30;
+
+/**
+ * The longest a single tag name under a lake's prefix can be: the longest prefix plus the longest
+ * taxonomy suffix a name under it could carry. Derived rather than hardcoded so it tracks
+ * `MAX_TAG_PREFIX_LENGTH` and `MAX_TAXONOMY_TAG_SUFFIX_LENGTH` instead of drifting from either.
+ * This bounds what a caller may WRITE under a prefix; it does not bound what the upload path may
+ * already have stored there (folder-derived names are not truncated), so an existing name over
+ * this length is a real, legitimate possibility a replace-semantics door must account for.
+ */
+export const MAX_LAKE_FILE_TAG_NAME_LENGTH = MAX_TAG_PREFIX_LENGTH + MAX_TAXONOMY_TAG_SUFFIX_LENGTH;
+
+/**
+ * Length bounds and shape for a lake `slug`, owned here rather than by the create schema because
+ * the client PRODUCES the value it then sends: the wizard slugifies a lake name, truncates to the
+ * max, and gates Start Upload on the min, all before the schema ever sees the result. A produced
+ * value whose bound lives only in the schema is how the `fileTagPrefix` derive above came to hand
+ * users a prefix the server refused, so keep the schema, `slugifyDataLakeName`,
+ * `isValidDataLakeSlug`, the wizard's "name too short" copy and the 422 translator all reading
+ * these.
+ *
+ * The regex is shared for the same reason in the other direction: `slugifyDataLakeName` satisfies
+ * it BY CONSTRUCTION (it trims the edge hyphens truncation can expose), and the only thing that
+ * keeps that true is a test asserting against this exact pattern.
+ */
+export const MIN_DATA_LAKE_SLUG_LENGTH = 2;
+export const MAX_DATA_LAKE_SLUG_LENGTH = 60;
+export const DATA_LAKE_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
 
 /**
  * A typed prefix as the create request will actually carry it: trimmed, and closed with the
@@ -256,6 +365,12 @@ export interface DataLakeConfig {
    */
   isPublic?: boolean;
   /**
+   * Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Reader-visible, matching
+   * auditQueryTextEnabled's precedent - it answers "is the option on", not "is there a profile"
+   * (that is health's derived `lakeMemory.state`).
+   */
+  lakeMemoryEnabled?: boolean;
+  /**
    * Whether the requesting caller may WRITE/MANAGE this lake (add files, edit settings,
    * archive, remove files). Server-computed per request from the manage rule (admin or
    * creator; fallback lakes are read-only for everyone) - the SAME predicate the write
@@ -309,6 +424,24 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   isOwn: boolean;
   /**
+   * Whether the caller may name this lake in `preauthorizedLakeIds` at session create - i.e. the
+   * manage-but-not-member admission that lets a maintainer ground a scoped session on a lake the
+   * ordinary tag/entitlement gate would not give them.
+   *
+   * NOT the same predicate as `canManage`, and the difference is the point: this one is resolved
+   * with `isAdmin: false`, exactly as `pages/api/sessions/create.ts` and `filterStillManagedLakes`
+   * both resolve it. Platform-admin is deliberately not an admission rung there (the admission
+   * widens FILE retrieval, not just prompt injection - see unionPreauthorizedLakeAccess), so a
+   * platform admin who holds no other rung on the lake gets `canManage: true` and
+   * `canPreauthorize: false`. The UI must gate the admission on THIS field: gating on `canManage`
+   * would send ids the route rejects with a 403.
+   *
+   * REQUIRED for the same reason as `isOwn`: a projection that forgot it would silently send no
+   * admission and reintroduce the bug with a green typecheck. Built-in fallback lakes have no
+   * document (session-create resolves ids via `findById`), so `false`.
+   */
+  canPreauthorize: boolean;
+  /**
    * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
    * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
    * manager list route) - the content-scope resolver and Slack omit it and pay for no extra
@@ -324,6 +457,20 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * so "not yours to see" and "no preferred prompt" stay distinguishable.
    */
   preferredSystemPromptId?: string;
+  /**
+   * How many proposals are waiting for this caller to review (#1671). EDITOR-ONLY, same gate as the
+   * fields above: deciding what enters a lake is a management right, so a reader must not learn that
+   * a queue exists, let alone how deep it is.
+   *
+   * Carried on the LIST rather than fetched per lake because it is the feature's only discovery
+   * surface. Nothing else in the app says a human has work waiting - without this the queue is
+   * reachable only by opening a lake's settings and noticing a tab that exists solely when it is
+   * non-empty, which is not a signal anyone will find.
+   *
+   * Absent (never 0) when the caller cannot manage the lake or the projection was given no proposal
+   * repo, so "none waiting" and "not yours to see" stay distinguishable.
+   */
+  pendingProposalCount?: number;
   /**
    * Per-lake grounding mode (see IDataLake.groundingMode). EDITOR-ONLY, like the two prompt fields:
    * surfaced only when the caller can manage the lake, so the settings picker can seed its current
@@ -361,13 +508,41 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * the affordance rather than exposing it), so this is a precision note, not a safety concern.
    */
   canRebuild: boolean;
+  /**
+   * Whether the requesting caller may edit this lake's admin-settable session-default OVERLAY
+   * (currently `groundingMode` only - see `IFallbackLakeSetting`). Same shape as `canRebuild`, for
+   * the same reason: a fallback (built-in) lake has no document, so `canManage` stays `false` for
+   * it, but the overlay attaches to no lake document either - see
+   * `assertFallbackLakeSettingsWriteAccess`. For a DB lake the two are identical
+   * (`canManageSettings === canManage`, and a DB lake's settings live on the document itself, so
+   * this flag gates nothing extra there); for a fallback lake `canManageSettings` is `ctx.isAdmin`
+   * directly, NOT `resolveCanManageLake` - an org-scoped registry lake must not let a customer-side
+   * org admin pass, mirroring `assertLakeRebuildAccess`'s reasoning exactly.
+   *
+   * REQUIRED, not optional - same reasoning as `canRebuild`: both producers (toManageableConfig,
+   * toFallbackConfig) must set it unconditionally, or an absent field silently hides the affordance
+   * (fails closed) rather than surfacing a compile error at the one spot that forgot it.
+   */
+  canManageSettings: boolean;
+  /**
+   * Whether the requesting caller may ERASE this lake's extracted memory profile - an irreversible
+   * crypto-shred. Strictly narrower than `canManage`: creator or platform admin only, with no grant
+   * or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the one
+   * `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the erase
+   * affordance on `canManage` instead offered it to curators and org admins the endpoint then 403'd.
+   *
+   * REQUIRED for the same reason as `canRebuild` and `canManageSettings`: an absent field reads as
+   * falsy and hides the affordance silently instead of failing the build at the producer that forgot
+   * it. A fallback (built-in) lake has no document and no memory profile, so it is always `false`.
+   */
+  canManageMemory: boolean;
 }
 
 /**
  * A public data lake as it appears in the discover/browse surface: the lightweight card
  * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
- * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
- * construction) and adds the human-facing preview metadata the catalog renders: owner
+ * DataLakeConfig - it drops the access/gate internals (the endpoint has already resolved the
+ * gate for this caller) and adds the human-facing preview metadata the catalog renders: owner
  * display, file count, and total size. `ownerDisplayName` is deliberately name-or-username
  * only (never the owner's email) so browsing a public lake can't leak a cross-org address.
  */
@@ -520,6 +695,7 @@ export function toDataLakeConfig(dl: {
   organizationId?: string;
   description?: string;
   isPublic?: boolean;
+  lakeMemoryEnabled?: boolean;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -532,6 +708,7 @@ export function toDataLakeConfig(dl: {
     organizationId: dl.organizationId,
     description: dl.description,
     isPublic: dl.isPublic,
+    lakeMemoryEnabled: dl.lakeMemoryEnabled,
   };
 }
 

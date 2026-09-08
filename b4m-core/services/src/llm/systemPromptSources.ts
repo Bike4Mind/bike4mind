@@ -40,7 +40,8 @@ export type PromptSourceId =
   | 'project'
   | 'recentImages'
   | 'urls'
-  | 'attachedFiles';
+  | 'attachedFiles'
+  | 'callerPrompt';
 
 /**
  * Assembly order, and the single place it is defined. Order is prompt-visible - the Anthropic
@@ -49,13 +50,16 @@ export type PromptSourceId =
  */
 export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'dateContext',
-  'extraContext',
   'artifactEmission',
   'helpCenter',
   'abstention',
   'viewRegistry',
   'toolPrompt',
   'agentDetection',
+  // Moved behind the admin/hardcoded block above: this is `origin: 'user'` content that
+  // varies per request, and in front of that block it split the deployment-wide shareable
+  // prefix (see SHAREABLE_PREFIX_SOURCES) down to dateContext alone.
+  'extraContext',
   'questMaster',
   'organizationPrompt',
   'sessionPrompt',
@@ -68,6 +72,11 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'recentImages',
   'urls',
   'attachedFiles',
+  // Caller-supplied systemPrompt (no SPA control authors it, but /api/ai/llm reaches it too).
+  // Appended last, after every source above it -
+  // including the caller's own attached files/URLs - so it sits inside the per-caller cached
+  // tail (see markShareablePrefixBoundary) rather than in front of anything shareable.
+  'callerPrompt',
 ];
 
 /**
@@ -112,7 +121,9 @@ export const SIDE_EFFECT_ONLY_FEATURES: featureNames[] = [
  * Bike4Mind impossible to compare against the bare model - and a measured comparison found the
  * stack was costing more than it added on some question shapes.
  *
- * - `raw`: only what the caller themselves supplied. Nothing we author.
+ * - `raw`: only what the caller themselves supplied. The one thing we author that survives is
+ *   the defended header/footer wrapped around a caller-supplied `systemPrompt` - so a bare-model
+ *   comparison should omit that field, not just set the mode.
  * - `grounded`: `raw` plus forced data-lake retrieval, so the answer is cited but unstyled.
  * - `surface`: `grounded` plus the prompts a product surface or org authored for the session.
  *
@@ -124,7 +135,7 @@ export type PromptMode = 'raw' | 'grounded' | 'surface';
  * Sources that carry the caller's own content rather than guidance we wrote. Kept in every mode:
  * silently dropping an attached file would be a worse surprise than any prompt we removed.
  */
-const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'attachedFiles'];
+const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'attachedFiles', 'callerPrompt'];
 
 export const PROMPT_MODE_SOURCES: Record<PromptMode, PromptSourceId[]> = {
   raw: CALLER_SUPPLIED_SOURCES,
@@ -164,6 +175,10 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   skills: 12,
   agentDetection: 13,
   questMaster: 14,
+  // Unlike the priority-0 caller-content sources above, this one IS a system-role message that
+  // reaches the budget - it is the caller's own per-request guidance, ranked just behind the
+  // tenant/session band it must defer to.
+  callerPrompt: 15,
 
   // Grounding data. Absent, the model does not degrade politely - it fabricates, or denies it can see
   // something the user knows it was given.
@@ -243,7 +258,7 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  */
 export const PROMPT_SOURCE_METADATA: Record<
   PromptSourceId,
-  { origin: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org'; name: string }
+  { origin: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org' | 'caller'; name: string }
 > = {
   dateContext: { origin: 'hardcoded', name: 'date_time_context' },
   extraContext: { origin: 'user', name: 'extra_context' },
@@ -265,7 +280,47 @@ export const PROMPT_SOURCE_METADATA: Record<
   recentImages: { origin: 'hardcoded', name: 'recent_images' },
   urls: { origin: 'user', name: 'url_content' },
   attachedFiles: { origin: 'user', name: 'attached_files' },
+  callerPrompt: { origin: 'caller', name: 'caller_prompt' },
 };
+
+/**
+ * The leading run of sources whose text is identical for every caller on this deployment -
+ * `origin` of `hardcoded` or `admin`. Anything `user`/`session`/`org`/`project` ends the run,
+ * because a prompt cache matches on a PREFIX: one per-caller block in front of shared content
+ * makes that content unshareable.
+ *
+ * Derived from PROMPT_SOURCE_ORDER rather than hand-listed, so reordering a source cannot
+ * silently widen or narrow the shared region. Note the run must be CONTIGUOUS from the start:
+ * `recentImages` is also `hardcoded`, but it sits behind per-user content and so is not part
+ * of any shareable prefix.
+ */
+export const SHAREABLE_PREFIX_SOURCES: PromptSourceId[] = (() => {
+  const shareable: PromptSourceId[] = [];
+  for (const source of PROMPT_SOURCE_ORDER) {
+    const origin = PROMPT_SOURCE_METADATA[source].origin;
+    if (origin !== 'hardcoded' && origin !== 'admin') break;
+    shareable.push(source);
+  }
+  return shareable;
+})();
+
+/**
+ * Mark the end of the shareable prefix as a cache breakpoint, so the deployment-wide block
+ * is cached (and read back) independently of the per-caller content behind it. Measured on
+ * Bedrock: without this, a caller whose tail differs re-writes the whole prefix (6510 written,
+ * 0 read); with it, the same caller reads the shared head and writes only its own tail.
+ *
+ * Mutates in place: `systemPromptPriorities` and the delivered-message set in
+ * ChatCompletionProcess are keyed by message REFERENCE, so replacing the object would
+ * silently detach both.
+ *
+ * No-op when nothing shareable survived the gates (e.g. a promptMode that strips the admin
+ * block), rather than marking an arbitrary message.
+ */
+export function markShareablePrefixBoundary(tagged: TaggedSystemMessage[]): void {
+  const lastShareable = tagged.filter(t => SHAREABLE_PREFIX_SOURCES.includes(t.source)).at(-1);
+  if (lastShareable) lastShareable.message.cache = true;
+}
 
 /** The canonical telemetry row shape; sourced from common so the two cannot drift. */
 export type SystemPromptDetail = z.infer<typeof SystemPromptDetailSchema>;

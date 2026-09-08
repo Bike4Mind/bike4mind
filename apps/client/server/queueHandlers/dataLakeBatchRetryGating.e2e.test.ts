@@ -7,7 +7,10 @@ import { KnowledgeType } from '@bike4mind/common';
 // A REAL replica set is required here (not createMongoServer, used by the sibling e2e suites):
 // fabFileVectorize's success path writes chunk vectors via withTransaction, and a standalone
 // mongod rejects the first write inside a session with MongoServerError code 20.
-import { createMongoReplSet } from '../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   User,
   FabFile,
@@ -81,16 +84,20 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 
 import { dispatch } from './fabFileVectorize';
 
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let replSet: MongoMemoryReplSet;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
   await mongoose.connect(replSet.getUri());
-}, 60000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await replSet?.stop();
-}, 60000);
+});
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
 });

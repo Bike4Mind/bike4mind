@@ -4,7 +4,10 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source
 // (same convention as apps/client's other e2e/integration tests against a real Mongo).
-import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { Quest } from '@bike4mind/database';
 
 // This route's fix is a MongoDB query-semantics question (does $elemMatch actually match an
@@ -36,6 +39,10 @@ vi.mock('@server/utils/errors', () => ({
 }));
 
 import handler from '../model-logs';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const run = (query: Record<string, string> = {}) => {
   const { req, res } = createMocks({ method: 'GET', query });

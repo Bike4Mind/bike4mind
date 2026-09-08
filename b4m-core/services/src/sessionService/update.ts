@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { updateShareableFiles } from '../projectService';
+import { usableSessionIds } from '../utils/objectIds';
 import {
   ICacheRepository,
   IFabFileRepository,
@@ -11,10 +12,10 @@ import {
   SessionUpdateRequestSchema,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 import { secureParameters } from '@bike4mind/utils';
 import { BaseStorage, getCachedSignedUrl } from '@bike4mind/utils';
 import uniq from 'lodash/uniq.js';
-import isEqual from 'lodash/isEqual.js';
 import { z } from 'zod';
 
 // `id` is service-internal addressing, not a field the public PUT request body carries
@@ -25,6 +26,21 @@ const updateSessionParamtersSchema = SessionUpdateRequestSchema.extend({
 
 type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
 
+/**
+ * Compile-time guard for the manage-but-not-member admission, mirroring the one in
+ * sessionService/create.ts. `preauthorizedLakeIds` must never become an `updateSession` input: it is
+ * set once at session-create after the route's own `canManageLake` check, and a session update must
+ * not be able to grant or alter it. Adding the key to `SessionUpdateRequestSchema` resolves the
+ * argument to `false` and fails the build.
+ *
+ * This lives here rather than as a `@ts-expect-error` in update.test.ts because tsconfig.json
+ * excludes test files, so an assertion in one is in no typecheck program and can never fail.
+ */
+type AssertTrue<T extends true> = T;
+export type UpdateSessionParametersOmitPreauthorizedLakeIds = AssertTrue<
+  'preauthorizedLakeIds' extends keyof UpdateSessionParameters ? false : true
+>;
+
 interface UpdateSessionAdapters {
   db: {
     sessions: ISessionRepository;
@@ -33,6 +49,10 @@ interface UpdateSessionAdapters {
     caches: ICacheRepository;
   };
   storage: BaseStorage;
+  /** Optional so existing callers compile; without it a failed derivation is silent. */
+  logger?: Logger;
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
 }
 
 export const updateSession = async (
@@ -41,8 +61,20 @@ export const updateSession = async (
   adapters: UpdateSessionAdapters
 ) => {
   const { db } = adapters;
-  const { knowledgeIds, artifactIds, name, id, tags, lastUsedModel, forceKnowledgeRetrieval, propagateToProjects } =
-    secureParameters(parameters, updateSessionParamtersSchema);
+  const {
+    knowledgeIds: rawIds,
+    artifactIds,
+    name,
+    id,
+    tags,
+    lastUsedModel,
+    forceKnowledgeRetrieval,
+    propagateToProjects,
+  } = secureParameters(parameters, updateSessionParamtersSchema);
+
+  // Dropped, not rejected - a rename PUTs the whole session, so see usableSessionIds.
+  const knowledgeIds = rawIds && usableSessionIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
+
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 
   if (!session) {
@@ -56,28 +88,57 @@ export const updateSession = async (
   // write that happens to have it on, and a removal - which sends the surviving files -
   // propagates all of them. Since project.fileIds is append-only and additive, the
   // delta is the only set that ever needs propagating anyway.
-  if (knowledgeIds && !isEqual(session.knowledgeIds, knowledgeIds) && propagateToProjects !== false) {
-    const alreadyKnown = new Set(session.knowledgeIds ?? []);
-    const addedFileIds = knowledgeIds.filter(id => !alreadyKnown.has(id));
-    if (addedFileIds.length > 0) {
-      await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
-    }
+  //
+  // Keyed on the ADDED set rather than "the list changed" for a second reason too: a rename PUTs
+  // the whole stored list back, and dropping an unusable id from it makes the incoming list differ
+  // from the stored one on EVERY such write. A changed-list test would then fire on a rename.
+  const alreadyKnown = new Set(session.knowledgeIds ?? []);
+  const addedFileIds = knowledgeIds?.filter(id => !alreadyKnown.has(id)) ?? [];
+
+  if (addedFileIds.length > 0 && propagateToProjects !== false) {
+    await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
   }
 
-  session.name = name || session.name;
-  session.knowledgeIds = knowledgeIds || session.knowledgeIds;
-  session.artifactIds = artifactIds || session.artifactIds;
-  session.tags = tags || session.tags;
-  session.lastUsedModel = lastUsedModel || session.lastUsedModel;
+  // Persist ONLY the fields this request changed, as a plain partial keyed by id.
+  // findUpdateAccessById returns a hydrated mongoose doc, and passing it straight to
+  // db.sessions.update($set of the whole thing) reverted any owner share revocation,
+  // visibility change or soft-delete that landed during this handler's window (the read
+  // authorizes a sharee; a lake derivation and signed-URL pre-warm can run before the write).
+  const update: Partial<ISessionDocument> & { id: string } = { id };
+  if (name) update.name = name;
+
+  // Re-derive the lake scope whenever a file is ATTACHED. Deriving only at CREATE left the most
+  // ordinary way a user reaches a lake completely unscoped: attaching a lake file to an
+  // already-open notebook goes through here, and an empty `retrievalTags` is not a narrow scope -
+  // the search's tag clause is skipped entirely and retrieval falls through to every lake the
+  // caller can reach. Only ever ADDS a derived scope; an explicitly-set one is left alone.
+  //
+  // Additions, not any change: a removal cannot bring a new lake into the attached set, and a
+  // write that adds nothing (a rename, a tag edit) must not acquire a scope as a side effect.
+  // Derives from the whole surviving list, since the scope describes the attached set, not the
+  // delta.
+  if (knowledgeIds && addedFileIds.length > 0 && !session.retrievalTags?.length) {
+    const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
+      db: { fabFiles: db.fabFiles },
+      logger: adapters.logger,
+      resolveLakeAccess: adapters.resolveLakeAccess,
+    });
+    if (derived.length > 0) update.retrievalTags = derived;
+  }
+
+  if (knowledgeIds) update.knowledgeIds = knowledgeIds;
+  if (artifactIds) update.artifactIds = artifactIds;
+  if (tags) update.tags = tags;
+  if (lastUsedModel) update.lastUsedModel = lastUsedModel;
   // Explicit undefined check (not `|| session.x`) so toggling OFF (false) actually persists.
   if (forceKnowledgeRetrieval !== undefined) {
-    session.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
+    update.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
   }
-  session.lastUpdated = new Date();
+  update.lastUpdated = new Date();
 
-  await db.sessions.update(session);
+  const updated = await db.sessions.update(update);
 
-  return session;
+  return updated ?? session;
 };
 
 const addFilesToProjects = async (

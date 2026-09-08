@@ -14,13 +14,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindById, mockRateLimit, mockQuestFindById, mockSessionFindById } = vi.hoisted(() => ({
-  mockValidate: vi.fn(),
-  mockFindById: vi.fn(),
-  mockRateLimit: vi.fn(),
-  mockQuestFindById: vi.fn(),
-  mockSessionFindById: vi.fn(),
-}));
+const { mockValidate, mockFindById, mockRateLimit, mockQuestFindById, mockQuestSettle, mockSessionFindById } =
+  vi.hoisted(() => ({
+    mockValidate: vi.fn(),
+    mockFindById: vi.fn(),
+    mockRateLimit: vi.fn(),
+    mockQuestFindById: vi.fn(),
+    mockQuestSettle: vi.fn(),
+    mockSessionFindById: vi.fn(),
+  }));
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -60,6 +62,7 @@ vi.mock('@bike4mind/database', async orig => {
     questRepository: {
       ...(actual.questRepository as object),
       findById: (...a: unknown[]) => mockQuestFindById(...a),
+      settleIfUnfinished: (...a: unknown[]) => mockQuestSettle(...a),
     },
     sessionRepository: {
       ...(actual.sessionRepository as object),
@@ -83,6 +86,7 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../index';
 import { ApiKeyScope } from '@bike4mind/common';
+import { QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -198,6 +202,262 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
+  });
+
+  describe('attachment report (#1576 ask 1: a caller can tell whether the corpus contributed)', () => {
+    it('returns BOTH halves - the notices and the affirmative counts', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        attachmentNotices: ['"a.md" was not sent: it could not be read.'],
+        attachmentDelivery: { requested: 3, delivered: 2, fullyDelivered: 1, dropped: 1, droppedIds: ['f-a'] },
+      });
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      const body = res._getJSONData();
+      expect(body.attachmentNotices).toEqual(['"a.md" was not sent: it could not be read.']);
+      expect(body.attachmentDelivery).toEqual({
+        requested: 3,
+        delivered: 2,
+        fullyDelivered: 1,
+        dropped: 1,
+        droppedIds: ['f-a'],
+      });
+    });
+
+    // The case the whole ask turns on. Nothing failed, so there are no notices at all, and before
+    // `attachmentDelivery` this response was byte-identical to a turn that attached nothing - which
+    // is how a 600-answer eval ran in the wrong configuration without anyone noticing.
+    it('reports a fully successful turn, which produces no notices to infer from', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        attachmentDelivery: { requested: 4, delivered: 4, fullyDelivered: 4, dropped: 0, droppedIds: [] },
+      });
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      const body = res._getJSONData();
+      expect(body.attachmentNotices).toBeUndefined();
+      expect(body.attachmentDelivery).toMatchObject({ requested: 4, delivered: 4, dropped: 0 });
+    });
+
+    it("serves the report to a sharee - it describes the turn, not the owner's private corpus", async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        attachmentDelivery: { requested: 1, delivered: 0, fullyDelivered: 0, dropped: 1, droppedIds: ['f-a'] },
+      });
+      // `userId: 'owner'` on the session and 'user-1' only in `users` - a share, not ownership.
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      expect(res._getJSONData().attachmentDelivery).toMatchObject({ requested: 1, dropped: 1 });
+    });
+  });
+
+  describe('toolPayloads (structured tool output for programmatic callers)', () => {
+    const PROBLEM = { name: 'shop', jobs: [], machines: [] };
+
+    it('returns the structured payload ALONGSIDE the unchanged prose reply', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: 'Scheduled 3 jobs across 2 machines.',
+        replies: ['Scheduled 3 jobs across 2 machines.'],
+        promptMeta: {},
+        uiSideEffects: [{ type: 'populateProblem', payload: PROBLEM }],
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.reply).toBe('Scheduled 3 jobs across 2 machines.');
+      expect(body.toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+
+    it('returns an empty array when the turn fired no structured tool', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getJSONData().toolPayloads).toEqual([]);
+    });
+
+    it('publishes only type and payload, so a Mongoose subdocument _id never leaks', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        uiSideEffects: [{ _id: '507f1f77bcf86cd799439011', type: 'populateProblem', payload: PROBLEM }],
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(Object.keys(res._getJSONData().toolPayloads[0])).toEqual(['type', 'payload']);
+    });
+
+    it('serves them to a sharee too - the client already dispatches them off loaded quests', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        uiSideEffects: [{ type: 'populateProblem', payload: PROBLEM }],
+      });
+      // jwt-user is in session.users but is not session.userId, i.e. a share holder.
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+  });
+
+  describe('read-time timeout recovery (headless API clients)', () => {
+    const staleDate = new Date(Date.now() - QUEST_TIMEOUT_THRESHOLD_MS - 5_000).toISOString();
+
+    const stuckQuest = (overrides: Record<string, unknown> = {}) => ({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'running',
+      reply: null,
+      replies: [],
+      images: [],
+      promptMeta: {},
+      updatedAt: staleDate,
+      ...overrides,
+    });
+
+    /** The JWT caller owns the session - recovery writes are owner-only. */
+    const ownedByJwtUser = () => mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+
+    beforeEach(() => {
+      mockQuestSettle.mockResolvedValue(true);
+    });
+
+    it('recovers a stuck quest on GET and returns terminal status', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest());
+      ownedByJwtUser();
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.status).toBe('done');
+      // `type` is what lets a headless client tell a recovered timeout from a real success.
+      expect(body.type).toBe('error');
+      expect(mockQuestSettle).toHaveBeenCalledWith(
+        'quest-1',
+        expect.objectContaining({ status: 'done', type: 'error' })
+      );
+    });
+
+    it('preserves content on a stuck quest that has replies', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest({ reply: 'partial answer', replies: ['partial answer'] }));
+      ownedByJwtUser();
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('done');
+      // No error type when content exists
+      expect(mockQuestSettle).toHaveBeenCalledWith('quest-1', { status: 'done' });
+    });
+
+    it('does not recover a fresh running quest (heartbeat still alive)', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest({ updatedAt: new Date().toISOString() }));
+      ownedByJwtUser();
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('running');
+      expect(mockQuestSettle).not.toHaveBeenCalled();
+    });
+
+    it('does not re-recover an already-terminal quest', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest({ status: 'done', reply: 'complete', replies: ['complete'] }));
+      ownedByJwtUser();
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('done');
+      expect(mockQuestSettle).not.toHaveBeenCalled();
+    });
+
+    it('works for API-key callers (the actual bug: headless API clients never got recovery)', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]); // resolves to userId 'user-1'
+      mockQuestFindById.mockResolvedValue(stuckQuest());
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'user-1', users: [] });
+
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('done');
+      expect(mockQuestSettle).toHaveBeenCalled();
+    });
+
+    it('returns the quest unchanged when the recovery write loses the race', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest());
+      ownedByJwtUser();
+      // The compare-and-set matched nothing: the run committed its real answer in the gap
+      // between the read and this write, and must keep it.
+      mockQuestSettle.mockResolvedValue(false);
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('running');
+    });
+
+    it('still answers with the quest when the recovery write throws', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest());
+      ownedByJwtUser();
+      // Writes fail for reasons reads do not (a primary stepdown, a write-concern timeout).
+      // Turning a GET that can still answer into a 500 is worse than answering 'running'.
+      mockQuestSettle.mockRejectedValue(new Error('not primary'));
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('running');
+    });
+
+    it('does not let a sharee read write a terminal status onto the owner quest', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest());
+      // jwt-user is a sharee here, not session.userId. Recovery for a quest only sharees ever
+      // poll is the sweep cron's job, not a viewer's.
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'owner', users: [{ userId: 'jwt-user' }] });
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('running');
+      expect(mockQuestSettle).not.toHaveBeenCalled();
+    });
   });
 
   describe('functionCalls redaction for non-owner viewers', () => {

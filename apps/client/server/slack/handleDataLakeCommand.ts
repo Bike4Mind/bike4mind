@@ -1,6 +1,7 @@
 import { parseDataLakeCommand, type ParsedDataLakeCommand, type SlackAttachment } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
-import type { IDataLakeRepository } from '@bike4mind/common';
+import { STATIC_LAKE_IDS } from '@bike4mind/common';
+import type { AccessContext, IDataLakeRepository, ManageableDataLakeConfig } from '@bike4mind/common';
 import { buildSlackAccessContext, type SlackIngestActor } from './dataLakeIngestAuthz';
 import { ingestSlackFilesIntoLake, type SlackLakeIngestDeps, type SlackLakeIngestOutcome } from './dataLakeFileIngest';
 import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps, type SlackLinkIngestOutcome } from './dataLakeLinkIngest';
@@ -76,22 +77,161 @@ export async function handleDataLakeCommand(params: HandleDataLakeCommandParams)
   }
 }
 
+/** The lake fields the `list` scoping rules and the rendered rows need. */
+export type ListableLake = Pick<ManageableDataLakeConfig, 'id' | 'slug' | 'name' | 'organizationId' | 'canManage'>;
+
+/** The caller facts both scoping rules key off. */
+export type ListScope = Pick<AccessContext, 'isAdmin' | 'organizationIds'>;
+
+/** An org-scoped lake's org id, with a blank string read as org-less (both forms are stored). */
+const lakeOrgId = (lake: ListableLake): string | undefined => lake.organizationId?.trim() || undefined;
+
 /**
- * The lakes the caller may ADD to - i.e. `canManage` (admin or creator), not merely readable.
- * Listing everything they can read would advertise lakes every add would then refuse.
+ * Whether the caller may WRITE to this lake. `canManage` arrives computed under the
+ * isAdmin-suppressed context (see `handleList`), so a platform admin's own manage rung is restored
+ * here - EXCEPT on a built-in registry lake, which is read-only for everyone including admins
+ * (`assertLakeWritable`; `listDataLakes` stamps every fallback `canManage: false` for that reason).
+ * Restoring it there would advertise a lake `add` always refuses.
+ */
+const isWritable = (lake: ListableLake, scope: ListScope): boolean =>
+  lake.canManage || (scope.isAdmin && !STATIC_LAKE_IDS.has(lake.id));
+
+/** Tier 1 (org-less) ordering key: null/undefined (BSON Null) sorts before any string, mirroring
+ * DataLakeModel.findBySlug's `.sort({ organizationId: 1 })` on its own org-less arm. */
+const orgSortKey = (organizationId: string | null | undefined): readonly [0 | 1, string] =>
+  organizationId == null ? [0, ''] : [1, organizationId];
+
+/**
+ * findBySlug's three arms, in the order it tries them - own-org, then org-less, then grant-held
+ * (#2425) - as ONE total function rather than a boolean check plus a separately-derived rank:
+ * `null` means "not resolvable by this caller at all" and doubles as the addressability check
+ * (`slugTier(...) !== null`), so there is no separate predicate that can drift out of sync with
+ * the ranking, and no precondition to assert at runtime - a foreign-org lake with no grant simply
+ * ranks `null` instead of being assumed away by elimination. Must stay in sync with `findBySlug`
+ * (packages/database/src/models/ai/DataLakeModel.ts) - a row that fails there is a slug this reply
+ * promised and `add` then refuses as "No Data Lake found".
+ */
+export const slugTier = (
+  lake: ListableLake,
+  scope: ListScope,
+  grantedLakeIds: ReadonlySet<string>
+): 0 | 1 | 2 | null => {
+  const orgId = lakeOrgId(lake);
+  if (orgId && (scope.organizationIds ?? []).includes(orgId)) return 0;
+  if (!orgId) return 1;
+  return grantedLakeIds.has(lake.id) ? 2 : null;
+};
+
+/** A lake paired with the (already non-null) tier it resolved to - computed once per lake, in the
+ * filter pass, and carried through dedupe rather than re-derived. */
+interface AddressableRow {
+  lake: ListableLake;
+  tier: 0 | 1 | 2;
+}
+
+/**
+ * Of two lakes sharing a slug, the one `findBySlug` would resolve: own-org beats org-less beats
+ * grant-held, matching the arm order above. Within own-org the lowest org id wins, within
+ * org-less the lower `orgSortKey` wins (see its doc comment - `null` and `''` are distinct index
+ * keys and CAN collide on one slug), and within grant-held the lowest lake id wins (all three
+ * mirror the model's own `.sort()` tie-breaks).
+ */
+const preferredRow = (a: AddressableRow, b: AddressableRow): AddressableRow => {
+  if (a.tier !== b.tier) return a.tier < b.tier ? a : b;
+  if (a.tier === 0) return (lakeOrgId(b.lake) as string) < (lakeOrgId(a.lake) as string) ? b : a;
+  if (a.tier === 1) {
+    const [aType, aOrg] = orgSortKey(a.lake.organizationId);
+    const [bType, bOrg] = orgSortKey(b.lake.organizationId);
+    return bType !== aType ? (bType < aType ? b : a) : bOrg < aOrg ? b : a;
+  }
+  return b.lake.id < a.lake.id ? b : a;
+};
+
+/**
+ * One row per slug. A slug is unique per org, so a collision means two lakes the caller can reach
+ * under one name - keep the one `add` would resolve, or the reply names a lake the command does not
+ * target. Runs over every ADDRESSABLE row, before the write gate, because `findBySlug` resolves by
+ * org priority without consulting write access (see the note in `handleList`).
+ */
+const dedupeBySlug = (rows: AddressableRow[]): AddressableRow[] => {
+  const bySlug = new Map<string, AddressableRow>();
+  for (const row of rows) {
+    const existing = bySlug.get(row.lake.slug);
+    bySlug.set(row.lake.slug, existing ? preferredRow(existing, row) : row);
+  }
+  return Array.from(bySlug.values());
+};
+
+/**
+ * The lakes the caller may ADD to (see `isWritable`), not merely read. Listing everything they can
+ * read would advertise lakes every add would then refuse.
+ *
+ * Two scoping rules, both needed, because `list` and `add` resolve lakes differently:
+ *
+ * 1. The row set is queried with the platform-admin bypass SUPPRESSED, so an admin's reply is built
+ *    from the same org/visibility arms as everyone else's. Left on, `findAccessible` short-circuits
+ *    to every draft/active lake on the platform - and unlike the web manager list, this reply is a
+ *    channel message, so that set lands somewhere shared, searchable and permanent.
+ * 2. Every surviving row must be addressable BY SLUG for this caller, because `add` resolves through
+ *    the org-scoped `findBySlug` while `findAccessible`'s public arm ignores the org constraint.
+ *
+ * The invariant is "listed implies addable", NOT the converse: a lake an admin could write to purely
+ * by platform-admin power, holding no ownership or org claim on it, stays out of the channel.
  */
 async function handleList(params: HandleDataLakeCommandParams): Promise<string> {
-  const ctx = await buildSlackAccessContext(params.actor, params.deps);
-  const lakes = await dataLakeService.listDataLakes(ctx, { db: { dataLakes: params.deps.dataLakes } });
-  const writable = lakes.filter(lake => lake.canManage);
+  // Entitlement keys are resolved even for an admin, unlike the write path: rule 1 evaluates them
+  // through the non-admin arms, so without the keys an entitlement-gated lake in the admin's OWN
+  // org would fail findAccessible's requirement constraint and vanish from a list `add` still takes.
+  const ctx = await buildSlackAccessContext(params.actor, params.deps, { resolveEntitlementsForAdmin: true });
+  // The same last-resort grant lookup findBySlug's #2425 fallback arm runs, so a foreign-org
+  // owner/curator grant holder sees the lake here too - otherwise `list` would omit exactly the
+  // lake `add` now accepts (slugTier would rank it null before dedupe/write-gate ever run).
+  // Resolved ONCE and handed to listDataLakes below as its precomputed set, rather than each
+  // independently running the identical listByPrincipal query - listDataLakes' own includeReaders
+  // is always false here too, since we deliberately never thread a settings adapter (see below).
+  const grantedLakeIdsArray = await dataLakeService.grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    params.deps.dataLakeAccessGrants,
+    false
+  );
+  const grantedLakeIds = new Set(grantedLakeIdsArray);
+  const lakes = await dataLakeService.listDataLakes(
+    { ...ctx, isAdmin: false },
+    {
+      // Grants make the reply agree with `add`, which already resolves them: without this repo
+      // `listDataLakes` degrades both of its grant reads to empty, so a curator-granted or
+      // transferred lake neither enters the row set nor earns a manage label, and `list` omits a lake
+      // `add` accepts. Deliberately NO `settings` adapter alongside it: that flag is what admits
+      // READER grants specifically, and a reader cannot write, so passing it would advertise lakes
+      // `add` then refuses - the #2022 failure in a new place. (An org-principal owner/curator grant
+      // - canManageLake's fifth rung - CAN write; nothing mints that principal type yet, so this is a
+      // bound on today's system, not a rung this omission is meant to guard against.)
+      db: { dataLakes: params.deps.dataLakes, dataLakeAccessGrants: params.deps.dataLakeAccessGrants },
+      grantedLakeIds: grantedLakeIdsArray,
+    }
+  );
+  // Order matters, and it mirrors `add`: resolve the slug's winning lake FIRST, then apply the write
+  // gate to that winner. `findBySlug` picks by org priority alone and never falls back when the lake
+  // it picked turns out to be unwritable, so gating before the dedupe would hide a higher-priority
+  // lake and print a slug `add` resolves elsewhere and refuses. `isWritable` also restores the
+  // manage LABEL that suppressing isAdmin silenced in canManageLake; it only ever removes rows.
+  const addressable: AddressableRow[] = [];
+  for (const lake of lakes) {
+    const tier = slugTier(lake, ctx, grantedLakeIds);
+    if (tier !== null) addressable.push({ lake, tier });
+  }
+  const writable = dedupeBySlug(addressable)
+    .map(row => row.lake)
+    .filter(lake => isWritable(lake, ctx));
 
   if (writable.length === 0) {
     return 'You cannot add to any data lakes yet. You can add to lakes you created, or ask an admin.';
   }
 
-  // Capped: for an ADMIN, findAccessible short-circuits to every draft/active lake on the
-  // platform, all canManage. Past Slack's 40k-character `text` limit chat.postMessage errors, the
-  // orchestrator catches it, and the admin gets "something went wrong" instead of any list at all.
+  // Capped: a caller in a large org can still have more manageable lakes than fit Slack's
+  // 40k-character `text` limit, and past it chat.postMessage errors, the orchestrator catches it,
+  // and they get "something went wrong" instead of any list at all.
   const shown = writable.slice(0, LIST_LIMIT);
   const rows = shown.map(lake => `- \`${lake.slug}\` - ${lake.name}`).join('\n');
   const more = writable.length > shown.length ? `\n- ...and ${writable.length - shown.length} more` : '';

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -77,6 +77,16 @@
       "require": {
         "types": "./dist/escapeRegex.d.cts",
         "default": "./dist/escapeRegex.cjs"
+      }
+    },
+    "./contentDisposition": {
+      "import": {
+        "types": "./dist/contentDisposition.d.mts",
+        "default": "./dist/contentDisposition.mjs"
+      },
+      "require": {
+        "types": "./dist/contentDisposition.d.cts",
+        "default": "./dist/contentDisposition.cjs"
       }
     },
     "./normalizeId": {

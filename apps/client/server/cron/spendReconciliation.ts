@@ -66,7 +66,8 @@ export async function handler(_event: unknown, context: Context) {
   logger.log('[SpendReconciliation] Connected to database');
 
   const months = getReconcileMonths();
-  const internalCogs = await usageEventRepository.monthlyCogsByProvider();
+  // getReconcileMonths() only ever uses the current and previous month.
+  const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
 
   let reconciled = 0;
   let skipped = 0;

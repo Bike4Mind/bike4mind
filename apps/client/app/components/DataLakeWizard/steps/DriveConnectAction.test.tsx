@@ -18,12 +18,6 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => ({ data: h.connection.current, isLoading: false, isError: h.isError.current }),
   useConnectDriveFolderToLake: () => ({ mutate: h.connectMutate, isPending: false }),
   useDisconnectLakeDrive: () => ({ mutate: h.disconnectMutate, isPending: false }),
-  // Real map, not a stub: the status wording is the thing under test in the connected case.
-  DRIVE_STATUS_BADGE: {
-    connected: { label: 'Connected', color: 'success' },
-    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-    credential_error: { label: 'Credential error', color: 'danger' },
-  },
 }));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
@@ -53,11 +47,6 @@ beforeEach(() => {
 });
 
 describe('DriveConnectAction', () => {
-  it('disables the action in create mode, before the lake exists', () => {
-    wrap(<DriveConnectAction lake={null} />);
-    expect(screen.getByTestId('drive-connect-disabled-btn')).toBeDisabled();
-  });
-
   it('offers an enabled Connect button when the lake has no connection yet', () => {
     wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('drive-connect-btn')).not.toBeDisabled();
@@ -77,6 +66,29 @@ describe('DriveConnectAction', () => {
     expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Docs');
     expect(screen.getByTestId('drive-resync-btn')).toBeInTheDocument();
     expect(screen.getByTestId('drive-disconnect-btn')).toBeInTheDocument();
+  });
+
+  it('reports a healthy connection as Connected and shows no error line', () => {
+    h.connection.current = connected();
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Connected');
+    expect(screen.queryByTestId('drive-connection-last-error')).toBeNull();
+  });
+
+  it('does NOT report a sync that stopped short as Connected (#2394)', () => {
+    // releaseSyncClaim heals the status back to 'connected' whatever happened and records WHY on
+    // lastError, so this pair is a sync that left files out of the lake. The old code showed a green
+    // "Connected" chip here and rendered lastError only for status === 'credential_error', which is
+    // exactly the "every dashboard says the sync worked" failure.
+    h.connection.current = connected({
+      lastError: 'Google Drive is rate-limiting this sync, and it stopped after 20 continuation runs.',
+    });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const status = screen.getByTestId('drive-connection-status');
+    expect(status).toHaveTextContent('Stopped short');
+    expect(status).not.toHaveTextContent('Connected');
+    expect(screen.getByTestId('drive-connection-last-error')).toHaveTextContent('rate-limiting');
   });
 
   it('requires a confirm step before disconnecting, so a single click is not destructive', () => {

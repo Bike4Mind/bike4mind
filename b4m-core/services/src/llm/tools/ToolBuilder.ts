@@ -15,6 +15,7 @@ import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits, validateMusicCredits, validateAudioCredits } from './base/utils';
 import type { CostInput } from '../imageCostCalculator/types';
@@ -100,6 +101,12 @@ export interface ToolBuilderConfig {
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
+  suppressLakeArms?: ToolContext['suppressLakeArms'];
+  /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
+  sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
+  sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -200,7 +207,7 @@ function resolveToolStatus(toolName: string, data: any): string | null {
 /**
  * Apply a partial status-update change set onto the live quest object.
  *
- * Most fields are overwritten wholesale via Object.assign, but three fields
+ * Most fields are overwritten wholesale via Object.assign, but four fields
  * accrete across a single turn and MUST merge instead of overwrite:
  *   - promptMeta.citables: accreted by web_search / knowledge retrieval; merged
  *     and deduped by stable identity (id, then url, then title) to avoid duplicate
@@ -214,6 +221,12 @@ function resolveToolStatus(toolName: string, data: any): string | null {
  *     request down to just the last call's image. Merge-append with dedup;
  *     onToolFinish dedup-appends the same paths, so this stays idempotent for a
  *     single call.
+ *   - promptMeta.retrieval: the forced/lake-memory arm (ChatCompletionFeatures)
+ *     writes this directly, before any tool call, and a tool's own retrieval
+ *     write must merge onto it rather than replace it wholesale - otherwise a
+ *     zero-result knowledge_base_search after a successful lake-memory recall
+ *     (or vice versa) would silently erase the other's outcome. See
+ *     mergeRetrievalSummary (retrievalSummaryMerge.ts) for the merge policy.
  *
  * Mutates `quest` in place.
  */
@@ -233,6 +246,7 @@ export function applyQuestStatusChanges(
       return true;
     });
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
+    const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = {
       ...quest.promptMeta,
       ...changedPromptMeta,
@@ -240,6 +254,9 @@ export function applyQuestStatusChanges(
       // Omit the key entirely when neither side has warnings, so an untouched quest is not
       // given an empty array it never had.
       ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
+      // Explicit override, not left to the spread above: an incoming write here must MERGE onto
+      // an existing forced-arm value, never replace it (see the docblock above).
+      ...(mergedRetrieval ? { retrieval: mergedRetrieval } : {}),
     };
   } else if (changedPromptMeta) {
     quest.promptMeta = changedPromptMeta;
@@ -302,6 +319,12 @@ export interface BuildToolPromptArgs {
   hasContentTransform: boolean;
   hasChessEngine: boolean;
   hasCurrentDateTime: boolean;
+  hasWebSearch: boolean;
+  /**
+   * Resolved `WebSearchFreshnessPrompt` setting. Resolved by the caller, which owns the
+   * settings reader, so the injected text and its telemetry cannot disagree.
+   */
+  webSearchGuidance?: string;
   /**
    * User's IANA timezone (from the browser) when known, so the current-time
    * nudge can tell the model which timezone to pass to `current_datetime`.
@@ -685,6 +708,9 @@ export class ToolBuilder {
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
+        suppressLakeArms: this.deps.suppressLakeArms,
+        sessionRetrievalTags: this.deps.sessionRetrievalTags,
+        sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
@@ -837,6 +863,7 @@ export class ToolBuilder {
           return undefined; // Use default simplified result
         },
         sessionId: quest.sessionId,
+        questId: quest.id,
         onSubagentCredits: (credits, meta) => {
           this.reserveToolCredits('delegate_to_agent', credits);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
@@ -900,6 +927,8 @@ export class ToolBuilder {
     hasContentTransform,
     hasChessEngine,
     hasCurrentDateTime,
+    hasWebSearch,
+    webSearchGuidance,
     userTimezone,
     mcpTools,
     sessionId,
@@ -1021,6 +1050,13 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
           `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
       );
+    }
+
+    // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
+    // date context tells the model what today is, but nothing otherwise tells it when its own
+    // knowledge is too old to answer from.
+    if (hasWebSearch && webSearchGuidance) {
+      sections.push(webSearchGuidance);
     }
 
     // 4. MCP integration guidance (if MCP tools are available)

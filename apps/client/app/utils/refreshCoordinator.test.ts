@@ -138,12 +138,36 @@ describe('refreshCoordinator', () => {
   });
 
   describe('sibling-tab adoption', () => {
-    /** Post as another tab would and let the message loop deliver it. */
+    const openChannels: BroadcastChannel[] = [];
+
+    afterEach(() => {
+      openChannels.forEach(c => c.close());
+      openChannels.length = 0;
+    });
+
+    /**
+     * Post as another tab would, and return only once the coordinator has actually seen it.
+     *
+     * A fixed `setTimeout(0)` is not a delivery barrier. BroadcastChannel dispatch is a queued
+     * task, so on a loaded runner the coordinator's listener can run after that tick and the
+     * assertion then reads pre-delivery state - which is how this raced in CI. The probe channel
+     * is opened after the coordinator's (`listenForSiblingRefresh` runs first in every test
+     * here), and a post is delivered to channels in creation order, so the probe receiving the
+     * message proves the coordinator's listener has already run.
+     *
+     * That barrier matters just as much to the two "ignores ..." cases below: they assert the
+     * token is UNCHANGED, so without proof of delivery they would also pass when the message
+     * never arrived at all, and would stop pinning the guard they exist for.
+     */
     const broadcastFromSibling = async (payload: unknown) => {
       const sibling = new BroadcastChannel('b4m.auth');
+      const probe = new BroadcastChannel('b4m.auth');
+      openChannels.push(sibling, probe);
+      const delivered = new Promise<void>(resolve =>
+        probe.addEventListener('message', () => resolve(), { once: true })
+      );
       sibling.postMessage(payload);
-      await new Promise(resolve => setTimeout(resolve, 0));
-      sibling.close();
+      await delivered;
     };
 
     const fromSibling = token(SID, 'from-sibling');

@@ -18,9 +18,11 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
   requireStripeWebhook: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-vi.mock('@bike4mind/utils', () => ({
-  BadRequestError: class BadRequestError extends Error {},
-}));
+// Deliberately NOT mocking the error classes: the real BadRequestError carries statusCode
+// 400, which lets the rejection test assert the status the client would actually receive
+// rather than only the message. The previous bare `class BadRequestError extends Error` had
+// no statusCode at all, so that assertion was impossible.
+import { BadRequestError, HttpStatus } from '@bike4mind/common';
 
 const mockGetSettingsValue = vi.fn();
 const mockUserUpdate = vi.fn();
@@ -52,11 +54,13 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
 
 // Use the REAL appendSuccessParams so the success_url this route builds is
 // actually asserted below - mocking it away is what let the individual path ship
-// with an unmarked success redirect in the first place. Only the origin check is
-// stubbed, since it reads APP_URL from the environment.
+// with an unmarked success redirect in the first place. The origin check is stubbed
+// because it reads APP_URL from the environment, but driven per-test rather than pinned
+// to `true`: a hard-coded verdict asserts nothing about the rejection path.
+const mockIsAllowedCallbackOrigin = vi.fn();
 vi.mock('@server/integrations/stripe/callbackUrl', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/stripe/callbackUrl')>();
-  return { ...actual, isAllowedCallbackOrigin: () => true };
+  return { ...actual, isAllowedCallbackOrigin: (...args: unknown[]) => mockIsAllowedCallbackOrigin(...args) };
 });
 vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
@@ -78,9 +82,11 @@ import handler from '../subscribe';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
-function makeReq(priceId: string) {
+const CALLBACK_URL = 'https://app.example.com/cb';
+
+function makeReq(priceId: string, callbackUrl = CALLBACK_URL) {
   const { req, res } = createMocks({ method: 'POST' });
-  (req as Record<string, unknown>).body = { priceId, callbackUrl: 'https://app.example.com/cb' };
+  (req as Record<string, unknown>).body = { priceId, callbackUrl };
   (req as Record<string, unknown>).user = {
     id: 'user_1',
     email: 'buyer@example.com',
@@ -93,6 +99,7 @@ function makeReq(priceId: string) {
 describe('POST /api/subscriptions/subscribe — launch/availability gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindUserSubByPrice.mockResolvedValue(null); // not already subscribed
     mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
     mockPricesRetrieve.mockResolvedValue({ id: 'price_gated', active: true });
@@ -155,6 +162,66 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
     await (handler as HandlerFn)(req, res);
 
     expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /api/subscriptions/subscribe - callbackUrl origin guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockGetSettingsValue.mockResolvedValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_open', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('rejects a callbackUrl on a disallowed origin with a 400', async () => {
+    // The guard is the only thing between a caller-supplied callbackUrl and an open redirect
+    // off Stripe's hosted checkout page, where the redirect wears Stripe's brand.
+    mockIsAllowedCallbackOrigin.mockReturnValue(false);
+    const { req, res } = makeReq('price_open', 'https://attacker.example.net/phish');
+
+    // Asserted in ONE throw: message and status together, so the handler runs once. Invoking
+    // it twice would double every mock's call log for the assertions below.
+    // `constructor:` rather than `toBeInstanceOf` is deliberate - it pins the exact class,
+    // where toBeInstanceOf would also accept a SUBCLASS of BadRequestError carrying a
+    // different status. Do not "simplify" it.
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: HttpStatus.BadRequest,
+      message: 'callbackUrl must point to the deployed application origin',
+    });
+
+    expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith('https://attacker.example.net/phish');
+  });
+
+  it('runs the guard before the availability gate, any lookup, or any Stripe side effect', async () => {
+    // Ordering matters beyond tidiness: the guard sits above an admin-settings read and a
+    // subscription lookup, so a rejected callbackUrl must cost neither.
+    mockIsAllowedCallbackOrigin.mockReturnValue(false);
+    const { req, res } = makeReq('price_gated', 'https://attacker.example.net/phish');
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
+
+    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    expect(mockFindUserSubByPrice).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockPricesRetrieve).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes an allowed-origin callbackUrl through to the checkout session', async () => {
+    // Pins the guard as the ONLY reason the two tests above stop early: same fixtures, allowed
+    // origin, and execution reaches Stripe. Without this, `not.toHaveBeenCalled()` could pass
+    // for the wrong reason.
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith(CALLBACK_URL);
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
   });

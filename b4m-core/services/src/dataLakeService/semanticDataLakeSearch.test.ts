@@ -33,10 +33,12 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 import {
+  comparedNoPassages,
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   type SemanticDataLakeSearchParams,
 } from './semanticDataLakeSearch';
+import { describeSearchLimitations, isPartialSearch } from './retrievalUnavailable';
 
 beforeEach(() => {
   mockCosine.mockReset();
@@ -86,6 +88,27 @@ describe('semanticDataLakeSearch retrieval exclusion', () => {
     const findVectors = vi.fn().mockResolvedValue([]);
     await semanticDataLakeSearch(baseParams(), makeAdapters(findVectors) as never);
     expect(findVectors.mock.calls[0][0]).toEqual(['m', 'c']);
+  });
+
+  /**
+   * The bail above is an optimization for a caller who HAS no lake. A caller whose lakes were
+   * suppressed deliberately still has a corpus - their own and shared files, which collectScopedFiles
+   * admits via includeShared - and bailing there drops the turn to metadata-only keyword search.
+   *
+   * Exercises the real function rather than a mock of it on purpose: the tool-level test asserts the
+   * CALL shape (dataLakeTags: []), which passes whether or not this bail fires, so a fix that never
+   * ran read as verified for a whole round.
+   */
+  it("ownFilesOnly: with no lake tags it still scopes the caller's own files instead of bailing", async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const adapters = makeAdapters(findVectors);
+    await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, adapters as never);
+    // The DB is consulted - the thing the default path skips.
+    expect(adapters.db.fabfiles.search).toHaveBeenCalled();
+    const opts = (adapters.db.fabfiles.search as ReturnType<typeof vi.fn>).mock.calls[0][5];
+    // ...over own + shared files, with no lake arms.
+    expect(opts.includeShared).toBe(true);
+    expect(opts.dataLakeTags).toEqual([]);
   });
 
   it('tag path unchanged after core extraction: no data-lake tags returns empty without touching the DB', async () => {
@@ -151,6 +174,58 @@ const skipAwareFilesAdapter = (corpus: { id: string; fileName: string; tags?: un
   });
 
 const makeLogger = () => ({ warn: vi.fn(), debug: vi.fn(), error: vi.fn(), log: vi.fn() });
+
+// #2243: retrieval resolves a dynamic lake's prefix arm through `lakeMemberships`, replacing the
+// caller-anchored `scopedTagPrefixes` this module used to forward. Net-new coverage - this module
+// never pinned `scopedTagPrefixes` reaching fabfiles.search at all.
+describe('semanticDataLakeSearch lakeMemberships (#2243)', () => {
+  const MEMBERSHIP = { datalakeTag: 'datalake:x', fileTagPrefix: 'x:', creatorUserId: 'creator-1' };
+
+  it('reaches fabfiles.search on EVERY page of the paging walk', async () => {
+    const pageOne = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const pageTwo = [{ id: 'g0', fileName: 'G0.pdf', tags: [] }];
+    const search = filesAdapter([
+      { data: pageOne, hasMore: true, total: 11 },
+      { data: pageTwo, hasMore: false, total: 11 },
+    ]);
+
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP], budgets: { filePageSize: 10 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect(search).toHaveBeenCalledTimes(2);
+    for (const call of search.mock.calls) {
+      expect((call[5] as { lakeMemberships?: unknown[] }).lakeMemberships).toEqual([MEMBERSHIP]);
+    }
+  });
+
+  it('scopedTagPrefixes is absent from the options object', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search.mock.calls[0][5]).not.toHaveProperty('scopedTagPrefixes');
+  });
+
+  it('ownFilesOnly with no lake tags still sends lakeMemberships: [] + includeShared: true', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    const opts = search.mock.calls[0][5] as { lakeMemberships?: unknown[]; includeShared?: boolean };
+    expect(opts.lakeMemberships).toEqual([]);
+    expect(opts.includeShared).toBe(true);
+  });
+
+  it('the empty-dataLakeTags bail still fires even with non-empty lakeMemberships', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    const result = await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search).not.toHaveBeenCalled();
+    expect(result.results).toEqual([]);
+  });
+});
 
 describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
   const oneFile = [{ id: 'f1', fileName: 'F1.pdf', tags: [] }];
@@ -313,13 +388,17 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
   });
 
-  it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
+  it('asks for a fileName order, the sort the file walk needs to be a total order', async () => {
+    // The sort literal is hardcoded inside the paging loop (semanticDataLakeSearch.ts), so pinning
+    // the first call pins every page - a one-page fixture is sufficient here. buildFabFileSearchQuery
+    // gives no _id tiebreaker to createdAt, so switching this walk to it would silently re-expose
+    // the walk to page-boundary loss.
     const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
     await semanticDataLakeSearch(baseParams(), {
       db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
     } as never);
 
-    expect(search.mock.calls[0][5]).toMatchObject({ stableSort: true });
+    expect(search.mock.calls[0][4]).toEqual({ by: 'fileName', direction: 'asc' });
   });
 
   it('the file budget marks the scan truncated and warns', async () => {
@@ -551,6 +630,201 @@ describe('semanticDataLakeSearch determinism', () => {
   });
 });
 
+/**
+ * Per-lake supersession collapse at the lake-scoped entrypoint. Both halves of the opt-in are
+ * exercised - the admin flag AND the resolved lakes - because either alone must leave today's
+ * behaviour byte-identical.
+ */
+describe('semanticDataLakeSearch supersession collapse', () => {
+  const LAKES = [{ id: 'lakeX', datalakeTag: 'datalake:x' }];
+
+  // Two generations of one document plus an unrelated file, all in one lake.
+  const twoGenerations = () => [
+    {
+      id: 'old',
+      fileName: 'Protocol.pdf',
+      tags: [{ name: 'datalake:x' }],
+      vectorized: true,
+      createdAt: new Date('2024-01-01'),
+    },
+    {
+      id: 'new',
+      fileName: 'Protocol.pdf',
+      tags: [{ name: 'datalake:x' }],
+      vectorized: true,
+      createdAt: new Date('2025-01-01'),
+    },
+    { id: 'other', fileName: 'Other.pdf', tags: [{ name: 'datalake:x' }], vectorized: true },
+  ];
+
+  const adaptersFor = (files: unknown[], findVectors: ReturnType<typeof vi.fn>) => ({
+    db: {
+      fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+      fabfilechunks: { findVectorsByFabFileIds: findVectors },
+    },
+  });
+
+  const collapseParams = () => ({ ...baseParams(), lakes: LAKES, supersessionCollapseEnabled: true });
+
+  it('drops the older generation BEFORE the chunk scan, so the budget goes to other files', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(twoGenerations(), findVectors) as never);
+    expect(findVectors.mock.calls[0][0]).toEqual(['new', 'other']);
+    expect(result.supersession.count).toBe(1);
+    expect(result.supersession.sample[0]).toMatchObject({ fileId: 'old', tier: 'fileName', supersededBy: 'new' });
+    expect(result.supersession.partial).toBe(true);
+  });
+
+  it('spends the recovered top-K on another document instead of returning fewer passages', async () => {
+    // Both generations out-score the unrelated file, so at topK 2 they fill the result set between
+    // them. The collapse must hand the freed slot to `other`, not shorten the output.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const chunks = [
+      { id: 'ch-1old', fabFileId: 'old', vector: [1, 0.9], text: 'old' },
+      { id: 'ch-2new', fabFileId: 'new', vector: [1, 0.9], text: 'new' },
+      { id: 'ch-3other', fabFileId: 'other', vector: [1, 0.5], text: 'other' },
+    ];
+    const run = (params: SemanticDataLakeSearchParams) =>
+      semanticDataLakeSearch(
+        { ...params, topK: 2 },
+        adaptersFor(twoGenerations(), pagingChunkMock(chunks as never)) as never
+      );
+
+    const off = await run({ ...baseParams(), lakes: LAKES });
+    expect(off.results.map(r => r.fileId).sort()).toEqual(['new', 'old']);
+
+    const on = await run(collapseParams());
+    expect(on.results).toHaveLength(off.results.length);
+    expect(on.results.map(r => r.fileId).sort()).toEqual(['new', 'other']);
+  });
+
+  /**
+   * Ordering guard, and the reason the collapse sits after `groupFilesByEmbeddingModel` rather than
+   * before it: the alternate-model buckets reach the ANN phase only when vector search is enabled,
+   * which is off by default, so a foreign-model file is a hard drop on the default deployment. If it
+   * could win an identity key the lake would serve NEITHER generation of that document.
+   */
+  it('collapses AFTER the embedding-model split: a foreign-model newest generation does not suppress the older one', async () => {
+    const files = [
+      {
+        id: 'old',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2024-01-01'),
+        embeddingModel: 'text-embedding-ada-002',
+        chunkCount: 1,
+        vectorizedChunkCount: 1,
+      },
+      {
+        id: 'new',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2025-01-01'),
+        embeddingModel: 'text-embedding-3-small',
+        chunkCount: 1,
+        vectorizedChunkCount: 1,
+      },
+    ];
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(files, findVectors) as never);
+    expect(findVectors.mock.calls[0][0]).toEqual(['old']);
+    expect(result.supersession.count).toBe(0);
+    expect(result.embeddingMismatch.excludedFiles.count).toBe(1);
+  });
+
+  it('no two ranked chunks come from members sharing a source identity within one lake', async () => {
+    const chunkFor = (fileId: string) => ({ id: `ch-${fileId}`, fabFileId: fileId, vector: [1, 0], text: fileId });
+    const findVectors = pagingChunkMock(twoGenerations().map(f => chunkFor(f.id)) as never);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(twoGenerations(), findVectors) as never);
+    const names = result.results.map(r => r.fileName);
+    expect(new Set(names).size).toBe(names.length);
+    expect(result.results.map(r => r.fileId).sort()).toEqual(['new', 'other']);
+  });
+
+  it('surfaces the suppression through describeSearchLimitations, naming ids and the tier', async () => {
+    const result = await semanticDataLakeSearch(
+      collapseParams(),
+      adaptersFor(twoGenerations(), vi.fn().mockResolvedValue([])) as never
+    );
+    const prose = describeSearchLimitations(result);
+    expect(prose).toContain('old');
+    expect(prose).toContain('new');
+    expect(prose).toContain('fileName');
+    // Reported, but NOT partial: the corpus is complete, just deduplicated. See isPartialSearch.
+    expect(isPartialSearch(result)).toBe(false);
+  });
+
+  it('flag off (the shipped default): nothing collapses even with lakes resolved', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), lakes: LAKES },
+      adaptersFor(twoGenerations(), findVectors) as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['old', 'new', 'other']);
+    expect(result.supersession).toEqual({ count: 0, sample: [], partial: false });
+    expect(isPartialSearch(result)).toBe(false);
+  });
+
+  it('flag on but no lakes resolved: nothing is attributable, so nothing collapses', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), supersessionCollapseEnabled: true },
+      adaptersFor(twoGenerations(), findVectors) as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['old', 'new', 'other']);
+    expect(result.supersession.count).toBe(0);
+  });
+
+  it('collapses AFTER the availability partition: a mid-reindex newest generation does not suppress the servable older one', async () => {
+    const files = [
+      {
+        id: 'old',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2024-01-01'),
+        chunkCount: 4,
+        vectorizedChunkCount: 4,
+      },
+      {
+        // Mid-reindex: chunks committed, none vectorized yet - withheld upstream of the collapse.
+        id: 'new',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2025-01-01'),
+        chunkCount: 4,
+        vectorizedChunkCount: 0,
+      },
+    ];
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(files, findVectors) as never);
+    // The older generation still ranks - the lake is not left contributing nothing for this document.
+    expect(findVectors.mock.calls[0][0]).toEqual(['old']);
+    expect(result.supersession.count).toBe(0);
+    expect(result.retrievalUnavailable.partial).toBe(true);
+  });
+
+  it('never collapses across lakes', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const files = [
+      { id: 'x1', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:x' }], vectorized: true },
+      { id: 'y1', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:y' }], vectorized: true },
+    ];
+    const result = await semanticDataLakeSearch(
+      {
+        ...collapseParams(),
+        lakes: [...LAKES, { id: 'lakeY', datalakeTag: 'datalake:y' }],
+      },
+      adaptersFor(files, findVectors) as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['x1', 'y1']);
+    expect(result.supersession.count).toBe(0);
+  });
+});
+
 describe('fileScopedSemanticSearch (allow-list scope)', () => {
   const scopedParams = (fileIds: string[]) => ({
     query: 'stage III treatment',
@@ -571,6 +845,24 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
       findVectorsByFabFileIds,
     };
   };
+
+  /**
+   * Decision guard, not a description of a limitation: a curated kbScope is an explicit allow-list,
+   * so this entrypoint must never collapse superseded members even though it shares the ranking core
+   * with the lake-scoped one. It has no lake context to pass, and adding one would silently override
+   * a human's curation. Asserted here because a well-meaning "why is this asymmetric" edit is the
+   * likely way it gets broken.
+   */
+  it('does NOT collapse superseded members, even for two identically named files', async () => {
+    const files = [
+      { id: 'old', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:x' }], createdAt: new Date('2024-01-01') },
+      { id: 'new', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:x' }], createdAt: new Date('2025-01-01') },
+    ];
+    const { adapters, findVectorsByFabFileIds } = scopedAdapters({ files });
+    const result = await fileScopedSemanticSearch(scopedParams(['old', 'new']), adapters as never);
+    expect(findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['new', 'old']);
+    expect(result.supersession).toEqual({ count: 0, sample: [], partial: false });
+  });
 
   it('searches vectors for EXACTLY the scoped file ids and returns only their hits', async () => {
     const { adapters, getAccessibleFiles, findVectorsByFabFileIds } = scopedAdapters({
@@ -1521,5 +1813,100 @@ describe('semanticDataLakeSearch withholds mid-(re)index members (#1681)', () =>
 
     expect(result.retrievalUnavailable.indexing.count).toBe(1);
     expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+  });
+
+  // #1939. The pending-rebuild stamp is the ONLY in-flight signal a chunkless member carries, so a
+  // builder that drops it hands the partition a file that reads as an image and serves it silently.
+  // Both entrypoints are asserted for the same reason the two above are - and this pair is not
+  // theoretical: the field was carried into the ranking map but NOT into either `fileById` builder,
+  // so `indexing.count` read 0 against a real local lake until that was fixed.
+  const rebuilding = {
+    id: 'rebuilding',
+    fileName: 'Reset.pdf',
+    tags: [],
+    chunkCount: 0,
+    vectorizedChunkCount: 0,
+    notes: '',
+    error: null,
+    chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+  };
+
+  it('withholds a member whose rebuild was requested but never committed', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([rebuilding, settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(result.retrievalUnavailable.indexing.sample).toEqual([{ fileId: 'rebuilding', fileName: 'Reset.pdf' }]);
+    // Bucketed as re-indexing, never as paused: the prose for `paused` tells the reader an
+    // administrator has to act, which is wrong for an ordinary rebuild.
+    expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
+
+  it('serves the same member once the stamp is cleared, so the stamp is what decides', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([{ ...rebuilding, chunkRebuildRequestedAt: null }, settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.partial).toBe(false);
+  });
+
+  it('applies the pending-rebuild withhold to the file-scoped entrypoint as well', async () => {
+    const getAccessibleFiles = vi.fn().mockResolvedValue([rebuilding]);
+    const findVectorsByFabFileIds = pagingChunkMock([] as never);
+
+    const result = await fileScopedSemanticSearch(
+      {
+        query: 'stage III treatment',
+        fileIds: ['rebuilding'],
+        embeddingModel: 'text-embedding-ada-002' as SemanticDataLakeSearchParams['embeddingModel'],
+        apiKeyTable: { openai: 'k' },
+      },
+      { db: { fabfiles: { getAccessibleFiles }, fabfilechunks: { findVectorsByFabFileIds } } } as never
+    );
+
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
+});
+
+/**
+ * `comparedNoPassages` is the seam that separates "we looked at none of the corpus" from "we
+ * looked and it did not match" - the distinction `results.length` cannot make, and the one a
+ * retrieval outcome is graded on (see proveRetrievalOutcome in knowledgeBaseSearch).
+ *
+ * Both routes have to count, and each was a plausible one-sided implementation: keying on the scan
+ * count alone reports every healthy all-ANN deployment as unsearched, and keying on the ann hits
+ * alone reports every DocumentDB/self-host deployment the same way.
+ */
+describe('comparedNoPassages', () => {
+  const scanOf = (over: Partial<{ annHits: number }> = {}) => ({
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 3,
+    filesScoped: 3,
+    filesScanned: 3,
+    chunksScanned: 0,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    annModelsQueried: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+    ...over,
+  });
+
+  it('is true only when neither route compared anything', () => {
+    expect(comparedNoPassages({ chunksScored: 0, scan: scanOf() })).toBe(true);
+  });
+
+  it('is false once the scan path scored a chunk, even with no ann hits', () => {
+    expect(comparedNoPassages({ chunksScored: 1, scan: scanOf() })).toBe(false);
+  });
+
+  it('is false once an ann index returned a hit, even with nothing scored on the scan path', () => {
+    expect(comparedNoPassages({ chunksScored: 0, scan: scanOf({ annHits: 1 }) })).toBe(false);
   });
 });

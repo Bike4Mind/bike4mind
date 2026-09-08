@@ -555,8 +555,11 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
   /** Margin buckets per user over the trailing N days (default 30), worst margin first. */
   marginByUser(days?: number): Promise<IUserMargin[]>;
 
-  /** Monthly COGS per provider for invoice reconciliation, newest month first. */
-  monthlyCogsByProvider(): Promise<IProviderMonthCogs[]>;
+  /**
+   * Monthly COGS per provider for invoice reconciliation, newest month first, over the
+   * trailing N whole UTC months including the current one (default 12).
+   */
+  monthlyCogsByProvider(months?: number): Promise<IProviderMonthCogs[]>;
 
   /**
    * Spend rollup for the admin Spend tab over a bounded window, honoring optional

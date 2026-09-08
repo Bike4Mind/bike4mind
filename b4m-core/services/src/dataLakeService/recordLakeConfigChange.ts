@@ -72,10 +72,17 @@ export async function recordLakeConfigChange(
   const events = db.lakeConfigChangeEvents;
   if (!events) return;
 
-  // Falls back to console when no logger is wired, so a swallowed failure cannot go fully silent -
-  // the only other symptom is a config change missing from a history nobody is reading yet. Called
-  // through a closure rather than by reference so a logger whose method needs `this` still works.
-  const warn = (msg: string, meta: unknown) => (logger?.warn ? logger.warn(msg, meta) : console.warn(msg, meta));
+  // AUDIT LOSS is logged at ERROR, matching the read-side twin (recordLakeAccessEvent). The two
+  // halves of the trail must be one alert surface: at `warn` this was invisible to any alert keyed
+  // off the access side, so config-audit loss could accumulate silently while the read side paged
+  // someone. Falls back through error -> warn -> console.error so a caller wiring an older
+  // warn-only logger still records something. Called through a closure rather than by reference so
+  // a logger whose method needs `this` still works.
+  const logAuditLoss = (msg: string, meta: Record<string, unknown>) => {
+    if (logger?.error) return logger.error(msg, meta);
+    if (logger?.warn) return logger.warn(msg, meta);
+    return console.error(msg, meta);
+  };
 
   try {
     const retentionDays = db.adminSettings
@@ -83,11 +90,23 @@ export async function recordLakeConfigChange(
       : undefined;
 
     await events.record({
-      // A blank actor id means no principal drove this write (a script, a migration, the
+      // A route that accepts API-key auth resolves the principal itself and attaches it to the
+      // actor; that always wins, because only the route can tell a key from a session. Otherwise a
+      // blank actor id means no principal drove this write (a script, a migration, the
       // auto-activate path), which is a `system` event rather than a user event with a lost id -
       // the same call the actor stamp makes when it emits no key at all.
-      principalKind: actor.userId ? 'user' : 'system',
-      principalId: actor.userId || 'system',
+      // Read as a PAIR, never field by field: mixing a resolved kind with a fallback id would record
+      // `apiKey` against the human's id, which is worse than either answer on its own.
+      ...(actor.auditPrincipal
+        ? {
+            principalKind: actor.auditPrincipal.principalKind,
+            principalId: actor.auditPrincipal.principalId,
+            onBehalfOfUserId: actor.auditPrincipal.onBehalfOfUserId,
+          }
+        : {
+            principalKind: actor.userId ? ('user' as const) : ('system' as const),
+            principalId: actor.userId || 'system',
+          }),
       organizationId: lake.organizationId || undefined,
       dataLakeId: lake.id,
       // `system` rather than a guess when the rung will not resolve: the gate has already passed by
@@ -100,7 +119,7 @@ export async function recordLakeConfigChange(
       retentionDays,
     });
   } catch (err) {
-    warn('[dataLakes] lake config changed but the audit event did not persist', {
+    logAuditLoss('[dataLakes] lake config changed but the audit event did not persist', {
       dataLakeId: lake.id,
       action,
       err,

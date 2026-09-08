@@ -188,8 +188,14 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ]);
   }
 
-  async monthlyCogsByProvider(): Promise<IProviderMonthCogs[]> {
+  async monthlyCogsByProvider(months: number = 12): Promise<IProviderMonthCogs[]> {
+    const now = new Date();
+    // Align the bound to a UTC month start so the oldest month in the window is whole,
+    // matching the timezone: 'UTC' group key below. A rolling now - N*30d bound would
+    // return a silently truncated oldest month.
+    const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
     return this.model.aggregate<IProviderMonthCogs>([
+      { $match: { createdAt: { $gte: from } } },
       {
         $group: {
           _id: {

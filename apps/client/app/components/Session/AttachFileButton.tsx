@@ -12,6 +12,7 @@ import CasinoIcon from '@mui/icons-material/Casino';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import {
   Box,
+  Chip,
   IconButton,
   List,
   ListItem,
@@ -49,9 +50,26 @@ import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 
-import type { AttachScopeMode } from '@bike4mind/common';
+import { ATTACH_SCOPE_MODES, type AttachScopeMode } from '@bike4mind/common';
 
 ensureGoogleDrivePickerStyles();
+
+// Keyed by the union, so adding a mode to ATTACH_SCOPE_MODES fails the build here
+// until it has copy, rather than rendering an unlabeled chip.
+const ATTACH_SCOPE_COPY: Record<AttachScopeMode, { label: string; description: string }> = {
+  auto: {
+    label: 'Smart',
+    description: 'Documents stay available to this notebook; images attach to one message.',
+  },
+  notebook: {
+    label: 'Whole notebook',
+    description: 'Everything is kept for this notebook and re-sent with every message.',
+  },
+  message: {
+    label: 'Just this message',
+    description: 'Nothing is kept - files attach to one message only.',
+  },
+};
 
 interface IProps {
   onUploadFromComputer: () => void;
@@ -363,18 +381,46 @@ const AttachFileButton = ({
               onChange={event => onAttachScopeModeChange(event.target.value as AttachScopeMode)}
               sx={{ gap: 1.5, flexWrap: 'wrap' }}
             >
-              <Radio value="auto" label="Smart" data-testid="attach-file-scope-auto-radio" />
-              <Radio value="notebook" label="Whole notebook" data-testid="attach-file-scope-notebook-radio" />
-              <Radio value="message" label="Just this message" data-testid="attach-file-scope-message-radio" />
+              {ATTACH_SCOPE_MODES.map(mode => {
+                const selected = attachScopeMode === mode;
+                return (
+                  <Chip
+                    key={mode}
+                    variant={selected ? 'solid' : 'outlined'}
+                    color={selected ? 'primary' : 'neutral'}
+                    size="sm"
+                  >
+                    {/* disableIcon drops the dot so the pill fill IS the selection cue; overlay
+                        makes the focus ring follow the pill instead of boxing the whole row. It is
+                        NOT what makes the row clickable - Radio renders its action slot
+                        unconditionally and absolutely positions it over its nearest positioned
+                        ancestor, so the label was always part of the hit target.
+
+                        variant/color are passed down deliberately: Radio reads RadioGroupContext
+                        and FormControlContext, never ChipContext, so without these it resolves its
+                        own default outlined/primary. Under disableIcon that repaints BOTH the label
+                        colour and the action's background, and the action sits at zIndex 1 over the
+                        chip - so an outlined Radio in a solid Chip paints primary.outlinedColor on
+                        primary.solidBg (1.08:1) and inverts to near-white on hover. Matching the
+                        Chip's own variant/color makes the action paint the token the chip already
+                        paints, which is a no-op at rest and a proper darken on hover. */}
+                    <Radio
+                      disableIcon
+                      overlay
+                      variant={selected ? 'solid' : 'outlined'}
+                      color={selected ? 'primary' : 'neutral'}
+                      value={mode}
+                      label={ATTACH_SCOPE_COPY[mode].label}
+                      data-testid={`attach-file-scope-${mode}-radio`}
+                    />
+                  </Chip>
+                );
+              })}
             </RadioGroup>
           </Box>
           <Box sx={{ mb: 1.5 }}>
             <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {attachScopeMode === 'auto'
-                ? 'Documents stay available to this notebook; images attach to one message.'
-                : attachScopeMode === 'notebook'
-                  ? 'Everything is kept for this notebook and re-sent with every message.'
-                  : 'Nothing is kept - files attach to one message only.'}
+              {ATTACH_SCOPE_COPY[attachScopeMode].description}
             </Typography>
           </Box>
 

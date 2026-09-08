@@ -28,12 +28,15 @@ import {
   rapidReplyResultRepository,
   cacheRepository,
   mementoRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
+  fallbackLakeSettingsRepository,
   latticeModelRepository,
   slackDevWorkspaceRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -98,6 +101,8 @@ const getStaticOptions = () => {
       fabfiles: fabFileRepository,
       fabfilechunks: fabFileChunkRepository,
       dataLakes: dataLakeRepository,
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      fallbackLakeSettings: fallbackLakeSettingsRepository,
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
@@ -146,6 +151,7 @@ const getStaticOptions = () => {
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
+      scopedSettings: scopedSettingsRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

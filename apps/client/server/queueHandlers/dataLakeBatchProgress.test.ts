@@ -49,6 +49,8 @@ import {
   finalizeBatchIfComplete,
   enqueueTaxonomyAnalysisIfWanted,
   deferFailureIfRetryable,
+  isBatchComplete,
+  completedBatchStatus,
 } from './dataLakeBatchProgress';
 
 // `warn` as well as `error`, matching what the real callers pass (the Lambda logger): the audit
@@ -122,6 +124,49 @@ describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
     await finalizeBatchIfComplete(batch({ vectorizedFiles: 1 }), logger as never);
     expect(h.markTerminalIfActive).not.toHaveBeenCalled();
     expect(h.recordBatchCompletion).not.toHaveBeenCalled();
+  });
+
+  // A Drive continuation chain that stopped short re-plans totalFiles down to what it produced, so it
+  // DOES cross the threshold - by construction, since the shortfall was subtracted from the total. The
+  // only thing separating it from a clean run is deferredFiles, so if the outcome ignores that field a
+  // 3-of-500 sync settles as a green 'completed' and no surface anywhere says files are missing (#2394).
+  it('settles a chain that wrote files off unfinished as completed_with_errors, not completed', async () => {
+    const short = batch({ totalFiles: 3, vectorizedFiles: 3, deferredFiles: 497 });
+    h.markTerminalIfActive.mockResolvedValue(short);
+
+    await finalizeBatchIfComplete(short, logger as never);
+
+    expect(h.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors');
+    expect(h.recordBatchCompletion).toHaveBeenCalledWith('completed_with_errors');
+  });
+
+  // The degenerate chain: nothing produced, so the re-plan lands on 0 and the threshold is met at 0.
+  it('settles a chain that ingested nothing as completed_with_errors rather than an empty success', async () => {
+    const nothing = batch({ totalFiles: 0, vectorizedFiles: 0, deferredFiles: 2 });
+    h.markTerminalIfActive.mockResolvedValue(nothing);
+
+    await finalizeBatchIfComplete(nothing, logger as never);
+
+    expect(h.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors');
+  });
+
+  // deferredFiles must stay OUT of the completion threshold. A deferred candidate mints no manifest
+  // entry and no counter, so no later event can ever satisfy a gate that counted it - the batch would
+  // sit in 'processing' until the stuck-batch reconciler force-failed it, which is a worse outcome than
+  // the one this field exists to report. The threshold decides WHETHER it is done; the outcome decides
+  // whether it went well.
+  it('does not let a deferred count hold a batch open past its completion threshold', async () => {
+    const short = batch({ totalFiles: 3, vectorizedFiles: 3, deferredFiles: 497 }) as unknown as never;
+    expect(isBatchComplete(short)).toBe(true);
+    expect(completedBatchStatus(short)).toBe('completed_with_errors');
+  });
+
+  // The six websocket progress payloads report the outcome through this helper, so the client cannot
+  // be told 'completed' about a batch the database settled as 'completed_with_errors'.
+  it('reports no status at all while a batch is still short of its threshold', () => {
+    expect(completedBatchStatus(batch({ vectorizedFiles: 1 }))).toBeUndefined();
+    expect(completedBatchStatus(null)).toBeUndefined();
+    expect(completedBatchStatus(batch())).toBe('completed');
   });
 
   it('does not record when another handler already finalized (guard lost)', async () => {
@@ -260,7 +305,7 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
     expect(h.sendToClient).not.toHaveBeenCalled();
   });
 
-  it('swallows a failed revert-to-failed write instead of throwing (never blocks the caller)', async () => {
+  it('swallows a failed revert-to-failed write instead of throwing, but logs it (never blocks the caller, never silent)', async () => {
     h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
     h.setTaxonomyStatusIfActive
       .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
@@ -270,6 +315,7 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
       enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never)
     ).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('mongo down'));
   });
 
   it('shares its rate-limit bucket with the manual reanalyze endpoint (same key format)', async () => {

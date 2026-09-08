@@ -16,6 +16,9 @@ export const SessionUpdateRequestSchema = z.object({
   name: z.string().min(1).optional(),
   // Full replacement list of attached knowledge (fabFile) ids. Setting this together
   // with forceKnowledgeRetrieval: true is what turns on grounded retrieval for the session.
+  // Not shape-checked on purpose: callers echo the stored list back (a rename PUTs the whole
+  // session), so a legacy entry must not block an unrelated write. updateSession drops unusable
+  // ids instead - see services/src/utils/objectIds.ts for why dropping beats rejecting.
   knowledgeIds: z.array(z.string()).optional(),
   artifactIds: z.array(z.string()).optional(),
   tags: z.array(SessionTagSchema).optional(),

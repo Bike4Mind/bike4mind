@@ -4,25 +4,37 @@ import type {
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
 } from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 import type { LakeGrant } from './manageRule';
 import { classifyLakeAccess } from './classifyLakeAccess';
-import { resolveEnforceReadGrants, resolveLakeReadAccess, type LakeAccessLogger } from './resolveLakeReadAccess';
+import {
+  grantedLakeIdsFor,
+  resolveEnforceReadGrants,
+  resolveLakeReadAccess,
+  type LakeAccessLogger,
+} from './resolveLakeReadAccess';
 
 interface AssertLakeAccessAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
     // Optional: when wired, a transferred/delegated owner or curator reaches the lake through the
     // single read gate too (canAccessLake delegates to the grant-aware canManageLake). Absent ->
     // read access falls back to createdByUserId + org/tag/public, the pre-grant behavior.
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // `listByPrincipal` (#2425) additionally lets a foreign-org owner/curator grant holder
+    // resolve the lake BY SLUG in the first place - see the findBySlugAmongIds call below.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
     // Optional: the read-time grant cutover flag (#1673). When wired, a persisted READER grant
     // resolves into an ephemeral membership view at the gate; the flag governs whether that
     // resolution is ENFORCED or merely reported (report-only). Absent -> report-only (legacy), so
     // a caller that has not threaded settings keeps exact pre-cutover behavior.
     settings?: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
+    // Optional: a static (registry) lake's admin-settable overlay (currently `groundingMode` only -
+    // see IFallbackLakeSetting). Absent -> a fallback lake resolves exactly as it did before this
+    // adapter existed (its coded default), so every caller that has not threaded it is unaffected.
+    fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>;
   };
   // Optional diagnostic sink for the report-only divergence line (the expected-grant-set diff).
   logger?: LakeAccessLogger;
@@ -103,8 +115,20 @@ export function assertLakeGrantable(lake: Pick<IDataLakeDocument, 'id'>): void {
  * any-of via lakeMatchesAccess) plus the hard org prerequisite from canAccessLake.
  * Unlike DB lakes, a gateless fallback is deliberately public: fallbacks are curated
  * config, not user-created, and the list path already shows them to everyone.
+ *
+ * `fallbackLakeSettings` merges in the registry lake's admin-settable overlay (`groundingMode` and
+ * `preferredSystemPromptId`), when the caller has wired one. This is the ONE place a synthetic
+ * fallback document is constructed, so it is the one seam an overlay value must reach for every
+ * downstream consumer - sessions/create.ts reads both fields straight off this return value via
+ * resolveLakeSessionDefaults, with no per-consumer change. A read failure degrades to the coded
+ * default rather than failing the request, matching every other optional adapter here.
  */
-function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLakeDocument | null {
+async function resolveFallbackLake(
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>,
+  logger?: LakeAccessLogger
+): Promise<IDataLakeDocument | null> {
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
   const configOrgId = normalizeId(config.organizationId);
@@ -115,6 +139,15 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
     if (!lakeMatchesAccess(config, normalizedTags, normalizedKeys)) return null;
   }
+  // Logged, not swallowed: every sibling degrade in this area reports itself (getDataLakePrompts,
+  // resolveLakeReadAccess). A silent failure here reverts every admin-set default for this lake and
+  // is indistinguishable from "never configured", which is the hard failure mode to notice.
+  const overlay = fallbackLakeSettings
+    ? await fallbackLakeSettings.findByLakeId(config.id).catch(err => {
+        logger?.warn?.('[dataLakes] fallback overlay read failed; resolving lake with coded defaults', err);
+        return null;
+      })
+    : null;
   // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and document writes
   // (rename/delete/visibility/file-removal) are refused wholesale by assertLakeWritable, so no
   // one is the creator. The one exception is assertLakeRebuildAccess (authorizeLakeWrite.ts),
@@ -125,8 +158,29 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
     status: 'active',
     createdAt: new Date(0),
     updatedAt: new Date(0),
+    ...(overlay?.groundingMode ? { groundingMode: overlay.groundingMode } : {}),
+    ...(overlay?.preferredSystemPromptId ? { preferredSystemPromptId: overlay.preferredSystemPromptId } : {}),
   };
 }
+
+/**
+ * The #2425 last-resort arm: only called on a `findBySlug` miss, and only when a grants repo is
+ * wired. Owner/curator only (`includeReaders: false`) - a foreign-org grant resolves the lake
+ * here, but `canManageLake` in the caller still gates what the grant actually admits the caller
+ * to do with it. Extracted so the miss-only laziness is visible at the call site (an `??` on two
+ * awaited calls) rather than hidden inside a thunk passed into the repository method.
+ */
+const resolveGrantHeldLakeBySlug = async (
+  slug: string,
+  ctx: AccessContext,
+  dataLakeAccessGrants: AssertLakeAccessAdapters['db']['dataLakeAccessGrants'],
+  dataLakes: Pick<IDataLakeRepository, 'findBySlugAmongIds'>
+): Promise<IDataLakeDocument | null> => {
+  if (!dataLakeAccessGrants) return null;
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], dataLakeAccessGrants, false);
+  if (grantedLakeIds.length === 0) return null;
+  return dataLakes.findBySlugAmongIds(slug, grantedLakeIds);
+};
 
 /**
  * The single access gate. Resolves a lake by id (then slug) from the DB, falling back
@@ -136,6 +190,15 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
  * final (no fallback retry). Denies with a NOT-FOUND-style error so a user who can't
  * see a lake can't confirm it exists. Every single-lake read and every batch/file
  * operation calls this first. Returns the lake on grant.
+ *
+ * Slug resolution (#2425): findBySlug's own-org/org-less arms miss a lake in an org the
+ * caller isn't a member of, even when they hold a real owner/curator grant on it (e.g. a
+ * cross-org transferLakeOwnership). On that miss, and only when `dataLakeAccessGrants` is
+ * wired, this resolves the grant-held id set itself (owner/curator only, includeReaders=false)
+ * and retries via `findBySlugAmongIds` - so a foreign-org grant holder can still reach the lake
+ * by slug, and canManageLake below still gates what they're actually allowed to do with it. The
+ * extra grants query only ever runs on a miss, matching the prior lazy-thunk design, but the
+ * decision now lives here rather than inside the repository method.
  */
 export const assertLakeAccess = async (
   lakeIdOrSlug: string,
@@ -144,7 +207,8 @@ export const assertLakeAccess = async (
 ): Promise<IDataLakeDocument> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
-    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds));
+    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds)) ??
+    (await resolveGrantHeldLakeBySlug(lakeIdOrSlug, ctx, db.dataLakeAccessGrants, db.dataLakes));
   if (lake) {
     // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
     // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.
@@ -179,7 +243,7 @@ export const assertLakeAccess = async (
     if (!decision.allowed) throw new NotFoundError('Data lake not found');
     return lake;
   }
-  const fallback = resolveFallbackLake(lakeIdOrSlug, ctx);
+  const fallback = await resolveFallbackLake(lakeIdOrSlug, ctx, db.fallbackLakeSettings, logger);
   if (!fallback) throw new NotFoundError('Data lake not found');
   return fallback;
 };

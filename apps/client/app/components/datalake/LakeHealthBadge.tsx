@@ -89,13 +89,15 @@ function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
     if (level === 'degraded') return 'Health: needs attention';
     return 'Health: not measured';
   }
-  return `Reachable ${pct(health.reachableShare)}`;
+  // Scoped like the member-count chip beside it (LakeInfoPanel): membership, and so this share, is
+  // computed against the lake's CREATOR - see buildDataLakeMembershipFilter's docblock.
+  return `Reachable ${pct(health.reachableShare)} (as creator)`;
 }
 
 const DRILLDOWN_ROWS = 8;
 
 function HealthTooltip({ health, failedFileCount = 0 }: { health: LakeHealthApiResponse; failedFileCount?: number }) {
-  const { predicates, coverage, affectedMembers, affectedMemberCount } = health;
+  const { predicates, coverage, affectedMembers, affectedMemberCount, duplicateMembers } = health;
   const measuredGap = coverage.membersWithChunks - coverage.measuredMembers;
   const anyMemberFails =
     predicates.chunkWithinPolicy.fail > 0 ||
@@ -125,6 +127,12 @@ function HealthTooltip({ health, failedFileCount = 0 }: { health: LakeHealthApiR
       {health.scanTruncated && (
         <Typography level="body-xs" sx={{ mt: 0.25, color: 'warning.400' }}>
           Large lake: figures cover the first {coverage.membersWithChunks} files.
+        </Typography>
+      )}
+      {duplicateMembers.memberCount > 0 && (
+        <Typography level="body-xs" sx={{ mt: 0.25, color: 'warning.400' }}>
+          {duplicateMembers.memberCount} file(s) share a name with a sibling ({duplicateMembers.groupCount} name
+          {duplicateMembers.groupCount === 1 ? '' : 's'}) - possibly duplicate upload generations.
         </Typography>
       )}
       <Divider sx={{ my: 0.5 }} />

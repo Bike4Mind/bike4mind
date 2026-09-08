@@ -17,9 +17,12 @@ import {
 import type { DataLakeSpendNotificationEvent } from './sendDataLakeSpendNotification';
 import { scopeForLake } from '../settings/resolveScopedSetting';
 
-/** Cache keys for the platform-wide meters. One period window, one rate window. */
+/** Cache keys for the platform-wide meters. One period window, two throughput windows. */
 export const EMBEDDING_SPEND_PERIOD_KEY = 'dataLakeEmbeddingSpend:period';
 export const EMBEDDING_SPEND_RATE_KEY = 'dataLakeEmbeddingSpend:rate';
+/** The TPM window. Separate key from the call window: the two meter different quantities of the
+ *  same call and must drain independently. */
+export const EMBEDDING_SPEND_TOKEN_RATE_KEY = 'dataLakeEmbeddingSpend:tokenRate';
 
 const MINUTE_MS = 60_000;
 /**
@@ -71,11 +74,22 @@ export interface SpendGateDb {
 }
 
 /**
- * The single money gate for data-lake embedding work. Called by the vectorize handler
- * immediately before a provider embedding call - downstream of the embedding cache, so
+ * The single money and throughput gate for data-lake embedding work. Called by the vectorize
+ * handler immediately before a provider embedding call - downstream of the embedding cache, so
  * cache hits cost nothing against any budget. Every lever it reads is the one registered
  * in the admin panel; this function existing is what keeps them from being levers with
  * no consumer.
+ *
+ * INGEST ONLY, deliberately. Query-side embedding (semanticDataLakeSearch, alternateModelAnn)
+ * does NOT pass through here: it is one small, latency-critical call on an interactive path, and
+ * putting it behind a window a bulk backfill can saturate would make search wait on maintenance
+ * work - the starvation this gate exists to prevent, inflicted from the other direction. The
+ * consequence is that query traffic spends provider quota this gate cannot see, which is why the
+ * TPM lever's default is set BELOW the provider tier rather than at it (see
+ * DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT); the headroom is the query lane.
+ *
+ * Applies to every data-lake ingest door - upload batch, per-file reprocess, Rebuild Passages,
+ * and convergence - because they all funnel into the one vectorize handler that calls this.
  *
  * The per-run and per-lake budgets are TIERED by lake ownership (#1675): an individual-owned lake
  * and an organization-owned one are different economic cases, so the gate resolves which one this
@@ -92,9 +106,10 @@ export interface SpendGateDb {
  * Checks, in order:
  *  1. resolveSpendLevers  - throws SpendLeverResolutionError on unusable values (fail closed)
  *  2. master switch       - denies everything when off
- *  3. rate limit          - fixed one-minute window, one unit per provider call; waits out
- *                           the window in-handler up to a few attempts before denying, so a
- *                           brief burst does not burn SQS delivery attempts
+ *  3. throughput cap      - two fixed one-minute windows, calls/min and tokens/min, both of
+ *                           which a call must fit; waits out a full window in-handler up to a
+ *                           few attempts before denying, so a brief burst does not burn SQS
+ *                           delivery attempts
  *  4. per-run budget      - reserve-first against the batch's meter
  *  5. per-lake budget     - reserve-first against the lake's meter
  *  6. per-period budget   - reserve-first against the platform-wide fixed window
@@ -119,6 +134,13 @@ export interface SpendGateDb {
 export async function enforceEmbeddingSpendGate(params: {
   /** Estimated provider cost of the call about to be made, integer micro-USD (>= 0). */
   estimatedMicroUsd: number;
+  /**
+   * Tokens the call will send to the provider (>= 0), metered against the TPM window. Required
+   * rather than optional on purpose: a caller that forgot it would silently spend the provider's
+   * token quota unmetered, which is precisely the hole this window exists to close. Pass 0 only
+   * when the call genuinely sends none.
+   */
+  estimatedTokens: number;
   batchId?: string;
   dataLakeId?: string;
   db: SpendGateDb;
@@ -136,7 +158,7 @@ export async function enforceEmbeddingSpendGate(params: {
   /** Injectable for tests; defaults to DEFAULT_NOTIFY_TIMEOUT_MS. */
   notifyTimeoutMs?: number;
 }): Promise<void> {
-  const { estimatedMicroUsd, batchId, dataLakeId, db, logger, notify } = params;
+  const { estimatedMicroUsd, estimatedTokens, batchId, dataLakeId, db, logger, notify } = params;
   const sleep = params.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const notifyTimeoutMs = params.notifyTimeoutMs ?? DEFAULT_NOTIFY_TIMEOUT_MS;
 
@@ -175,34 +197,92 @@ export async function enforceEmbeddingSpendGate(params: {
     throw new EmbeddingSpendDeniedError('the embedding spend switch is off');
   }
 
-  // Rate limit: metered per provider call (a batch of chunks is one call), and 0 is a stop.
+  // Throughput cap: two fixed one-minute windows a call must fit BOTH of. calls/min bounds the
+  // provider's RPM; tokens/min bounds its TPM, which is what providers actually meter and what a
+  // call cap alone does not bound - one call carries a whole batch of passages, so the call cap
+  // at its default permits several million tokens a minute.
+  //
   // On a full window, wait briefly for it to close rather than immediately failing the
   // message - the SQS retry budget is only 3 deliveries and must be kept for real errors.
-  // The wait is bounded by RATE_WAIT_TOTAL_MS across ALL attempts (see its comment for why
-  // sleeping on reserved concurrency is itself a cost); past that the denial is retryable
-  // and the remaining wait happens on the queue instead. A wait that resolves on its own
-  // (grant after sleeping) is the rate limiter working as designed - deliberately no
-  // notification on that path, only on the two throws below.
-  for (let waitedMs = 0; ;) {
-    const rate = await db.cache.tryAddWithinLimitFixedWindow(
-      EMBEDDING_SPEND_RATE_KEY,
-      1,
-      levers.maxCallsPerMinute,
-      MINUTE_MS
-    );
-    if (rate.success) break;
-    if (levers.maxCallsPerMinute <= 0) {
+  // The wait is bounded by RATE_WAIT_TOTAL_MS across ALL attempts and BOTH windows (see its
+  // comment for why sleeping on reserved concurrency is itself a cost); past that the denial is
+  // retryable and the remaining wait happens on the queue instead. A wait that resolves on its
+  // own (grant after sleeping) is the rate limiter working as designed - deliberately no
+  // notification on that path, only on the throws below.
+  //
+  // A granted window is dropped from `pending` immediately, so waiting out the SECOND window
+  // never re-charges the first. The reservations are not rolled back if the second then denies:
+  // same direction as the budget reservations below - a stranded reservation makes a window read
+  // slightly full, never slightly empty, and it drains within the minute either way.
+  //
+  // Both windows report under the `rate` notification scope. One saturated throughput cap is one
+  // operator-visible condition, and sharing the scope means the (lake, kind, scope, periodKey)
+  // dedup slot sends ONE notice per minute rather than two for the same stall; the `reason`
+  // string is what names the window that actually denied.
+  const throughputWindows = [
+    {
+      key: EMBEDDING_SPEND_RATE_KEY,
+      amount: 1,
+      limit: levers.maxCallsPerMinute,
+      name: 'call rate limit',
+      unit: '/min',
+    },
+    {
+      key: EMBEDDING_SPEND_TOKEN_RATE_KEY,
+      amount: estimatedTokens,
+      limit: levers.maxTokensPerMinute,
+      name: 'token rate limit',
+      unit: ' tokens/min',
+    },
+  ];
+
+  // A call bigger than the whole window can never be granted, however long we wait: the counter
+  // denies `amount > limit` even against an empty window. Waiting it out would burn the whole
+  // wait budget and then hand SQS a retry that is guaranteed to fail the same way, so it is
+  // caught up front and thrown as terminal. Only reachable on the token window (calls cost 1).
+  for (const limitWindow of throughputWindows) {
+    if (limitWindow.amount > 0 && limitWindow.limit > 0 && limitWindow.amount > limitWindow.limit) {
+      const reason =
+        `a single embedding call of ${limitWindow.amount} tokens can never fit the embedding ` +
+        `${limitWindow.name} (${limitWindow.limit}${limitWindow.unit})`;
       await fire({
         kind: 'stopped',
         scope: 'rate',
         periodKey: periodKeyForClock(new Date()),
-        detail: { reason: 'the embedding rate limit is 0 (stopped)' },
+        detail: { reason },
       });
-      throw new EmbeddingSpendDeniedError('the embedding rate limit is 0 (stopped)');
+      throw new EmbeddingSpendDeniedError(reason);
+    }
+  }
+
+  const pending = [...throughputWindows];
+  for (let waitedMs = 0; pending.length > 0;) {
+    const limitWindow = pending[0];
+    const rate = await db.cache.tryAddWithinLimitFixedWindow(
+      limitWindow.key,
+      limitWindow.amount,
+      limitWindow.limit,
+      MINUTE_MS
+    );
+    if (rate.success) {
+      pending.shift();
+      continue;
+    }
+    if (limitWindow.limit <= 0) {
+      const reason = `the embedding ${limitWindow.name} is 0 (stopped)`;
+      await fire({
+        kind: 'stopped',
+        scope: 'rate',
+        periodKey: periodKeyForClock(new Date()),
+        detail: { reason },
+      });
+      throw new EmbeddingSpendDeniedError(reason);
     }
     const waitMs = Math.min(Math.max(rate.expiresAt.getTime() - Date.now(), 250), MINUTE_MS);
     if (waitedMs + waitMs > RATE_WAIT_TOTAL_MS) {
-      const reason = `the embedding rate limit (${levers.maxCallsPerMinute}/min) stayed exhausted after waiting ${waitedMs}ms`;
+      const reason =
+        `the embedding ${limitWindow.name} (${limitWindow.limit}${limitWindow.unit}) ` +
+        `stayed exhausted after waiting ${waitedMs}ms`;
       // Retryable: the window drains on its own, so a later SQS delivery can be granted.
       await fire({
         kind: 'throttled',
@@ -212,7 +292,9 @@ export async function enforceEmbeddingSpendGate(params: {
       });
       throw new EmbeddingSpendDeniedError(reason, { retryable: true });
     }
-    logger?.log?.(`[spendGate] rate window full (${rate.count}); waiting ${waitMs}ms (${waitedMs}ms waited so far)`);
+    logger?.log?.(
+      `[spendGate] ${limitWindow.name} window full (${rate.count}); waiting ${waitMs}ms (${waitedMs}ms waited so far)`
+    );
     await sleep(waitMs);
     waitedMs += waitMs;
   }

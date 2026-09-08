@@ -112,3 +112,104 @@ describe('DataLakeChatTree file-row actions', () => {
     expect(onViewFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f1' }));
   });
 });
+
+describe('DataLakeChatTree chrome slots (#1943)', () => {
+  it('gives Create the primary treatment and Manage the secondary one', () => {
+    renderTree({ onManage: vi.fn(), onCreateLake: vi.fn() });
+
+    // Joy's variant/color modifier classes are a stable public API (unlike its emotion
+    // hashes), so they are the only way to assert visual hierarchy without a snapshot.
+    const createBtn = screen.getByTestId('datalake-create-btn');
+    expect(createBtn.className).toMatch(/MuiButton-variantSolid/);
+    expect(createBtn.className).toMatch(/MuiButton-colorPrimary/);
+
+    const manageBtn = screen.getByTestId('datalake-manage-btn');
+    expect(manageBtn.className).toMatch(/MuiButton-variantOutlined/);
+    expect(manageBtn.className).toMatch(/MuiButton-colorNeutral/);
+  });
+
+  it('wires each footer button to its own handler', () => {
+    const onManage = vi.fn();
+    const onCreateLake = vi.fn();
+    renderTree({ onManage, onCreateLake });
+
+    fireEvent.click(screen.getByTestId('datalake-create-btn'));
+    expect(onCreateLake).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('datalake-manage-btn'));
+    expect(onManage).toHaveBeenCalledTimes(1);
+  });
+
+  it('advertises drag-to-ingest at rest, which the drop overlay alone cannot do', () => {
+    renderTree({ dropHint: 'Drag files here to add' });
+    expect(screen.getByTestId('datalake-drop-hint')).toHaveTextContent(/drag files here to add/i);
+  });
+
+  it('renders the sub-header between the title bar and the search toolbar', () => {
+    renderTree({ subHeader: <div data-testid="sub-header" /> });
+
+    const subHeader = screen.getByTestId('sub-header');
+    const search = screen.getByTestId('datalake-search');
+    expect(subHeader.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('prefers the host empty slot over the bare "No categories" line', () => {
+    // Root breadcrumb + empty tree: the node list is empty and nothing is being searched.
+    renderTree({ breadcrumb: [], articles: [], emptySlot: <div data-testid="host-empty" /> });
+
+    expect(screen.getByTestId('host-empty')).toBeInTheDocument();
+    expect(screen.queryByText('No categories')).not.toBeInTheDocument();
+  });
+
+  it('keeps "No matches" over the empty slot while searching - that is a fact about the query', () => {
+    renderTree({ breadcrumb: [], articles: [], emptySlot: <div data-testid="host-empty" /> });
+
+    // The testid sits on Joy's Input root; the value setter lives on the inner <input>.
+    fireEvent.change(screen.getByTestId('datalake-search').querySelector('input')!, {
+      target: { value: 'zzz' },
+    });
+
+    expect(screen.getByText('No matches')).toBeInTheDocument();
+    expect(screen.queryByTestId('host-empty')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeChatTree uncategorized bucket', () => {
+  // The lake's members with no taxonomy tag: counted by the picker directly above this tree, and
+  // until now shown by no row in it (#2031). The count is the host's - the files arrive only once
+  // the bucket is opened.
+  const loose = { id: 'f9', fileName: 'no-tags.pdf', tags: [] } as unknown as IFabFileDocument;
+
+  it('renders the bucket row at root with the host count, and opens it on click', () => {
+    const onNavigate = vi.fn();
+    renderTree({ breadcrumb: [], onNavigate, uncategorized: { files: [], count: 3 } });
+
+    const row = screen.getByTestId('datalake-node-uncategorized');
+    expect(row).toHaveTextContent('Uncategorized');
+    expect(row).toHaveTextContent('3');
+
+    fireEvent.click(row);
+    expect(onNavigate).toHaveBeenCalledWith(['__uncategorized__']);
+  });
+
+  it('lists the bucket files once opened, with the same row actions as any other file', () => {
+    const onViewFile = vi.fn();
+    renderTree({
+      breadcrumb: ['__uncategorized__'],
+      articles: [],
+      onViewFile,
+      uncategorized: { files: [loose], count: 1 },
+    });
+
+    fireEvent.click(screen.getByTestId('datalake-file-f9'));
+    expect(onViewFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f9' }));
+    expect(screen.getByTestId('datalake-row-menu-btn-f9')).toBeInTheDocument();
+  });
+
+  it('renders no bucket row when the host passes none', () => {
+    renderTree({ breadcrumb: [] });
+
+    expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+  });
+});

@@ -1,4 +1,5 @@
 import {
+  type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
   IMessage,
@@ -58,6 +59,7 @@ import {
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
+  reservationOutputTokens,
   LOW_CREDIT_ALERT_THRESHOLD,
   ITokenizer,
   getSettingsByNames,
@@ -67,6 +69,8 @@ import {
   effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
+import type { FabFileNotice } from '@bike4mind/utils';
+import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -77,6 +81,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   resolveOutputMaxTokens,
+  reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
   type ICompletionOptions,
@@ -87,11 +92,19 @@ import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { settleToolCallCredits } from './settleToolCredits';
+import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
-import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+  type ResolvedLakeAccess,
+} from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -136,6 +149,7 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  markShareablePrefixBoundary,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
@@ -143,6 +157,9 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import {
@@ -158,9 +175,19 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
-import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
-import { resolveArtifactsEnabled } from './artifactGating';
+import type {
+  ToolTelemetry,
+  ToolErrorCategory,
+  SystemPromptDetail,
+  DataLakeGroundingMode,
+  IAttachmentDelivery,
+} from '@bike4mind/common';
+import {
+  buildAlwaysOnFloorDetails,
+  buildInjectedBlockDetails,
+  sortDetailsByDeliveryOrder,
+} from './systemPromptFloorTelemetry';
+import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
@@ -749,6 +776,23 @@ export class ChatCompletionProcess {
    * NEVER set from cached static options - it is a per-request, per-user value.
    */
   public entitlementKeys: string[] = [];
+  /**
+   * True when everything attached to this session is a PERSONAL file - nothing that belongs to a
+   * data lake the caller can reach. The signal for "this notebook is about its own uploads, not the
+   * curated library", read by KnowledgeRetrievalFeature to skip forced retrieval.
+   *
+   * Keyed on lake MEMBERSHIP rather than on `retrievalTags` being empty, which is the weaker test it
+   * replaced: attaching a lake file to an EXISTING session goes through sessionService.update, which
+   * derives no tags (only create does), so an empty tag list cannot distinguish a personal upload
+   * from a lake file-click and the weaker test would cut lake browsing off from its own lake.
+   * Monotone by construction - it can only ever withhold retrieval from a session where nothing
+   * attached belongs to any reachable lake.
+   *
+   * Defaults false so an unresolvable lake lookup keeps today's behavior instead of silently
+   * suppressing retrieval (fail toward grounding, mirroring the tool-offer gate below).
+   */
+  public personalCorpusOnly = false;
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -757,7 +801,19 @@ export class ChatCompletionProcess {
    * the two can never disagree - it is the SAME access the knowledge tool resolves with.
    */
   private accessibleDataLakeAccessMemo:
-    { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
+    | {
+        dataLakeTags: string[];
+        dataLakeTagPrefixes: string[];
+        lakes: ResolvedLakeAccess[];
+      }
+    | undefined;
+  /**
+   * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
+   * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
+   * - the attachment classifier, the tool-offer gate, the inline-defer plan - all read its memo.
+   * Undefined means no admission this turn, which makes the widening a no-op.
+   */
+  private turnPreauthorizedLakeIds: string[] | undefined;
   /**
    * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
    * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
@@ -888,24 +944,129 @@ export class ChatCompletionProcess {
   private async getAccessibleDataLakeAccess(): Promise<{
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
-    scopedTagPrefixes: string[];
+    lakes: ResolvedLakeAccess[];
   }> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
         const entitlementKeys = await this.resolveEntitlementKeys();
-        this.accessibleDataLakeAccessMemo = await getDynamicDataLakeAccess({
+        const resolved = await getDynamicDataLakeAccess({
           db: this.db,
           user: this.user,
           entitlementKeys,
         });
+        // Same union the retrieval and tool doors run, so all three agree on what this session can
+        // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
+        // un-widened exactly as it would have before the admission.
+        this.accessibleDataLakeAccessMemo = await unionPreauthorizedLakeAccess(
+          resolved,
+          this.turnPreauthorizedLakeIds,
+          this.user.id,
+          this.db
+        );
       } catch (err) {
         this.logger.warn(
           `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
         );
-        this.accessibleDataLakeAccessMemo = { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [] };
+        this.accessibleDataLakeAccessMemo = {
+          dataLakeTags: [],
+          dataLakeTagPrefixes: [],
+          lakes: [],
+        };
       }
     }
     return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * How many of `ids` are reachable AS LAKE CONTENT by this caller.
+   *
+   * Deliberately a second read rather than reusing `getAttachedKnowledgeFiles`: that method now also
+   * carries a lake arm (see `attachmentLakeAccess`), but it answers a different question - ownership-
+   * OR-lake reachability - while this one asks whether the file is lake content AT ALL. A file that
+   * resolves through `getAttachedKnowledgeFiles` might have matched purely on ownership, so its
+   * success can't tell "personal" from "lake"; running LAKE-ONLY here is what can.
+   *
+   * Runs LAKE-ONLY: `restrictToDataLake` makes buildOwnershipConditions start from no ownership
+   * arms at all (fabFileSearchQuery: `restrictToDataLake ? [] : [...baseAccess]`), so only the lake
+   * tag/prefix arms select. That is narrower than an ownership-OR-lake read and is what we want -
+   * the question is "is this file lake content", not "can the caller read it by any route".
+   * `restrictToFileIds` bounds it to the requested ids. Returns `null` when it cannot
+   * tell, which callers must treat as "cannot judge".
+   */
+  private async countLakeReachableAttachments(ids: string[]): Promise<number | null> {
+    if (ids.length === 0) return 0;
+    try {
+      const access = await this.getAccessibleDataLakeAccess();
+      if (access.dataLakeTags.length === 0) return null;
+      const lakeMemberships = lakeMembershipsFrom(access.lakes);
+      warnIfManyLakeMemberships(lakeMemberships, this.logger, 'countLakeReachableAttachments');
+      const res = await this.db.fabfiles!.search(
+        this.user.id,
+        '',
+        { tags: [], shared: false, restrictToFileIds: ids },
+        { page: 1, limit: ids.length },
+        { by: 'fileName', direction: 'asc' },
+        {
+          textSearch: false,
+          includeShared: true,
+          userGroups: this.user.groups || [],
+          dataLakeTags: access.dataLakeTags,
+          dataLakeTagPrefixes: access.dataLakeTagPrefixes,
+          // Anchored to each lake's CREATOR rather than the caller (#2243): a creator-owned
+          // prefix-only member now counts as lake-reachable for every member, not only its
+          // creator. The one call site in the repo where this swap changes what matches at all,
+          // because restrictToDataLake drops the broad owner/shared arms. BOTH directions fire
+          // here, for different callers:
+          //   NARROWS for everyone - the caller's own file carrying a merely colliding prefix no
+          //   longer counts, since the arm now requires the lake creator's userId.
+          //   WIDENS only where the attachment is readable by a route buildOwnershipConditions'
+          //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
+          //   NOT in baseAccess. `getAttachedKnowledgeFiles` now also carries a lake arm (see
+          //   `attachmentLakeAccess`), so a lake reader attaching lake files they do not own now
+          //   resolves fully there too - resolvePersonalCorpusOnly's full-resolution guard
+          //   (`resolvePersonalCorpusOnly.ts:62`) passes, and this count IS reached for exactly that
+          //   caller. It is what correctly classifies the corpus as non-personal: the residual
+          //   affected set is a lake reader attaching lake files in a session that is neither
+          //   lake-scoped nor in `retrieve` mode.
+          lakeMemberships,
+          restrictToDataLake: true,
+          excludeContent: true,
+        }
+      );
+      return res.data.length;
+    } catch (err) {
+      this.logger.warn(
+        `[knowledge] lake-reachability check failed; treating the corpus as unclassifiable: ${(err as Error)?.message}`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * The lake arms the attachment door adds to its CASL scope.
+   *
+   * Owner-wide and deliberately NOT narrowed to `session.retrievalTags`: unlike every retrieval
+   * surface (which narrows via `narrowLakeAccessToSession`), the caller here named the file ids
+   * explicitly, and narrowing would turn an explicit request into a silent refusal.
+   *
+   * `lakeMembershipsFrom` must stay the source for `lakeMemberships` - it allow-lists
+   * `kind === 'owned'`, and an unanchored registry prefix arm sitting beside other lakes' arms in
+   * one `$or` is the cross-tenant promotion the SCOPED/OPEN split forbids. Registry lakes are
+   * covered by `dataLakeTagPrefixes` instead. Never construct `lakeMemberships` any other way here.
+   *
+   * Fail direction is inherited from `getAccessibleDataLakeAccess`, which catches its own failures
+   * and returns an empty access set - so a lake-resolution outage degrades to today's
+   * ownership-only behaviour. Never widen on error.
+   */
+  private async attachmentLakeAccess(): Promise<AttachmentLakeAccess> {
+    const access = await this.getAccessibleDataLakeAccess();
+    const lakeMemberships = lakeMembershipsFrom(access.lakes);
+    warnIfManyLakeMemberships(lakeMemberships, this.logger, 'attachment-resolution');
+    return {
+      lakeMemberships,
+      dataLakeTags: access.dataLakeTags,
+      dataLakeTagPrefixes: access.dataLakeTagPrefixes,
+    };
   }
 
   /**
@@ -921,7 +1082,8 @@ export class ChatCompletionProcess {
     if (this.attachedKnowledgeFilesMemo === undefined) {
       try {
         const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope);
+        const lakeAccess = await this.attachmentLakeAccess();
+        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope, lakeAccess);
       } catch (err) {
         this.logger.warn(
           `[knowledge] attached-file lookup failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
@@ -1528,15 +1690,33 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
+      // Captured HERE, ahead of every consumer, because getAccessibleDataLakeAccess memoizes per
+      // turn: whoever touches it first freezes the access set for the rest of the turn. A
+      // pre-authorized lake missing from that set does not merely fail to widen retrieval - it
+      // reads to the attachment classifier as "this file belongs to no lake I can reach", which
+      // marks the corpus personal and SUPPRESSES the lake arms for the one session the admission
+      // exists to serve.
+      this.turnPreauthorizedLakeIds = vetPreauthorizedLakeIds(session, this.user.id);
+
       const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
       // Any promptMode is an eval/passthrough that must not receive our server-side offers.
       const skipAutoOffers = Boolean(promptMode);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
-      // fetch below instead of serializing in front of it - folded into that Promise.all. Skips
-      // the lookup entirely when there's nothing to check (no attachment) or the offer is skipped
-      // anyway (promptMode).
+      // fetch below instead of serializing in front of it - folded into that Promise.all.
+      //
+      // Two consumers now, and they need this on different turns. The tool-offer gate does not need
+      // it under promptMode (the offer is suppressed anyway) - but the personal-corpus
+      // CLASSIFICATION does, whenever forced retrieval is actually running. Gating on
+      // `!skipAutoOffers` alone left `resolvePersonalCorpusOnly` seeing a null file list on every
+      // promptMode turn, so it returned false at its "cannot judge" guard and the suppression was
+      // structurally dead on `POST /api/chat`'s grounded mode - which forces retrieval ON.
+      //
+      // `raw` is the one mode that needs neither: it is the only mode resolveForcedRetrieval turns
+      // retrieval OFF for, so there is no classification to make and the read stays skipped. The
+      // cost is one memoized read on the promptMode turns that previously skipped it.
+      const needFilesForClassification = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
       const attachedKnowledgeFilesPromise: Promise<IFabFileDocument[] | null> =
-        hasAnyAttachment && !skipAutoOffers
+        hasAnyAttachment && (!skipAutoOffers || needFilesForClassification)
           ? this.getAttachedKnowledgeFiles(session.knowledgeIds!)
           : Promise.resolve(null);
 
@@ -1573,6 +1753,26 @@ export class ChatCompletionProcess {
       // is the array reference handed to buildTools, so splice the result back in place rather
       // than reassigning the binding.
       //
+      // Resolved here because this is where `attachedKnowledgeFiles` is already in hand. The lake
+      // lookup is memoized (accessibleDataLakeAccessMemo) and degrades to empty tags, so an empty
+      // set is treated as "cannot judge" rather than as "belongs to no lake" - otherwise a transient
+      // failure would read as personal-only and suppress retrieval.
+      const accessibleLakeTags = hasAnyAttachment
+        ? new Set((await this.getAccessibleDataLakeAccess()).dataLakeTags)
+        : new Set<string>();
+      this.personalCorpusOnly = await resolvePersonalCorpusOnly({
+        requestedKnowledgeIds: session.knowledgeIds ?? [],
+        resolvedFiles: attachedKnowledgeFiles,
+        accessibleLakeTags,
+        retrievalTags: session.retrievalTags,
+        corpusGroundingMode: session.corpusGroundingMode,
+        // A THUNK, not a value: this costs a db.fabfiles.search, and the predicate discards it on
+        // four cheap guards before ever reaching that clause. Passing it eagerly made every
+        // lake-scoped session - the population this whole fix serves - pay the round-trip on every
+        // attachment-bearing turn for a result that was thrown away.
+        countLakeReachableAttachments: () => this.countLakeReachableAttachments(session.knowledgeIds ?? []),
+      });
+
       // "Attached knowledge" for the offer means the caller has an attachment the tool can
       // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
       // content already inlined by processFabFilesServer, so offering the tool for it can only
@@ -1688,6 +1888,14 @@ export class ChatCompletionProcess {
         : session.systemPromptId && this.loadSystemPromptById
           ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
           : undefined;
+      // Hoisted out of the buildOptimizedFeatures argument it used to be inlined into: the
+      // offeredTools site further down stamps this onto promptMeta.retrieval.mode, and the two
+      // must be the same value - a telemetry field that recomputes its own answer is a field that
+      // can disagree with the behaviour it claims to describe.
+      const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
+      // The field, not a second vetPreauthorizedLakeIds call: the offer/classification path above
+      // and the retrieval feature below must be admitted for the same lakes or they disagree.
+      const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
@@ -1702,10 +1910,11 @@ export class ChatCompletionProcess {
         organization,
         sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
-        resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
+        forcedRetrievalEnabled,
         session.retrievalTags,
         session.citationStyle,
-        toRetrievalFilter(session)
+        toRetrievalFilter(session),
+        vettedPreauthorizedLakeIds
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -2074,6 +2283,9 @@ export class ChatCompletionProcess {
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
+        // A raw completion must carry the caller's message exactly once. On a session's first turn
+        // history otherwise retains the in-flight quest, which is then re-sent as the user prompt.
+        excludeCurrentPrompt: promptMode === 'raw',
         // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
         // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
         model: modelInfo.id,
@@ -2275,7 +2487,20 @@ export class ChatCompletionProcess {
         featureContextMessages,
         actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
+        attachmentNotices,
+        attachmentDelivery,
       } = dataSources;
+
+      // Persisted before the completion runs: an attachment that failed to arrive is worth showing
+      // even on a turn that later errors out, and this is the only durable record the user sees.
+      // The delivery report goes with it and is written even when nothing failed - a turn whose
+      // attachments all arrived produces no notices, and that silence is exactly what #1576 is
+      // about: it reads identically to a turn that attached nothing.
+      if (attachmentNotices.length > 0 || attachmentDelivery) {
+        if (attachmentNotices.length > 0) quest.attachmentNotices = attachmentNotices;
+        if (attachmentDelivery) quest.attachmentDelivery = attachmentDelivery;
+        await saveQuest(quest);
+      }
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
       timer.phase('tool_setup');
@@ -2297,6 +2522,10 @@ export class ChatCompletionProcess {
         retrievalFilter: toRetrievalFilter(session),
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
+        suppressLakeArms: this.personalCorpusOnly,
+        // Narrows the knowledge tools' lake access to the lake this session is FOR.
+        sessionRetrievalTags: session.retrievalTags,
+        sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -2469,6 +2698,28 @@ export class ChatCompletionProcess {
       // knowledge auto-offer above.
       if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
 
+      // Seed the turn's retrieval mode (#1394). Paired with `offeredTools` above deliberately:
+      // together they are the denominator of "the model was OFFERED retrieval and chose not to
+      // use it", which is the measurement the per-turn routing question rests on. Before this,
+      // promptMeta recorded retrieval only when it RAN, so a turn where forced retrieval was
+      // enabled but suppressed (ChatCompletionFeatures.getContextMessages' attached-files and
+      // personal-corpus skips) was indistinguishable from a turn that was never forced at all -
+      // and those are precisely the turns the question is about.
+      //
+      // Seeded only for turns that could have retrieved, so a turn with no knowledge in scope
+      // still carries no `retrieval` field at all. Merged rather than assigned: the forced arm
+      // and the knowledge tools write the same field later in the turn (mergeRetrievalSummary
+      // keeps 'forced' and never lets this not-attempted seed erase a real outcome).
+      const knowledgeToolOffered = offeredToolNames.includes('search_knowledge_base');
+      if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
+        quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+          attempted: false,
+          mode: forcedRetrievalEnabled ? 'forced' : 'optional',
+          surfaces: [],
+          dataLakeTags: [],
+        });
+      }
+
       // Loud warning for the invisible failure mode: the caller has retrievable knowledge
       // (attached documents OR an accessible lake) but no knowledge tool survived into the final
       // offered set. Checked here against offeredToolNames (not at resolveEnabledTools) because
@@ -2532,6 +2783,11 @@ export class ChatCompletionProcess {
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
+        // Unlike the two lines above, web_search is key-gated (GATED_TOOLS in toolAvailability.ts)
+        // and can be dropped from the built schemas while the requested list still carries it, so
+        // this reads the offered set for the same reason blog_draft and navigate_view do above.
+        hasWebSearch: offeredToolNames.includes('web_search'),
+        webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
         userTimezone,
         mcpTools: directMcpTools,
         sessionId,
@@ -2617,7 +2873,7 @@ export class ChatCompletionProcess {
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
         // never told to emit artifacts that the post-processing below will not extract.
-        artifactEmission: artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : [],
+        artifactEmission: buildArtifactEmissionMessages(artifactsEnabled, artifactEmissionContent),
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
@@ -2711,8 +2967,19 @@ export class ChatCompletionProcess {
             : [],
         urls: urlMessages,
         attachedFiles: fabMessages,
+        // Caller-supplied systemPrompt, reachable from both POST /api/chat and /api/ai/llm.
+        // Appended last so it sits at the tail of the stack - after even the caller's own
+        // attached files/URLs above. Note this is assembly order only: in the retention table
+        // it outranks lake grounding, so it defers by prose, not by budget priority.
+        callerPrompt: renderCallerPromptMessages(parsedBody.systemPrompt),
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      // Close the deployment-wide shareable prefix with a cache breakpoint. Applied after the
+      // promptMode filter so the boundary lands on a block that actually ships. Unconditional
+      // by design: `IMessage.cache` only DECLARES a breakpoint - each backend decides whether
+      // to translate it (Anthropic-family does, the others ignore it per the field's contract),
+      // and the cacheStrategy built later in this method still governs the other breakpoints.
+      markShareablePrefixBoundary(admittedContextMessages);
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3067,6 +3334,9 @@ export class ChatCompletionProcess {
         } catch (injectedDetailsError) {
           logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
         }
+        // Sorted once, after every batch has landed, so the persisted array reads in the order the
+        // model sees the blocks rather than the order the three helpers happened to run.
+        systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       }
 
@@ -3175,7 +3445,16 @@ export class ChatCompletionProcess {
         // Atomic pre-reservation: reserve estimated credits BEFORE streaming begins
         // This prevents race conditions where concurrent requests overdraw the balance.
         // Pattern: bare $inc + check + rollback (consistent with cliCompletions.ts)
-        const usdCost = getTextModelCost(modelInfo, inputTokens, safeMaxTokens);
+        //
+        // Priced on a realistic output size, NOT safeMaxTokens: that is a ceiling the
+        // model usually stops far short of, and holding it would gate the turn on a cost
+        // it will not incur. See reservationOutputTokens for the under-reservation
+        // tradeoff this accepts; settlement below charges actual usage either way.
+        const usdCost = getTextModelCost(
+          modelInfo,
+          inputTokens,
+          reservationOutputTokens(safeMaxTokens, reasonsWithinOutputBudget(modelInfo))
+        );
         const requiredCredits = usdToCredits(usdCost);
 
         // Determine credit holder (user or org)
@@ -3192,7 +3471,14 @@ export class ChatCompletionProcess {
           // Enforce the per-member cap here, at pre-flight, before debiting the org pool.
           // Blocking must happen now: by settlement the reply has streamed and the balance
           // has moved, so a cap throw there can only sabotage usage tracking (#1536).
-          if (isMemberCreditCapExceeded(organization, this.user.id, requiredCredits)) {
+          // Priced on the unshrunk ceiling rather than the hold: this gate has no
+          // settlement counterpart (see memberCreditCap.ts), so an under-estimate lets a
+          // member blow past the cap in one turn with nothing left to catch it. Still not
+          // an upper bound on the turn - it prices one round at the uncached input rate on
+          // the primary model, so a tool loop, a cache-write turn, or a fallback hop onto
+          // pricier pricing can each settle above it.
+          const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens));
+          if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
                 used: getMemberUsedCredits(organization, this.user.id),
@@ -3369,6 +3655,31 @@ export class ChatCompletionProcess {
       // Add timing logs
       const streamStartTime = Date.now();
       let chunkCount = 0;
+
+      /**
+       * Wipe everything that describes a single streaming attempt, so a retry starts clean.
+       *
+       * The timings reset with the rest of it because a retry discards the reply the user was
+       * shown, and `promptMeta.model` is relabelled to whichever model finally answers. Keeping
+       * a first attempt's fast TTFVT would attribute it to the model that replaced it - the row
+       * would claim sub-second on a turn the user watched freeze.
+       *
+       * Scope, and it is not uniform: `streamStartTime` is declared outside the retry loop, so
+       * `streamingPerformance.totalStreamTime` spans every attempt - but `chunkCount` and `replies`
+       * are reset here, so `totalChars` and `chunkCount` describe the last attempt only, and
+       * `charsPerSecond` divides one by the other and understates on any retried turn. The resets
+       * are what let a retry restart cleanly and are deliberately kept; the TTFVT pair is
+       * per-attempt by design.
+       */
+      const resetStreamStateForRetry = () => {
+        for (const key of Object.keys(replies)) {
+          replies[parseInt(key)] = '';
+        }
+        quest.replies = [];
+        chunkCount = 0;
+        quest.promptMeta!.performance!.firstChunkTime = undefined;
+        quest.promptMeta!.performance!.firstTokenTime = undefined;
+      };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
@@ -3701,13 +4012,14 @@ export class ChatCompletionProcess {
                     });
                   }
                 );
-                // Clear the interval on first response and calculate TTFVT
+                // First chunk of ANY kind, hidden reasoning included, so this is explicitly
+                // not the user-visible latency - a thinking-first turn stamps this while the
+                // transcript is still empty. TTFVT is stamped further down, off the
+                // accumulated reply.
                 if (streamedTexts.some(text => text != null && text.trim().length > 0)) {
-                  // Capture TTFVT on first non-empty chunk (regardless of chunk number)
-                  if (!quest.promptMeta!.performance!.firstTokenTime) {
+                  if (!quest.promptMeta!.performance!.firstChunkTime) {
                     const timeToFirstChunk = Date.now() - streamStartTime;
-                    const ttfvt = Date.now() - processStartTime; // Time to First Visible Token
-                    quest.promptMeta!.performance!.firstTokenTime = ttfvt;
+                    quest.promptMeta!.performance!.firstChunkTime = Date.now() - processStartTime;
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
@@ -3780,30 +4092,41 @@ export class ChatCompletionProcess {
                   // Note: 'enhance' mode would be more complex and could be implemented later
                 }
 
-                await Promise.all(
-                  streamedTexts.map(async (text, index) => {
-                    if (!text) return;
+                streamedTexts.forEach((text, index) => {
+                  if (!text) return;
+                  appendStreamedChunk(replies, text, index, transitionMode);
+                  quest.replies = Object.values(replies);
+                  // Send message to the client for each received streamed message
+                  smartSend();
+                });
 
-                    // In append mode, always append to replies[0] regardless of stream index
-                    if (transitionMode === 'append') {
-                      replies[0] ??= '';
-                      replies[0] += text;
-                    } else {
-                      replies[index] ??= '';
-                      // If the last character is </think> which indicates the end of a thinking reply, append the text to the next reply
-                      // This happens when thinking models use other tools which causes the index to reset.
-                      if (replies[index].endsWith('</think>')) {
-                        replies[index + 1] ??= '';
-                        replies[index + 1] += text;
-                      } else {
-                        replies[index] += text;
-                      }
-                    }
-                    quest.replies = Object.values(replies);
-                    // Send message to the client for each received streamed message
-                    smartSend();
-                  })
-                );
+                // Time To First Visible Token: stamped off the ACCUMULATED reply, not the raw
+                // chunk, for two reasons. Hidden reasoning and the answer that follows it can
+                // land in a single chunk (kimiBackend and xaiBackend both prepend the close
+                // marker to real text), so only the accumulated slots say what the transcript
+                // now shows. And
+                // `replies` is already cleared on every fallback/overload/timeout retry path,
+                // where a running "am I inside a thinking block" flag would need resetting at
+                // each of the five - drift this derivation cannot have.
+                // Deliberately left unset when nothing visible ever streams: absent reads as
+                // "never rendered", where a number would read as fast.
+                if (
+                  shouldStampFirstVisibleToken(
+                    quest.promptMeta!.performance!,
+                    replies,
+                    transitionMode,
+                    rapidReplyContent
+                  )
+                ) {
+                  quest.promptMeta!.performance!.firstTokenTime = Date.now() - processStartTime;
+                  logger.info(
+                    `⏱️ [TTFVT] First visible token at ${
+                      quest.promptMeta!.performance!.firstTokenTime
+                    }ms (first chunk of any kind: ${
+                      quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+                    }ms, model: ${currentModel.id})`
+                  );
+                }
                 // Field-wise assign-not-clobber (mirrors cliCompletions.ts:211-214). Some
                 // adapters fire intermediate callbacks carrying only {toolsUsed} or with
                 // inputTokens: 0 (see anthropicBackend.ts:1598-1604) before the terminal
@@ -3865,12 +4188,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue; // Retry the while loop with cleaned messages
             }
@@ -3905,12 +4223,7 @@ export class ChatCompletionProcess {
 
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
-                // Reset streaming state for clean retry
-                for (const key of Object.keys(replies)) {
-                  replies[parseInt(key)] = '';
-                }
-                quest.replies = [];
-                chunkCount = 0;
+                resetStreamStateForRetry();
 
                 continue; // Re-enter the while loop to retry with the same model
               }
@@ -3935,12 +4248,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -3961,12 +4269,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -4048,13 +4351,7 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
 
               // Clear previous replies for retry
-              Object.keys(replies).forEach(key => {
-                replies[parseInt(key)] = '';
-              });
-              quest.replies = [];
-
-              // Reset streaming state for retry
-              chunkCount = 0;
+              resetStreamStateForRetry();
               // Continue the loop with the new model
               continue;
             } catch (fallbackError) {
@@ -4120,8 +4417,14 @@ export class ChatCompletionProcess {
             }
           }
         } else if (chunkCount > 0) {
+          // The frozen-turn signature: chunks arrived (hidden reasoning; tool-call argument
+          // deltas are consumed without being forwarded, so they never show up here at all)
+          // while the user saw nothing. Deliberately left unstamped, which makes this log the
+          // only place such a turn surfaces - keep it a warning.
           logger.warn(
-            `⚠️ [TTFVT] Failed to capture first token time for ${currentModel.id} despite ${chunkCount} chunks - all chunks were empty`
+            `⚠️ [TTFVT] Never rendered for ${currentModel.id}: ${chunkCount} chunks streamed but no visible text (first chunk of any kind: ${
+              quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+            }ms)`
           );
         } else {
           logger.warn(
@@ -4392,20 +4695,31 @@ export class ChatCompletionProcess {
         // keeps the capped cache-read discount and never bills cache creation,
         // exactly the pre-provider-basis behavior. The bases never blend.
         //
-        // Disjoint-fields assumption: cacheReadInputTokens is only forwarded by
-        // Anthropic-family adapters - the direct Anthropic adapter and
-        // Claude-on-Bedrock (bedrockBackend/base.ts) - whose input_tokens EXCLUDE
-        // cached tokens. OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache
-        // and must not forward cache counts here without also subtracting them
-        // from input.
+        // Disjoint-fields assumption: whatever an adapter forwards as
+        // cacheReadInputTokens must NOT also be counted in inputTokens. Anthropic-family
+        // adapters (the direct Anthropic adapter and Claude-on-Bedrock,
+        // bedrockBackend/base.ts) get this for free - their input_tokens already exclude
+        // cached tokens. Providers that report prompt tokens INCLUSIVE of cache
+        // (OpenAI, Moonshot) subtract in the adapter before forwarding, via each
+        // backend's splitCachedInput. An adapter that forwards without subtracting
+        // double-bills the cached portion here; one that forwards nothing bills every
+        // cache hit at the full input rate.
         //
         // NOTE: the provider input (uncached tail) drives getTextModelCost's
         // pricing-tier selection. Every model today publishes a single tier, so
         // this is exact; if tiered pricing lands, a heavily-cached prompt could
         // select a cheaper tier for its cache volume - revisit tier selection then.
-        const hasProviderUsage = (actualTokenUsage?.inputTokens ?? 0) > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
+        // Summed across all three input components, not just the uncached tail: on a
+        // fully-cached prompt the provider legitimately reports 0 uncached input, and
+        // reading that as "nothing reported" would drop the row onto the local estimate
+        // and discard the very discount that zeroed it.
+        const providerInputTokens =
+          (actualTokenUsage?.inputTokens ?? 0) +
+          (actualTokenUsage?.cacheReadInputTokens ?? 0) +
+          (actualTokenUsage?.cacheCreationInputTokens ?? 0);
+        const hasProviderUsage = providerInputTokens > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
         const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
-        const settledInputTokens = hasProviderUsage ? actualTokenUsage.inputTokens! : inputTokens;
+        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : inputTokens;
         const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
@@ -5348,16 +5662,17 @@ export class ChatCompletionProcess {
     modelInfo: ModelInfo
   ) {
     const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-    const convertedFabFiles = await fetchAndConvertFabFiles(
+    const lakeAccess = await this.attachmentLakeAccess();
+    const { files: convertedFabFiles, missingIds } = await fetchAndConvertFabFiles(
       fabFileIds,
-      { scope },
-      { db: this.db, storage: this.storage }
+      { scope, lakeAccess },
+      { db: this.db, storage: this.storage, logger: this.logger }
     );
     const {
       userMessages: promptMessages,
       deliveredFileIds,
       fullyDeliveredFileIds,
-      // errorMessages,
+      fileNotices,
     } = await processFabFilesServer(
       embeddingFactory,
       convertedFabFiles,
@@ -5398,80 +5713,35 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles, deliveredFileIds, fullyDeliveredFileIds };
+    // An id `getAccessibleFiles` never returned reaches processFabFilesServer as nothing at all, so
+    // it can only be reported here. The file name is unknown by definition - the id is what the user
+    // and an operator can match against the attachment.
+    const allNotices: FabFileNotice[] = [
+      ...missingIds.map(id => ({
+        fabFileId: id,
+        fileName: id,
+        band: 'unresolved' as const,
+        message: `An attached file (id ${id}) could not be found or is no longer accessible, so its content was not sent.`,
+        delivered: false,
+      })),
+      ...fileNotices,
+    ];
+
+    if (allNotices.length > 0) {
+      promptMessages.unshift({
+        role: 'system',
+        content: buildAttachmentNoticePrompt(allNotices),
+      });
+    }
+
+    const result = {
+      promptMessages,
+      convertedFabFiles,
+      deliveredFileIds,
+      fullyDeliveredFileIds,
+      fileNotices: allNotices,
+    };
     return result;
-  }
-
-  private async validateUserCredits(
-    model: ModelInfo,
-    inputTokens: number,
-    maxOutputTokens: number,
-    organization?: IOrganizationDocument | null
-  ) {
-    // Secondary dispute check: catches mid-stream tool invocations (e.g. image generation)
-    if (this.user.disputePending) {
-      throw new InsufficientCreditsError(
-        'Your account is under review due to a payment dispute. Please contact support to resolve this.'
-      );
-    }
-
-    let userCredits = this.user.currentCredits ?? 0;
-    this.logger.updateMetadata({ creditsSource: 'user', creditsSourceId: this.user.id });
-
-    if (organization) {
-      this.logger.updateMetadata({ creditsSource: 'organization', creditsSourceId: organization.id });
-      userCredits = organization.currentCredits;
-    }
-
-    const usdCost = getTextModelCost(model, inputTokens, maxOutputTokens);
-    const requiredCredits = usdToCredits(usdCost);
-
-    // Check if current credits are below the alert threshold
-    if (userCredits < LOW_CREDIT_ALERT_THRESHOLD) {
-      // Send low credits notification for current balance using deduplication
-      const { getNotificationDeduplicator } = await import('@bike4mind/utils');
-      getNotificationDeduplicator()
-        .handleLowCreditNotification(
-          this.user.id,
-          this.user.name || 'Unknown',
-          this.user.email || 'No email',
-          userCredits,
-          organization ? { id: organization.id, name: organization.name } : null,
-          this.slackWebhookUrl
-        )
-        .catch((error: Error) => {
-          this.logger.error('Failed to send low credits notification:', error);
-        });
-    }
-
-    // Check if there are enough credits for the operation
-    if (userCredits < requiredCredits) {
-      const errorMessage = organization
-        ? `Your organization "${organization.name}" does not have enough credits to complete this request. The organization currently has ${userCredits} credits, and this request requires ${requiredCredits} credits. Please contact your organization administrator to add more credits.`
-        : `You do not have enough credits to complete this request. You currently have ${userCredits} credits, and this request requires ${requiredCredits} credits. Try adjusting your prompt to be more concise or reducing the number of chat history messages to lower the credit cost.`;
-      throw new InsufficientCreditsError(errorMessage);
-    }
-
-    // Check if credits will be below the alert threshold after this operation
-    const remainingCredits = userCredits - requiredCredits;
-    if (remainingCredits < LOW_CREDIT_ALERT_THRESHOLD) {
-      // Send low credits notification using deduplication
-      const { getNotificationDeduplicator } = await import('@bike4mind/utils');
-      getNotificationDeduplicator()
-        .handleLowCreditNotification(
-          this.user.id,
-          this.user.name || 'Unknown',
-          this.user.email || 'No email',
-          remainingCredits,
-          organization ? { id: organization.id, name: organization.name } : null,
-          this.slackWebhookUrl
-        )
-        .catch((error: Error) => {
-          this.logger.error('Failed to send low credits notification:', error);
-        });
-    }
-
-    return requiredCredits;
   }
 
   /**
@@ -5551,7 +5821,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     forceKnowledgeRetrieval?: boolean,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
+    preauthorizedLakeIds?: string[]
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -5663,7 +5935,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
+        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter, preauthorizedLakeIds)
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer
@@ -5734,6 +6006,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  "you already have everything, no need to search/retrieve further" for (#1163 review: the
      *  wording was claiming this for a merely-inlined file, which can still be a partial delivery). */
     fullyInlinedAttachmentIds: string[];
+    /** User-facing lines for every attachment that did not arrive intact, already said to the model
+     *  in a system message inside `fabMessages`. Stored on the quest so the transcript says the same
+     *  thing - an attachment must never fail silently (#2228). */
+    attachmentNotices: string[];
+    /** Affirmative delivery report - the counts behind the notices, and the only record of a turn
+     *  whose attachments ALL arrived (which produces no notices at all). `undefined` when the turn
+     *  carried no attachments, so a caller can tell "none sent" from "none arrived". */
+    attachmentDelivery?: IAttachmentDelivery;
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -5881,6 +6161,36 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const fullyDeliveredKnowledgeIds = new Set(fabResult?.fullyDeliveredFileIds ?? []);
     const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
 
+    const fileNotices: FabFileNotice[] = fabResult?.fileNotices ?? [];
+    let attachmentDelivery: IAttachmentDelivery | undefined;
+    if (dedupedFileIds.length > 0) {
+      // The one line a production attachment report is read from: what was asked for, what actually
+      // reached the model, and why the rest did not. Requested-minus-delivered is computed here (not
+      // taken from the notice list) so the counts stay true even if a drop site stops reporting.
+      const delivered = new Set(fabResult?.deliveredFileIds ?? []);
+      const droppedIds = dedupedFileIds.filter(id => !delivered.has(id));
+      const bandTally = fileNotices.reduce<Record<string, number>>((acc, notice) => {
+        acc[notice.band] = (acc[notice.band] ?? 0) + 1;
+        return acc;
+      }, {});
+      attachmentDelivery = {
+        // Counts everything handed to fabFilesToMessages - the turn's own attachments AND the
+        // session/message/system files inlined alongside them. So `delivered > 0` is not by itself
+        // proof that a CALLER's attachment arrived; `droppedIds` is what answers that exactly.
+        requested: dedupedFileIds.length,
+        delivered: delivered.size,
+        fullyDelivered: fullyDeliveredKnowledgeIds.size,
+        dropped: droppedIds.length,
+        droppedIds,
+      };
+      const summary = { ...attachmentDelivery, bands: bandTally };
+      if (droppedIds.length > 0 || fileNotices.length > 0) {
+        logger.warn('📎 Attachment delivery summary', summary);
+      } else {
+        logger.info('📎 Attachment delivery summary', summary);
+      }
+    }
+
     return {
       urlMessages: urlResult.userMessages,
       remainingUserPrompt: urlResult.remainingPrompt,
@@ -5893,6 +6203,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       featureContextMessages,
       actuallyInlinedKnowledgeIds,
       fullyInlinedAttachmentIds,
+      attachmentNotices: toAttachmentNoticeStrings(fileNotices),
+      attachmentDelivery,
     };
   }
 }

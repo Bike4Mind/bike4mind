@@ -3,7 +3,10 @@ import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { apiKeyRepository } from '@bike4mind/database';
 import { ApiKeyType } from '@bike4mind/common';
 import { configureSecretsAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
@@ -37,6 +40,10 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => undef
 
 import handler from '../create';
 
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let mongoServer: MongoMemoryServer;
 
 beforeAll(async () => {
@@ -46,11 +53,11 @@ beforeAll(async () => {
   // seam never fires. Register a key so provider-key creation (now fail-closed without one)
   // stores ciphertext; findAllByUserId decrypts it back, so the plaintext assertions hold.
   configureSecretsAtRest(generateEncryptionKey());
-}, 30000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
 });

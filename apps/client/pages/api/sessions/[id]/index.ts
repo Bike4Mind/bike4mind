@@ -80,6 +80,14 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
         fabFiles: fabFileRepository,
         caches: cacheRepository,
       },
+      logger: req.logger,
+      // Lets the lake-tag derivation see lake-membership files: the ownership reader alone cannot,
+      // so attaching a teammate's org-lake file would otherwise derive nothing and leave the
+      // session unscoped. Same resolver the chat tool runs on, so the two cannot drift.
+      // Imported at CALL time - see the create route for why (the resolver's graph reaches the
+      // Mongoose models, and it is only needed when files are actually attached).
+      resolveLakeAccess: async () =>
+        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       storage: getFilesStorage(),
     }
   );

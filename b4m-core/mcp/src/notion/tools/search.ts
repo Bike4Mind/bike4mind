@@ -13,7 +13,7 @@ import { getConfig } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { searchFilterTypeSchema, paginationParams } from '../helpers/schemas.js';
 import { normalizeId, buildAllowedIdSet, findAncestorInSet, MAX_ANCESTRY_CONCURRENCY } from '../helpers/ancestry.js';
-import { TOOL_NOTION_SEARCH } from '../constants.js';
+import { TOOL_NOTION_SEARCH, TOOL_DESCRIPTIONS } from '../constants.js';
 import { debug } from '../logger.js';
 
 /**
@@ -70,6 +70,7 @@ function isAccessibleFromParentField(
 export function registerSearchTools(server: McpServer): void {
   server.tool(
     TOOL_NOTION_SEARCH,
+    TOOL_DESCRIPTIONS[TOOL_NOTION_SEARCH],
     {
       query: z.string().min(1).max(200).describe('Text to search for in the connected Notion workspace'),
       ...paginationParams,

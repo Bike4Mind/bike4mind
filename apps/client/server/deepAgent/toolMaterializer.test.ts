@@ -19,6 +19,8 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]) },
+  fallbackLakeSettingsRepository: {},
   // ToolContext.db.organizations is required since #1674 (org membership set).
   organizationRepository: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
   fabFileChunkRepository: {},
@@ -26,6 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {},
   projectRepository: {},
   lakeAccessEventRepository: {},
+  scopedSettingsRepository: {},
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;

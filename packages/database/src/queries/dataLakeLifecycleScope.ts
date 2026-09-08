@@ -1,9 +1,4 @@
-import {
-  DATALAKE_TAG_PREFIX,
-  isReservedTagPrefix,
-  normalizeTagPrefix,
-  type DataLakeMembershipScope,
-} from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, effectiveTagPrefixArm, type DataLakeMembershipScope } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 /**
@@ -31,26 +26,70 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
  */
 export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): Record<string, unknown> {
   const metaArm = { 'tags.name': scope.datalakeTag };
-  const prefix = normalizeTagPrefix(scope.fileTagPrefix);
-  // Fail closed to the meta-tag alone. A reserved-namespace prefix is dropped because it would
-  // match every OTHER lake's membership tag, and a scope with no creator has nothing to anchor
-  // the prefix arm to - in both cases matching less is the safe direction.
-  if (!prefix || isReservedTagPrefix(prefix) || !scope.creatorUserId) {
+  // Whether the prefix arm runs at all is `effectiveTagPrefixArm`'s decision, not this function's,
+  // so a caller that discloses the scope it queried cannot claim an arm this filter dropped (#2243).
+  // It drops an unusable prefix, a reserved-namespace one (which would match every OTHER lake's
+  // membership tag), and an owned scope with no creator to anchor to - matching less, the safe
+  // direction, in all three cases.
+  const prefix = effectiveTagPrefixArm(scope);
+  if (!prefix) {
     return metaArm;
   }
+  // Anchored so the index on `tags.name` still bounds the scan; escaped because a user-chosen
+  // prefix can carry regex metacharacters.
+  const prefixArm = { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } };
+
+  // A REGISTRY lake's prefix arm carries no ownership conjunct, deliberately: the lake is a shared
+  // knowledge base whose files come from many contributors, and it has no creator to anchor to.
+  // That is only safe because a registry prefix is compile-time config from DATA_LAKES rather than
+  // user input - the same reasoning `dataLakeTagPrefixes` documents in fabFileSearchQuery. Never
+  // route a user-supplied prefix through this branch.
+  //
+  // This arm is also why registry lakes cannot be narrowed to meta-tag-only "for safety": doing so
+  // under-counts them against their own browse, which is the drift this union exists to stop.
+  if (scope.kind === 'registry') {
+    return { $or: [metaArm, prefixArm] };
+  }
+
+  // OWNED lake: the prefix is user-chosen and unique only per creator, so it MUST be conjoined with
+  // positive ownership. `effectiveTagPrefixArm` already returned null for a creator-less owned
+  // scope, so `creatorUserId` is set here.
   return {
-    $or: [
-      metaArm,
-      {
-        $and: [
-          // Anchored so the index on `tags.name` still bounds the scan; escaped because a
-          // user-chosen prefix can carry regex metacharacters.
-          { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } },
-          { userId: scope.creatorUserId },
-        ],
-      },
-    ],
+    $or: [metaArm, { $and: [prefixArm, { userId: scope.creatorUserId }] }],
   };
+}
+
+/**
+ * Prefix-arm membership with the meta-tag arm subtracted out - the datastore mirror of
+ * `getFileMembershipArm` returning `'prefix'` rather than `'both'`. Paired with a plain
+ * `{ 'tags.name': scope.datalakeTag }` count, this partitions a lake's members into two
+ * DISJOINT counts that sum to the same total `buildDataLakeMembershipFilter` would report,
+ * which is what lets a lake header read "48 by lake tag, 37 by content prefix" without the
+ * two numbers double-counting a file that carries both signals.
+ *
+ * A REGISTRY lake's prefix arm carries no ownership conjunct (see buildDataLakeMembershipFilter),
+ * so this mirrors that: no `userId` conjunct for `kind === 'registry'`, only for an owned lake -
+ * dropping it there would double-count against the disjoint-sum guarantee this function exists
+ * to uphold.
+ *
+ * Whether the prefix arm survives at all is `effectiveTagPrefixArm`'s decision, the same one
+ * `buildDataLakeMembershipFilter` above defers to: no usable prefix, a reserved namespace, or an
+ * owned lake with no creator to anchor it to, and there is no prefix-only membership to count.
+ */
+export function buildDataLakePrefixOnlyMembershipFilter(
+  scope: DataLakeMembershipScope
+): Record<string, unknown> | null {
+  const prefix = effectiveTagPrefixArm(scope);
+  if (!prefix) return null;
+  const prefixArm = { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } };
+  const excludesMeta = { 'tags.name': { $ne: scope.datalakeTag } };
+  if (scope.kind === 'registry') {
+    return { $and: [prefixArm, excludesMeta] };
+  }
+  // effectiveTagPrefixArm already returned null for an owned scope with no creator; this narrows
+  // the type to prove it to the compiler, and is not a second copy of that decision.
+  if (!scope.creatorUserId) return null;
+  return { $and: [prefixArm, { userId: scope.creatorUserId }, excludesMeta] };
 }
 
 /**

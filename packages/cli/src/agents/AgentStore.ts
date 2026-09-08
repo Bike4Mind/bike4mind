@@ -122,7 +122,7 @@ export const MODEL_ALIASES: Record<string, string> = {
   // Google Gemini Models
   gemini: ChatModels.GEMINI_2_5_PRO,
   'gemini-pro': ChatModels.GEMINI_2_5_PRO,
-  'gemini-flash': ChatModels.GEMINI_2_5_FLASH,
+  'gemini-flash': ChatModels.GEMINI_3_5_FLASH,
   'gemini-flash-lite': ChatModels.GEMINI_2_5_FLASH_LITE,
 
   // Gemini 3 (preview)

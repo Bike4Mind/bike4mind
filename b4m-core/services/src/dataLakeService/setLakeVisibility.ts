@@ -168,21 +168,14 @@ export const setLakeVisibility = async (
         organizationId: targetOrg ?? undefined,
         isPublic: targetIsPublic,
       }),
-      // An EXPOSING write was authorized by ownership and nothing else: the gate above is
-      // deliberately `isEffectiveOwner`, "WITHOUT the admin / curator / org-admin bypasses this must
-      // exclude". Left to `resolveLakeManageRung`, its first branch (`if (actor.isAdmin) return
-      // 'platform-admin'`) would record admin for an admin who is ALSO the owner - naming an
-      // authority that could not have passed this particular gate. The rung is an authorization
-      // fact, so it must name the branch that actually let the call through. Same reasoning, and the
-      // same shape, as transferLakeOwnership's override.
-      //
-      // Demotion to private is NOT overridden: that path stays full `canManageLake`, so the
-      // resolver's wider ladder is the honest answer there.
-      manageRung: exposes
-        ? grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')
-          ? 'grant-owner'
-          : 'creator'
-        : undefined,
+      // No `manageRung` override, either direction. An EXPOSING write is gated on
+      // `isEffectiveOwner` alone ("WITHOUT the admin / curator / org-admin bypasses this must
+      // exclude"), and `resolveLakeManageRung` now checks the admin rung LAST, so for an actor who
+      // cleared that gate it reports `grant-owner`/`creator` on its own - the branch that actually
+      // let the call through. Demotion to private stays full `canManageLake`, where the resolver's
+      // wider ladder is the honest answer. Overriding here would have to restate the resolver to
+      // stay right, and the two drifting apart is exactly how one direction of the SAME edit by the
+      // SAME owner came to record a different authority than the other.
     },
     { db, logger }
   );

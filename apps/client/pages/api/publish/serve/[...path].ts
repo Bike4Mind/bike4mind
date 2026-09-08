@@ -33,6 +33,7 @@ import {
   usercontentHostFor,
   publicIdFromUsercontentHost,
   isAppWrapperHost,
+  VIEWER_SANDBOX,
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 import {
@@ -73,7 +74,7 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  *
  * Bundles are served inside a sandboxed iframe: the `/p/...` HTML response
  * is a minimal trusted wrapper page whose only content is an
- * `<iframe sandbox="allow-scripts" srcdoc=...>` (NO `allow-same-origin`). The
+ * `<iframe sandbox={VIEWER_SANDBOX} srcdoc=...>` (NO `allow-same-origin`). The
  * bundle therefore runs on an opaque (`null`) origin - author inline JS executes,
  * but it cannot read the app origin's localStorage/cookies or call `/api/*` with
  * the viewer's credentials. The visibility check still runs on the app origin
@@ -90,7 +91,7 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * script reads the app's localStorage JWT and re-fetches this same route with
  * `?raw=1` + Authorization: Bearer, then injects the rendered srcdoc into the
  * sandboxed iframe client-side. The opaque-origin model is unchanged: the
- * bundle still runs in `sandbox="allow-scripts"` with NO allow-same-origin, the
+ * bundle still runs in `sandbox={VIEWER_SANDBOX}` with NO allow-same-origin, the
  * token is read only by the trusted shell on the app origin (never the iframe),
  * and the visibility gate still runs for the HTML AND every asset. `?raw=1` is
  * served as inert text/plain so direct navigation can't execute it on the app origin.
@@ -98,10 +99,20 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * The loader shell covers bundles AND reply/fabfile. A gated reply/fabfile navigated with no
  * credential gets the same shell, which re-fetches `?raw=1` and injects the rendered page as the
  * iframe srcdoc; `renderViewerPage` carries a `script-src 'none'` CSP meta so it stays
- * script-free inside the shell's `allow-scripts` iframe. Tradeoff: inside the shelled (gated)
- * render, links obey the iframe sandbox (no `allow-popups`/`allow-top-navigation`), so
- * `target=_blank`/top-nav links won't open - acceptable versus the prior hard 401, and the
- * direct (public, non-shelled) render is unaffected (its links work normally).
+ * script-free inside the shell's sandboxed iframe.
+ *
+ * Printing: the browser's own File > Print on this wrapper paginates only the iframe's visible
+ * first screen, so "Save as PDF" prints the FRAME's live document instead - `VIEWER_SANDBOX`
+ * carries `allow-modals` (without it `print()` is a silent no-op in a sandbox), every render
+ * carries the in-frame trigger (`printBridge.ts`), and the wrapper button that asks for it
+ * lives in the widget, the only script the Approach-B wrapper CSP admits.
+ *
+ * Outbound links: a framed render (shelled or not, public or gated) obeys the iframe sandbox,
+ * and framing another origin stays refused by `frame-src`. So `VIEWER_SANDBOX` carries
+ * `allow-popups`/`allow-popups-to-escape-sandbox` and `renderSandboxedBundle` retargets a
+ * bundle's off-origin `<a href>`s to a new tab. Two things are still framed-only breakage:
+ * author JS that assigns `location` off-origin, and a plain (no `target`) off-origin link in
+ * a reply/fabfile body, which renders as markdown rather than through the bundle path.
  */
 
 // Bearer-JWT first (browser/client loader), then X-API-Key (programmatic). apiKeyAuth
@@ -919,14 +930,17 @@ function liveryBarMark(brandName: string): string {
 }
 
 /**
- * Minimal trusted wrapper page hosting the bundle in an iframe. Runs no script of
- * its own (besides the comment overlay). Two isolation modes:
+ * Minimal trusted wrapper page hosting the bundle in an iframe. Its only script is the
+ * first-party widget (`/api/publish/widget`), which binds the comment overlay when the
+ * artifact has comments and, on every non-embed wrapper, the "Save as PDF" button - the
+ * button asks the frame to print ITSELF, because printing the wrapper captures only the
+ * frame's visible first screen. Two isolation modes:
  *   - Approach B (`isolatedSrc` set): a CROSS-ORIGIN `<iframe src={isolatedSrc}>` to
  *     `{publicId}.usercontent.app.<domain>`. The separate origin is the isolation boundary;
  *     `allow-same-origin` is SAFE here (resolves to the usercontent origin, not the app).
  *   - Fallback (no isolatedSrc - SERVER_DOMAIN unset): the same-origin sandboxed
- *     `srcdoc` model - `sandbox="allow-scripts"` WITHOUT `allow-same-origin` (opaque
- *     origin; NEVER add allow-same-origin here - it would reclaim the app origin -> ATO).
+ *     `srcdoc` model - `VIEWER_SANDBOX` WITHOUT `allow-same-origin` (opaque origin;
+ *     NEVER add allow-same-origin here - it would reclaim the app origin -> ATO).
  */
 function renderBundleWrapper(
   artifact: PublishedArtifactLean,
@@ -952,13 +966,14 @@ function renderBundleWrapper(
   const srcdocAttr = srcdoc.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   // Approach B: cross-origin src. `allow-same-origin` is REQUIRED (and safe) here - it keeps
   // the framed doc on its usercontent origin (isolated from the app by SOP), which is what
-  // lets the bundle load its own `<base>`-relative assets same-origin. The sandbox is kept
-  // minimal otherwise: NO allow-forms (the isolated CSP sets `form-action 'none'`, so it'd be
-  // dead capability) and NO allow-popups (matches the Approach A `allow-scripts`-only posture).
+  // lets the bundle load its own `<base>`-relative assets same-origin. Still NO allow-forms
+  // (the isolated CSP sets `form-action 'none'`, so it'd be dead capability).
   // Fallback: opaque-origin srcdoc (no allow-same-origin - that would reclaim the app origin).
   const iframeTag = isolatedSrc
-    ? `<iframe sandbox="allow-scripts allow-same-origin" title="${titleHtml}" src="${escapeHtml(isolatedSrc)}"></iframe>`
-    : `<iframe sandbox="allow-scripts" title="${titleHtml}" srcdoc="${srcdocAttr}"></iframe>`;
+    ? `<iframe sandbox="${VIEWER_SANDBOX} allow-same-origin" title="${titleHtml}" src="${escapeHtml(
+        isolatedSrc
+      )}"></iframe>`
+    : `<iframe sandbox="${VIEWER_SANDBOX}" title="${titleHtml}" srcdoc="${srcdocAttr}"></iframe>`;
   // Hash bridge (srcdoc mode only): forwards the page fragment into the sandboxed
   // bundle (initial deep link + hashchange) and mirrors in-bundle fragment jumps
   // back into the address bar. Approach B's wrapper CSP drops 'unsafe-inline', so
@@ -968,6 +983,10 @@ function renderBundleWrapper(
   // The comment overlay lives in this trusted wrapper (app origin), floating over the
   // sandboxed iframe - never inside it (the opaque-origin bundle can't read the token).
   const overlay = buildAnnotateOverlayHtml(artifact);
+  // The one script on the wrapper, and the only one the Approach-B wrapper CSP admits.
+  // Emitted for every non-embed render, not just commented ones: it also binds "Save as
+  // PDF" (the mount node above stays conditional, and the widget no-ops without it).
+  const widgetScript = embed ? '' : `\n<script src="/api/publish/widget" defer></script>`;
   // Abuse-report affordance: a plain anchor floats over the iframe. It is a
   // top-level navigation (not blocked by the wrapper's script-src/form-action CSP) to
   // the app-origin report flow. The bundle in the opaque-origin iframe can't reach it.
@@ -986,8 +1005,9 @@ function renderBundleWrapper(
   //   - embed (chrome-less): a small floating "Built with {brand}" pill.
   //   - own-tab open-public: a persistent bottom bar with a "Try {brand}" CTA
   //     (Anthropic-style); the iframe is shortened so the bar covers nothing.
-  // Both are top-level links (CSP-safe, no JS). barPresent also relocates the Report
-  // affordance INTO the bar and lifts the version switcher above it.
+  // Both are top-level links (CSP-safe, no JS); only "Save as PDF" alongside them needs
+  // the widget. barPresent also relocates the Report affordance INTO the bar and lifts
+  // the version switcher above it.
   const brandBadge =
     embed && pillHref && brandName
       ? `\n<a class="b4m-brand" href="${escapeHtml(pillHref)}" rel="noopener" target="_top">Built with ${escapeHtml(
@@ -996,14 +1016,18 @@ function renderBundleWrapper(
       : '';
   const barPresent = !embed && !!barHref && !!brandName;
   // Plain top-level `download` anchor - no JS, so it works under the tightened
-  // Approach-B wrapper CSP (script-src admits only the comment widget).
+  // Approach-B wrapper CSP (script-src admits only the first-party widget).
   const barExport = exportHtmlHref
     ? `\n    <a class="b4m-bar-export" href="${escapeHtml(exportHtmlHref)}" download target="_top">Save as HTML</a>`
     : '';
+  // "Save as PDF" prints the LIVE frame document via the widget, so unlike `?export=` it
+  // needs no re-authorization and rides along on every own-tab render. `hidden` until the
+  // widget binds it - a button that does nothing without JS is worse than no button.
+  const barPrint = `\n    <button class="b4m-bar-print" type="button" hidden>Save as PDF</button>`;
   const bar = barPresent
     ? `\n<div class="b4m-bar">
   <span class="b4m-bar-l">Built with ${liveryBarMark(brandName)}${LIVERY_REG}</span>
-  <span class="b4m-bar-r">${barExport}
+  <span class="b4m-bar-r">${barPrint}${barExport}
     <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
     <a class="b4m-bar-cta" href="${escapeHtml(
       barHref
@@ -1014,9 +1038,10 @@ function renderBundleWrapper(
   const floatingExport = exportHtmlHref
     ? `<a class="b4m-export" href="${escapeHtml(exportHtmlHref)}" download target="_top">&#8681; HTML</a>`
     : '';
+  const floatingPrint = embed ? '' : `<button class="b4m-print" type="button" hidden>&#8681; PDF</button>`;
   const floatingReport = barPresent
     ? ''
-    : `\n<div class="b4m-actions">${floatingExport}<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">&#9873; Report</a></div>`;
+    : `\n<div class="b4m-actions">${floatingPrint}${floatingExport}<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">&#9873; Report</a></div>`;
   const iframeHeight = barPresent ? 'calc(100vh - 52px)' : '100vh';
 
   return `<!doctype html>
@@ -1027,9 +1052,11 @@ function renderBundleWrapper(
 <title>${titleHtml}</title>${metaHead}
 <style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:${iframeHeight}}
 .b4m-actions{position:fixed;bottom:10px;right:10px;z-index:2147483647;display:flex;gap:8px}
-.b4m-report,.b4m-export{font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+.b4m-report,.b4m-export,.b4m-print{font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
-.b4m-report:hover,.b4m-export:hover{color:#fff;background:rgba(13,24,48,.95)}
+.b4m-print{border:0;cursor:pointer}
+.b4m-report:hover,.b4m-export:hover,.b4m-print:hover{color:#fff;background:rgba(13,24,48,.95)}
+.b4m-bar-print[hidden],.b4m-print[hidden]{display:none}
 .b4m-brand{position:fixed;bottom:10px;left:10px;z-index:2147483647;font:600 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#fff;background:${LIVERY_ORANGE};padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
 .b4m-brand:hover{filter:brightness(1.07)}
@@ -1042,8 +1069,9 @@ function renderBundleWrapper(
 .b4m-bar-logo svg{height:22px;width:auto;display:block}
 .b4m-reg{font-size:.62em;vertical-align:super;font-weight:400;margin-left:1px}
 .b4m-bar-r{display:flex;align-items:center;gap:14px}
-.b4m-bar-report,.b4m-bar-export{color:#94a3b8;text-decoration:none;font-weight:500;font-size:12px}
-.b4m-bar-report:hover,.b4m-bar-export:hover{color:#cbd5e1}
+.b4m-bar-report,.b4m-bar-export,.b4m-bar-print{color:#94a3b8;text-decoration:none;font-weight:500;font-size:12px}
+.b4m-bar-print{background:none;border:0;padding:0;cursor:pointer;font-family:inherit}
+.b4m-bar-report:hover,.b4m-bar-export:hover,.b4m-bar-print:hover{color:#cbd5e1}
 .b4m-bar-cta{padding:8px 14px;border-radius:9px;background:${LIVERY_ORANGE};color:#fff;font-weight:700;text-decoration:none;white-space:nowrap}
 .b4m-bar-cta:hover{filter:brightness(1.07)}
 .b4m-ver{position:fixed;bottom:${barPresent ? '62px' : '10px'};left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
@@ -1053,7 +1081,7 @@ function renderBundleWrapper(
 .b4m-ver .b4m-vd{opacity:.4}</style>
 </head>
 <body>
-${iframeTag}${hashBridge}${chromeBody}${brandBadge}${floatingReport}${bar}
+${iframeTag}${hashBridge}${chromeBody}${brandBadge}${floatingReport}${bar}${widgetScript}
 ${noscriptBody}
 </body>
 </html>`;
@@ -1165,10 +1193,10 @@ function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: stri
   const appHostSrc = appHost ? ` ${appHost}` : '';
   // blessed libs at both the document origin and the canonical app host.
   const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
-  // The trusted comment-overlay widget loads from /api/publish/widget on the app origin
-  // (and doc origin for preview/staging hosts). Allowlisted explicitly - it runs in the
-  // wrapper (parent), never the sandboxed bundle. The app-host variant is added only when
-  // PUBLISH_HOST is configured.
+  // The trusted first-party widget (comment overlay + the Save as PDF button) loads from
+  // /api/publish/widget on the app origin (and doc origin for preview/staging hosts).
+  // Allowlisted explicitly - it runs in the wrapper (parent), never the sandboxed bundle.
+  // The app-host variant is added only when PUBLISH_HOST is configured.
   const widgetSrc = `${docOrigin}/api/publish/widget${appHost ? ` ${appHost}/api/publish/widget` : ''}`;
   // script-src: in Approach B (artifactHost set) the bundle runs on its OWN cross-origin
   // iframe, so the wrapper carries NO inline scripts and NO bundle libs - tighten to just the
@@ -1198,8 +1226,8 @@ function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: stri
 
 /**
  * CSP for a reply's embedded-artifact sub-document (`/p/r/{publicId}?a={i}`). Author inline JS
- * is ALLOWED here (an HTML/SVG artifact is meant to run), but the `sandbox allow-scripts`
- * directive forces an OPAQUE origin with NO `allow-same-origin` - so even a DIRECT navigation
+ * is ALLOWED here (an HTML/SVG artifact is meant to run), but the `sandbox` directive
+ * forces an OPAQUE origin with NO `allow-same-origin` - so even a DIRECT navigation
  * to this URL can never read the app origin's token/cookies (the sandbox, not script-src, is the
  * ATO boundary, exactly as on the bundle path). Blessed libs load from their absolute app-host
  * URLs (renderSandboxedBundle absolutizes them); everything else is self-contained/data:.
@@ -1218,7 +1246,7 @@ function buildReplyArtifactCsp(req: Request): string {
     "form-action 'none'",
     "frame-ancestors 'self'",
     // Opaque origin even on direct navigation; allow-scripts re-enables the artifact's own JS.
-    'sandbox allow-scripts',
+    `sandbox ${VIEWER_SANDBOX}`,
   ].join('; ');
 }
 
@@ -1414,38 +1442,93 @@ function cleanViewerTitle(rawTitle: string | undefined, artifacts: ParsedArtifac
   return named?.title || SHARED_FALLBACK_TITLE;
 }
 
+/** An artifact carrying its own JS. Non-global so `.test` stays stateless across calls. */
+const ARTIFACT_HAS_SCRIPT = /<script[\s>]/i;
+
+/**
+ * How one embedded artifact renders. Single source of truth so `renderArtifactBlock` and the
+ * lead-artifact hero check in `renderViewerPage` can never disagree about what appears:
+ * - `sub-document`: an iframe at `?a={index}`, which needs a path whose fresh, credential-free
+ *   sub-request re-authorizes (`canFrame`).
+ * - `srcdoc`: the document inlined into the frame, so no sub-request happens at all.
+ * - `card`: a placeholder, for a type the static viewer cannot host or a document whose JS
+ *   would not survive inlining.
+ */
+type ArtifactRenderMode = 'sub-document' | 'srcdoc' | 'card';
+
+function artifactRenderMode(
+  artifact: ParsedArtifact,
+  selfPath: string,
+  canFrame: boolean,
+  standalone: boolean
+): ArtifactRenderMode {
+  if (artifact.type !== 'html' && artifact.type !== 'svg') return 'card';
+  if (standalone) return 'srcdoc';
+  if (canFrame && selfPath) return 'sub-document';
+  // Bearer-gated page: no `?a=` sub-request can carry the header, but a script-free document
+  // renders identically inline. A scripted one would not (see renderArtifactBlock), so: card.
+  return ARTIFACT_HAS_SCRIPT.test(artifact.content) ? 'card' : 'srcdoc';
+}
+
+/** Whether this artifact renders as a frame rather than a placeholder card. */
+function willFrame(artifact: ParsedArtifact, selfPath: string, canFrame: boolean, standalone: boolean): boolean {
+  return artifactRenderMode(artifact, selfPath, canFrame, standalone) !== 'card';
+}
+
+/** Opaque-origin frame whose document travels in the attribute, so it needs no sub-request. */
+function srcdocFrame(titleHtml: string, content: string, extraClass = ''): string {
+  // srcdoc attribute escape: inside a double-quoted value only `&` and `"` are unsafe -
+  // `<`/`>` are literal data. Escaping them would corrupt the framed document (see the
+  // identical note in renderBundleWrapper). `&` first so it can't double-escape `&quot;`.
+  const doc = content.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<iframe class="${artifactFrameClass(
+    extraClass
+  )}" sandbox="${VIEWER_SANDBOX}" title="${titleHtml}" srcdoc="${doc}"></iframe>`;
+}
+
+function artifactFrameClass(extraClass: string): string {
+  return extraClass ? `b4m-artifact ${extraClass}` : 'b4m-artifact';
+}
+
 /**
  * Render one embedded artifact as viewer markup. An HTML/SVG artifact renders in its own
  * SANDBOXED iframe pointed at the `?a={index}` sub-document (so its JS runs isolated on an
  * opaque origin, never on the script-free reply page) - but ONLY when `canFrame` says the
- * sub-request will authorize (see the call site); a Bearer-gated reply falls back to the card so
- * we never emit a frame that dead-ends at a loader shell. Every other type (react/code/python/
- * mermaid/recharts) needs the app runtime the static viewer can't provide, so it also gets a
+ * sub-request will authorize (see the call site). Every other type (react/code/python/
+ * mermaid/recharts) needs the app runtime the static viewer can't provide, so it gets a
  * clean placeholder card instead of leaking raw markup. `index` MUST match the position in the
  * same parseArtifactsWithFallback result the `?a` handler indexes into.
  *
  * `standalone` (the `?export=html` download) has no `?a=` route to point at, so an html/svg
- * artifact is inlined as an iframe `srcdoc` instead - same `sandbox="allow-scripts"` opaque-origin
+ * artifact is inlined as an iframe `srcdoc` instead - same `VIEWER_SANDBOX` opaque-origin
  * posture, but self-contained, so the saved file renders offline.
+ *
+ * A Bearer-gated page (org/domain visibility, reached through the loader shell) can't frame
+ * `?a=` either, since an iframe navigation carries no Authorization header. There it inlines
+ * the SAME srcdoc, which is the identical opaque-origin posture minus script execution: the
+ * page's `script-src 'none'` CSP is inherited by an about:srcdoc child, so a SCRIPTED artifact
+ * would render half-broken (markup and CSS, dead JS) and is kept as a card instead. Script-free
+ * documents (a styled report, an SVG) render fully, which is what the gated owner came for.
  */
 function renderArtifactBlock(
   artifact: ParsedArtifact,
   index: number,
   selfPath: string,
   canFrame: boolean,
-  standalone = false
+  standalone = false,
+  opts: { hero?: boolean } = {}
 ): string {
   const title = escapeHtml(artifact.title || 'Artifact');
-  if (standalone && (artifact.type === 'html' || artifact.type === 'svg')) {
-    // srcdoc attribute escape: inside a double-quoted value only `&` and `"` are unsafe -
-    // `<`/`>` are literal data. Escaping them would corrupt the framed document (see the
-    // identical note in renderBundleWrapper). `&` first so it can't double-escape `&quot;`.
-    const doc = artifact.content.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-    return `<iframe class="b4m-artifact" sandbox="allow-scripts" title="${title}" srcdoc="${doc}"></iframe>`;
+  const extraClass = opts.hero ? 'b4m-hero' : '';
+  const mode = artifactRenderMode(artifact, selfPath, canFrame, standalone);
+  if (mode === 'srcdoc') {
+    return srcdocFrame(title, artifact.content, extraClass);
   }
-  if (canFrame && selfPath && (artifact.type === 'html' || artifact.type === 'svg')) {
+  if (mode === 'sub-document') {
     const src = escapeHtml(`${selfPath}?a=${index}`);
-    return `<iframe class="b4m-artifact" sandbox="allow-scripts" loading="lazy" title="${title}" src="${src}"></iframe>`;
+    return `<iframe class="${artifactFrameClass(
+      extraClass
+    )}" sandbox="${VIEWER_SANDBOX}" loading="lazy" title="${title}" src="${src}"></iframe>`;
   }
   return `<div class="b4m-artifact-card"><strong>${title}</strong><span>${escapeHtml(
     artifact.type
@@ -1455,8 +1538,10 @@ function renderArtifactBlock(
 /**
  * Render a reply/fabfile snapshot to a standalone HTML page. Replies are markdown (rendered via
  * marked) with any embedded `<artifact>` blocks extracted: the surrounding prose renders inline,
- * and each HTML/SVG artifact renders in its own sandboxed `?a=` iframe (non-embeddable types get
- * a placeholder card). Fabfiles render their literal text as an escaped <pre>, with only explicit
+ * and each HTML/SVG artifact renders in its own sandboxed iframe (non-embeddable types get a
+ * placeholder card). A reply that OPENS with a frameable artifact leads with it as a full-bleed
+ * hero above the prose; every other reply keeps prose-then-artifacts order. Fabfiles render
+ * their literal text as an escaped <pre> in the original order, with only explicit
  * embedded `<artifact>` blocks extracted and framed the same way. The PAGE is served with
  * script-src 'none' so injected markup cannot execute; artifact JS runs only inside the sandbox.
  */
@@ -1497,10 +1582,26 @@ function renderViewerPage(
     const article = cleanedContent
       ? sanitizeRenderedHtml(marked.parse(cleanedContent, { async: false }) as string)
       : '';
-    const blocks = artifacts
-      .map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts, standalone))
-      .join('\n');
-    contentHtml = `${article}${blocks}`;
+    const block = (a: ParsedArtifact, i: number, hero = false) =>
+      renderArtifactBlock(a, i, selfPath, canFrameArtifacts, standalone, { hero });
+    // A reply that LEADS with an html/svg artifact IS that artifact; the prose after it is the
+    // text fallback. Hoist that first block above the article as a full-bleed hero, but only if
+    // it actually renders as a frame - promoting a placeholder card to hero would be a downgrade.
+    // Ordering only; `i` stays the artifact's position in this same parser result, so `?a={i}`
+    // still resolves to the block rendered at slot i.
+    const leadsWithArtifact =
+      /^<artifact\b/i.test(body.trim()) &&
+      artifacts.length > 0 &&
+      willFrame(artifacts[0], selfPath, canFrameArtifacts, standalone);
+    if (leadsWithArtifact) {
+      const rest = artifacts
+        .slice(1)
+        .map((a, i) => block(a, i + 1))
+        .join('\n');
+      contentHtml = `${block(artifacts[0], 0, true)}${article}${rest}`;
+    } else {
+      contentHtml = `${article}${artifacts.map((a, i) => block(a, i)).join('\n')}`;
+    }
     displayTitle = cleanViewerTitle(artifact.title, artifacts);
   } else {
     // Fabfile: a file is literal text, not markdown prose, so the non-artifact remainder stays an
@@ -1565,6 +1666,9 @@ function renderViewerPage(
   img { max-width: 100%; height: auto; }
   iframe.b4m-artifact { display: block; width: 100%; height: 600px; margin: 1.5rem 0; border: 1px solid rgba(127,127,127,.3);
          border-radius: 8px; background: #fff; }
+  /* Lead artifact: break out of the 760px column to full-bleed. The negative top margin
+     cancels the body's 2rem top padding so the hero starts at the very top of the page. */
+  iframe.b4m-artifact.b4m-hero { width: 100vw; margin: -2rem 0 2rem calc(50% - 50vw); height: 100vh; border: 0; border-radius: 0; }
   .b4m-artifact-card { display: flex; flex-direction: column; gap: .25rem; margin: 1.5rem 0; padding: 1rem 1.25rem;
          border: 1px solid rgba(127,127,127,.3); border-radius: 8px; background: rgba(127,127,127,.08); }
   .b4m-artifact-card span { font-size: .85rem; opacity: .75; }
@@ -1579,10 +1683,11 @@ ${footer}
 }
 
 /**
- * Build the comment-overlay mount node + trusted widget script tag, injected into
- * the WRAPPER page (app origin) - config passed via data-* attributes. Returns ''
- * when commentPolicy is `none` so opt-out artifacts get no widget. escapeHtml is
- * shared from viewerSecurity.
+ * Build the comment-overlay MOUNT NODE for the WRAPPER page (app origin) - config passed
+ * via data-* attributes. Returns '' when commentPolicy is `none`, which is what opts an
+ * artifact out: the widget script itself now ships on every non-embed wrapper (it also
+ * binds "Save as PDF") and early-returns when this node is absent. escapeHtml is shared
+ * from viewerSecurity.
  */
 /**
  * Trusted pin-bridge script injected INTO the sandboxed bundle (the iframe srcdoc) when
@@ -1630,8 +1735,7 @@ function buildAnnotateOverlayHtml(artifact: PublishedArtifactLean): string {
   const title = escapeHtml(artifact.title || '');
   return (
     `<div id="b4m-annotate-root" data-public-id="${publicId}" ` +
-    `data-comment-policy="${policy}" data-title="${title}"></div>` +
-    `<script src="/api/publish/widget" defer></script>`
+    `data-comment-policy="${policy}" data-title="${title}"></div>`
   );
 }
 

@@ -1,6 +1,7 @@
 import {
   CreditHolderType,
   IAdminSettingsRepository,
+  IScopedSetting,
   IScopedSettingsRepository,
   ScopeRef,
   SettingKey,
@@ -263,6 +264,54 @@ export async function resolveScopedSetting<K extends SettingKey>(
 }
 
 /**
+ * Resolve one setting across MANY scopes from an ALREADY-FETCHED override set. The bulk twin of
+ * {@link resolveScopedSetting}, and PURE - no platform read, no overlay read, no cache.
+ *
+ * The async API resolves one scope per call, which is the wrong shape for a consumer that has to
+ * grade every overridden lake in the install at once: that is one overlay round trip per lake. Such a
+ * consumer reads the setting's whole override set in a single query
+ * (`IScopedSettingsRepository.findBySettingName`), reads the platform value once, and grades here.
+ * The chunk rescue sweep's per-run pause map is that consumer (#2157).
+ *
+ * `platformValue` is the base the caller already read - passed in rather than read here so this stays
+ * pure and so the caller's own degrade-on-failure policy governs what "the platform value" means when
+ * that read fails. Override rows naming a DIFFERENT setting are ignored, so a caller may hand over a
+ * wider row set than it needs.
+ *
+ * Shares `computeCandidateRefs`, `pickOverride` and `applyClamp` with `resolveAll`, so "narrower rung
+ * wins", the `settableAt` gating, the sensitive-setting refusal and the safety-rail clamp each have
+ * exactly ONE implementation - a second copy of narrower-wins is the drift this delegation prevents.
+ * Result order matches `scopes`.
+ */
+export function resolveScopedSettingFromOverrides<K extends SettingKey>(
+  key: K,
+  scopes: readonly SettingScope[],
+  platformValue: SettingValue<K>,
+  overrideRows: readonly Pick<IScopedSetting, 'scopeLevel' | 'scopeId' | 'settingName' | 'settingValue'>[],
+  logger?: Logger
+): ResolvedSetting<SettingValue<K>>[] {
+  const def = settingsMap[key] as {
+    scope?: { settableAt: readonly SettingScopeLevel[]; clamp?: (v: number, s: SettingScope) => number };
+    isSensitive?: boolean;
+    schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } };
+  };
+  const overrides = new Map<string, string | null>();
+  for (const row of overrideRows) {
+    if (row.settingName !== key) continue;
+    overrides.set(scopedOverrideKey(row.scopeLevel, row.scopeId, key), row.settingValue);
+  }
+
+  return scopes.map(scope => {
+    // hasStore: true - the caller HAS read the overlay, which is what that flag reports. Passing
+    // false would make computeCandidateRefs warn about a missing store and resolve platform-only.
+    const refs = computeCandidateRefs(key, def.scope?.settableAt, !!def.isSensitive, scope, true, logger);
+    const won = pickOverride(key, refs, overrides, def.schema, logger);
+    const value = applyClamp(won ? won.value : platformValue, scope, def.scope?.clamp);
+    return { value: value as SettingValue<K>, source: won ? won.source : SettingScopeLevel.Platform };
+  });
+}
+
+/**
  * Derive the scope of a data lake. The owner rung reflects lake ownership: an org-owned lake
  * (`organizationId` set) is owned by that Organization; otherwise the individual `createdByUserId`.
  * This is the individual-vs-org distinction #1675's cost tiers turn on, computed in exactly one place.
@@ -306,5 +355,22 @@ export function scopeForFileOwner(file: { userId: string; organizationId?: strin
     owner: orgId
       ? { id: orgId, type: CreditHolderType.Organization }
       : { id: file.userId, type: CreditHolderType.User },
+  };
+}
+
+/**
+ * Derive the scope for a retrieval CALLER (#1955): the org/owner altitude of whoever is searching.
+ * `lakeId` is deliberately omitted - a knowledge-base search spans a mixed multi-lake corpus (plus
+ * the caller's own and shared files), so there is no single lake for a narrower rung to key on.
+ * Owner derivation matches `scopeForLake`/`scopeForFileOwner`: an org member resolves at
+ * `owner:<orgId>`, otherwise at `owner:<userId>`.
+ */
+export function scopeForCaller(caller: { userId: string; organizationId?: string | null }): SettingScope {
+  const orgId = caller.organizationId || undefined;
+  return {
+    organizationId: orgId,
+    owner: orgId
+      ? { id: orgId, type: CreditHolderType.Organization }
+      : { id: caller.userId, type: CreditHolderType.User },
   };
 }

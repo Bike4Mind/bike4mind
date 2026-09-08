@@ -1,6 +1,7 @@
 export * from './types';
 export * from './defineEndpoint';
 export { chatContract } from './contracts/chat.contract';
+export { startAgentExecutionContract, getAgentExecutionContract } from './contracts/agentExecutions.contract';
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { createCompletionContract } from './contracts/completions.contract';

@@ -9,9 +9,11 @@ export enum HttpStatus {
   Unauthorized = 401,
   Forbidden = 403,
   NotFound = 404,
+  Conflict = 409,
   UnprocessableEntity = 422,
   TooManyRequests = 429,
   InternalServerError = 500,
+  BadGateway = 502,
 }
 
 export class HTTPError extends Error {
@@ -82,6 +84,28 @@ export class ForbiddenError extends HTTPError {
   ) {
     super(HttpStatus.Forbidden, message, additionalInfo);
     this.name = 'ForbiddenError';
+  }
+}
+
+/** 409: the request conflicts with current state - e.g. a per-user concurrency cap. */
+export class ConflictError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.Conflict, message, additionalInfo);
+    this.name = 'ConflictError';
+  }
+}
+
+/** 502: an upstream we depend on failed. The caller's request was well-formed. */
+export class BadGatewayError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.BadGateway, message, additionalInfo);
+    this.name = 'BadGatewayError';
   }
 }
 

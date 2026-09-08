@@ -1,5 +1,6 @@
 import type { SystemPromptDetail } from '@bike4mind/common';
 import { BUILDER_INJECTED_BLOCK_IDS, type BuilderInjectedBlock, type BuilderInjectedBlockId } from '@bike4mind/utils';
+import { PROMPT_SOURCE_METADATA, PROMPT_SOURCE_ORDER } from './systemPromptSources';
 
 /**
  * Resolved inputs for the always-on system-prompt floor. Content strings are
@@ -157,4 +158,42 @@ export async function buildInjectedBlockDetails(
   }
 
   return details;
+}
+
+/**
+ * The order the model actually sees the blocks in, as telemetry row names.
+ *
+ * `buildAndSortMessages` PREPENDS its two blocks (the image nudge last, so it ends up first), which
+ * is why they lead here rather than trail. Everything behind them follows PROMPT_SOURCE_ORDER.
+ *
+ * Derived from those two tables rather than hand-listed, so moving a source cannot leave this
+ * behind - the same reason SHAREABLE_PREFIX_SOURCES is derived.
+ */
+export const DELIVERED_DETAIL_ORDER: string[] = [
+  INJECTED_BLOCK_METADATA.imagePrompt.name,
+  INJECTED_BLOCK_METADATA.formatPrompt.name,
+  ...PROMPT_SOURCE_ORDER.map(source => PROMPT_SOURCE_METADATA[source].name),
+];
+
+/**
+ * Put the assembled rows into delivery order.
+ *
+ * The rows arrive in three batches - the derived stack, then the always-on floor, then the
+ * builder-injected blocks - and each was simply appended, so the array read like delivery order
+ * without being one: the floor rows for artifact_emission/help_center trailed sources they actually
+ * ship in front of. This is the array a reviewer reads to check a prompt-ORDERING change, so getting
+ * it wrong made the one field that could confirm the invariant actively misleading.
+ *
+ * A name with no known position sorts last rather than throwing - a telemetry gap must never fail a
+ * completion. Stable within equal positions, so a source contributing two rows keeps their order.
+ */
+export function sortDetailsByDeliveryOrder(details: SystemPromptDetail[]): SystemPromptDetail[] {
+  const positionOf = (name: string) => {
+    const index = DELIVERED_DETAIL_ORDER.indexOf(name);
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  return details
+    .map((detail, index) => ({ detail, index }))
+    .sort((a, b) => positionOf(a.detail.name) - positionOf(b.detail.name) || a.index - b.index)
+    .map(({ detail }) => detail);
 }

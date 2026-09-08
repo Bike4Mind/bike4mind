@@ -1,5 +1,6 @@
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -18,7 +19,11 @@ interface RequestQuery {
   subscriptionId: string;
 }
 
-const handler = baseApi().put(
+// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+// before req.user is set, so a key issued for a narrow integration can't modify
+// a subscription's credit rate just because its owner is an admin. JWT/browser
+// admins skip that check and still pass the isAdmin gate below.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
   asyncHandler(async (req, res) => {
     // Check admin authorization
     if (!req.user?.isAdmin) {

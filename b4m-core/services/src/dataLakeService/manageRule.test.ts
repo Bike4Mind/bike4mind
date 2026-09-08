@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import {
   canManageLake,
+  canShredLakeMemory,
   isEffectiveOwner,
   isLakeCreator,
   resolveEffectiveOwnerIds,
@@ -172,15 +173,27 @@ describe('resolveLakeManageRung', () => {
     expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'creator' }), grants)).toBe('grant-curator');
   });
 
-  it('reports the MOST privileged rung when several apply - what actually let them do it', () => {
-    // A platform admin who also owns the lake could have acted either way; the admin rung is the
-    // one worth surfacing, because it is the one with no standing relationship to the lake.
-    const rung = resolveLakeManageRung(lake('creator', 'org-1'), {
-      userId: 'creator',
-      isAdmin: true,
-      administeredOrgIds: ['org-1'],
-    });
-    expect(rung).toBe('platform-admin');
+  // Reverses an earlier rule that reported the MOST privileged applicable rung. That rung feeds a
+  // history surface where `platform-admin` renders as a warning ("changed by somebody outside this
+  // lake's own people"), so it fired on a dual-role account's routine edits to a lake it owns.
+  // `platform-admin` now means what the warning claims: no lake-side relationship authorized this.
+  it("reports the actor's own relationship to the lake, not platform-admin, when both apply", () => {
+    const dualRole: ManageActor = { userId: 'creator', isAdmin: true, administeredOrgIds: ['org-1'] };
+    expect(resolveLakeManageRung(lake('creator', 'org-1'), dualRole)).toBe('creator');
+    expect(
+      resolveLakeManageRung(lake('someoneElse'), { ...dualRole, userId: 'newOwner' }, [
+        grant('user', 'newOwner', 'owner'),
+      ])
+    ).toBe('grant-owner');
+    expect(
+      resolveLakeManageRung(lake('someoneElse'), { ...dualRole, userId: 'cur' }, [grant('user', 'cur', 'curator')])
+    ).toBe('grant-curator');
+    // Only an admin with no relationship of their own to the lake still reports the admin rung.
+    expect(resolveLakeManageRung(lake('creator', 'org-1'), actor({ userId: 'root', isAdmin: true }))).toBe(
+      'platform-admin'
+    );
+    // ...as does an admin acting with no principal at all (a script running under admin rights).
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: '', isAdmin: true }))).toBe('platform-admin');
   });
 
   // The two functions must agree in BOTH directions, or a new rung added to canManageLake without
@@ -236,5 +249,50 @@ describe('resolveLakeManageRung branch ORDER', () => {
     );
 
     expect(rung).toBe('org-admin');
+  });
+});
+
+describe('canShredLakeMemory', () => {
+  it('admits the creator and a platform admin', () => {
+    expect(canShredLakeMemory(lake('creator'), actor({ userId: 'creator' }))).toBe(true);
+    expect(canShredLakeMemory(lake('creator'), actor({ userId: 'someone', isAdmin: true }))).toBe(true);
+  });
+
+  it('refuses everyone else, including actors `canManageLake` admits', () => {
+    // The whole point of the separate predicate. Each of these three CAN manage the lake - and a
+    // crypto-shred destroys facts derived from documents the rest of the org contributed, so it stays
+    // creator-or-platform-admin. `canShredLakeMemory` takes no grants and no org, so there is no
+    // argument shape by which a caller could accidentally widen it back to `canManageLake`.
+    const orgLake = lake('creator', 'org-1');
+    const curator = actor({ userId: 'curator-1' });
+    const orgAdmin = actor({ userId: 'org-admin-1', administeredOrgIds: ['org-1'] });
+    const grants = [grant('user', 'curator-1', 'curator')];
+
+    expect(canManageLake(orgLake, curator, grants)).toBe(true);
+    expect(canShredLakeMemory(orgLake, curator)).toBe(false);
+
+    expect(canManageLake(orgLake, orgAdmin)).toBe(true);
+    expect(canShredLakeMemory(orgLake, orgAdmin)).toBe(false);
+
+    expect(canShredLakeMemory(orgLake, actor({ userId: 'reader-1' }))).toBe(false);
+  });
+
+  it('does NOT follow an ownership transfer - the creator keeps the shred, the new owner does not get it', () => {
+    // Recorded as a decision rather than an oversight: this predicate exists to describe what the API
+    // gate already enforces (creator or platform admin, grants unread), and the UI is being aligned to
+    // it. Widening both to the effective owner is a policy change, not a bug fix, and would want the
+    // transfer flow to say so.
+    const transferred = lake('creator');
+    const grants = [grant('user', 'new-owner', 'owner')];
+
+    expect(isEffectiveOwner(transferred, actor({ userId: 'new-owner' }), grants)).toBe(true);
+    expect(canShredLakeMemory(transferred, actor({ userId: 'new-owner' }))).toBe(false);
+    expect(canShredLakeMemory(transferred, actor({ userId: 'creator' }))).toBe(true);
+  });
+
+  it('fails closed on a blank identity, so the synthetic fallback lake is never shreddable', () => {
+    // `''  === ''` would otherwise make an anonymous actor the "creator" of the fallback document.
+    expect(canShredLakeMemory(lake(''), actor({ userId: '' }))).toBe(false);
+    expect(canShredLakeMemory(lake(''), actor({ userId: 'someone' }))).toBe(false);
   });
 });

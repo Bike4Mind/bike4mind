@@ -1,5 +1,15 @@
 # @bike4mind/cli
 
+## 0.20.2
+
+### Patch Changes
+
+- [#1801](https://github.com/Bike4Mind/bike4mind/pull/1801) [`e49346a`](https://github.com/Bike4Mind/bike4mind/commit/e49346a617d10bc8ec15b05e0626975d85e2a720) Thanks [@onoya](https://github.com/onoya)! - stop benign concurrent refreshes from revoking healthy sessions
+
+- [#1886](https://github.com/Bike4Mind/bike4mind/pull/1886) [`e7d93b8`](https://github.com/Bike4Mind/bike4mind/commit/e7d93b8ff0a10b16ad54b93eafea3f5681eec4b4) Thanks [@onoya](https://github.com/onoya)! - discover skills and agents behind symlinks
+
+- [#1891](https://github.com/Bike4Mind/bike4mind/pull/1891) [`7edcf84`](https://github.com/Bike4Mind/bike4mind/commit/7edcf84060227e9384274dccbbde54c197d25425) Thanks [@onoya](https://github.com/onoya)! - stop reasoning from starving the visible answer
+
 ## 0.20.1
 
 ### Patch Changes

@@ -2,11 +2,19 @@
  * Limits shared by every path that can dispatch a top-level agent execution.
  *
  * These live here rather than next to one dispatcher because there is now more
- * than one: the WebSocket `agent_execute` start, and the QuestMaster v5 node
- * runner. A cap enforced by only one of them is not a cap.
+ * than one: `@server/utils/startAgentExecution` (behind both the WebSocket
+ * `agent_execute` start and `POST /api/v1/agent-executions`), and the QuestMaster v5
+ * node runner. A cap enforced by only one of them is not a cap.
  */
 
-/** Top-level agent executions a single user may have in flight at once. */
+/**
+ * Top-level agent executions a single user may have in flight at once.
+ *
+ * Subagent executions (created by `delegate_to_agent`) do NOT count: they are a
+ * downstream effect of a parent that already consumed a slot.
+ *
+ * TODO: make this configurable per organization or plan tier.
+ */
 export const MAX_CONCURRENT_EXECUTIONS_PER_USER = 3;
 
 /**

@@ -31,6 +31,12 @@ const optedInLake = async (auditQueryTextEnabled = true) => {
   return lake.id;
 };
 
+const dropIndexByKey = async (key: Record<string, number>) => {
+  const indexes = await LakeAccessEventModel.collection.indexes();
+  const match = indexes.find(index => JSON.stringify(index.key) === JSON.stringify(key));
+  if (match?.name) await LakeAccessEventModel.collection.dropIndex(match.name);
+};
+
 describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
   setupMongoTest();
   // setupMongoTest's beforeEach dropDatabase()s (indexes included), and these models are not in
@@ -71,6 +77,38 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.returnedChunkCount).toBe(1);
       expect(event.surface).toBe('forced-retrieval');
       expect(event.createdAt).toBeInstanceOf(Date);
+    });
+
+    it('round-trips questId and sessionId (#1867 turn linkage)', async () => {
+      const event = await repo.record(baseInput({ questId: 'quest-1', sessionId: 'session-1' }));
+      expect(event.questId).toBe('quest-1');
+      expect(event.sessionId).toBe('session-1');
+    });
+
+    it('leaves questId/sessionId absent, not null or empty string, when the caller supplies neither', async () => {
+      const event = await repo.record(baseInput());
+      expect(event.questId).toBeUndefined();
+      expect(event.sessionId).toBeUndefined();
+    });
+
+    it('round-trips candidateCapReached in both boolean directions', async () => {
+      const capped = await repo.record(baseInput({ candidateCapReached: true }));
+      expect(capped.candidateCapReached).toBe(true);
+
+      // `false` is an assertion in its own right - "this surface considered its whole candidate
+      // set" - so a truthiness check in record() that dropped it would be a silent data loss.
+      const complete = await repo.record(baseInput({ candidateCapReached: false }));
+      expect(complete.candidateCapReached).toBe(false);
+    });
+
+    it('omits the candidateCapReached path entirely when the caller supplies none', async () => {
+      const event = await repo.record(baseInput());
+      // Absent, NOT false: a surface that does not measure its candidate stage must not be
+      // recorded as having considered everything. Asserted on the stored document rather than on
+      // falsiness, since `false` is falsy too and is exactly the value this must not be.
+      const stored = await LakeAccessEventModel.findById(event.id).lean();
+      expect(stored).not.toBeNull();
+      expect(Object.prototype.hasOwnProperty.call(stored as object, 'candidateCapReached')).toBe(false);
     });
 
     it('is absent updatedAt - an audit row that reports being updated is a lie', async () => {
@@ -293,6 +331,32 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(ttlText?.expireAfterSeconds).toBe(0);
     });
 
+    it('serves the listByLake audit read from the index, sort included - no blocking SORT', async () => {
+      // Asserts the PLAN, not the key shape: a key-presence check stays green when the index stops
+      // at `createdAt` (it cannot supply `_id` order, so the planner drops the indexed sort and
+      // SORTs the lake's whole 450-day retention window above FETCH) and green again when the
+      // superseded two-key index lingers beside the new one.
+      // Seed a real array value first: on an empty collection `resolvedLakeIds` is never flagged
+      // multikey, and a non-multikey plan is not the plan production gets. The isMultiKey
+      // assertion is what keeps this honest.
+      await repo.record(baseInput({ resolvedLakeIds: ['lake-1', 'lake-2'] }));
+
+      const plan = await LakeAccessEventModel.find({ resolvedLakeIds: 'lake-1' })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(3)
+        .explain('queryPlanner');
+      const winning = JSON.stringify((plan as { queryPlanner: { winningPlan: unknown } }).queryPlanner.winningPlan);
+      expect(winning).toContain('IXSCAN');
+      expect(winning).toContain('"isMultiKey":true');
+      expect(winning).not.toContain('"stage":"SORT"');
+    });
+
+    it('has a sparse questId index (#1867 turn linkage) - most rows have none, so plain would waste space', async () => {
+      const indexes = await LakeAccessEventModel.collection.indexes();
+      const questIdIndex = indexes.find(idx => idx.key?.questId === 1);
+      expect(questIdIndex?.sparse).toBe(true);
+    });
+
     it('is not fooled by system-clock manipulation - record() always uses the real clock, not a caller-supplied one', async () => {
       // RecordLakeAccessEventInput has no `now` field; this asserts the type-level removal holds
       // at runtime too - an extra `now` on the input object is simply ignored.
@@ -309,6 +373,36 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.returnedChunkIds.length).toBe(500);
       expect(event.returnedChunkCount).toBe(600);
       expect(event.identifiersTruncated).toBe(true);
+    });
+
+    it('truncates scores in lockstep with chunkIds at the same 500-element boundary (#1867)', async () => {
+      const manyIds = Array.from({ length: 600 }, (_, i) => `chunk-${i}`);
+      const manyScores = Array.from({ length: 600 }, (_, i) => i / 600);
+      const event = await repo.record(baseInput({ chunkIds: manyIds, scores: manyScores }));
+      expect(event.scores?.length).toBe(500);
+      expect(event.scores).toEqual(manyScores.slice(0, 500));
+      expect(event.returnedChunkIds.length).toBe(event.scores?.length);
+    });
+  });
+
+  describe('scores (#1867 similarity scores)', () => {
+    it('round-trips scores index-aligned with chunkIds', async () => {
+      const event = await repo.record(baseInput({ chunkIds: ['c1', 'c2', 'c3'], scores: [0.9, 0.8, 0.7] }));
+      expect(event.scores).toEqual([0.9, 0.8, 0.7]);
+      expect(event.returnedChunkIds).toEqual(['c1', 'c2', 'c3']);
+    });
+
+    it('leaves scores absent (not an empty array) when the caller supplies none - distinguishes no-score-concept from ran-found-nothing', async () => {
+      const event = await repo.record(baseInput({ chunkIds: ['c1'] }));
+      expect(event.scores).toBeUndefined();
+    });
+
+    it('drops a mismatched-length scores array rather than risk misattributing a score to the wrong chunk', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const event = await repo.record(baseInput({ chunkIds: ['c1', 'c2'], scores: [0.9] }));
+      expect(event.scores).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('scores.length'));
+      warnSpy.mockRestore();
     });
   });
 
@@ -346,6 +440,15 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
         relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.test.ts')),
         relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.ts')),
         relFromRoot(path.resolve(__dirname, 'LakeAccessQueryTextModel.ts')),
+        // An index migration's integration test legitimately needs raw collection access: it
+        // asserts on `.indexes()` and resets state between cases, neither of which the repository
+        // exposes (nor should it - `record` is the only write verb by design). Declared here as an
+        // explicit exception rather than routed through `mongoose.connection.db` to dodge the
+        // pattern: evading a text guard leaves the same capability with none of the visibility,
+        // and it would decouple the collection name from the model. The guard's real subject is
+        // production code bypassing `record()` to mutate `expiresAt`; a migration test does not.
+        'packages/scripts/migrate/migrations/20260820000000_ensure-lakeaccessevent-questid-index.integration.test.ts',
+        'packages/scripts/migrate/migrations/20260827000000_ensure-lake-audit-tiebreak-indexes.integration.test.ts',
       ]);
       // `git grep` only searches TRACKED files (no explicit node_modules/.git/dist skip-list
       // needed) and is dramatically faster than a synchronous fs walk of the whole monorepo -
@@ -399,6 +502,27 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       // With a limit it must drop the OLDEST, and the last row is then the window's start.
       const limited = await repo.listByLake('lake-o', { limit: 2 });
       expect(limited.map(r => r.principalId)).toEqual(['newest', 'middle']);
+    });
+
+    it('listByLake orders same-millisecond events stably across repeated paged loads', async () => {
+      // Same clock for every write, so `createdAt` alone leaves the order to Mongo - and the row a
+      // page of 3 cuts at its boundary would then differ between two loads of that same page.
+      // Read against the two-key index the tie-break supersedes, on purpose: under the declared
+      // `{ resolvedLakeIds: 1, createdAt: -1, _id: -1 }` the IXSCAN already walks a tie in
+      // _id-descending order, so this stays green even with `_id` deleted from the sort clause -
+      // the index would be doing the work, and the sort clause is what this test exists to pin.
+      await dropIndexByKey({ resolvedLakeIds: 1, createdAt: -1, _id: -1 });
+      await LakeAccessEventModel.collection.createIndex({ resolvedLakeIds: 1, createdAt: -1 });
+
+      for (let i = 0; i < 5; i++) {
+        await repo.record(baseInput({ resolvedLakeIds: ['lake-tie'], principalId: `p${i}` }));
+      }
+
+      const page = async () => (await repo.listByLake('lake-tie', { limit: 3 })).map(r => r.principalId);
+      // Newest-first with the _id tie-break is reverse insertion order, ObjectIds being monotonic
+      // within a process.
+      expect(await page()).toEqual(['p4', 'p3', 'p2']);
+      expect(await page()).toEqual(['p4', 'p3', 'p2']);
     });
 
     it('two identical record() calls produce two rows - no dedupe, by design', async () => {

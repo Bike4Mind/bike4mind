@@ -80,7 +80,23 @@ describe('isAllowedCallbackOrigin', () => {
     expect(isAllowedCallbackOrigin('https://attacker.example.net/phish')).toBe(false);
   });
 
-  it('passes through when APP_URL is missing outside production (documented dev convenience)', () => {
+  it('fails closed when APP_URL is missing on a stage that is neither production nor development', () => {
+    // The gap this closes: the old `=== 'production'` test waved EVERY origin through on any
+    // other NODE_ENV, so a deployed stage that lost APP_URL was an open redirect. NODE_ENV is
+    // baked in by `next build` and nothing in infra/ sets it per stage, so the only line it can
+    // draw is local dev vs everything else - and everything else must reject. 'test' is also
+    // what vitest runs under, so this pins the local-test posture too.
+    vi.stubEnv('APP_URL', '');
+
+    for (const nodeEnv of ['test', 'staging'] as const) {
+      vi.stubEnv('NODE_ENV', nodeEnv);
+      expect(isAllowedCallbackOrigin('https://attacker.example.net/phish')).toBe(false);
+      // Rejects the app's own origin too - with no APP_URL there is nothing to compare against.
+      expect(isAllowedCallbackOrigin('https://app.example.com/settings/billing')).toBe(false);
+    }
+  });
+
+  it('passes through only when APP_URL is missing in local development (documented dev convenience)', () => {
     vi.stubEnv('APP_URL', '');
     vi.stubEnv('NODE_ENV', 'development');
 
