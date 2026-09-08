@@ -8,10 +8,13 @@ const { ingestSlackFilesIntoLake, ingestSlackLinkIntoLake, buildSlackAccessConte
   ingestSlackLinkIntoLake: vi.fn(),
   buildSlackAccessContext: vi.fn(),
 }));
-const { listDataLakes } = vi.hoisted(() => ({ listDataLakes: vi.fn() }));
+const { listDataLakes, grantedLakeIdsFor } = vi.hoisted(() => ({
+  listDataLakes: vi.fn(),
+  grantedLakeIdsFor: vi.fn(),
+}));
 
 vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes } }));
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeIdsFor } }));
 // Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
 // dispatch and reply composition only. Each path's own behavior has its own test file.
 vi.mock('./dataLakeIngestAuthz', () => ({ buildSlackAccessContext }));
@@ -37,6 +40,7 @@ const baseParams = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   buildSlackAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, userTags: [], entitlementKeys: [] });
+  grantedLakeIdsFor.mockResolvedValue([]);
 });
 
 describe('handleDataLakeCommand', () => {
@@ -303,6 +307,46 @@ describe('handleDataLakeCommand', () => {
             );
           }
         }
+      });
+
+      it('resolves a foreign-org grant-held lake by slug, mirroring findBySlug (#2425)', async () => {
+        // A lake in an org the caller does not belong to still reaches `add` when the grants
+        // fallback resolves it - `list` must agree, or it omits exactly the lake `add` accepts.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-1', slug: 'granted', name: 'Granted Lake', canManage: true, organizationId: 'org-b' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue(['lake-1']);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('granted');
+        expect(reply).toContain('Granted Lake');
+      });
+
+      it('still omits a foreign-org lake with NO grant, even though listDataLakes returned it', async () => {
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-1', slug: 'ungranted', name: 'Ungranted Lake', canManage: true, organizationId: 'org-b' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue([]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toMatch(/cannot add to any data lakes/i);
+      });
+
+      it("prefers the caller's own-org lake over a same-slug foreign-org grant-held one", async () => {
+        // findBySlug never reaches its grant-fallback arm when an own-org match exists for the
+        // slug - the grant tier must lose the tie regardless of org-id string ordering.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-own', slug: 'notes', name: 'Own Org Notes', canManage: true, organizationId: 'org-a' },
+          { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue(['lake-foreign']);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('Own Org Notes');
+        expect(reply).not.toContain('Foreign Grant Notes');
       });
     });
   });
