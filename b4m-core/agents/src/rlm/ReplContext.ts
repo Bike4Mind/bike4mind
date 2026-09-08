@@ -54,6 +54,17 @@ export interface ReplRunResult {
   error: string | null;
   truncated: boolean;
   durationMs: number;
+  /**
+   * The run that breached a host deadline or a memory limit and took the
+   * sandbox with it. Set on the breaching run itself, not just on the next
+   * call: the backend retires here, and without a flag on this result the
+   * caller sees an ordinary (retryable-looking) error and only learns the
+   * sandbox is gone when the FOLLOWING call throws `ReplSandboxRetiredError`.
+   *
+   * A flag rather than a throw because stdout captured before the kill is
+   * still worth returning, and a throw would discard it.
+   */
+  sandboxRetired?: boolean;
 }
 
 export interface ReplContextOptions {

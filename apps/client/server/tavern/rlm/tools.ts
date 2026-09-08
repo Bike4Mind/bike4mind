@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ReplToolMap, ReplSession } from '@bike4mind/agents';
 import type { PrincipalAuthHeaders } from './principalAuthHeaders';
+import { TOOL_HTTP_TIMEOUT_MS } from './timeouts';
 
 /**
  * Tool functions that get exposed inside the REPL for an RLM-style agent.
@@ -68,22 +69,7 @@ const SUB_LLM_PRICING = new Map<string, { inputPerToken: number; outputPerToken:
  *  usage as soon as the call returns, so it only has to be the right order. */
 const ESTIMATE_CHARS_PER_TOKEN = 4;
 
-/**
- * Wall-clock budget for ONE tool call's HTTP work, shared across every request
- * that call makes (`getArticle` makes three sequentially, so they draw on one
- * signal rather than getting 15s each).
- *
- * Must stay under the REPL's per-tool-call cap, which is itself under the
- * per-`code_execute` cap: the innermost bound should be the one that fires, so
- * the agent gets "this article timed out" and keeps its sandbox. If the REPL's
- * host deadline wins instead, the only preemption it has is disposing the
- * isolate, and one slow S3 read costs the session every later code_execute.
- * The 30s that used to sit on the body fetch was ABOVE the 25.5s host
- * deadline, so it could never fire.
- */
-const TOOL_HTTP_TIMEOUT_MS = 15_000;
-
-/** One shared abort signal per tool call - see TOOL_HTTP_TIMEOUT_MS. */
+/** One shared abort signal per tool call - see `timeouts.ts` for the ladder. */
 const toolHttpDeadline = () => AbortSignal.timeout(TOOL_HTTP_TIMEOUT_MS);
 
 interface SemanticSearchArgs {
@@ -312,11 +298,18 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     });
 
     try {
-      const msg = await anthropic.messages.create({
-        model: requestedModel,
-        max_tokens: maxTokens,
-        messages: [{ role: 'user', content: a.prompt }],
-      });
+      // Same deadline every other tool's HTTP work gets. Without it this call
+      // was the one tool that could outlive its own tool-dispatch bound: the
+      // dispatcher abandons the await at that bound, but the request kept
+      // running and kept billing, and a retry paid for it a second time.
+      const msg = await anthropic.messages.create(
+        {
+          model: requestedModel,
+          max_tokens: maxTokens,
+          messages: [{ role: 'user', content: a.prompt }],
+        },
+        { signal: toolHttpDeadline() }
+      );
       // settle() throws BudgetExceededError when the real cost tips the
       // ceiling. Let it propagate: that throw is how the agent finds out.
       reservation.settle({

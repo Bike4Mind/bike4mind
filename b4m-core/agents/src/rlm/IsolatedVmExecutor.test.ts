@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { IsolatedVmExecutor } from './IsolatedVmExecutor';
+import { IsolatedVmExecutor, TOOL_CALL_TIMEOUT_FRACTION } from './IsolatedVmExecutor';
+import { ReplSandboxRetiredError } from './replExecutor';
 import { ReplSession, _resetReplSessionsForTests } from './ReplSession';
 
 /**
@@ -222,7 +223,11 @@ describe('IsolatedVmExecutor', () => {
     const ex = spawn();
     await ex.runCode('z = 1;');
     ex.dispose();
-    await expect(ex.runCode('console.log(z);')).rejects.toThrow(/disposed/);
+    // The TYPE, not just the message: `code_execute` branches on
+    // `instanceof ReplSandboxRetiredError` to tell the agent the sandbox is
+    // gone rather than that a step failed, and a plain Error whose message
+    // happens to contain "disposed" satisfies a regex while breaking that.
+    await expect(ex.runCode('console.log(z);')).rejects.toThrow(ReplSandboxRetiredError);
   });
 
   it('integrates with ReplSession when executor: "isolated" is requested', async () => {
@@ -360,8 +365,12 @@ describe('IsolatedVmExecutor', () => {
       while (true) { blocks.push(new Array(1_000_000).fill(7)); }
     `);
     expect(r.error).toBeTruthy();
+    // The breaching run says so itself. Before this the OOM run returned a
+    // bare result and only the NEXT call reported the sandbox gone, so the
+    // agent spent an iteration discovering it.
+    expect(r.sandboxRetired).toBe(true);
     // After an OOM the isolate is gone; the executor fails fast on reuse.
-    await expect(ex.runCode('console.log(1)')).rejects.toThrow(/disposed/);
+    await expect(ex.runCode('console.log(1)')).rejects.toThrow(ReplSandboxRetiredError);
   }, 20_000);
 });
 
@@ -443,8 +452,10 @@ describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
     const r = await ex.runCode('await new Promise(() => {});');
     expect(r.error).toMatch(/cap|terminated|timed out/i);
     expect(Date.now() - t0).toBeLessThan(3000);
+    // The run that hit the deadline reports the retirement itself.
+    expect(r.sandboxRetired).toBe(true);
     // Ending it means killing the isolate, so the executor is spent.
-    await expect(ex.runCode('console.log(1)')).rejects.toThrow(/disposed/);
+    await expect(ex.runCode('console.log(1)')).rejects.toThrow(ReplSandboxRetiredError);
   });
 
   it('bounds a stalled tool call as a catchable tool error, keeping the isolate alive', async () => {
@@ -486,6 +497,64 @@ describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
     expect(r.error).toMatch(/did not settle within/i);
     await expect(ex.runCode('console.log("alive")')).resolves.toMatchObject({ error: null });
   });
+
+  /**
+   * The behavioural test above passes for any fraction that still lands under
+   * the host deadline - 1.0, 1.2 and 2.6 all did - because a tool that stalls
+   * FOREVER trips whichever bound comes first. So pin the contract itself: the
+   * fraction must be strictly below 1, or a tool call is allowed to consume
+   * the entire run and the per-tool bound stops being the one that fires.
+   */
+  it('derives a tool bound strictly inside the script cap at every timeoutMs', () => {
+    expect(TOOL_CALL_TIMEOUT_FRACTION).toBeGreaterThan(0);
+    expect(TOOL_CALL_TIMEOUT_FRACTION).toBeLessThan(1);
+
+    for (const timeoutMs of [10, 50, 200, 1_000, 25_000, 30_000]) {
+      const derived = Math.max(1, Math.floor(timeoutMs * TOOL_CALL_TIMEOUT_FRACTION));
+      expect(derived).toBeLessThan(timeoutMs);
+      expect(derived).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * The per-call bound caps ONE tool call. It cannot cap a loop of them, and a
+   * loop is the shape `code_execute`'s own description asks the model to write
+   * ("iterate over many items without spawning an LLM call per item"). Two
+   * calls each comfortably inside the per-call bound could sum past the host
+   * deadline, which has no preemption but disposing the isolate - so one slow
+   * pair of calls cost every later code_execute in the session.
+   */
+  it('draws sequential tool calls from one per-run budget, keeping the isolate alive', async () => {
+    // Per-call bound is 800ms, so a 600ms tool passes it twice over. Together
+    // they exceed the 1000ms run budget, which is what has to catch them.
+    const ex = spawn({ timeoutMs: 1_000 });
+    ex.setTools({ slow: () => new Promise(resolve => setTimeout(() => resolve('done'), 600)) });
+
+    const r = await ex.runCode(`
+      const first = await slow();
+      console.log('first:' + first);
+      try {
+        await slow();
+        console.log('second:completed');
+      } catch (e) {
+        console.log('second:' + e.message.slice(0, 80));
+      }
+    `);
+
+    // The first call fits; the second is refused or cut short by what is left.
+    expect(r.stdout).toContain('first:done');
+    expect(r.stdout).not.toContain('second:completed');
+    // Either bound is a pass: cut short by what the run had left, or refused
+    // outright because it had none. Both keep the isolate.
+    expect(r.stdout).toMatch(/second:.*(did not settle|no time left)/i);
+
+    // The point of catching it at the tool boundary: the sandbox survives.
+    expect(r.sandboxRetired).toBeFalsy();
+    await expect(ex.runCode('console.log("alive")')).resolves.toMatchObject({
+      error: null,
+      stdout: 'alive',
+    });
+  }, 15_000);
 
   it("does not expose the bootstrap's own bindings to guest code", async () => {
     const ex = spawn();

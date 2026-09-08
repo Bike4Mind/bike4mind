@@ -111,15 +111,19 @@ const DEFAULT_MEMORY_LIMIT_MB = 256;
  * racing the isolate on the CPU-bound path where the isolate's own answer is
  * the better one.
  */
-const HOST_DEADLINE_GRACE_MS = 500;
+export const HOST_DEADLINE_GRACE_MS = 500;
 /**
  * Fraction of `timeoutMs` a single host tool call may take before the
  * dispatcher gives up on it. Strictly below 1 so the guest sees a per-tool
  * error - and keeps its isolate - instead of the run reaching the host
  * deadline, which can only preempt a pending run by killing the isolate and
  * with it every later `code_execute` in the session.
+ *
+ * Exported so the ordering it exists to maintain is pinned by a test rather
+ * than only by this comment: a value at or above 1 inverts the whole ladder
+ * and nothing else in the code would notice.
  */
-const TOOL_CALL_TIMEOUT_FRACTION = 0.8;
+export const TOOL_CALL_TIMEOUT_FRACTION = 0.8;
 const STDOUT_HEAD_BYTES = 5000;
 const STDOUT_TAIL_BYTES = 2000;
 const HARD_PER_LINE_BYTES = 50_000;
@@ -129,10 +133,14 @@ export interface IsolatedVmExecutorOptions {
   timeoutMs?: number;
   /**
    * Wall-clock cap on a single host tool call made from inside the isolate.
-   * Defaults to 80% of `timeoutMs` (floor 1s). Must stay below `timeoutMs`:
-   * a tool that outlives this is reported to the guest as a failed tool call,
-   * which leaves the isolate alive, whereas letting the run reach the host
-   * deadline retires the sandbox for the rest of the session.
+   * Defaults to `TOOL_CALL_TIMEOUT_FRACTION` of `timeoutMs`, floored at 1ms -
+   * strictly proportional, so the ordering holds at every `timeoutMs`.
+   *
+   * Must stay below `timeoutMs`: a tool that outlives this is reported to the
+   * guest as a failed tool call, which leaves the isolate alive, whereas
+   * letting the run reach the host deadline retires the sandbox for the rest
+   * of the session. This is a cap on ONE call; the run's remaining time caps
+   * them cumulatively - see `runDeadlineAt`.
    */
   toolTimeoutMs?: number;
   /**
@@ -364,27 +372,57 @@ export class IsolatedVmExecutor implements ReplExecutor {
   private tools: ReplToolMap = {};
   private disposed = false;
   private hostRefsReleased = false;
+  /**
+   * Wall-clock instant the in-flight run must be done by, or null between
+   * runs. Every tool call in a run draws down the SAME budget: capping each
+   * call individually bounds one stalled tool but not a loop of them, and a
+   * loop is exactly the shape `code_execute`'s own guidance asks the model to
+   * write ("iterate over many items without spawning an LLM call per item").
+   * Two sequential calls each comfortably inside `toolTimeoutMs` could still
+   * sum past the host deadline and dispose the isolate mid-loop.
+   *
+   * Derived from the deadline rather than by subtracting each call's measured
+   * time, so guest CPU burned BETWEEN tool calls counts against it too.
+   */
+  private runDeadlineAt: number | null = null;
 
   // stdout capture state (host side, same shape as ReplContext)
   private stdoutChunks: string[] = [];
   private truncated = false;
 
   constructor(opts: IsolatedVmExecutorOptions = {}) {
+    // Reject a non-positive or non-finite cap rather than adopting it: a
+    // `timeoutMs` of 0 or NaN makes every bound derived from it meaningless
+    // (NaN loses every comparison), which disables the ladder silently.
+    if (opts.timeoutMs !== undefined && (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0)) {
+      throw new Error(`[IsolatedVmExecutor] timeoutMs must be a positive finite number (got ${opts.timeoutMs})`);
+    }
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     // Strictly proportional, with no absolute floor: a floor above
     // `timeoutMs` would put the tool timeout AFTER the host deadline and
     // silently restore the behaviour this bound exists to prevent. An explicit
     // override is clamped for the same reason.
     const derivedToolTimeout = Math.max(1, Math.floor(this.timeoutMs * TOOL_CALL_TIMEOUT_FRACTION));
-    if (opts.toolTimeoutMs !== undefined && opts.toolTimeoutMs >= this.timeoutMs) {
+    // A degenerate override (0, negative, NaN) used to pass the `< timeoutMs`
+    // test and become the cap, so every tool call failed instantly - or, for
+    // NaN, never timed out at all, since `setTimeout(NaN)` fires immediately
+    // but NaN also fails the comparison that would have rejected it.
+    const requestedToolTimeout = opts.toolTimeoutMs;
+    const usableToolTimeout =
+      requestedToolTimeout !== undefined &&
+      Number.isFinite(requestedToolTimeout) &&
+      requestedToolTimeout > 0 &&
+      requestedToolTimeout < this.timeoutMs
+        ? requestedToolTimeout
+        : undefined;
+    if (requestedToolTimeout !== undefined && usableToolTimeout === undefined) {
       Logger.globalInstance.warn(
-        `[IsolatedVmExecutor] toolTimeoutMs (${opts.toolTimeoutMs}ms) must be below timeoutMs ` +
-          `(${this.timeoutMs}ms) or a stalled tool reaches the host deadline, which retires the isolate. ` +
-          `Using ${derivedToolTimeout}ms instead.`
+        `[IsolatedVmExecutor] toolTimeoutMs (${requestedToolTimeout}ms) must be a positive finite number below ` +
+          `timeoutMs (${this.timeoutMs}ms), or a stalled tool reaches the host deadline, which retires the ` +
+          `isolate. Using ${derivedToolTimeout}ms instead.`
       );
     }
-    this.toolTimeoutMs =
-      opts.toolTimeoutMs !== undefined && opts.toolTimeoutMs < this.timeoutMs ? opts.toolTimeoutMs : derivedToolTimeout;
+    this.toolTimeoutMs = usableToolTimeout ?? derivedToolTimeout;
     this.label = opts.label ?? 'isolated-vm-repl';
     const ivm = loadIvm();
     this.isolate = new ivm.Isolate({ memoryLimit: opts.memoryLimitMb ?? DEFAULT_MEMORY_LIMIT_MB });
@@ -450,6 +488,10 @@ export class IsolatedVmExecutor implements ReplExecutor {
     }
     this.resetStdout();
     const t0 = Date.now();
+    // Opened here and closed in the `finally`, so tool calls can see how much
+    // of the run is left. Deliberately the script cap, not the host deadline:
+    // the tool bound must fire BEFORE the deadline that disposes the isolate.
+    this.runDeadlineAt = t0 + this.timeoutMs;
 
     // Wrap in async IIFE so top-level `await` works. The IIFE expression is
     // the script's completion value; `promise: true` makes run() await it.
@@ -485,6 +527,7 @@ export class IsolatedVmExecutor implements ReplExecutor {
     } catch (e) {
       error = serializeError(e);
     } finally {
+      this.runDeadlineAt = null;
       if (deadlineTimer) clearTimeout(deadlineTimer);
       try {
         script?.release();
@@ -499,17 +542,24 @@ export class IsolatedVmExecutor implements ReplExecutor {
     // isolated-vm, and release the host-side References here: dispose() gates on
     // the `disposed` flag, so once it is set a later dispose() would early-return
     // and strand them.
-    if (this.isolate.isDisposed) {
+    const sandboxRetired = this.isolate.isDisposed;
+    if (sandboxRetired) {
       this.disposed = true;
       this.releaseHostRefs();
       if (!error) error = `Error: isolate [${this.label}] disposed (likely exceeded memory limit)`;
     }
 
+    // Report the retirement on the run that CAUSED it. Returning a bare result
+    // here made the breaching run look like an ordinary failure and deferred
+    // the terminal signal to the next call, so an agent saw "step failed" -
+    // which reads as retryable - at the one moment it most needed to stop.
+    // Flagged rather than thrown so stdout captured before the kill survives.
     return {
       stdout: this.collectStdout(),
       error,
       truncated: this.truncated,
       durationMs: Date.now() - t0,
+      ...(sandboxRetired ? { sandboxRetired: true } : {}),
     };
   }
 
@@ -588,10 +638,25 @@ export class IsolatedVmExecutor implements ReplExecutor {
       // cancel it. Tools own their own cancellation (the data-lake tools pass
       // an AbortSignal to every fetch); this is the backstop for one that
       // does not.
+      //
+      // Bounded by whichever is tighter: this call's own cap, or what is left
+      // of the run. The per-call cap alone bounds one stalled tool, not a
+      // sequence of merely slow ones - and the run's budget is what the host
+      // deadline actually enforces.
+      const budgetMs = this.remainingToolBudgetMs();
+      if (budgetMs <= 0) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            `tool "${name}" was not dispatched: this code_execute run has no time left of its ` +
+            `${this.timeoutMs}ms budget. Do less work per run, or split it across calls.`,
+        });
+      }
       value = await withTimeout(
         tool(...args),
-        this.toolTimeoutMs,
-        `tool "${name}" did not settle within ${this.toolTimeoutMs}ms and was abandoned`
+        budgetMs,
+        `tool "${name}" did not settle within ${budgetMs}ms (of this run's ${this.timeoutMs}ms budget) ` +
+          `and was abandoned`
       );
     } catch (e) {
       const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -617,6 +682,17 @@ export class IsolatedVmExecutor implements ReplExecutor {
       });
     }
   };
+
+  /**
+   * How long the next tool call may take: its own cap, capped again by what
+   * remains of the run. `runDeadlineAt` is null outside a run (a tool invoked
+   * from a stray host-side reference), where the per-call cap is the only
+   * bound that makes sense.
+   */
+  private remainingToolBudgetMs(): number {
+    if (this.runDeadlineAt === null) return this.toolTimeoutMs;
+    return Math.min(this.toolTimeoutMs, this.runDeadlineAt - Date.now());
+  }
 
   private readGlobalNames(): string[] {
     const json = this.context.evalSync('JSON.stringify(Object.getOwnPropertyNames(globalThis))') as string;

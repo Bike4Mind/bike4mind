@@ -543,6 +543,54 @@ describe('getOrCreateReplSession executor pinning', () => {
       warn.mockRestore();
     }
   });
+
+  it('does not warn when a cache hit asks for the SAME tuning options again', () => {
+    // The realistic reuse shape: a caller builds one options object and hands
+    // it over on every call. Warning on the mere PRESENCE of these keys fired
+    // here every single time, and nothing was being ignored - the requested
+    // values are the ones in force. A warning that cries wolf on the normal
+    // path is one nobody reads on the path that matters.
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      const opts = {
+        sessionId: 'same-tuning',
+        executor: 'in-process-unsafe',
+        label: 'stable caller',
+        perCallTimeoutMs: 5_000,
+        budget: { maxCostUsd: 1, maxExecutions: 10 },
+      } as const;
+      getOrCreateReplSession({ ...opts, budget: { ...opts.budget } });
+      getOrCreateReplSession({ ...opts, budget: { ...opts.budget } });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still warns when a cache hit asks for DIFFERENT tuning options', () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      getOrCreateReplSession({
+        sessionId: 'changed-tuning',
+        executor: 'in-process-unsafe',
+        perCallTimeoutMs: 5_000,
+        budget: { maxCostUsd: 1 },
+      });
+      getOrCreateReplSession({
+        sessionId: 'changed-tuning',
+        executor: 'in-process-unsafe',
+        perCallTimeoutMs: 5_000,
+        budget: { maxCostUsd: 999 },
+      });
+
+      const message = warn.mock.calls.map(c => String(c[0])).join('\n');
+      expect(message).toMatch(/budget/);
+      // Only the key that actually changed - perCallTimeoutMs matches.
+      expect(message).not.toMatch(/perCallTimeoutMs/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('ReplSession executor validation', () => {

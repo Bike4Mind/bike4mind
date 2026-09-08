@@ -10,6 +10,13 @@ import { resolveToolbeltProfile } from './toolbelts';
 import type { ActContext, ActResult } from './types';
 
 /**
+ * Per-`code_execute` cap for a wake's REPL. Matches the HTTP answerer's rung
+ * (`PER_CALL_REPL_TIMEOUT_MS` in `rlm-answer.ts`) so one step's stall costs a
+ * step in both surfaces rather than the whole run in one of them.
+ */
+const WAKE_PER_CALL_REPL_TIMEOUT_MS = 25_000;
+
+/**
  * Maps a ReActAgent run result into the wake cycle's `ActResult`.
  *
  * Pure - the testable core of the executor. Action steps become `actionsTaken`,
@@ -137,6 +144,11 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
           sessionId: `deepagent-${ctx.charter.identity.agentId}-${randomUUID()}`,
           label: `${ctx.charter.identity.role} wake`,
           executor: 'isolated',
+          // Named rather than left to the backend's 30s default: a wake runs
+          // on the queue Lambda, so a stalled step burns queue time nobody is
+          // waiting on and the isolate-disposing host deadline is what ends
+          // it. 25s keeps a wake's step bound in line with the HTTP caller's.
+          perCallTimeoutMs: WAKE_PER_CALL_REPL_TIMEOUT_MS,
           budget: { maxExecutions: 30, maxSubLlmCalls: 50, maxCostUsd: 2 },
         });
         tools.push(makeCodeExecuteTool({ session, logger: config.logger }));

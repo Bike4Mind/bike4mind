@@ -1,13 +1,23 @@
 import type { ReplToolMap, ReplRunResult } from './ReplContext';
 
 /**
- * The built-in backends, by name. Declared here rather than in ReplSession
- * because this is the file where the three are defined and ordered by
- * isolation. ReplSession derives both `ReplSessionOptions.executor` and
- * `ReplSession.executorChoice` from this union, so a fourth backend cannot be
- * added to one spelling of the list and forgotten in the other.
+ * The built-in backends, by name, ordered by isolation. Declared here rather
+ * than in ReplSession because this is the file where the three are defined.
+ * ReplSession derives both `ReplSessionOptions.executor` and
+ * `ReplSession.executorChoice` from this list, so a fourth backend cannot be
+ * added to one spelling of it and forgotten in the other.
+ *
+ * A runtime array rather than a bare type union so the error messages that
+ * enumerate the backends read from the same source the type does - a fourth
+ * name added here reaches those strings without anyone remembering to edit
+ * them.
  */
-export type ReplExecutorName = 'isolated' | 'worker' | 'in-process-unsafe';
+export const REPL_EXECUTOR_NAMES = ['isolated', 'worker', 'in-process-unsafe'] as const;
+
+export type ReplExecutorName = (typeof REPL_EXECUTOR_NAMES)[number];
+
+/** The backends quoted for an error message: `'isolated' | 'worker' | ...`. */
+export const replExecutorNameList = (): string => REPL_EXECUTOR_NAMES.map(n => `'${n}'`).join(' | ');
 
 /**
  * Thrown when a backend is asked to run code after it has been retired -

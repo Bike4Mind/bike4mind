@@ -102,12 +102,22 @@ export function makeCodeExecuteTool(deps: CodeExecuteToolDeps): ICompletionOptio
           logger?.warn?.(`[code_execute] error: ${result.error.split('\n')[0]}`);
         }
 
+        // A run that breached the host deadline or the memory limit RETURNS
+        // (carrying whatever stdout was captured before the kill) rather than
+        // throwing, so the terminal signal arrives on the result. Without this
+        // the breaching call read as an ordinary failure and only the NEXT one
+        // reported the sandbox gone - one wasted iteration, at the point the
+        // agent most needs to stop calling.
+        if (result.sandboxRetired) {
+          logger?.error?.(`[code_execute] sandbox retired on this run: ${result.error ?? 'no error reported'}`);
+        }
         return formatObservation({
           ok: result.error === null,
           stdout: result.stdout,
           error: result.error,
           truncated: result.truncated,
           durationMs: result.durationMs,
+          sandboxRetired: result.sandboxRetired,
         });
       } catch (e) {
         if (e instanceof BudgetExceededError) {
@@ -200,6 +210,12 @@ function formatObservation(o: ObservationFields): string {
       'The code sandbox has been shut down for this session and will not come back. ' +
         'Do not call code_execute again. Continue with your other tools, or answer from what you already have.'
     );
+    // Output captured before the sandbox died is still the agent's best
+    // material for the answer it now has to give without the REPL.
+    if (o.stdout) {
+      lines.push('--- stdout (captured before shutdown) ---');
+      lines.push(o.stdout);
+    }
     return lines.join('\n');
   }
 

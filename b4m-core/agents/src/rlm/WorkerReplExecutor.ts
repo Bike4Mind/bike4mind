@@ -351,8 +351,12 @@ export class WorkerReplExecutor implements ReplExecutor {
         void this.dispose().catch(() => {
           // terminate() failing changes nothing for this caller
         });
+        // Typed, not a plain Error: this path TERMINATES the worker, so the
+        // run that breached the deadline is the last one this executor can
+        // serve. Rejecting with an ordinary error made the breaching call look
+        // retryable and left the terminal signal to the next call.
         reject(
-          new Error(
+          new ReplSandboxRetiredError(
             `REPL run exceeded the ${this.timeoutMs}ms cap (async continuation or unresolved tool ` +
               `call); worker [${this.label}] was terminated`
           )
@@ -380,7 +384,7 @@ export class WorkerReplExecutor implements ReplExecutor {
     // Reject pending runs so callers don't hang forever
     for (const [id, pending] of this.pendingRuns) {
       if (pending.timer) clearTimeout(pending.timer);
-      pending.reject(new Error(`WorkerReplExecutor disposed before runCode #${id} returned`));
+      pending.reject(new ReplSandboxRetiredError(`WorkerReplExecutor disposed before runCode #${id} returned`));
     }
     this.pendingRuns.clear();
     await this.worker.terminate();
@@ -452,7 +456,7 @@ export class WorkerReplExecutor implements ReplExecutor {
     this.disposed = true;
     for (const [, pending] of this.pendingRuns) {
       if (pending.timer) clearTimeout(pending.timer);
-      pending.reject(new Error(`worker crashed: ${err.message}`));
+      pending.reject(new ReplSandboxRetiredError(`worker crashed: ${err.message}`));
     }
     this.pendingRuns.clear();
   };
@@ -465,7 +469,7 @@ export class WorkerReplExecutor implements ReplExecutor {
     this.disposed = true;
     for (const [, pending] of this.pendingRuns) {
       if (pending.timer) clearTimeout(pending.timer);
-      pending.reject(new Error(`worker exited unexpectedly with code ${code} (likely memory limit)`));
+      pending.reject(new ReplSandboxRetiredError(`worker exited unexpectedly with code ${code} (likely memory limit)`));
     }
     this.pendingRuns.clear();
   };

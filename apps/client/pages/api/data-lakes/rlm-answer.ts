@@ -12,6 +12,7 @@ import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
 import { resolveAccessibleLakes } from '@server/dataLakes';
+import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**
  * POST /api/data-lakes/rlm-answer
@@ -80,18 +81,6 @@ const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 // 25 matches the per-session execution budget; v1 ran with 12 and clipped
 // T3 trajectories mid-orchestration. See doc 13-before-vs-middle-vs-after.md.
 const DEFAULT_MAX_ITERATIONS = 25;
-// Frontend Lambda is configured for 60s in `infra/web.ts`. AWS will SIGKILL
-// the function past that - `AbortSignal.timeout` would never fire. Cap our
-// internal timeout to fit within Lambda + ~5s buffer for response
-// serialization. Endpoint comments said "9 min" but that was infra-incorrect.
-// If we want long-running agent runs in production, that needs its own
-// Lambda with a higher `timeout` (or move to async-job + polling).
-const HARD_TIMEOUT_MS = 55_000;
-// Per `code_execute` step, not per request. Deliberately far enough below
-// HARD_TIMEOUT_MS that a stalled step is reported to the agent as a timed-out
-// observation with budget left to answer, rather than being swallowed by the
-// request-level abort.
-const PER_CALL_REPL_TIMEOUT_MS = 25_000;
 
 const handler = baseApi()
   .use(

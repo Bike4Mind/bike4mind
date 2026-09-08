@@ -219,10 +219,11 @@ export type {
 export { ReplContext } from './rlm/ReplContext';
 export type { ReplToolFn, ReplToolMap, ReplRunResult, ReplContextOptions } from './rlm/ReplContext';
 export { ReplSandboxRetiredError } from './rlm/replExecutor';
+export { REPL_EXECUTOR_NAMES } from './rlm/replExecutor';
 export type { ReplExecutor, ReplExecutorName } from './rlm/replExecutor';
 export { WorkerReplExecutor } from './rlm/WorkerReplExecutor';
 export type { WorkerReplExecutorOptions } from './rlm/WorkerReplExecutor';
-export { IsolatedVmExecutor } from './rlm/IsolatedVmExecutor';
+export { IsolatedVmExecutor, TOOL_CALL_TIMEOUT_FRACTION, HOST_DEADLINE_GRACE_MS } from './rlm/IsolatedVmExecutor';
 export type { IsolatedVmExecutorOptions } from './rlm/IsolatedVmExecutor';
 export {
   ReplSession,

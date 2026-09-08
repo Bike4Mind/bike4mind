@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { Logger } from '@bike4mind/observability';
 import { ReplContext, type ReplToolMap, type ReplRunResult } from './ReplContext';
-import type { ReplExecutor, ReplExecutorName } from './replExecutor';
+import { replExecutorNameList, type ReplExecutor, type ReplExecutorName } from './replExecutor';
 import { WorkerReplExecutor, type WorkerReplExecutorOptions } from './WorkerReplExecutor';
 import { IsolatedVmExecutor, type IsolatedVmExecutorOptions } from './IsolatedVmExecutor';
 
@@ -228,12 +228,25 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
    * spend while the caps still see money that is already committed.
    */
   private reservedCostUsd = 0;
+  /**
+   * The session-shaping options this session was BUILT with, kept verbatim so
+   * a later `getOrCreateReplSession` with the same id can tell a caller asking
+   * for something different from one asking for the same thing again. Read
+   * only by `warnOnDivergentReuse`; the live values live in `this.budget` and
+   * inside the executor.
+   */
+  private readonly shapingOptions: Pick<ReplSessionOptions, (typeof REUSE_IGNORED_OPTION_KEYS)[number]>;
   /** Wall-clock timestamp of the most recent runCode or recordSubLlm. Used by
    * the registry's idle-TTL and LRU eviction logic. */
   private _lastAccessedAt: number = Date.now();
 
   get lastAccessedAt(): number {
     return this._lastAccessedAt;
+  }
+
+  /** What this session was constructed with - see `warnOnDivergentReuse`. */
+  get configuredShapingOptions(): Readonly<Pick<ReplSessionOptions, (typeof REUSE_IGNORED_OPTION_KEYS)[number]>> {
+    return this.shapingOptions;
   }
 
   /** Mark this session as accessed now. Called automatically on runCode /
@@ -277,8 +290,8 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
       // rename nor the backend. The whole point of this option is that the
       // backend choice is unmistakable, so say so here.
       throw new Error(
-        `ReplSession: unknown executor "${executorChoice}" - expected 'isolated' | 'worker' | ` +
-          `'in-process-unsafe' or a ReplExecutor instance`
+        `ReplSession: unknown executor "${executorChoice}" - expected ${replExecutorNameList()} ` +
+          `or a ReplExecutor instance`
       );
     } else if (isReplExecutor(executorChoice)) {
       // Caller passed a custom ReplExecutor instance
@@ -292,7 +305,7 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
       // properties of undefined (reading 'setTools')` with nothing in it about
       // the option that was missing.
       throw new Error(
-        `ReplSession: \`executor\` is required and must be 'isolated' | 'worker' | 'in-process-unsafe' ` +
+        `ReplSession: \`executor\` is required and must be ${replExecutorNameList()} ` +
           `or a ReplExecutor instance (got ${describeExecutorValue(executorChoice)}). There is no default: ` +
           `the backend is the sandbox's trust boundary, so the caller has to name it.`
       );
@@ -304,6 +317,12 @@ export class ReplSession extends (EventEmitter as new () => TypedReplSessionEmit
       maxExecutions: opts.budget?.maxExecutions ?? 25,
       maxSubLlmCalls: opts.budget?.maxSubLlmCalls ?? 200,
       maxCostUsd: opts.budget?.maxCostUsd ?? 10,
+    };
+    this.shapingOptions = {
+      label: opts.label,
+      perCallTimeoutMs: opts.perCallTimeoutMs,
+      budget: opts.budget,
+      executorOptions: opts.executorOptions,
     };
   }
 
@@ -703,15 +722,32 @@ function evictLruReplSession(): boolean {
  */
 const REUSE_IGNORED_OPTION_KEYS = ['label', 'perCallTimeoutMs', 'budget', 'executorOptions'] as const;
 
+/**
+ * Structural equality for a shaping option's value. `budget` and
+ * `executorOptions` are small flat records of primitives, so key-wise
+ * comparison is enough and avoids pulling in a deep-equal dependency for it.
+ */
+function shapingValueEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const ka = Object.keys(a as Record<string, unknown>);
+  const kb = Object.keys(b as Record<string, unknown>);
+  if (ka.length !== kb.length) return false;
+  return ka.every(k => (a as Record<string, unknown>)[k] === (b as Record<string, unknown>)[k]);
+}
+
 function warnOnDivergentReuse(existing: ReplSession, opts: ReplSessionOptions): void {
+  const configured = existing.configuredShapingOptions;
   const diverged = REUSE_IGNORED_OPTION_KEYS.filter(key => {
     const requested = opts[key];
     if (requested === undefined) return false;
-    if (key === 'label') return requested !== existing.label;
-    // perCallTimeoutMs / budget / executorOptions were consumed by the
-    // existing session's constructor and are not retained for comparison, so
-    // any value supplied here is one the reused session is not honouring.
-    return true;
+    // Compared against what the session was actually built with, so asking
+    // twice for the SAME configuration is silent. Warning on mere presence
+    // meant a caller that passes a constant options object - which is the
+    // normal shape at both production call sites - got this warning on every
+    // single reuse, and a warning that fires when nothing is wrong is one
+    // nobody reads when something is.
+    return !shapingValueEquals(requested, configured[key]);
   });
   if (diverged.length === 0) return;
   Logger.globalInstance.warn(

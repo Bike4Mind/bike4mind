@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { WorkerReplExecutor } from './WorkerReplExecutor';
+import { ReplSandboxRetiredError } from './replExecutor';
 import { ReplSession, _resetReplSessionsForTests } from './ReplSession';
 
 /**
@@ -137,7 +138,10 @@ describe('WorkerReplExecutor', () => {
     const w = spawn();
     await w.runCode('z = 1;');
     await w.dispose();
-    await expect(w.runCode('console.log(z);')).rejects.toThrow(/disposed/);
+    // The TYPE, not the message - see the matching test in
+    // IsolatedVmExecutor.test.ts. `code_execute` branches on this class to
+    // tell the agent the sandbox is gone rather than that a step failed.
+    await expect(w.runCode('console.log(z);')).rejects.toThrow(ReplSandboxRetiredError);
   });
 
   it('integrates with ReplSession when executor: "worker" is requested', async () => {
@@ -178,7 +182,11 @@ describe('WorkerReplExecutor - the main thread enforces its own deadline', () =>
     // the main-thread deadline existed, this call never returned.
     const ex = new WorkerReplExecutor({ timeoutMs: 400 });
     const t0 = Date.now();
-    await expect(ex.runCode('await 0; while (true) {}')).rejects.toThrow(/cap|terminated/i);
+    // Terminal, and typed as such on the breaching run: this path terminates
+    // the worker, so the run that blew the deadline is the last one this
+    // executor can serve. A plain Error here read as retryable and left the
+    // agent to discover the loss on its next call.
+    await expect(ex.runCode('await 0; while (true) {}')).rejects.toThrow(ReplSandboxRetiredError);
     expect(Date.now() - t0).toBeLessThan(5000);
     await ex.dispose();
   }, 20_000);
@@ -186,7 +194,10 @@ describe('WorkerReplExecutor - the main thread enforces its own deadline', () =>
   it('does not wait forever on a run that is merely pending', async () => {
     const ex = new WorkerReplExecutor({ timeoutMs: 400 });
     const t0 = Date.now();
-    await expect(ex.runCode('await new Promise(() => {});')).rejects.toThrow(/cap|terminated/i);
+    await expect(ex.runCode('await new Promise(() => {});')).rejects.toThrow(ReplSandboxRetiredError);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    // Message still names the cap that fired, for the log a human reads.
+    await expect(ex.runCode('console.log(1)')).rejects.toThrow(/disposed|terminated|crashed/i);
     expect(Date.now() - t0).toBeLessThan(5000);
     await ex.dispose();
   }, 20_000);
