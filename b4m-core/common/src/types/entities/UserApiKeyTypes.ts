@@ -30,6 +30,20 @@ export enum ApiKeyScope {
   HEARTH_READ = 'hearth:read',
   /** Append Hearth events, create channels, and advance actor cursors. */
   HEARTH_WRITE = 'hearth:write',
+  /**
+   * Read OptiHashi problems, runs, and run artifacts. Deliberately split from
+   * {@link OPTIHASHI_COMPUTE}: a key that only inspects results is structurally
+   * unable to start a billable solve, so an agent-held key can be handed the
+   * read half alone. Like every scope, it authorizes but never entitles - the
+   * OptiHashi entitlement check still runs and can refuse on its own.
+   */
+  OPTIHASHI_READ = 'optihashi:read',
+  /**
+   * Submit OptiHashi compute (solve/decompose/schedule) and cancel a run. This
+   * is the spend half of the OptiHashi pair: it commissions external compute
+   * that costs real money, so it is never implied by {@link OPTIHASHI_READ}.
+   */
+  OPTIHASHI_COMPUTE = 'optihashi:compute',
 }
 
 export enum ApiKeyStatus {
@@ -154,6 +168,14 @@ export interface IUserApiKey {
   agentId?: string;
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
+  /**
+   * Lake ids this key is bound to for the manage-but-not-member session admission (see
+   * `preauthorizedLakeIds` on the session, and its containment check at
+   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * authority to admit a lake - the caller must still pass the live canManageLake check on every
+   * request, this only narrows which lakes that authority may be exercised for.
+   */
+  preauthorizedLakeIds?: string[];
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**

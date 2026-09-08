@@ -21,6 +21,7 @@ import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import type { IUserDocument } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 
 /**
  * Minimal structural request shape for the entitlement helpers. Using a plain
@@ -33,6 +34,8 @@ import type { IUserDocument } from '@bike4mind/common';
 export interface EntitlementRequest {
   user?: IUserDocument;
   entitlements?: EntitlementKey[];
+  /** Attached by `baseApi()` early in the middleware chain; optional so a bare test double still fits. */
+  logger?: Logger;
 }
 
 export interface EntitlementUser {

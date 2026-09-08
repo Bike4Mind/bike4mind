@@ -43,6 +43,7 @@ import {
   useAdminOrgGrants,
   useConvertOrgToPaid,
   useGrantOrganization,
+  useReconcileOrgSeats,
   useRevokeOrganization,
   useTopUpOrganization,
 } from '@client/app/hooks/data/adminOrganizations';
@@ -203,6 +204,7 @@ const OrganizationsTab: React.FC = () => {
   const grantOrgMutation = useGrantOrganization();
   const topUpMutation = useTopUpOrganization();
   const seatsMutation = useAdjustOrgSeats();
+  const reconcileMutation = useReconcileOrgSeats();
   const convertMutation = useConvertOrgToPaid();
   const revokeMutation = useRevokeOrganization();
 
@@ -274,6 +276,15 @@ const OrganizationsTab: React.FC = () => {
     try {
       await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue });
       setSeatsOrg(null);
+      refetch();
+    } catch {
+      // toast handled
+    }
+  };
+
+  const handleReconcileSeats = async (org: WithId<IOrganizationDocument>) => {
+    try {
+      await reconcileMutation.mutateAsync({ organizationId: org.id });
       refetch();
     } catch {
       // toast handled
@@ -502,6 +513,14 @@ const OrganizationsTab: React.FC = () => {
                               Adjust seats
                             </MenuItem>
                           )}
+                          {!isGranted && !org.personal && (
+                            <MenuItem
+                              data-testid={`reconcile-seats-${org.id}`}
+                              onClick={() => handleReconcileSeats(org)}
+                            >
+                              Reconcile seats from Stripe
+                            </MenuItem>
+                          )}
                           {isGranted && (
                             <MenuItem
                               data-testid={`convert-to-paid-${org.id}`}
@@ -620,6 +639,14 @@ const OrganizationsTab: React.FC = () => {
                                   }}
                                 >
                                   Adjust seats
+                                </MenuItem>
+                              )}
+                              {!isGranted && !org.personal && (
+                                <MenuItem
+                                  data-testid={`reconcile-seats-${org.id}`}
+                                  onClick={() => handleReconcileSeats(org)}
+                                >
+                                  Reconcile seats from Stripe
                                 </MenuItem>
                               )}
                               {isGranted && (

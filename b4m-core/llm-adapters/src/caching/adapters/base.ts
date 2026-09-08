@@ -13,9 +13,12 @@ export interface ICachingAdapter {
    * Apply caching to API parameters before sending to provider
    * @param apiParams - Provider-specific API parameters (varies by provider)
    * @param strategy - Cache strategy configuration
+   * @param logger - Optional; lets an adapter report a degraded strategy (e.g. a breakpoint
+   *                 skipped against a provider's per-request cap). Optional because not every
+   *                 call site has one - BaseBedrockBackend still logs via console.
    * @returns Modified API parameters with caching applied
    */
-  applyCaching(apiParams: Record<string, unknown>, strategy: ICacheStrategy): Record<string, unknown>;
+  applyCaching(apiParams: Record<string, unknown>, strategy: ICacheStrategy, logger?: Logger): Record<string, unknown>;
 
   /**
    * Extract cache statistics from provider response

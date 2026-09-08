@@ -43,6 +43,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'imageEditQueue',
   },
   {
+    label: 'data-lake-research',
+    displayName: 'Data Lake Research Run',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeResearchQueue',
+  },
+  {
     label: 'research-engine',
     displayName: 'Research Engine',
     application: 'ResearchEngine',
@@ -203,6 +209,12 @@ const DLQ_REGISTRY = [
     displayName: 'Lake Memory Extraction',
     application: 'DataLakeManagement',
     sourceQueue: 'lakeMemoryQueue',
+  },
+  {
+    label: 'drive-lake-ingest',
+    displayName: 'Drive Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveLakeIngestQueue',
   },
 ] as const satisfies readonly DlqDescriptor[];
 

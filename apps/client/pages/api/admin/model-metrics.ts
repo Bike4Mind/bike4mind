@@ -47,6 +47,7 @@ interface ModelMetricResponse {
     contextRetrievalTime?: number;
     modelInferenceTime?: number;
     firstTokenTime?: number;
+    firstChunkTime?: number;
     clientFirstTokenTime?: number;
     processPickupTime?: number;
     streamingPerformance?: {
@@ -149,6 +150,7 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
       contextRetrievalTime: quest.promptMeta?.performance?.contextRetrievalTime,
       modelInferenceTime: quest.promptMeta?.performance?.modelInferenceTime,
       firstTokenTime: quest.promptMeta?.performance?.firstTokenTime,
+      firstChunkTime: quest.promptMeta?.performance?.firstChunkTime,
       processPickupTime: getProcessPickupTime(quest),
       streamingPerformance: quest.promptMeta?.performance?.streamingPerformance
         ? {

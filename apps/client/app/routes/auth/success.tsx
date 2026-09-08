@@ -3,7 +3,7 @@ import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { CircularProgress, Container, Typography, Box } from '@mui/joy';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { resetRefreshPromise } from '@client/app/contexts/ApiContext';
+import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { parseAuthParams } from '@client/app/utils/authParams';
 import { applyRedirect } from '@client/app/utils/authRedirect';
@@ -37,7 +37,7 @@ const AuthSuccessPage = () => {
           // Set the access token - reset any stale refresh promise first. The matching refresh
           // token never reaches the client: the SSO callback set it as an HttpOnly cookie, which
           // is also why it is no longer in this page's URL fragment.
-          resetRefreshPromise();
+          resetRefreshCoordinator();
           resetSessionBootstrap();
           setVerifiedSession(token as string);
 

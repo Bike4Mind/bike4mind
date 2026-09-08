@@ -1,19 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope } from '@bike4mind/common';
 
 const { mockQueryPage, mockUserFind } = vi.hoisted(() => ({
   mockQueryPage: vi.fn(),
   mockUserFind: vi.fn(),
 }));
 
+// Captures the config so a test can assert requiredScopes: the scope gate lives in
+// apiKeyAuth (real middleware, not exercised here), so asserting the handler is
+// registered with it is the only guard available at this level.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
         use: () => chain,
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
+        _config: config,
       }
     );
     return chain;
@@ -47,6 +52,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/credit-adjustments', () => {
+  it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
+    const config = (handler as unknown as { _config?: { requiredScopes?: string[] } })._config;
+    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+  });
+
   it('rejects non-admin callers', async () => {
     const { promise } = run({}, { id: 'u2', isAdmin: false });
     await expect(promise).rejects.toThrow(/Admin access required/);

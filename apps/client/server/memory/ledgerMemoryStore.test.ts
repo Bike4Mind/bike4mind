@@ -82,11 +82,20 @@ function makeFake(opts: { failFirst?: number } = {}) {
 /** A key provider backed by an in-memory keyring, using the real cipher so encryption is exercised. */
 function makeKeys() {
   const keys = new Map<string, Buffer>();
+  // Models the TOMBSTONE the real keyring leaves: a destroyed key is remembered with the time it died,
+  // not forgotten. A fake that merely deleted the entry would re-mint on the next append and could
+  // never observe the fence at all - which is exactly the bug the fence exists to stop.
+  const destroyed = new Map<string, Date>();
   const k = (p: Principal) => `${p.kind}:${p.id}`;
   const provider: KeyProvider = {
-    async getOrCreateDek(p) {
+    async getOrCreateDek(p, _ownerUserId, startedAt) {
       const existing = keys.get(k(p));
       if (existing) return existing;
+      const tombstone = destroyed.get(k(p));
+      // `>=`, matching the repository: a same-millisecond collision is refused rather than let
+      // through, because the asymmetric cost of being wrong runs one way only.
+      if (tombstone && tombstone >= startedAt) return null;
+      destroyed.delete(k(p));
       const dek = randomBytes(32);
       keys.set(k(p), dek);
       return dek;
@@ -94,12 +103,26 @@ function makeKeys() {
     async getDek(p) {
       return keys.get(k(p)) ?? null;
     },
-    async destroyDek(p) {
+    async destroyDek(p, at = new Date()) {
       keys.delete(k(p));
+      destroyed.set(k(p), at);
     },
   };
-  return { provider, keys };
+  return { provider, keys, destroyed };
 }
+
+/**
+ * Every append carries a `startedAt` for the crypto-shred fence. Defaulted to call time here, which is
+ * what every non-fence test wants (a tombstone raised earlier lifts, so the ordinary path runs); the
+ * fence tests pass an explicit earlier date.
+ */
+const appendEvent = (
+  repo: Parameters<typeof appendMemoryEvent>[0],
+  keys: Parameters<typeof appendMemoryEvent>[1],
+  owner: string,
+  ev: MemoryEventInput,
+  options: Partial<Parameters<typeof appendMemoryEvent>[4]> = {}
+) => appendMemoryEvent(repo, keys, owner, ev, { startedAt: new Date(), ...options });
 
 const input = (over: Partial<MemoryEventInput>): MemoryEventInput => ({
   principal: { kind: 'user', id: 'u1' },
@@ -113,8 +136,8 @@ describe('appendMemoryEvent', () => {
   it('seals the genesis event with a null prevHash and chains subsequent events', async () => {
     const { repo, store } = makeFake();
     const { provider } = makeKeys();
-    const a = await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
-    const b = await appendMemoryEvent(
+    const a = await appendEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
+    const b = await appendEvent(
       repo,
       provider,
       'u1',
@@ -129,7 +152,7 @@ describe('appendMemoryEvent', () => {
   it('stores the fact as ciphertext and the subject as an HMAC, never plaintext', async () => {
     const { repo, store } = makeFake();
     const { provider } = makeKeys();
-    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'my secret fact' }));
+    await appendEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'my secret fact' }));
     expect(store[0].fact).toBeUndefined();
     expect(store[0].factCipher).toBeTruthy();
     expect(store[0].subject).not.toBe('loves sushi'); // subject is HMAC'd, not the plaintext key
@@ -141,8 +164,8 @@ describe('appendMemoryEvent', () => {
   it('HMACs the subject deterministically so re-mentions still land on one belief', async () => {
     const { repo, store } = makeFake();
     const { provider } = makeKeys();
-    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
-    await appendMemoryEvent(
+    await appendEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
+    await appendEvent(
       repo,
       provider,
       'u1',
@@ -162,10 +185,10 @@ describe('appendMemoryEvent', () => {
     const { repo, store } = makeFake();
     const { provider } = makeKeys();
 
-    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
+    await appendEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
     const storedSubject = store[0].subject; // what a folded belief's id actually is
 
-    await appendMemoryEvent(
+    await appendEvent(
       repo,
       provider,
       'u1',
@@ -181,10 +204,10 @@ describe('appendMemoryEvent', () => {
     const { repo, store } = makeFake();
     const { provider } = makeKeys();
 
-    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
+    await appendEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
     const storedSubject = store[0].subject;
 
-    await appendMemoryEvent(
+    await appendEvent(
       repo,
       provider,
       'u1',
@@ -197,7 +220,7 @@ describe('appendMemoryEvent', () => {
   it('retries onto a fresh tip when a concurrent append wins the seq', async () => {
     const { repo, store } = makeFake({ failFirst: 2 });
     const { provider } = makeKeys();
-    const a = await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
+    const a = await appendEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
     expect(a.hash).toBeTruthy();
     expect(store).toHaveLength(1);
   });
@@ -205,7 +228,77 @@ describe('appendMemoryEvent', () => {
   it('throws when contention never clears within the retry budget', async () => {
     const { repo } = makeFake({ failFirst: 99 });
     const { provider } = makeKeys();
-    await expect(appendMemoryEvent(repo, provider, 'u1', input({}))).rejects.toThrow(/retry budget/);
+    await expect(appendEvent(repo, provider, 'u1', input({}))).rejects.toThrow(/retry budget/);
+  });
+});
+
+/**
+ * The crypto-shred fence. A purge destroys the key; the append path used to re-mint one on demand, so
+ * work already in flight wrote facts that decrypted normally, were never marked shredded, and were
+ * served by recall - "erase my data" returned success while erased content came back.
+ */
+describe('appendMemoryEvent shred fence', () => {
+  const AT_SHRED = new Date('2026-07-05T00:00:00.000Z');
+  const BEFORE = new Date('2026-07-04T00:00:00.000Z');
+  const AFTER = new Date('2026-07-06T00:00:00.000Z');
+
+  it('refuses an append from work that began BEFORE the shred, and writes nothing', async () => {
+    const { repo, store } = makeFake();
+    const { provider, destroyed } = makeKeys();
+    destroyed.set('user:u1', AT_SHRED);
+
+    const sealed = await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }), {
+      startedAt: BEFORE,
+    });
+
+    expect(sealed).toBeNull();
+    // Not merely unreadable - never appended. A row here would be a fact the user had already erased.
+    expect(store).toHaveLength(0);
+  });
+
+  it('mints a fresh key for work that began AFTER the shred, so a rebuild still works', async () => {
+    // The other half of the fence: a permanent block would mean a user who erases their memory can
+    // never accumulate any again, and a purged lake could never be rebuilt.
+    const { repo, store } = makeFake();
+    const { provider, destroyed } = makeKeys();
+    destroyed.set('user:u1', AT_SHRED);
+
+    const sealed = await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }), {
+      startedAt: AFTER,
+    });
+
+    expect(sealed).not.toBeNull();
+    expect(store).toHaveLength(1);
+  });
+
+  it('refuses every subsequent append in the same unit of work, not just the first', async () => {
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+    const startedAt = new Date();
+
+    await appendEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }), { startedAt });
+    expect(store).toHaveLength(1);
+
+    await provider.destroyDek({ kind: 'user', id: 'u1' });
+
+    expect(await appendEvent(repo, provider, 'u1', input({ subject: 'other', fact: 'B' }), { startedAt })).toBeNull();
+    expect(await appendEvent(repo, provider, 'u1', input({ subject: 'third', fact: 'C' }), { startedAt })).toBeNull();
+    expect(store).toHaveLength(1);
+  });
+
+  it('leaves an unshredded principal alone', async () => {
+    // Negative control for over-refusal: a fence that refused HEALTHY writes would silently stop all
+    // memory. Measured, this assertion does not fire when the guard is merely deleted (the shred tests
+    // catch that); it fires when the guard refuses unconditionally, alongside most of this file.
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+
+    const sealed = await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }), {
+      startedAt: BEFORE,
+    });
+
+    expect(sealed).not.toBeNull();
+    expect(store).toHaveLength(1);
   });
 });
 
@@ -213,7 +306,7 @@ describe('createLedgerMemoryStore', () => {
   it('decrypts persisted ciphertext and folds into a profile with computed salience', async () => {
     const { repo } = makeFake();
     const { provider } = makeKeys();
-    await appendMemoryEvent(
+    await appendEvent(
       repo,
       provider,
       'u1',
@@ -246,7 +339,7 @@ describe('createLedgerMemoryStore', () => {
   it('is owner-scoped: a different owner cannot read the chain (no existence leak)', async () => {
     const { repo } = makeFake();
     const { provider } = makeKeys();
-    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
+    await appendEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
     const intruder = createLedgerMemoryStore({ ledger: repo, keys: provider, ownerUserId: 'someone-else' });
     expect(await intruder.readProfile({ kind: 'user', id: 'u1' })).toBeNull();
   });
@@ -258,7 +351,7 @@ describe('shredPrincipalMemory', () => {
   it('destroys the key so facts fold to redactions, and the belief structure survives', async () => {
     const { repo } = makeFake();
     const { provider, keys } = makeKeys();
-    await appendMemoryEvent(
+    await appendEvent(
       repo,
       provider,
       'u1',
@@ -288,7 +381,7 @@ describe('shredPrincipalMemory', () => {
     const principal: Principal = { kind: 'user', id: 'u1' };
     const embedding = [0.1, -0.25, 0.75, 0.5];
 
-    await appendMemoryEvent(repo, provider, 'u1', {
+    await appendEvent(repo, provider, 'u1', {
       principal,
       kind: 'assert',
       subject: 'color',
@@ -320,7 +413,7 @@ describe('shredPrincipalMemory', () => {
     const { provider, keys } = makeKeys();
     const principal: Principal = { kind: 'user', id: 'u1' };
 
-    await appendMemoryEvent(repo, provider, 'u1', {
+    await appendEvent(repo, provider, 'u1', {
       principal,
       kind: 'assert',
       subject: 'secret',
@@ -356,7 +449,7 @@ describe('shredPrincipalMemory', () => {
       { id: 'm1', summary: 'User favorite color is green', lastAccessedAt: '2026-07-01T00:00:00.000Z' },
     ];
 
-    await appendMemoryEvent(repo, provider, 'u1', {
+    await appendEvent(repo, provider, 'u1', {
       principal,
       kind: 'assert',
       subject: 'color',
@@ -392,7 +485,7 @@ describe('shredPrincipalMemory', () => {
       },
     };
 
-    await appendMemoryEvent(repo, provider, 'u1', {
+    await appendEvent(repo, provider, 'u1', {
       principal,
       kind: 'assert',
       subject: 'color',

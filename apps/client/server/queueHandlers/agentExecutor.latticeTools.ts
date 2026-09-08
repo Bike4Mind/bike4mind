@@ -80,7 +80,15 @@ export function resolveLatticeTools({
 export function buildSubagentLatticeToolPool(
   deps: ToolBuilderDeps,
   callbacks: ToolBuilderCallbacks,
-  config: BuildSharedToolsOptions['config']
+  config: BuildSharedToolsOptions['config'],
+  /**
+   * Key-gated availability, forwarded to `buildSharedTools` so this pool can never become the one
+   * path that skips the filter. Inert today by construction: no name in `LATTICE_TOOL_NAMES` is
+   * key-gated, and `isToolOfferable` treats an unmapped tool as offerable. Resolved by the caller
+   * (both callers already hold it) rather than here, so this helper stays synchronous and I/O-free -
+   * the property the eager once-per-execution build relies on (see the note above).
+   */
+  toolAvailability?: BuildSharedToolsOptions['toolAvailability']
 ): ICompletionOptionTools[] {
   // Clear `agentStore` so `buildSharedTools` short-circuits *before* its subagent
   // injection branch. With an `agentStore` present it would build a subagent LLM
@@ -95,6 +103,7 @@ export function buildSubagentLatticeToolPool(
       enabledTools: [...LATTICE_TOOL_NAMES],
       externalTools: latticeToolDefinitions,
       config,
+      toolAvailability,
     }) ?? [];
   // Defensive: the opt-in pool must contain ONLY the Lattice tools. The
   // `agentStore` short-circuit above already prevents delegate/coordinate

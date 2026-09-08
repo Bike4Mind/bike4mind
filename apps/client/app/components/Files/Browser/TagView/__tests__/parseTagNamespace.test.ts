@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTagTree, getNodesAtPath, TagNode } from '../parseTagNamespace';
+import { buildTagTree, getNodeAtPath, getNodesAtPath, TagNode } from '../parseTagNamespace';
 
 describe('buildTagTree', () => {
   it('returns empty array for empty input', () => {
@@ -64,12 +64,14 @@ describe('buildTagTree', () => {
 
     const a = result[0];
     expect(a.fileCount).toBe(9); // 2 + 7
+    expect(a.ownFileCount).toBe(0); // "a" itself is never a tag on its own here
 
     const b = a.children[0];
     expect(b.segment).toBe('b');
     expect(b.fileCount).toBe(9); // 2 (own) + 7 (from child c)
+    expect(b.ownFileCount).toBe(2); // what fileCount alone can't surface once b has children
     expect(b.children).toHaveLength(1);
-    expect(b.children[0]).toMatchObject({ segment: 'c', fileCount: 7 });
+    expect(b.children[0]).toMatchObject({ segment: 'c', fileCount: 7, ownFileCount: 7 });
   });
 
   it('sorts children alphabetically at each level', () => {
@@ -149,5 +151,29 @@ describe('getNodesAtPath', () => {
   it('returns empty array for leaf node breadcrumb (no children)', () => {
     const result = getNodesAtPath(tree, ['opti', 'work']);
     expect(result).toEqual([]); // work is a leaf, has no children
+  });
+});
+
+describe('getNodeAtPath', () => {
+  const tree: TagNode[] = buildTagTree([
+    { tag: 'a:b', count: 2 },
+    { tag: 'a:b:c', count: 7 },
+  ]);
+
+  it('returns null for the root (empty breadcrumb)', () => {
+    expect(getNodeAtPath(tree, [])).toBeNull();
+  });
+
+  it('returns null for a non-existent path', () => {
+    expect(getNodeAtPath(tree, ['nonexistent'])).toBeNull();
+  });
+
+  it('returns the node itself, not its children, so ownFileCount is reachable at a branch', () => {
+    const b = getNodeAtPath(tree, ['a', 'b']);
+    expect(b).not.toBeNull();
+    expect(b!.segment).toBe('b');
+    expect(b!.fileCount).toBe(9);
+    expect(b!.ownFileCount).toBe(2);
+    expect(b!.children).toHaveLength(1);
   });
 });

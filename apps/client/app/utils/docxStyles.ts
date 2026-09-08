@@ -2,6 +2,29 @@
  * Centralized DOCX styling constants for consistent document exports.
  * Used by sessionExport, questExport, and bulkNotebookExport.
  */
+import type { SubQuestStatus } from '@bike4mind/common';
+
+/**
+ * Quest-table status palettes. Both are pinned exhaustive over SubQuestStatus so
+ * adding a status to the canonical enum fails the build here instead of silently
+ * exporting the new status in the not_started palette.
+ */
+const StatusTextColors = {
+  completed: '4CAF50',
+  in_progress: 'FF9800',
+  not_started: '9E9E9E',
+  skipped: '607D8B',
+  deleted: 'F44336',
+} as const satisfies Record<SubQuestStatus, string>;
+
+// Lighter versions of StatusTextColors, for cell shading.
+const StatusBackgroundColors = {
+  completed: 'E8F5E9',
+  in_progress: 'FFF3E0',
+  not_started: 'FAFAFA',
+  skipped: 'ECEFF1',
+  deleted: 'FFEBEE',
+} as const satisfies Record<SubQuestStatus, string>;
 
 /**
  * Color palette for DOCX exports (hex without #).
@@ -14,22 +37,8 @@ export const DocxColors = {
   systemMessage: { text: '757575', background: 'F5F5F5' },
 
   // Status colors for quest tables
-  status: {
-    completed: '4CAF50',
-    in_progress: 'FF9800',
-    not_started: '9E9E9E',
-    skipped: '607D8B',
-    deleted: 'F44336',
-  },
-
-  // Status background colors (lighter versions for cell shading)
-  statusBackground: {
-    completed: 'E8F5E9',
-    in_progress: 'FFF3E0',
-    not_started: 'FAFAFA',
-    skipped: 'ECEFF1',
-    deleted: 'FFEBEE',
-  },
+  status: StatusTextColors,
+  statusBackground: StatusBackgroundColors,
 
   // Structural colors
   metadata: '666666',
@@ -122,4 +131,3 @@ export const DocxRoleStyles = {
 } as const;
 
 export type MessageRole = keyof typeof DocxRoleStyles;
-export type SubQuestStatusType = keyof typeof DocxColors.status;

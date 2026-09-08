@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAttemptSessionOpen } from './SessionContainer';
+import { shouldAttemptSessionOpen, shouldShowChromeBand } from './SessionContainer';
+import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 
 // Guards the fix for the 404 retry loop: changeSession must be attempted at most
 // once per session id, even when the open keeps failing and contextSessionId
@@ -31,5 +32,38 @@ describe('shouldAttemptSessionOpen', () => {
 
   it('attempts a newly selected session even if a different one was attempted before', () => {
     expect(shouldAttemptSessionOpen('sess-2', null, false, SID)).toBe(true);
+  });
+});
+
+// Pins the #2304 fix: the chat's 56px chrome band shows ONLY in the desktop vertical split.
+// The table is exhaustive over DefaultLayoutType x {mobile, desktop} on purpose - the bug was a
+// negative `layout !== ...` chain that silently gave new/other layouts the band. A new member
+// added to the union without a row here defaults to false, which is the intended safe direction.
+describe('shouldShowChromeBand', () => {
+  const ALL_LAYOUTS: DefaultLayoutType[] = [
+    'horizontal',
+    'vertical',
+    'pip',
+    'noAI',
+    'hide',
+    'floatingChat',
+    'dockRight',
+    'dockBottom',
+  ];
+
+  it('is true ONLY for desktop vertical', () => {
+    expect(shouldShowChromeBand('vertical', false)).toBe(true);
+  });
+
+  it('is false for vertical on mobile (the split collapses to a stack there)', () => {
+    expect(shouldShowChromeBand('vertical', true)).toBe(false);
+  });
+
+  it.each(ALL_LAYOUTS.filter(l => l !== 'vertical'))('is false for %s on desktop', layout => {
+    expect(shouldShowChromeBand(layout, false)).toBe(false);
+  });
+
+  it.each(ALL_LAYOUTS)('is false for %s on mobile', layout => {
+    expect(shouldShowChromeBand(layout, true)).toBe(false);
   });
 });

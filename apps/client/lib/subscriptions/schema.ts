@@ -1,4 +1,7 @@
-import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@client/lib/subscriptions/constants';
+import {
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+} from '@client/lib/subscriptions/constants';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { z } from 'zod';
 
@@ -33,9 +36,12 @@ export const OrgSubscriptionSubscribeSchema = z
     priceId: z.string(),
 
     /**
-     * Number of seats to subscribe to. Minimum enforced by ORGANIZATION_SUBSCRIPTION_MIN_SEATS.
+     * Number of seats to subscribe to. Whole seats only, bounded by the platform
+     * min/max - this value flows into Stripe checkout line_items and into
+     * organization.seats at creation, so a non-integer or over-cap value must be
+     * rejected here rather than relying on Stripe to bounce it.
      */
-    quantity: z.number().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS),
+    quantity: z.number().int().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
 
     /**
      * The organization that is subscribing. If not provided, a new organization will be created.
@@ -43,9 +49,12 @@ export const OrgSubscriptionSubscribeSchema = z
     organizationId: z.string().optional(),
 
     /**
-     * The URL to redirect to after the subscription is created.
+     * The URL to redirect to after the subscription is created. Must be a real URL -
+     * origin is further restricted to the deployed app in the subscribe handler
+     * (isAllowedCallbackOrigin) to prevent an open-redirect through Stripe's hosted
+     * checkout success/cancel pages.
      */
-    callbackUrl: z.string(),
+    callbackUrl: z.string().url(),
 
     /**
      * If organizationId is not provided, this is the data of the organization to create.

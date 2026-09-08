@@ -136,34 +136,10 @@ describe('FabFileRepository.search data-lake tag prefixes', () => {
       tags: [{ name: tagName }],
     });
 
-  it('a SCOPED prefix does not reach another tenant who picked the same prefix', async () => {
-    // Nothing reserves a dynamic lake's fileTagPrefix, so two tenants can and will collide.
-    const mine = await seedTagged(ownerId, 'mine.txt', 'acme:spec');
-    await seedTagged(otherTenantId, 'theirs.txt', 'acme:spec');
-
-    const result = await fabFileRepository.search(ownerId, '', {}, pagination, order, {
-      includeShared: true,
-      scopedTagPrefixes: ['acme:'],
-    });
-
-    expect(result.data.map(f => f.id)).toEqual([mine.id as string]);
-  });
-
-  it('a SCOPED prefix is the only grant under restrictToDataLake, and it stays owner-bound', async () => {
-    // restrictToDataLake drops the broad ownership arms, so the scoped prefix arm is the ONLY
-    // thing selecting files - the owner's file can only arrive through the arm under test.
-    const mine = await seedTagged(ownerId, 'mine.txt', 'acme:spec');
-    await seedTagged(otherTenantId, 'theirs.txt', 'acme:spec');
-    await seedTagged(ownerId, 'unrelated.txt', 'personal:note');
-
-    const result = await fabFileRepository.search(ownerId, '', {}, pagination, order, {
-      includeShared: true,
-      scopedTagPrefixes: ['acme:'],
-      restrictToDataLake: true,
-    });
-
-    expect(result.data.map(f => f.id)).toEqual([mine.id as string]);
-  });
+  // A dynamic-lake prefix's cross-tenant containment now runs through `lakeMemberships`
+  // (creator-anchored - #2243), not the deleted caller-anchored `scopedTagPrefixes` option; that
+  // mechanism's own coverage (VIEWER reach, cross-tenant boundary, restrictToDataLake) lives in
+  // FabFileModel.dataLakeLifecycle.test.ts's "lakeMemberships parity" suite.
 
   it('an OPEN prefix does reach another user file (the shared-KB bypass, by design)', async () => {
     const theirs = await seedTagged(otherTenantId, 'shared-kb.txt', 'opti:article');
@@ -188,8 +164,10 @@ describe('FabFileRepository.search data-lake tag prefixes', () => {
   });
 
   it('passing a dynamic prefix in the OPEN bucket WOULD leak - the split is what prevents it', async () => {
-    // Characterizes why resolveRetrievalLakeScope must never promote a scoped prefix: the same
-    // prefix string leaks across tenants in the OPEN bucket and does not in the SCOPED one.
+    // Characterizes why resolveRetrievalLakeScope must never promote a dynamic lake's prefix into
+    // the OPEN bucket: the same prefix string leaks across tenants there, and does not through a
+    // creator-anchored `lakeMemberships` arm - `ownerId` (the searcher) never owns the other
+    // tenant's file, so the membership arm cannot admit it.
     await seedTagged(otherTenantId, 'theirs.txt', 'acme:spec');
 
     const leaked = await fabFileRepository.search(ownerId, '', {}, pagination, order, {
@@ -198,7 +176,9 @@ describe('FabFileRepository.search data-lake tag prefixes', () => {
     });
     const contained = await fabFileRepository.search(ownerId, '', {}, pagination, order, {
       includeShared: true,
-      scopedTagPrefixes: ['acme:'],
+      lakeMemberships: [
+        { kind: 'owned', datalakeTag: 'datalake:org:acmelake', fileTagPrefix: 'acme:', creatorUserId: ownerId },
+      ],
     });
 
     expect(leaked.total).toBe(1);
@@ -233,13 +213,17 @@ describe('a file removed from a lake no longer matches that lake read scope', ()
     });
 
   // The single-lake browser's option set, verbatim (see the lake articles route). Keep in sync:
-  // if that route's scope widens, removal has to clear whatever the new arm matches.
+  // if that route's scope widens, removal has to clear whatever the new arm matches. Every file
+  // here is owned by `ownerId`, who is also the lake's creator, so the creator-anchored
+  // `lakeMemberships` arm and the pre-#2243 caller-anchored one it replaced admit the same rows.
   const browseLake = (lake: { datalakeTag: string; fileTagPrefix: string }) =>
     fabFileRepository.search(ownerId, '', {}, pagination, order, {
       includeShared: true,
       userGroups: [],
       dataLakeTags: [lake.datalakeTag],
-      scopedTagPrefixes: [lake.fileTagPrefix],
+      lakeMemberships: [
+        { kind: 'owned', datalakeTag: lake.datalakeTag, fileTagPrefix: lake.fileTagPrefix, creatorUserId: ownerId },
+      ],
       restrictToDataLake: true,
       excludeContent: true,
     });

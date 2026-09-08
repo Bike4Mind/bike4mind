@@ -7,14 +7,18 @@ const mockClient = {
   update: vi.fn(),
   delete: vi.fn(),
   deleteByQuery: vi.fn(),
+  search: vi.fn(),
   indices: { create: vi.fn(), delete: vi.fn(), exists: vi.fn() },
   transport: { request: vi.fn() },
   close: vi.fn(),
 };
 
+let lastClientConstructorArgs: unknown;
+
 vi.mock('@opensearch-project/opensearch', () => ({
   // Regular function (not arrow) so `new Client(...)` works as a constructor.
-  Client: vi.fn(function MockClient() {
+  Client: vi.fn(function MockClient(args: unknown) {
+    lastClientConstructorArgs = args;
     return mockClient;
   }),
 }));
@@ -25,7 +29,13 @@ vi.mock('@aws-sdk/credential-provider-node', () => ({
   defaultProvider: vi.fn(() => () => Promise.resolve({})),
 }));
 
-import { OpenSearchClient, isTransientOpenSearchError, getOpenSearchRetryAfterMs } from './opensearchClient';
+import {
+  OpenSearchClient,
+  isTransientOpenSearchError,
+  isIndexAlreadyExistsError,
+  isIndexNotFoundError,
+  getOpenSearchRetryAfterMs,
+} from './opensearchClient';
 
 /** Build an opensearch-js-style ResponseError carrying an HTTP status code. */
 function responseError(statusCode: number, message = `status ${statusCode}`): Error {
@@ -71,6 +81,68 @@ describe('isTransientOpenSearchError', () => {
   });
 });
 
+describe('isIndexAlreadyExistsError', () => {
+  it('detects a 400 with a resource_already_exists_exception body', () => {
+    const err = Object.assign(new Error('index [x] already exists'), {
+      statusCode: 400,
+      body: { error: { type: 'resource_already_exists_exception' } },
+    });
+    expect(isIndexAlreadyExistsError(err)).toBe(true);
+  });
+
+  it('detects it from the message alone when the body is absent', () => {
+    expect(isIndexAlreadyExistsError(new Error('resource_already_exists_exception: index exists'))).toBe(true);
+  });
+
+  it('does not flag an unrelated 400', () => {
+    const err = Object.assign(new Error('mapper_parsing_exception'), {
+      statusCode: 400,
+      body: { error: { type: 'mapper_parsing_exception' } },
+    });
+    expect(isIndexAlreadyExistsError(err)).toBe(false);
+  });
+
+  it('does not flag a transient error', () => {
+    expect(isIndexAlreadyExistsError(responseError(503))).toBe(false);
+  });
+});
+
+describe('isIndexNotFoundError', () => {
+  it('detects a 404 with an index_not_found_exception body', () => {
+    const err = Object.assign(new Error('no such index [x]'), {
+      statusCode: 404,
+      body: { error: { type: 'index_not_found_exception' } },
+    });
+    expect(isIndexNotFoundError(err)).toBe(true);
+  });
+
+  it('detects it from the message alone when the body is absent', () => {
+    expect(isIndexNotFoundError(new Error('index_not_found_exception: no such index'))).toBe(true);
+  });
+
+  it('does not flag an unrelated 404', () => {
+    // The purge treats this error as a satisfied removal, so keeping it keyed to the TYPE rather
+    // than the status code is what stops it swallowing a genuine failure (#2087).
+    const err = Object.assign(new Error('resource_not_found_exception'), {
+      statusCode: 404,
+      body: { error: { type: 'resource_not_found_exception' } },
+    });
+    expect(isIndexNotFoundError(err)).toBe(false);
+  });
+
+  it('does not flag a transient error', () => {
+    expect(isIndexNotFoundError(responseError(503))).toBe(false);
+  });
+
+  it('is disjoint from isIndexAlreadyExistsError', () => {
+    const exists = Object.assign(new Error('resource_already_exists_exception'), {
+      statusCode: 400,
+      body: { error: { type: 'resource_already_exists_exception' } },
+    });
+    expect(isIndexNotFoundError(exists)).toBe(false);
+  });
+});
+
 describe('getOpenSearchRetryAfterMs', () => {
   it('reads numeric Retry-After seconds from error.headers', () => {
     const err = Object.assign(new Error('429'), { headers: { 'retry-after': '2' } });
@@ -93,6 +165,30 @@ describe('getOpenSearchRetryAfterMs', () => {
   it('returns null when there is no Retry-After header', () => {
     expect(getOpenSearchRetryAfterMs(new Error('429'))).toBeNull();
     expect(getOpenSearchRetryAfterMs(Object.assign(new Error('429'), { headers: {} }))).toBeNull();
+  });
+
+  // #2118: withRetry treats any non-null return as authoritative OVER its backoff, so a zero is not
+  // "wait a moment" - it is "abandon the backoff and retry immediately", five times, against a
+  // cluster that only sends Retry-After when it is already struggling.
+  it.each([
+    ['an explicit zero', '0'],
+    ['a negative value', '-5'],
+  ])('returns null for %s rather than disabling the backoff', (_label, value) => {
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': value } });
+    expect(getOpenSearchRetryAfterMs(err)).toBeNull();
+  });
+
+  it('returns null for an HTTP date that has already elapsed', () => {
+    // Needs no misbehaving server: clock skew, or seconds of queueing between the cluster writing
+    // the header and this code reading it, is enough. Math.max(0, ...) used to floor this to zero.
+    const past = new Date(Date.now() - 5000).toUTCString();
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': past } });
+    expect(getOpenSearchRetryAfterMs(err)).toBeNull();
+  });
+
+  it('still honours a positive hint, so the fix does not just disable Retry-After', () => {
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': '1' } });
+    expect(getOpenSearchRetryAfterMs(err)).toBe(1000);
   });
 });
 
@@ -160,5 +256,121 @@ describe('OpenSearchClient retry/backoff', () => {
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toBe(true);
     expect(mockClient.indices.exists).toHaveBeenCalledTimes(2);
+  });
+
+  it('createIndex merges caller-provided settings with the baseline knn:true', async () => {
+    mockClient.indices.create.mockResolvedValueOnce({ statusCode: 200 });
+
+    await client.createIndex('idx', {
+      mappings: { properties: { vector: { type: 'knn_vector' } } },
+      settings: { 'index.knn.algo_param.ef_search': 100 },
+    });
+
+    expect(mockClient.indices.create).toHaveBeenCalledWith({
+      index: 'idx',
+      body: {
+        settings: { knn: true, 'index.knn.algo_param.ef_search': 100 },
+        mappings: { properties: { vector: { type: 'knn_vector' } } },
+      },
+    });
+  });
+
+  it('knnQuery runs a plain knn search and maps hits when no filter is given', async () => {
+    mockClient.search.mockResolvedValueOnce({
+      body: { hits: { hits: [{ _id: 'chunk-1', _score: 0.9, _source: { text: 'hello' } }] } },
+    });
+
+    const results = await client.knnQuery('idx', [0.1, 0.2], 5);
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: { size: 5, query: { knn: { vector: { vector: [0.1, 0.2], k: 5 } } } },
+    });
+    expect(results).toEqual([{ id: 'chunk-1', score: 0.9, source: { text: 'hello' } }]);
+  });
+
+  it('knnQuery puts the filter INSIDE the knn clause for efficient pre-filtering, not a post-filter', async () => {
+    mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+    const filter = { terms: { fabFileId: ['f1', 'f2'] } };
+
+    await client.knnQuery('idx', [0.1, 0.2], 5, { filter });
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: {
+        size: 5,
+        query: { knn: { vector: { vector: [0.1, 0.2], k: 5, filter } } },
+      },
+    });
+  });
+
+  it('knnQuery separates size (response page) from k (candidate pool) when size is given', async () => {
+    mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+
+    await client.knnQuery('idx', [0.1, 0.2], 5000, { size: 10 });
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: { size: 10, query: { knn: { vector: { vector: [0.1, 0.2], k: 5000 } } } },
+    });
+  });
+
+  it('knnQuery excludes requested _source fields (e.g. the embedding vector) from the response', async () => {
+    mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+
+    await client.knnQuery('idx', [0.1, 0.2], 5, { excludeSource: ['vector'] });
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: {
+        size: 5,
+        query: { knn: { vector: { vector: [0.1, 0.2], k: 5 } } },
+        _source: { excludes: ['vector'] },
+      },
+    });
+  });
+
+  it('knnQuery retries on a transient error', async () => {
+    mockClient.search.mockRejectedValueOnce(responseError(503)).mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+
+    const promise = client.knnQuery('idx', [0.1], 1);
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual([]);
+    expect(mockClient.search).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('OpenSearchClient self-host construction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('the default constructor signs requests with AWS SigV4 over https', async () => {
+    const { AwsSigv4Signer } = await import('@opensearch-project/opensearch/aws-v3');
+    new OpenSearchClient('search.example.com');
+
+    expect(AwsSigv4Signer).toHaveBeenCalled();
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'https://search.example.com' });
+  });
+
+  it('selfHosted skips AWS SigV4 and connects over plain http', async () => {
+    const { AwsSigv4Signer } = await import('@opensearch-project/opensearch/aws-v3');
+    new OpenSearchClient('localhost:9200', { selfHosted: true });
+
+    expect(AwsSigv4Signer).not.toHaveBeenCalled();
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'http://localhost:9200' });
+  });
+
+  it('strips a scheme the caller already included instead of doubling it up', async () => {
+    new OpenSearchClient('http://opensearch:9200', { selfHosted: true });
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'http://opensearch:9200' });
+
+    new OpenSearchClient('https://search.example.com');
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'https://search.example.com' });
+  });
+
+  it('strips a mixed-case scheme too', async () => {
+    new OpenSearchClient('HTTP://opensearch:9200', { selfHosted: true });
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'http://opensearch:9200' });
   });
 });

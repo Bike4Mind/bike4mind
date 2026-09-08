@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { REVIEW_GATE_STATUS_VALUES, SUBQUEST_STATUS_VALUES, type SubQuestStatus } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { ITavernService } from './ITavernService.js';
 import { CreateAgentRequestSchema, CreateQuestRequestSchema, UpdateAgentRequestSchema } from './types.js';
@@ -13,7 +14,7 @@ const UpdateReviewGateParamsSchema = z.object({
   plan_id: z.string().min(1),
   quest_id: z.string().min(1),
   sub_quest_id: z.string().min(1),
-  review_status: z.enum(['pending', 'approved', 'rejected']),
+  review_status: z.enum(REVIEW_GATE_STATUS_VALUES),
   review_note: z.string().optional(),
 });
 
@@ -21,7 +22,7 @@ const UpdateQuestProgressParamsSchema = z.object({
   plan_id: z.string().min(1),
   quest_id: z.string().min(1),
   sub_quest_id: z.string().min(1),
-  status: z.enum(['not_started', 'in_progress', 'completed', 'skipped', 'deleted']).optional(),
+  status: z.enum(SUBQUEST_STATUS_VALUES).optional(),
   evidence: z.string().optional(),
   time_spent: z.number().min(0).optional(),
 });
@@ -648,7 +649,7 @@ function createUpdateReviewGateTool(service: ITavernService): ICompletionOptionT
           review_status: {
             type: 'string',
             description: 'The review decision',
-            enum: ['pending', 'approved', 'rejected'],
+            enum: [...REVIEW_GATE_STATUS_VALUES],
           },
           review_note: {
             type: 'string',
@@ -692,7 +693,7 @@ function createUpdateQuestProgressTool(service: ITavernService): ICompletionOpti
           status: {
             type: 'string',
             description: 'New status for the sub-quest',
-            enum: ['not_started', 'in_progress', 'completed', 'skipped', 'deleted'],
+            enum: [...SUBQUEST_STATUS_VALUES],
           },
           evidence: {
             type: 'string',
@@ -710,7 +711,7 @@ function createUpdateQuestProgressTool(service: ITavernService): ICompletionOpti
     toolFn: async (params: unknown) => {
       const { plan_id, quest_id, sub_quest_id, status, evidence, time_spent } =
         UpdateQuestProgressParamsSchema.parse(params);
-      const updates: { status?: string; evidence?: string; timeSpent?: number } = {};
+      const updates: { status?: SubQuestStatus; evidence?: string; timeSpent?: number } = {};
       if (status !== undefined) updates.status = status;
       if (evidence !== undefined) updates.evidence = evidence;
       if (time_spent !== undefined) updates.timeSpent = time_spent;

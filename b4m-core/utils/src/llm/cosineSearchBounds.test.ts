@@ -241,11 +241,11 @@ describe('unusable chunks never silently zero the attachment', () => {
     // it must reach the model rather than being dropped for want of a score.
     const all = rows(3, () => [0.1, 0.2, 0.3]);
 
-    const { text, errorMessages } = await run(pagedRepo(all));
+    const { text, fileNotices } = await run(pagedRepo(all));
 
     expect(text).toContain('body-0');
     expect(text).toContain('body-2');
-    expect(errorMessages).toEqual([]);
+    expect(fileNotices).toEqual([]);
   });
 
   it('does not depend on the raw reader for a format the raw reader cannot decode', async () => {
@@ -275,14 +275,15 @@ describe('unusable chunks never silently zero the attachment', () => {
     mockGetFileContent.mockResolvedValue('X'.repeat(50_000));
     const fileUpdate = vi.fn();
 
-    const { errorMessages } = await run(pagedRepo([]), { maxTokens: 1000, fileUpdate });
+    await run(pagedRepo([]), { maxTokens: 1000, fileUpdate });
 
-    const messages = errorMessages.map(m => String(m.content)).join('\n');
-    expect(messages).toContain('exceeds');
-    expect(messages).not.toContain('Vectorize your large file');
-    expect(messages).toContain('embedding model');
+    // The operator-facing wording lives on the persisted fabfiles.error value; the user-facing
+    // notice says the same thing in plainer language, so this assertion reads the persisted one.
+    const persistedError = fileUpdate.mock.calls.map(c => String(c[0]?.error)).join('\n');
+    expect(persistedError).toContain('exceeds');
+    expect(persistedError).not.toContain('Vectorize your large file');
+    expect(persistedError).toContain('embedding model');
     // Keeps the prefix the cosine arm clears, so the error goes away by itself once cosine works.
-    const persisted = fileUpdate.mock.calls.map(c => String(c[0]?.error)).join('\n');
-    expect(persisted).toContain('Knowledge in the workbench with the fileName');
+    expect(persistedError).toContain('Knowledge in the workbench with the fileName');
   });
 });

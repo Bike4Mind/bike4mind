@@ -21,10 +21,11 @@ interface TagListFileTagsAdapters {
  * a `fileCount` comes from, which is why the return type is `IFileTagWithFileCount` and a tag read
  * through any other repository method has none.
  *
- * Uses the same aggregate and the same options as GET /api/files/tags/counts, which backs the tag
- * tree - the two surfaces must stay in sync or the sidebar badge and the tag card disagree for the
- * same tag. Counting live files means soft-deleted files drop out, as does anything attached to a
- * session (the aggregate's own filter).
+ * Uses the same aggregate and the same options as GET /api/files/tags/counts's UNNARROWED call
+ * (its tagCounts field, not the excludePersonalShares:true call behind workspaceTagCounts), which
+ * backs the tag tree - the two surfaces must stay in sync or the sidebar badge and the tag card
+ * disagree for the same tag. Counting live files means soft-deleted files drop out, as does
+ * anything attached to a session (the aggregate's own filter).
  *
  * Same aggregate, different grouping, though: this folds each bucket onto a tag document
  * (matchTagDocument, case-insensitive) while the tree renders the raw `tags.name` buckets. So on

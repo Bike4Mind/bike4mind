@@ -29,6 +29,7 @@ import {
 import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services';
 import { agentExecutionRepository, type AgentExecutionStatus, type IDagSpec } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { inheritedArtifactFields } from '../utils/artifactGate';
 import { Resource } from 'sst';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
@@ -48,8 +49,17 @@ export function makeDagDispatcher(args: {
     organizationId?: string;
     sessionId: string;
     questId: string;
+    /** The parent's real Quest id, inherited so a DAG child's lake-access audit rows join to the
+     *  turn. NOT `questId` above, which holds different things per dispatch lineage (#1867). */
+    linkedQuestId?: string;
     /** Pulled from the parent execution doc - used for audit lineage. */
     spawnedByExecutionId?: string;
+    /**
+     * The parent's per-request artifact intent. Inherited so a caller opt-out survives fan-out -
+     * see the matching note on `baseFields` in `agentExecutor.ts`. `undefined` leaves the admin
+     * `EnableArtifacts` setting as the only gate for the node.
+     */
+    enableArtifacts?: boolean;
   };
   logger: Logger;
 }): DagDispatcher {
@@ -79,6 +89,7 @@ export function makeDagDispatcher(args: {
         organizationId: nodeDefaults.organizationId,
         sessionId: nodeDefaults.sessionId,
         questId: nodeDefaults.questId,
+        linkedQuestId: nodeDefaults.linkedQuestId,
         model,
         query: node.description,
         status: 'pending' as AgentExecutionStatus,
@@ -101,6 +112,7 @@ export function makeDagDispatcher(args: {
           thoroughness,
           maxIterations,
         },
+        ...inheritedArtifactFields(nodeDefaults.enableArtifacts),
       });
       return { childExecutionId: child.id, dagNodeId: node.id };
     },
@@ -346,4 +358,57 @@ export function buildDagResumeReport(args: {
   const failedNodes = taskResults.filter(t => t.status === 'failed' || t.status === 'cascade_failed').map(t => t.id);
 
   return { summary, success, failedNodes };
+}
+
+/**
+ * Whether this invocation is a DAG parent waking ONLY to aggregate children
+ * that have already finished, with no new billable work of its own to start.
+ * Shared by the per-member credit cap gate (skip - an aggregation wake should
+ * not be blocked, it just returns work the org already paid for) and the
+ * resume-trigger check below in `agentExecutor.ts` (fire - inject the
+ * aggregated result and clear `waitingOnDagChildren`), so the two decisions
+ * can never drift apart.
+ */
+export function isDagAggregationWake(args: {
+  isDagResume: boolean;
+  dagSpec: IDagSpec | undefined;
+  waitingOnDagChildren: { toolUseId: string } | undefined;
+}): boolean {
+  return args.isDagResume && args.dagSpec != null && args.waitingOnDagChildren != null;
+}
+
+/**
+ * The aggregation-wake exemption above only excuses the wake's own read-and-splice
+ * work (no new billable work of its own) - it does not license the run to keep
+ * iterating past it. If the member reads as over cap at the moment of the wake
+ * (per whatever the org's `userDetails[].usedCredits` counter reflects at that
+ * point - it does not yet see dispatched-child spend, tracked separately), this
+ * caps the parent's own loop to the one iteration that turns the aggregated
+ * result into an answer for THIS wake. A no-op (returns `maxIterations`
+ * unchanged) outside that exact case.
+ *
+ * This is a per-wake bound, not a lifetime one: `maxIterations` is recomputed
+ * fresh from `iterationIndex` on every invocation, so a run that dispatches a
+ * new `coordinate_task` from within its grace iteration gets another one-iteration
+ * grant on its next aggregation wake. The real overall ceiling stays the run's
+ * original `maxIterations` - each wake just narrows what's left of it to one step.
+ *
+ * This only bounds the PARENT's own further iterations. A DAG fan-out, or a
+ * `background: true` subagent, dispatched from within that one grace iteration
+ * is a separate fresh execution gated independently by `processSubagentDispatch`'s
+ * own per-member cap check. A plain (non-background) `delegate_to_agent` or
+ * `coordinate_task` call runs in-process instead and used to run past this bound
+ * uncapped - closed by `checkMemberCreditCap` on the in-process orchestrator path
+ * (see `ServerSubagentOrchestrator.delegateToAgent`).
+ */
+export function clampMaxIterationsForOverCapAggregationWake(args: {
+  isAggregationOnlyWake: boolean;
+  isOverCap: boolean;
+  maxIterations: number;
+  iterationIndex: number;
+}): number {
+  if (args.isAggregationOnlyWake && args.isOverCap) {
+    return Math.min(args.maxIterations, args.iterationIndex + 1);
+  }
+  return args.maxIterations;
 }

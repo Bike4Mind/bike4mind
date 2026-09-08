@@ -8,6 +8,7 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import {
   ApiKeyType,
+  MAX_TAXONOMY_TAGS,
   sanitizeCategories,
   sanitizeFileAssignments,
   type IDataLakeBatchDocument,
@@ -54,7 +55,7 @@ export async function analyzeBatchTaxonomy(
   batchId: string,
   dataLakeId: string,
   userId: string,
-  logger: { error: (msg: string) => void },
+  logger: { error: (msg: string) => void; warn: (msg: string) => void },
   options: { from: TaxonomyStatus[]; context?: string }
 ): Promise<AnalyzeBatchTaxonomyResult> {
   // Refresh taxonomyStartedAt on the claim itself, not just on later transitions - the
@@ -108,6 +109,15 @@ export async function analyzeBatchTaxonomy(
 
   const tags = sanitizeCategories(response.categories, lake.fileTagPrefix);
   const fileAssignments = sanitizeFileAssignments(response.fileAssignments);
+  // sanitizeCategories silently caps at MAX_TAXONOMY_TAGS (it has no logger, by design - it's
+  // a pure sanitizer). A raw response over the cap is the one case worth a signal: the user
+  // sees fewer suggestions than the model produced, with no indication anything was dropped.
+  const rawCategoryCount = Array.isArray(response.categories) ? response.categories.length : 0;
+  if (rawCategoryCount > MAX_TAXONOMY_TAGS) {
+    logger.warn(
+      `Batch ${batchId} taxonomy inference returned ${rawCategoryCount} categories - capped to ${tags.length} (max ${MAX_TAXONOMY_TAGS})`
+    );
+  }
 
   const finalized = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batchId, ['analyzing'], 'ready', {
     taxonomySuggestions: { tags, fileAssignments },

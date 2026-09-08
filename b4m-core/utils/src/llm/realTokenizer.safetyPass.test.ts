@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildAndSortMessages, calculateTotalTokenLength, getLastBuildDebugInfo } from './utils';
+import { buildAndSortMessages, calculateTotalTokenLength } from './utils';
 import { TiktokenTokenizer } from '../tokenCounting';
 import type { IMessage } from '@bike4mind/common';
 
@@ -226,7 +226,7 @@ describe('final safety pass measured with the real tokenizer', () => {
   it.each(rows)('$name', async row => {
     logger.warn.mockClear();
     const prompt = row.prompt ?? [{ role: 'user' as const, content: ASK }];
-    const result = await buildAndSortMessages(
+    const { messages: result, messageTruncation } = await buildAndSortMessages(
       row.history,
       row.content,
       prompt,
@@ -258,7 +258,7 @@ describe('final safety pass measured with the real tokenizer', () => {
     }
 
     if (row.untouched) {
-      expect(getLastBuildDebugInfo()?.wasTruncated).toBe(false);
+      expect(messageTruncation?.wasTruncated).toBe(false);
       expect(text).not.toContain(DECLARED);
       expect(text).not.toContain(TRUNCATED);
     }
@@ -297,7 +297,7 @@ describe('special-token literals in untrusted content', () => {
   });
 
   it.each(SPECIAL_TOKEN_LITERALS)('assembles a prompt whose user message contains %s', async literal => {
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       historyOf(4, i => prose(3, i)),
       [attachment('notes.txt', prose(6))],
       [{ role: 'user' as const, content: `${ASK} ${literal}` }],

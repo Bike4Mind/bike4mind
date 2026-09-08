@@ -82,6 +82,23 @@ export interface FullManifest extends ControlledManifestFields {
 /**
  * Returns just the OAuth scopes from the manifest template.
  * Use this when you only need scopes (e.g., OAuth installer) to avoid generating URLs with a dummy baseUrl.
+ *
+ * SCOPE MODEL - one install-time superset for the WHOLE Slack integration, not per feature. Consumed
+ * by `installer.ts` (`SLACK_BOT_SCOPES`) and `org-slack-helpers.ts`, so it is what every workspace
+ * grants at install regardless of which features that workspace intends to use. Two consequences,
+ * and they pull in opposite directions:
+ *
+ * - Good: a feature flag can never change the granted scopes, so turning a Slack feature on or off is
+ *   a pure server-side change and never forces a workspace to reinstall. This is why the data-lake
+ *   `@datalake add` surface needed no manifest change to go live - it uses only `files:read` (the
+ *   attachment download) and `chat:write` (the in-thread reply), both long since granted.
+ * - Bad: minimal-privilege installs are impossible without a code change. An org that wants one
+ *   feature still grants all of these, including `channels:manage` and the `*:write` family, which no
+ *   single feature needs on its own.
+ *
+ * Narrowing this to per-feature scope sets is a real change, not a tidy-up: scopes are fixed at
+ * install, so any narrowing means re-prompting every existing workspace through OAuth and handling
+ * the partially-granted state. Do not attempt it as a side effect of shipping a feature.
  */
 export function getControlledScopes(): { bot: string[]; user: string[] } {
   return {

@@ -17,6 +17,7 @@ import mime from 'mime-types';
 import { fileTypeFromBuffer } from 'file-type';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent } from 'https';
+import { createS3Client } from './createS3Client';
 
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
@@ -33,7 +34,7 @@ export class S3Storage extends BaseStorage {
     // endpoint and keeps the default virtual-hosted addressing, so hosted is unchanged.
     const endpoint = process.env.AWS_ENDPOINT_URL_S3;
 
-    this.s3 = new S3Client({
+    this.s3 = createS3Client({
       region: this.region,
       ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
       maxAttempts: 3,

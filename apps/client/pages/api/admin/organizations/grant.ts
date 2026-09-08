@@ -8,7 +8,7 @@ import {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
-import { CreditHolderType, dayjs } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, dayjs } from '@bike4mind/common';
 import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
@@ -40,7 +40,11 @@ const GrantOrgSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
-const handler = baseApi().post(
+// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+// before req.user is set, so a key issued for a narrow integration can't create
+// an org with an initial credit grant just because its owner is an admin.
+// JWT/browser admins skip that check and still pass the isAdmin gate below.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

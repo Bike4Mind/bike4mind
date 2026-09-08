@@ -2,7 +2,7 @@
  * Parses, validates, and processes agent commands from Slack messages.
  */
 
-import { SQSService } from '@bike4mind/utils';
+import { SQSService, checkStorageLimitForFile } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { PERSONA_ALLOWED_SUBAGENTS } from '@bike4mind/agents';
 import { SYSTEM_MODEL_DEFAULTS } from './constants/system-model-defaults';
@@ -10,12 +10,18 @@ export { SYSTEM_MODEL_DEFAULTS };
 import { parseCommand, selectAgent, type ParsedAgentCommand, type AgentPersona } from './agent-parser';
 import { customAgentToPersona } from './custom-agent-adapter';
 import { SlackEvent, type SlackEventData } from './SlackEvent';
+import { validateSlackFileForIngest } from './slackFileValidation';
 import { Types } from 'mongoose';
 import { updateUserSlackSettings } from './handlers/notebook-manager';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import { notebookNew } from './tools/notebookNew';
 import { notebookStatus } from './tools/notebookStatus';
-import { IUserDocument } from '@bike4mind/common';
+import {
+  IUserDocument,
+  BadRequestError,
+  type IAdminSettingsRepository,
+  type IOrganizationDocument,
+} from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
 
 const HISTORY_COUNT = 20;
@@ -464,53 +470,100 @@ export class CommandHandler {
     const fileMetadata: Array<{ fabFileId: string; filename: string; mimeType: string; sizeBytes: number }> = [];
     const errors: string[] = [];
 
-    // File size limits (in bytes)
-    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-    const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB for images
+    // Enforce the same MaxFileSize + storage limits fabFilesService.createFabFile applies on
+    // the web upload path (#1685): this path writes the FabFile directly and never called that
+    // service, so neither limit applied here before. Resolved once per message, not per
+    // attachment - neither the admin setting nor the org lookup below can change mid-call.
+    const { adminSettingsRepository, FabFile } = getSlackDb();
+    // Typed once here, at the DI boundary, instead of `any`-cast at each use below: dropping the
+    // `.exec()` on the memoized lookup then becomes a compile error rather than a runtime
+    // "Query was already executed" throw on an org-affiliated user's second attachment (the
+    // exact bug the round-2 fix caught). `.select(...)` narrows the round-trip to the two fields
+    // checkStorageLimitForFile actually reads, instead of pulling the whole organization doc.
+    const { Organization } = getSlackDb() as unknown as {
+      Organization: {
+        findById(id: string): {
+          select(fields: string): {
+            lean(): { exec(): Promise<Pick<IOrganizationDocument, 'storageLimit' | 'currentStorageSize'> | null> };
+          };
+        };
+      };
+    };
+    const { storage } = getSlackDeps();
+    // Resolved outside the per-file try/catch below, so a lookup failure here is caught on its
+    // own (mirroring resolveModelConfig's DB-failure fallback above) instead of propagating out
+    // of processSlackFiles entirely - this method never threw before #1685 added this check.
+    let maxFileSizeBytes: number | undefined;
+    try {
+      // any: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary;
+      // the bound implementation (slackPackageInit.ts) is the real IAdminSettingsRepository.
+      const maxFileSizeMB = await (adminSettingsRepository as any as IAdminSettingsRepository).getSettingsValue(
+        'MaxFileSize'
+      );
+      maxFileSizeBytes = typeof maxFileSizeMB === 'number' ? maxFileSizeMB * 1024 * 1024 : undefined;
+    } catch (settingsError) {
+      // Fails open (no MaxFileSize limit for this call) rather than blocking every attachment -
+      // the real storage-quota check below still runs regardless.
+      this.logger.error('[Slack Files] Failed to resolve MaxFileSize setting, proceeding without it', {
+        error: settingsError,
+      });
+    }
+    // Memoized rather than resolved eagerly: most messages carry no attachment that actually
+    // needs the storage check, so this only pays for the lookup the first time it is used.
+    // Deliberately NOT fail-open like the MaxFileSize lookup above: a rejected lookup stays
+    // memoized as the rejection, so every attachment in the message that needs it fails the
+    // same way. Unlike an absent MaxFileSize, there is no safe "no limit" fallback for a
+    // storage check we could not actually run.
+    let organizationLookup:
+      Promise<Pick<IOrganizationDocument, 'storageLimit' | 'currentStorageSize'> | null> | undefined;
+    const findOrganizationOnce = (id: string) => {
+      // `.exec()` is load-bearing: `.lean()` alone returns a thenable Mongoose Query, not a
+      // Promise - memoizing the Query itself and awaiting it more than once throws "Query was
+      // already executed" on the second await, which is exactly what happens for an
+      // org-affiliated user with 2+ attachments in one message (checkStorageLimitForFile awaits
+      // this once per accepted attachment). Typed on `Organization` above, so removing `.exec()`
+      // is now a compile error instead of a runtime throw.
+      organizationLookup ??= Organization.findById(id).select('storageLimit currentStorageSize').lean().exec();
+      // TS can't narrow a closed-over variable past `??=` on its own - it is always assigned
+      // by this point. checkStorageLimitForFile only reads the two selected fields, so the lean
+      // projection satisfies it despite not being a full Mongoose document.
+      return organizationLookup as Promise<IOrganizationDocument | null>;
+    };
+    // `this.user`/the org doc's `currentStorageSize` is a snapshot taken once for this whole
+    // call - it is only updated asynchronously later via the S3 `objectCreated` event, not as
+    // attachments are accepted here. Tracking bytes accepted so far in THIS message and adding
+    // them to each subsequent check keeps a user right at quota from overshooting it by
+    // attaching several files in one message that would each individually pass against the
+    // stale snapshot.
+    let acceptedBytesThisMessage = 0;
 
-    const { SupportedFabFileMimeTypes } = await import('@bike4mind/common');
-
-    const SUPPORTED_TYPES: string[] = [
-      // Documents
-      SupportedFabFileMimeTypes.PDF,
-      SupportedFabFileMimeTypes.DOCX,
-      SupportedFabFileMimeTypes.XLS,
-      SupportedFabFileMimeTypes.XLSX,
-      SupportedFabFileMimeTypes.TXT_PLAIN,
-      SupportedFabFileMimeTypes.TXT_MARKDOWN,
-      SupportedFabFileMimeTypes.TXT_MD_LEGACY,
-
-      // Images
-      SupportedFabFileMimeTypes.PNG,
-      SupportedFabFileMimeTypes.JPG,
-      SupportedFabFileMimeTypes.WEBP,
-      SupportedFabFileMimeTypes.GIF,
-    ];
-
-    for (const file of files) {
+    for (const rawFile of files) {
       try {
-        // Slack may send partial file objects (e.g. pending/deleted files) where
-        // required fields are absent. Skip silently - this is a Slack infrastructure
-        // artifact, not a user-chosen file, so no user-facing message is needed.
-        if (!file.mimetype || !file.name || !file.url_private_download || file.size === undefined) {
-          this.logger.warn('[Slack Files] Skipping file with incomplete data', { fileId: file.id });
-          continue;
-        }
-
-        // Validate file type
-        if (!SUPPORTED_TYPES.includes(file.mimetype)) {
-          const error = `⚠️ File "${file.name}" has unsupported type ${file.mimetype}. Skipping.`;
+        const validation = validateSlackFileForIngest(rawFile);
+        if (!validation.ok) {
+          // An incomplete file object is Slack's artifact, not the user's choice, so it stays a
+          // silent log; the other rejections are about a file the user actually picked.
+          if (validation.reason === 'incomplete') {
+            this.logger.warn('[Slack Files] Skipping file with incomplete data', { fileId: rawFile.id });
+            continue;
+          }
+          // Warning sign, escaped so this source file stays ASCII.
+          const error = `\u26a0\ufe0f ${validation.message} Skipping.`;
           this.logger.warn(error);
           errors.push(error);
           continue;
         }
+        const { file, resolvedMimeType } = validation;
 
-        // Validate file size
-        const maxSize = file.mimetype.startsWith('image/') ? MAX_IMAGE_SIZE : MAX_FILE_SIZE;
-        if (file.size > maxSize) {
+        // Checked against Slack's CLAIMED size before downloading - mirrors
+        // dataLakeFileIngest.ts's own "before it is downloaded" reasoning: an over-limit file
+        // would otherwise be transferred in full for nothing. Re-checked below against the real
+        // buffer length, since a lying client's claim must not be the actual enforcement.
+        if (maxFileSizeBytes !== undefined && file.size >= maxFileSizeBytes) {
           const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-          const maxMB = (maxSize / (1024 * 1024)).toFixed(0);
-          const error = `⚠️ File "${file.name}" (${sizeMB}MB) exceeds ${maxMB}MB limit. Skipping.`;
+          const limitMB = (maxFileSizeBytes / (1024 * 1024)).toFixed(0);
+          // Warning sign, escaped so this source file stays ASCII.
+          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
           this.logger.warn(error);
           errors.push(error);
           continue;
@@ -523,46 +576,98 @@ export class CommandHandler {
         // Download file from Slack
         const fileBuffer = await this.slackClient.downloadFile(file.url_private_download, file.name);
 
+        if (maxFileSizeBytes !== undefined && fileBuffer.length >= maxFileSizeBytes) {
+          const sizeMB = (fileBuffer.length / (1024 * 1024)).toFixed(1);
+          const limitMB = (maxFileSizeBytes / (1024 * 1024)).toFixed(0);
+          // Warning sign, escaped so this source file stays ASCII.
+          const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
+          this.logger.warn(error);
+          errors.push(error);
+          continue;
+        }
+
+        try {
+          // Adding `acceptedBytesThisMessage` folds in every file already accepted earlier in
+          // this same loop, so the check is against "quota used so far, including this
+          // message" rather than the stale start-of-call snapshot alone.
+          await checkStorageLimitForFile(
+            this.user,
+            fileBuffer.length + acceptedBytesThisMessage,
+            this.user.organizationId ?? undefined,
+            findOrganizationOnce
+          );
+        } catch (limitError) {
+          // Only a `BadRequestError` (the three thrown by checkStorageLimitForFile/
+          // checkOrganizationStorageLimit in @bike4mind/utils) is safe to post verbatim to
+          // Slack. Anything else - notably whatever the memoized `Organization.findById(...)`
+          // lookup throws on a DB blip - is an internal error (can name a host/port) and must
+          // not be echoed into a customer channel.
+          if (!(limitError instanceof BadRequestError)) {
+            this.logger.error('[Slack Files] Storage limit check failed', { error: limitError, fileName: file.name });
+          }
+          const message =
+            limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit';
+          const error = `\u26a0\ufe0f ${message}. Skipping "${file.name}".`;
+          this.logger.warn(error);
+          errors.push(error);
+          continue;
+        }
+
         if (statusCallback) {
           await statusCallback(`Processing file: ${file.name}...`);
         }
 
         // Upload to S3 storage
-        const { storage } = getSlackDeps();
         const filePath = `slack-files/${this.user.id}/${Date.now()}-${file.name}`;
         await storage.filesStorage.upload(fileBuffer, filePath, {
-          ContentType: file.mimetype,
+          // resolvedMimeType, not the client's claim - a file that only passed the gate because
+          // its extension resolved to a supported type must not have an arbitrary/wrong
+          // Content-Type header written to S3 (e.g. an attachment that claims text/html on a
+          // real .png would otherwise let the object render as HTML from the bucket origin).
+          ContentType: resolvedMimeType,
         });
 
         // Create FAB file record in database
-        const { FabFile } = getSlackDb();
         const { KnowledgeType, FabFileSourceType } = await import('@bike4mind/common');
         const fabFile = await (FabFile as any).create({
           userId: this.user.id,
           fileName: file.name,
-          mimeType: file.mimetype,
+          // Persist what the checks above actually verified, not the client's claim: the
+          // resolved (extension-based) type, and the real downloaded byte count. A client that
+          // under-reports its claimed size would otherwise pass both size checks (the real
+          // buffer is checked too) yet permanently undercount this file's recorded fileSize.
+          mimeType: resolvedMimeType,
           filePath: filePath,
-          fileSize: file.size,
+          fileSize: fileBuffer.length,
           type: KnowledgeType.FILE,
           status: 'complete',
           sourceType: FabFileSourceType.SLACK,
+          // Same origin pair the data-lake ingest stamps, so an attachment that arrived through the
+          // plain path is auditable the same way rather than only being labelled "from Slack".
+          // `channel` is '' on an event that carries none; the field is Mixed, so it round-trips.
+          sourceMetadata: { channel: this.slackEvent.channel, messageTs: this.slackEvent.ts },
         });
+
+        // Only charged against quota once the file is actually persisted - a file that fails
+        // upload or create must not eat into the headroom the next attachment in this same
+        // message is checked against.
+        acceptedBytesThisMessage += fileBuffer.length;
 
         const fabFileIdStr = fabFile._id.toString();
         fabFileIds.push(fabFileIdStr);
         fileMetadata.push({
           fabFileId: fabFileIdStr,
           filename: file.name,
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
+          mimeType: resolvedMimeType,
+          sizeBytes: fileBuffer.length,
         });
         this.logger.debug('Successfully created FAB file from Slack attachment', {
           fileName: file.name,
           fabFileId: fabFileIdStr,
-          mimeType: file.mimetype,
+          mimeType: resolvedMimeType,
         });
       } catch (error) {
-        const errorMsg = `❌ Failed to process file "${file.name}": ${
+        const errorMsg = `\u274c Failed to process file "${rawFile.name}": ${
           error instanceof Error ? error.message : 'Unknown error'
         }`;
         this.logger.error(errorMsg, error);

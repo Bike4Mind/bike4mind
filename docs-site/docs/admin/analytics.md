@@ -191,4 +191,4 @@ This means that switching between sub-tabs preserves your filter selections, and
 
 - [Admin Dashboard Overview](./overview.md) - Overall admin panel navigation
 - [User Management](./user-management.md) - Managing user accounts
-- [Feedbacks](./feedbacks.md) - User feedback management
+- [Feedback](./feedback.md) - User feedback management

@@ -20,6 +20,15 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
     selector({ selectedAccount: selectedAccount.current }),
 }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
+// Both Drive actions pull in React Query (useConfig / lake-connection hooks); stub them so these
+// step-order/name-validation tests need no QueryClientProvider. Their own behavior is covered by
+// DriveConnectAction.test.tsx and DrivePendingConnectAction.test.tsx.
+vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+  default: () => null,
+}));
+vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
+  default: () => null,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -106,7 +115,11 @@ describe('SourceSelectionStep - lake name', () => {
 
     renderStep();
 
-    expect(screen.getByTestId(SLUG_ERROR)).toBeInTheDocument();
+    // Asserts the TEXT, not just the element: the minimum is interpolated into this copy from
+    // MIN_DATA_LAKE_SLUG_LENGTH, which the component imports from @bike4mind/common. If that
+    // ever resolved to undefined the sentence would read "at least  letters" and a presence-only
+    // check would still pass, which is the one way this shared bound can break a user-facing string.
+    expect(screen.getByTestId(SLUG_ERROR)).toHaveTextContent('This name needs at least 2 letters or numbers');
   });
 
   it('stays silent for a name that yields a valid slug', () => {

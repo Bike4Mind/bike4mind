@@ -51,6 +51,18 @@ describe('WhatsNewDistributionService', () => {
     ...overrides,
   });
 
+  it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', async () => {
+    // Without this, the SDK's flexible-checksums default fails every PutObject with
+    // XAmzContentSHA256Mismatch. There is no unit-testable way to observe an upload
+    // succeeding, so this locks the client config instead.
+    const client = (
+      WhatsNewDistributionService as unknown as {
+        s3Client: { config: { requestChecksumCalculation: () => Promise<string> } };
+      }
+    ).s3Client;
+    await expect(client.config.requestChecksumCalculation()).resolves.toBe('WHEN_REQUIRED');
+  });
+
   beforeEach(() => {
     s3Mock.reset();
     // Enable distribution for most tests (simulates main production)

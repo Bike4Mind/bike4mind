@@ -19,6 +19,7 @@ import {
   UserApiKeyEvents,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -125,6 +126,15 @@ const handler = baseApi()
     const userId = req.user?.id;
     const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
       req.body;
+
+    // Reject any scope outside the self-service allowlist. ADMIN, CC_BRIDGE, and
+    // other dedicated-flow scopes are intentionally absent from USER_API_KEY_SCOPE_VALUES
+    // and must never be reachable here, regardless of what the request body contains.
+    const requestedScopes = Array.isArray(scopes) ? scopes : [];
+    const invalidScopes = requestedScopes.filter(s => !USER_API_KEY_SCOPE_VALUES.includes(s as ApiKeyScope));
+    if (invalidScopes.length > 0) {
+      throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
+    }
 
     // Authorize org-billed minting: caller must administer the org (owner or
     // manager) or be a platform admin. Fail closed on anything else.

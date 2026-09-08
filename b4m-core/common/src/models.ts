@@ -273,6 +273,13 @@ export const supportedChatModels = z.enum(ChatModels);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
 
 /**
+ * Every `ChatModels` Gemini entry is named `gemini...` (see the GEMINI block above) - a prefix
+ * check tracks that naming convention automatically as new Gemini models are added, unlike an
+ * explicit id list that would need updating in lockstep and could silently miss one.
+ */
+export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
+
+/**
  * Models that support the reasoning_effort parameter.
  * o1-preview and o1-mini do NOT support reasoning_effort.
  */

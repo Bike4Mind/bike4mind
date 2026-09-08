@@ -155,6 +155,16 @@ export interface ParentExecution {
   pendingTextByIteration?: Record<number, string>;
 }
 
+/** One outstanding `reconnect` request, waiting for the response that answers it. */
+export interface PendingReconnect {
+  /** Absent when the sweep asked about a run whose session the store never learned -
+   *  consuming such an entry returns undefined and hydrate falls back to the
+   *  execution's own stored sessionId. */
+  sessionId?: string;
+  /** Absent when the caller was asking "is anything running here?" and had no id yet. */
+  executionId?: string;
+}
+
 interface AgentExecutionState {
   executions: Record<string, ParentExecution>;
   /** Sessions awaiting their first `execution_started` event. Dispatch enqueues,
@@ -163,11 +173,17 @@ interface AgentExecutionState {
    * `concurrent_limit` check. */
   pendingDispatches: string[];
   /** Sessions awaiting their `reconnect_result` response. The server's payload
-   * doesn't echo sessionId back (the response shape is kept stable), so we use
-   * the same FIFO correlation as `pendingDispatches` to stamp the sessionId
-   * onto the hydrated execution. WS event ordering is preserved per connection,
-   * and mount-time reconnect is one-shot per session, so a queue is sufficient. */
-  pendingReconnects: string[];
+   * doesn't echo sessionId back (the response shape is kept stable), so the
+   * sessionId has to be carried here to be stamped onto the hydrated execution.
+   *
+   * Correlation is by `executionId` whenever the caller knew one - a socket-open
+   * sweep asks about several runs at once, and independent handler invocations
+   * answer in whatever order their work finishes, so arrival order alone would
+   * pair a response with another run's session. Callers that cannot know the id
+   * yet (the mount-time "is anything running in this session?" probe) enqueue
+   * without one and are matched FIFO among themselves, which is safe because
+   * that probe is one-shot per session. */
+  pendingReconnects: PendingReconnect[];
 
   // Lifecycle
   startExecution: (executionId: string, sessionId?: string) => void;
@@ -282,8 +298,10 @@ interface AgentExecutionState {
   // Dispatch correlation
   registerPendingDispatch: (sessionId: string) => void;
   consumePendingDispatch: () => string | undefined;
-  registerPendingReconnect: (sessionId: string) => void;
-  consumePendingReconnect: () => string | undefined;
+  /** `executionId` when the caller already knows which run it is asking about. */
+  registerPendingReconnect: (sessionId: string | undefined, executionId?: string) => void;
+  /** Pass the id the response carries; falls back to FIFO for un-keyed entries. */
+  consumePendingReconnect: (executionId?: string) => string | undefined;
 
   // Cleanup
   clear: (executionId: string) => void;
@@ -435,12 +453,21 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
     return head;
   },
 
-  registerPendingReconnect: sessionId => set(state => ({ pendingReconnects: [...state.pendingReconnects, sessionId] })),
+  registerPendingReconnect: (sessionId, executionId) =>
+    set(state => ({ pendingReconnects: [...state.pendingReconnects, { sessionId, executionId }] })),
 
-  consumePendingReconnect: () => {
-    const [head, ...rest] = get().pendingReconnects;
-    set({ pendingReconnects: rest });
-    return head;
+  consumePendingReconnect: executionId => {
+    const queue = get().pendingReconnects;
+    // A keyed entry answers only to its own run. Fall through to the oldest
+    // un-keyed entry otherwise, which is both the mount-time probe's own case
+    // and what a `found: false` response (no executionId on the wire) drains.
+    const at = executionId
+      ? queue.findIndex(e => e.executionId === executionId)
+      : queue.findIndex(e => e.executionId === undefined);
+    const index = at === -1 ? queue.findIndex(e => e.executionId === undefined) : at;
+    if (index === -1) return undefined;
+    set({ pendingReconnects: queue.filter((_, i) => i !== index) });
+    return queue[index].sessionId;
   },
 
   startExecution: (executionId, sessionId) =>
@@ -725,7 +752,10 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       return { executions: next, pendingDispatches };
     }),
 
-  clearAll: () => set({ executions: {} }),
+  // The pending queues are correlation state for requests already in flight, so a reset that
+  // dropped the executions but kept them would leave entries that can only ever mis-pair with
+  // whatever comes next.
+  clearAll: () => set({ executions: {}, pendingDispatches: [], pendingReconnects: [] }),
 }));
 
 // ---------------------------------------------------------------------------

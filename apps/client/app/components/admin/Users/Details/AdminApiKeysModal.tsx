@@ -1,6 +1,7 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGetUserApiKeys, useAdminResetApiKeyRateLimit } from '@client/app/hooks/data/userApiKeys';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
-import { ApiKeyStatus, IUserApiKeyDocument, IUserDocument } from '@bike4mind/common';
+import { ApiKeyStatus, IUserApiKeyDocument } from '@bike4mind/common';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import {
@@ -28,7 +29,7 @@ dayjs.extend(relativeTime);
 interface AdminApiKeysModalProps {
   open: boolean;
   onClose: () => void;
-  user: IUserDocument;
+  user: AdminUserListItem;
 }
 
 const STATUS_CHIP: Record<ApiKeyStatus, { color: 'success' | 'neutral' | 'warning' | 'danger'; label: string }> = {

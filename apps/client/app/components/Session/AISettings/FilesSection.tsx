@@ -4,13 +4,7 @@ import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typog
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import {
-  DEFAULT_PASSAGE_TOKEN_TARGET,
-  IFabFileDocument,
-  MimeType,
-  isImageAttachment,
-  isImageServeable,
-} from '@bike4mind/common';
+import { IFabFileDocument, MimeType, isImageAttachment, isImageServeable } from '@bike4mind/common';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import {
   useSessions,
@@ -22,7 +16,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
-import { useChunkFile } from '@client/app/hooks/data/fabFiles';
+import { useReprocessFile } from '@client/app/hooks/data/fabFiles';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
@@ -161,9 +155,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const { currentUser } = useUser();
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
   const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
-  // Fall back to the canonical chunker default, not a third hand-copied number.
-  const defaultChunkSize = useGetSettingsValue('DefaultChunkSize') || DEFAULT_PASSAGE_TOKEN_TARGET;
-  const chunkFile = useChunkFile();
+  const reprocessFile = useReprocessFile();
   const queryClient = useQueryClient();
 
   // Files attached to individual messages
@@ -200,60 +192,46 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
       // Check if this is a system file
       const isSystemFile = systemFiles.some(sysFile => sysFile.id === file.id);
 
-      chunkFile.mutate(
-        { fabFileId: file.id, chunkSize: Number(defaultChunkSize) }, // Use default chunk size from settings
-        {
-          onSuccess: () => {
-            toast.success(`Successfully reprocessed "${file.fileName}" with the current embedding model`);
-            setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
+      reprocessFile.mutate(file.id, {
+        onSuccess: () => {
+          // Only the queue ack - the rebuild runs async, so say started, not done.
+          toast.success(`Re-processing "${file.fileName}" - it will be re-embedded with the current model`);
+          setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
 
-            if (isSystemFile) {
-              // For system files, first manually update the cache data
-              queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
-                if (Array.isArray(oldData)) {
-                  return oldData.map((f: IFabFileDocument) =>
-                    f.id === file.id
-                      ? { ...f, embeddingModel: String(currentEmbeddingModel), vectorized: true, chunked: true }
-                      : f
-                  );
-                }
-                return oldData;
-              });
+          // /api/files/reprocess has cleared the flags server-side; mirror that rather than
+          // claiming completion. Nothing reconciles this panel in-session: it has no
+          // update_file_chunk_vector_status subscriber, and the workbench store is zustand, so the
+          // hook's ['fabFiles'] invalidation cannot reach it either - the row stays pending until a
+          // remount or session switch rehydrates it (SessionsContext's knowledgeIds effect).
+          // isChunking is what the disabled predicates below read, so setting it keeps the button
+          // from re-arming mid-rebuild; a second click would be a second real reset + re-embed.
+          const markPending = (f: IFabFileDocument) =>
+            f.id === file.id ? { ...f, vectorized: false, chunked: false, isChunking: true } : f;
 
-              // Then invalidate after a delay to allow server processing
-              setTimeout(() => {
-                queryClient.invalidateQueries({
-                  queryKey: ['system-prompt-files'],
-                  exact: false,
-                });
-
-                // Also invalidate any individual file queries
-                queryClient.invalidateQueries({
-                  queryKey: ['fab-file', file.id],
-                  exact: false,
-                });
-              }, 1500); // 1.5 second delay to allow server to process the file
-            } else {
-              // Update the file in the workbench store to reflect the new embedding model
-              if (currentSessionId) {
-                setWorkBenchFiles(currentSessionId, prevFiles =>
-                  prevFiles.map(f =>
-                    f.id === file.id
-                      ? { ...f, embeddingModel: String(currentEmbeddingModel), vectorized: true, chunked: true }
-                      : f
-                  )
-                );
+          if (isSystemFile) {
+            // No follow-up invalidation: ['system-prompt-files', allSystemFileIds]
+            // (SessionsContext) is active while this panel is open, so a refetch would replace this
+            // row with server state that already reads isChunking:false - resetChunkStateByIds
+            // writes it - and re-arm the button mid-rebuild, which is exactly what markPending
+            // exists to prevent. It could never observe completion anyway; that needs the deferred
+            // update_file_chunk_vector_status subscriber.
+            queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
+              if (Array.isArray(oldData)) {
+                return oldData.map(markPending);
               }
-            }
-          },
-          onError: (error: any) => {
-            toast.error(`Failed to reprocess file: ${error?.message || 'Unknown error'}`);
-            setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
-          },
-        }
-      );
+              return oldData;
+            });
+          } else if (currentSessionId) {
+            setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(markPending));
+          }
+        },
+        onError: (error: any) => {
+          toast.error(`Failed to reprocess file: ${error?.message || 'Unknown error'}`);
+          setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
+        },
+      });
     },
-    [chunkFile, defaultChunkSize, currentSessionId, setWorkBenchFiles, currentEmbeddingModel, systemFiles, queryClient]
+    [reprocessFile, currentSessionId, setWorkBenchFiles, systemFiles, queryClient]
   );
 
   // Check if the file is supported by the model
@@ -455,6 +433,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-system-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"
@@ -558,6 +537,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-workbench-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"

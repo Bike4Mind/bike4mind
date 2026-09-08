@@ -7,7 +7,7 @@ import {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
 import { creditService } from '@bike4mind/services';
-import { CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
@@ -33,7 +33,11 @@ interface RequestQuery {
   id: string;
 }
 
-const handler = baseApi().post(
+// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+// before req.user is set, so a key issued for a narrow integration can't grant
+// org credits just because its owner is an admin. JWT/browser admins skip that
+// check and still pass the isAdmin gate below.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

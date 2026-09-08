@@ -9,6 +9,12 @@ import BaseRepository from '@bike4mind/db-core';
  *
  * `session_revoked` records an admin force-logout (revoke all of a user's sessions
  * via the tokenVersion kill switch); written by the admin revoke-sessions route.
+ *
+ * `session_reuse_revoked`, `session_recovered`, `refresh_replay_capped` and
+ * `refresh_recovery_capped` record the refresh endpoint's involuntary-session outcomes (theft
+ * detection, lost-response recovery, and the two allowance caps); emitted by rotateSession's audit
+ * hook. They exist so a "user was logged out" report can be answered from one query instead of
+ * code archaeology. NOTE: recorded, not alarmed - nothing consumes these yet.
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -18,7 +24,14 @@ export type UserAuthAuditEvent =
   | 'mfa_disabled'
   | 'oauth_link'
   | 'oauth_unlink'
-  | 'session_revoked';
+  | 'session_revoked'
+  | 'session_reuse_revoked'
+  | 'session_recovered'
+  | 'refresh_replay_capped'
+  | 'refresh_recovery_capped'
+  | 'trusted_device_granted'
+  | 'trusted_device_used'
+  | 'trusted_device_revoked';
 
 const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -29,6 +42,13 @@ const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'oauth_link',
   'oauth_unlink',
   'session_revoked',
+  'session_reuse_revoked',
+  'session_recovered',
+  'refresh_replay_capped',
+  'refresh_recovery_capped',
+  'trusted_device_granted',
+  'trusted_device_used',
+  'trusted_device_revoked',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {

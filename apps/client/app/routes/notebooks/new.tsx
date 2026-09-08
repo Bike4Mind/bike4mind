@@ -12,9 +12,13 @@ import { setQuestLaunchIntent } from '@client/app/utils/questLaunchIntent';
 const NewNotebookPage = () => {
   const { setCurrentSession, setCurrentSessionId, setWorkBenchAgents } = useSessions();
   const { clearAllSessions } = useWorkBenchActions();
-  const search = useSearch({ strict: false }) as { questmaster?: string; goal?: string };
+  const search = useSearch({ strict: false }) as { questmaster?: string; goal?: string; article?: string };
   const navigate = useNavigate();
   const hasProcessedQuestParams = useRef(false);
+  // Snapshotted at mount, deliberately NOT a dependency below: this reset is a one-time "blank
+  // notebook" action, and re-running it because a search param later changed would clear a live
+  // session out from under the user.
+  const arrivedWithDeepLink = useRef(!!search.article);
   const { setPreparingQuest, isPreparingQuest } = useQuestPreparation();
 
   useDocumentTitle(search.goal || isPreparingQuest ? 'Preparing Quest...' : 'New Notebook');
@@ -45,7 +49,13 @@ const NewNotebookPage = () => {
 
     setCurrentSession(null);
     setCurrentSessionId(null);
-    setSessionLayout({ layout: 'hide' });
+    // Skipped when an `?article=` deep link arrived (forwarded here by the retired /data-lakes
+    // route): DataLakeExplorer opens that file by writing layout 'vertical' from a CHILD effect,
+    // and child effects commit before this one. On a cold load its query is still in flight so
+    // the ordering is harmless, but react-query serves a warm cache synchronously - re-opening a
+    // shared link for a file already viewed this session - and then this 'hide' would land last
+    // and swallow the viewer the link exists to open.
+    if (!arrivedWithDeepLink.current) setSessionLayout({ layout: 'hide' });
   }, [setCurrentSession, setCurrentSessionId, clearAllSessions, setWorkBenchAgents]);
 
   // Overlay is now rendered at app level (QuestPreparationOverlay in root layout)

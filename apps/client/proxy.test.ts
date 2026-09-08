@@ -55,6 +55,17 @@ describe('proxy CSP header', () => {
     expect(csp).toContain('https://assets.mailerlite.com');
   });
 
+  it('frame-src allows only the -nocookie YouTube host', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const frameSrc = csp.match(/frame-src ([^;]*)/)?.[1] ?? '';
+    // Help demo embeds hardcode the -nocookie host, so www.youtube.com is never
+    // framed. Compare whole tokens: 'https://www.youtube' prefixes both hosts,
+    // so a substring check would never fail.
+    expect(frameSrc.split(/\s+/)).toContain('https://www.youtube-nocookie.com');
+    expect(frameSrc.split(/\s+/)).not.toContain('https://www.youtube.com');
+  });
+
   it('CSP header contains only known directives (no leaked source comments)', () => {
     // Guards against accidentally embedding // line comments inside the cspHeader
     // template literal — JS template literals do not strip // comments, so any

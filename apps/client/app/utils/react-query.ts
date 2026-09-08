@@ -331,7 +331,6 @@ export const useSubscribeCollection = <T>(
   callbackFn?: SubscriptionCallbackFunction<T>,
   options?: {
     fetchInitialData?: boolean;
-    fields?: Partial<Record<keyof T, boolean | number>>;
   }
 ) => {
   const [subscriptionId] = useState(() => Math.random().toString(36).substring(2, 9));
@@ -401,6 +400,11 @@ export const useSubscribeCollection = <T>(
           collectionName,
           query: mongoQuery,
           subscriptionId,
+          // Always empty: the server owns the projection (it merges in exclusion-based
+          // fieldLimits per collection, e.g. password/stripeCustomerId for `users`). A
+          // client-supplied inclusion projection can't be honored on those collections -
+          // it would mix inclusions with the server's exclusions and be dropped - so we
+          // don't offer one. `fields` is still required by the wire schema.
           fields: {},
           fetchInitialData: options?.fetchInitialData ?? true,
         };

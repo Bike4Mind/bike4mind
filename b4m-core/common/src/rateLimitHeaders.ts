@@ -119,6 +119,26 @@ export function hasRateLimitInfo(info: RateLimitInfo): boolean {
  * @param thresholdPercent - Usage percentage threshold (default: 80)
  * @returns true if usage is at or above the threshold
  */
+/**
+ * The delay a 429 handler should actually wait, from a parsed `Retry-After` plus the caller's own
+ * default.
+ *
+ * A hint is honoured only when it asks us to WAIT. `Retry-After: 0`, a negative value, or an HTTP
+ * date that has already elapsed all parse to a non-positive delay, and `?? default` does not catch
+ * them - `0 ?? 5000` is `0` - so a literal zero silently replaced the caller's default and left the
+ * retry firing after jitter alone. A server sends this header when it is already struggling, so a
+ * zero is the worst moment to skip the wait.
+ *
+ * Deliberately NOT folded into `parseRateLimitHeaders`: that function reports what the response
+ * actually said, and `hasRateLimitInfo` / `buildRateLimitLogEntry` both read `retryAfterMs` - so
+ * nulling a zero there would make "the server sent Retry-After: 0" indistinguishable from "the
+ * server sent no Retry-After" in the logs. Parsing stays faithful; the delay decision lives here,
+ * once, for every 429 handler that shares it.
+ */
+export function resolveRetryAfterDelayMs(info: RateLimitInfo, defaultMs: number): number {
+  return info.retryAfterMs !== null && info.retryAfterMs > 0 ? info.retryAfterMs : defaultMs;
+}
+
 export function isNearLimit(info: RateLimitInfo, thresholdPercent = 80): boolean {
   if (info.usagePercent === null) return false;
   return info.usagePercent >= thresholdPercent;

@@ -12,6 +12,7 @@ import type { ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
 import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
+import { isMemberCreditCapError } from '../../../creditService';
 
 /**
  * Maximum number of nodes the coordinator is allowed to emit in a single DAG.
@@ -157,6 +158,13 @@ export interface CoordinateTaskToolDeps {
    * converts them to observation strings).
    */
   dagHandoffSignal?: DagHandoffSignal;
+
+  /**
+   * Returns true when the delegating user is at or over their organization's
+   * per-member credit cap. Forwarded to the orchestrator that runs the
+   * coordinator agent in-process; see `ServerOrchestratorDeps.checkMemberCreditCap`.
+   */
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -223,6 +231,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         getRemainingTimeMs: deps.getRemainingTimeMs,
         handoffSignal: deps.subagentHandoffSignal,
         optInTools: deps.optInTools,
+        checkMemberCreditCap: deps.checkMemberCreditCap,
       });
 
       try {
@@ -233,6 +242,14 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
+        // A capped-out refusal is deliberate policy, not a coordinator malfunction - log it
+        // at warn (matching the sibling gates) rather than error, and skip suggesting
+        // delegate_to_agent as a fallback, since it shares the same gate and would just
+        // spend the grace iteration on a guaranteed refusal.
+        if (isMemberCreditCapError(error)) {
+          deps.logger.warn('[coordinate_task] coordinator refused: member credit cap reached');
+          return `Error: ${msg}`;
+        }
         deps.logger.error('[coordinate_task] coordinator agent failed', { error: msg });
         return `Error: the coordinator agent failed to produce a decomposition: ${msg}. Consider calling delegate_to_agent directly with a single specialized agent.`;
       }
