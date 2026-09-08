@@ -16,14 +16,29 @@ import { updateUserSlackSettings } from './handlers/notebook-manager';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import { notebookNew } from './tools/notebookNew';
 import { notebookStatus } from './tools/notebookStatus';
-import { IUserDocument } from '@bike4mind/common';
+import { HTTPError, IUserDocument } from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
 
 const HISTORY_COUNT = 20;
+// A curated failure reply from ChatCompletionProcess is always short; an unclassified
+// internal error message (the raw err.message fallback - see isHttpError below) is the
+// one case worth bounding before it reaches a whole Slack channel.
+const MAX_ERROR_REPLY_LENGTH = 300;
 
 import { SlackClient } from './SlackClient';
 import { ChatCompletionInvoke } from '@bike4mind/services';
 import { createLoadingBar } from './utils/loadingBar';
+
+/**
+ * `error instanceof HTTPError` is unreliable across the @bike4mind/services ->
+ * @bike4mind/slack package boundary if @bike4mind/common ever resolves as two distinct
+ * module realms - the same reason `isZodError` and `isChunkClaimLostError`
+ * (b4m-core/common/src/errors.ts) avoid a bare instanceof. Duck-type on `statusCode`,
+ * which every HTTPError subclass sets, as a realm-safe fallback.
+ */
+function isHttpError(err: unknown): err is HTTPError {
+  return err instanceof HTTPError || typeof (err as { statusCode?: unknown } | null)?.statusCode === 'number';
+}
 
 /**
  * CommandHandler class for processing Slack commands
@@ -428,7 +443,18 @@ export class CommandHandler {
 
         if (updatedQuest?.type === 'error') {
           this.logger.error('Quest failed:', updatedQuest.reply);
-          return 'Sorry, I encountered an error processing your request.';
+          // updatedQuest.reply is the curated message for ChatCompletionProcess's named
+          // categories (credits, timeout, tool-pairing, overload, context overflow) - but
+          // it sets quest.reply to the raw err.message BEFORE that categorization runs, so
+          // an uncategorized failure leaves the raw message in place, and nothing on the
+          // quest distinguishes the two cases. Surface it (instead of always flattening to
+          // the same string) but cap the length: a curated message is always short, so this
+          // only bites the unclassified case, keeping a large/unexpected internal error from
+          // dumping wholesale into a Slack channel that may not be private.
+          if (!updatedQuest.reply) return 'Sorry, I encountered an error processing your request.';
+          return updatedQuest.reply.length > MAX_ERROR_REPLY_LENGTH
+            ? `${updatedQuest.reply.slice(0, MAX_ERROR_REPLY_LENGTH)}...`
+            : updatedQuest.reply;
         }
 
         // Wait before polling again
@@ -440,6 +466,13 @@ export class CommandHandler {
       return 'Sorry, I took too long to respond. Please try again.';
     } catch (error) {
       this.logger.error('Error triggering AI response:', error);
+      // HTTPError subclasses (BadRequestError, ForbiddenError, InternalServerError, ...)
+      // are thrown with a message already written to be shown to the caller - surface it
+      // so a future failure names what broke. Anything else stays generic rather than
+      // leaking an unreviewed internal error message to a public Slack channel.
+      if (isHttpError(error) && error.message) {
+        return error.message;
+      }
       return 'Sorry, I encountered an error processing your request.';
     }
   }
