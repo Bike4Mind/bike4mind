@@ -44,12 +44,13 @@ const handler = baseApi().post(
     const { fileId } = await withTransaction(async session => {
       if (user.photoUrl) {
         // Defense-in-depth: only delete the underlying S3 object + AppFile when the AppFile
-        // at this key belongs to the caller. photoUrl is no longer settable via the
+        // at this key belongs to the profile owner. photoUrl is no longer settable via the
         // self-service profile update, but a value poisoned before that fix (or by any other
-        // writer) must never delete a file the caller does not own. AppFiles for profile
-        // photos are created below with userId: req.user.id, so a legit re-upload always matches.
+        // writer) must never delete a file that is not this profile's photo. The owner is the
+        // path param, not the caller: an admin may upload on another user's behalf, and the
+        // AppFile is created below under the same owner so a later re-upload still matches.
         const existing = await AppFile.findOne({ path: user.photoUrl }).session(session);
-        if (existing && existing.userId?.toString() === req.user.id) {
+        if (existing && existing.userId?.toString() === userId) {
           await storage.delete(user.photoUrl);
           await AppFile.findOneAndDelete({ path: user.photoUrl }).session(session);
         }
@@ -57,7 +58,7 @@ const handler = baseApi().post(
       }
 
       const file = new AppFile({
-        userId: req.user.id,
+        userId,
         name: `${user.name} profile photo`,
         size: data.fileSize,
         path: fileKey,

@@ -8,6 +8,7 @@ const {
   mockAppFileFindOneAndDelete,
   mockStorageDelete,
   mockStorageGetSignedUrl,
+  mockAppFileCtor,
 } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
   mockUserUpdateOne: vi.fn(),
@@ -15,6 +16,7 @@ const {
   mockAppFileFindOneAndDelete: vi.fn(),
   mockStorageDelete: vi.fn(),
   mockStorageGetSignedUrl: vi.fn(),
+  mockAppFileCtor: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -45,7 +47,9 @@ const withSession = (value: unknown) => ({ session: () => Promise.resolve(value)
 vi.mock('@bike4mind/database/content', () => {
   class AppFile {
     id = 'new-file-id';
-    constructor(public doc: Record<string, unknown>) {}
+    constructor(public doc: Record<string, unknown>) {
+      mockAppFileCtor(doc);
+    }
     save = vi.fn().mockResolvedValue(undefined);
     static findOne = (...a: unknown[]) => withSession(mockAppFileFindOne(...a));
     static findOneAndDelete = (...a: unknown[]) => withSession(mockAppFileFindOneAndDelete(...a));
@@ -82,9 +86,9 @@ import handler from '../upload-photo';
 
 const OWN = 'u1';
 
-const run = (photoUrl: string | undefined) => {
+const run = (photoUrl: string | undefined, caller: { id: string; isAdmin: boolean } = { id: OWN, isAdmin: false }) => {
   const { req, res } = createMocks({ method: 'POST', query: { id: OWN }, body: {} });
-  (req as Record<string, unknown>).user = { id: OWN, isAdmin: false };
+  (req as Record<string, unknown>).user = caller;
   (req as Record<string, unknown>).ability = {};
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -96,6 +100,7 @@ beforeEach(() => {
   mockAppFileFindOneAndDelete.mockReset().mockResolvedValue(undefined);
   mockStorageDelete.mockReset().mockResolvedValue(undefined);
   mockStorageGetSignedUrl.mockReset().mockResolvedValue('https://signed');
+  mockAppFileCtor.mockReset();
 });
 
 describe('POST /api/users/:id/upload-photo - stored photoUrl deref guard', () => {
@@ -112,6 +117,22 @@ describe('POST /api/users/:id/upload-photo - stored photoUrl deref guard', () =>
     expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
     // The stale/foreign key is still cleared off the profile.
     expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN }, { $unset: { photoUrl: 1 } });
+  });
+
+  it('deletes the previous photo file when an admin re-uploads for another user', async () => {
+    mockUserFindById.mockResolvedValue({ id: OWN, name: 'A', photoUrl: 'profile-photos/u1/own.png' });
+    mockAppFileFindOne.mockReturnValue({ userId: OWN });
+
+    const { res, promise } = run('profile-photos/u1/own.png', { id: 'admin-1', isAdmin: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Ownership is the profile owner, not the uploader - otherwise an admin upload strands the
+    // old S3 object and AppFile row, since the $unset still clears the pointer to them.
+    expect(mockStorageDelete).toHaveBeenCalledWith('profile-photos/u1/own.png');
+    expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith({ path: 'profile-photos/u1/own.png' });
+    // And the replacement is attributed to the profile owner, so the next re-upload matches too.
+    expect(mockAppFileCtor).toHaveBeenCalledWith(expect.objectContaining({ userId: OWN }));
   });
 
   it('deletes the caller-owned previous photo file on re-upload', async () => {
