@@ -155,6 +155,9 @@
       "isolated-vm",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "patchedDependencies": {
+      "@mui/joy@5.0.0-beta.52": "patches/@mui__joy@5.0.0-beta.52.patch"
+    }
   }
 }
