@@ -875,6 +875,64 @@ describe('driveLakeIngest consumer', () => {
       );
     });
 
+    it('defers the rest of the slice on a Drive rate limit instead of silently short-changing the batch', async () => {
+      // The bug this exists for: a 429 used to come back as reason 'error', which the loop recorded
+      // as a PERMANENT skip. recordSkippedDriveFile is idempotent per chain, so the file was
+      // subtracted from every later walk - gone from the lake for good - while `skippedFiles` carried
+      // the batch over the finalize gate and the whole sync reported success.
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2', 'd3'));
+      h.fetchDriveFileContent
+        .mockResolvedValueOnce(okBytes())
+        .mockResolvedValueOnce({ ok: false, reason: 'rate_limited', detail: 'Rate Limit Exceeded' });
+
+      await run({ connectionId: 'conn1' });
+
+      // The throttled file keeps its candidacy: no skip recorded, so the continuation's walk still
+      // sees it. d3 is never even attempted - the quota is exhausted, not this one file.
+      expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+      expect(h.fetchDriveFileContent).toHaveBeenCalledTimes(2);
+      expect(h.upload).toHaveBeenCalledTimes(1);
+
+      // And the batch is handed on rather than settled, so nothing can report this run complete.
+      expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+      expect(h.setTotalFilesIfActive).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'token-renew' },
+        expect.any(Number)
+      );
+      // Unlike the deadline yield, a throttled slice delays its continuation - coming straight back
+      // would hit the same exhausted quota.
+      expect(h.sendToQueue.mock.calls[0][2]).toBeGreaterThanOrEqual(60);
+    });
+
+    it('tells the operator the sync was rate-limited when a throttled chain hits the ceiling', async () => {
+      // lastError is the only account of a chain that stopped short that reaches a user (the lake's
+      // Drive chip surfaces it - describeDriveConnection), and the large-folder advice ("split into
+      // subfolders") is both wrong and unactionable for a quota problem.
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
+      h.fetchDriveFileContent.mockResolvedValue({ ok: false, reason: 'rate_limited', detail: '429' });
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 2,
+        skippedFiles: 0,
+        files: [],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: MAX_INGEST_SLICES - 1 });
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+      const [, , lastError] = h.releaseSyncClaim.mock.calls[0];
+      expect(lastError).toContain('rate-limiting');
+      expect(lastError).not.toContain('subfolders');
+    });
+
     it('tolerates a release that loses its CAS when the claim was taken away mid-slice', async () => {
       // Someone else owns the connection now (a stale-claim reclaim). The release still RUNS - it is a
       // compare-and-set on this run's token, so it misses the new owner's document and heals nothing,
