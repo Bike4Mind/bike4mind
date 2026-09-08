@@ -13,6 +13,7 @@ import {
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
   ABSTENTION_PROMPT,
+  WEB_SEARCH_FRESHNESS_PROMPT,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -682,6 +683,31 @@ describe('AbstentionPrompt default carries the anti-invention licence', () => {
 
   it('ships as the AbstentionPrompt setting default (no drift between const and setting)', () => {
     expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
+  });
+});
+
+describe('WebSearchFreshnessPrompt default tells the model when to search', () => {
+  // The measured failure it exists to fix is under-SELECTION, not weak search: web_search was
+  // offered on every turn of a 200-question internal eval and called on 16% of them, and the
+  // tool prompt instructed the model about clock time and chess and nothing about staleness.
+  // Two clauses carry the whole effect, so pin both.
+  it('directs the model to search before answering a time-sensitive question', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/web_search/);
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/training data has a cutoff/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a search it did
+  // not need; on the same eval it held the rate to 31% on questions with nothing to look up.
+  it('names the cases that do NOT need a search', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/do not need to search/i);
+  });
+
+  it('requires an as-of date on any time-sensitive fact it reports', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/as of/i);
+  });
+
+  it('ships as the WebSearchFreshnessPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.WebSearchFreshnessPrompt.defaultValue).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
   });
 });
 

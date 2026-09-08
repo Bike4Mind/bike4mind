@@ -2783,6 +2783,8 @@ export class ChatCompletionProcess {
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
+        hasWebSearch: enabledTools.includes('web_search'),
+        webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
         userTimezone,
         mcpTools: directMcpTools,
         sessionId,

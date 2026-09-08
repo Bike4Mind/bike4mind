@@ -143,6 +143,16 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
  */
 export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
 
+export const WEB_SEARCH_FRESHNESS_PROMPT = `# WEB SEARCH AND FRESHNESS
+
+Your training data has a cutoff. The current date is supplied to you in this conversation's system context - treat it as authoritative, and assume anything time-sensitive may have changed since your training.
+
+Call \`web_search\` BEFORE answering when the answer depends on a fact that changes over time: current prices or rates, product availability or roadmap status, funding, organizational or personnel changes, published benchmarks or performance figures, competitive positioning, or anything the user frames as "current", "latest", "now", or "as of today". When a stale answer would mislead, search instead of answering from memory. Use \`web_fetch\` to read a specific page that a search surfaces or that the user names.
+
+You do not need to search for stable knowledge (definitions, mathematics, established theory), or for questions answerable purely from this conversation or from documents already retrieved for you.
+
+When you report a time-sensitive fact, state what it is as of - the date of the source you used - and say plainly when you could not verify something and are answering from training data instead. Never present an unverified recollection as a current fact.`;
+
 /**
  * Default text for the formatting system message. Runtime fallback used by
  * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) when the `FormatPromptTemplate`
@@ -177,6 +187,7 @@ export const SettingKeySchema = z.enum([
   'ArtifactEmissionPrompt',
   'HelpCenterPrompt',
   'AbstentionPrompt',
+  'WebSearchFreshnessPrompt',
   'UseFormatPrompt',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
@@ -1429,6 +1440,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'ArtifactEmissionPrompt', order: 9 },
       { key: 'HelpCenterPrompt', order: 10 },
       { key: 'AbstentionPrompt', order: 11 },
+      { key: 'WebSearchFreshnessPrompt', order: 12 },
     ],
   },
   EMBEDDING: {
@@ -2412,6 +2424,15 @@ export const settingsMap = {
       'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 11,
+  }),
+  WebSearchFreshnessPrompt: makeStringSetting({
+    key: 'WebSearchFreshnessPrompt',
+    name: 'Web Search Freshness Prompt',
+    defaultValue: WEB_SEARCH_FRESHNESS_PROMPT,
+    description:
+      'System prompt telling the model when to reach for web_search rather than answer from training data, and to state the as-of date of any time-sensitive fact. Injected only when the web_search tool is enabled for the request - a model instructed to search without a search tool tends to claim it searched. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
+    category: 'AI',
+    order: 12,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
