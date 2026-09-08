@@ -655,6 +655,19 @@ export interface IDataLakeBatch {
   processingFailedFiles: number;
   skippedFiles: number;
   /**
+   * Candidates a multi-run Drive chain PLANNED to ingest and then wrote off unfinished - the chain hit
+   * its slice ceiling, was throttled, lost its claim, or had its connection/lake deleted mid-flight.
+   * Deliberately NOT part of the `vectorized + failed + skipped >= totalFiles` finalize gate: a
+   * deferred candidate mints no manifest entry and no counter, so folding it into that sum would strand
+   * every stopped-short batch in `processing` until the reconciler force-failed it. It is the record
+   * that a `completed` batch is nonetheless SHORT - without it, settling re-plans totalFiles down to
+   * what the chain produced and a 3-of-500 run finalizes as a clean 3-of-3 (#2394).
+   *
+   * Optional because every batch written before this field existed genuinely lacks it; read it as
+   * `?? 0`. Not a `BatchCounterField` either - it is set once when a chain ends, not $inc'd per file.
+   */
+  deferredFiles?: number;
+  /**
    * Drive-ingest-only: driveFileIds skip() has already counted into `skippedFiles` for THIS batch.
    * A skip mints no FabFile, so it is invisible to the ordinary alreadyIngested subtraction
    * (findDriveFileIdsByBatchId) - without recording it here, a chain re-diffing the same
@@ -840,8 +853,17 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * the expected total is only known progressively - it is raised whenever a later slice re-walks a
    * folder that grew, and set exactly when the chain ends, which is what lets the finalize gate
    * (`vectorized + failed + skipped === totalFiles`) still be reached exactly.
+   *
+   * That end-of-chain set is a NARROWING, and `deferredFiles` is how it stays honest: pass the
+   * shortfall being written off so the same update records it, rather than leaving a short chain
+   * indistinguishable from one that ingested everything it planned (see the field's doc). Omit it on
+   * the mid-chain RAISE, which writes nothing off and must not claim otherwise.
    */
-  setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null>;
+  setTotalFilesIfActive(
+    batchId: string,
+    totalFiles: number,
+    deferredFiles?: number
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is

@@ -20,7 +20,7 @@ import { sendToQueue } from '@server/utils/sqs';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
-  isBatchComplete,
+  completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
@@ -172,7 +172,7 @@ async function accountFileFailure(params: {
       batchId,
       failedFiles: batch?.failedFiles ?? 1,
       processingFailedFiles: batch?.processingFailedFiles ?? 1,
-      status: isBatchComplete(batch) ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+      status: completedBatchStatus(batch),
     });
   } catch (innerErr) {
     logger.error(`Error reporting batch ${action.toLowerCase()} failure: ${innerErr}`);
@@ -280,7 +280,7 @@ async function revertStrandBatchAccounting(params: {
       failedFiles: batch.failedFiles,
       processingFailedFiles: batch.processingFailedFiles,
       vectorizedFiles: batch.vectorizedFiles,
-      status: isBatchComplete(batch) ? (batch.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+      status: completedBatchStatus(batch),
     });
   } catch (err) {
     logger.error(`Error reverting the vectorize-enqueue failure accounting for ${fabFileId}: ${err}`);
@@ -768,11 +768,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
               action: 'data_lake_batch_progress',
               batchId: fabFile.batchId,
               vectorizedFiles: batch?.vectorizedFiles ?? 1,
-              status: isBatchComplete(batch)
-                ? batch!.failedFiles > 0
-                  ? 'completed_with_errors'
-                  : 'completed'
-                : undefined,
+              status: completedBatchStatus(batch),
             });
           }
         } catch (error) {

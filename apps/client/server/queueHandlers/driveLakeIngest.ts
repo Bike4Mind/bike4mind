@@ -248,7 +248,10 @@ export function hasDriveFileChanged(
  *     interval is its queue wait, not its run length.
  *   - `totalFiles` is re-planned as the chain goes (raised when a later walk finds more, set exactly
  *     when the chain ends), so the finalize gate is still reached exactly and the batch never settles
- *     mid-chain or strands in `processing` afterwards.
+ *     mid-chain or strands in `processing` afterwards. That final set is a NARROWING, so the same
+ *     settle records the shortfall it just wrote off as `deferredFiles` - otherwise a chain that
+ *     ingested 3 of 500 files finalizes as a clean 3-of-3, and the only account of the other 497 is a
+ *     connection field the next sync overwrites (#2394).
  *
  * A throw part-way through a CONTINUATION slice is rethrown for SQS retry as before, and that retry
  * redelivers the same message - resumeBatchId included - so it adopts the batch and resumes instead of
@@ -305,10 +308,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // handler's own skip() (drive-side: oversized/unsupported/fetch-failed) mints no manifest entry
       // at all, so those are the only skippedFiles that need adding back in.
       const produced = (current.files?.filter(f => f.status !== 'skipped').length ?? 0) + (current.skippedFiles ?? 0);
+      // What the chain PLANNED minus what it produced is exactly the work it gave up on, and it is
+      // derivable here at every exit - including the ones that cannot know a count (a continuation whose
+      // connection or lake was deleted mid-chain settles a batch it never got to walk). Recording it is
+      // what keeps the re-plan below honest: dropping totalFiles to `produced` is what lets the finalize
+      // gate be reached at all, but on its own it rewrites a chain that ingested 3 of 500 files into a
+      // clean 3-of-3 success, and in the degenerate case (throttled before the first file on every
+      // slice) into an empty folder. `max` because a mid-chain walk that finds MORE files raises the
+      // plan, never lowers it, so produced can never legitimately exceed it.
+      const deferredFiles = Math.max(0, current.totalFiles - produced);
       const settled =
         produced === current.totalFiles
           ? current
-          : await dataLakeBatchRepository.setTotalFilesIfActive(batchId, produced);
+          : await dataLakeBatchRepository.setTotalFilesIfActive(batchId, produced, deferredFiles);
       await finalizeBatchIfComplete(settled ?? current, logger);
     };
 
@@ -878,6 +890,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           failedFiles: 0,
           processingFailedFiles: 0,
           skippedFiles: 0,
+          deferredFiles: 0,
           uploadedSizeBytes: 0,
           files: [],
           appliedTags: [],

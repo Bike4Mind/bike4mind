@@ -902,6 +902,11 @@ const DataLakeBatchSchema = new mongoose.Schema(
     // accounting; upload-complete.ts's browser-reported failures never touch it.
     processingFailedFiles: { type: Number, default: 0 },
     skippedFiles: { type: Number, default: 0 },
+    // Drive-ingest-only: candidates a continuation chain planned and then wrote off unfinished, so a
+    // `completed` batch that is SHORT can be told apart from one that ingested all it planned. Kept out
+    // of the finalize gate's sum on purpose - see IDataLakeBatch.deferredFiles for why folding it in
+    // would strand every stopped-short batch in `processing`.
+    deferredFiles: { type: Number, default: 0 },
     // Drive-ingest-only: the driveFileIds skip() has already counted into skippedFiles, so a later
     // slice of the same chain can subtract them (see IDataLakeBatch.skippedDriveFileIds) instead of
     // re-fetching and re-skipping (and re-incrementing) the same permanently-unsupported file.
@@ -1285,9 +1290,20 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
    * may have grown, so `totalFiles` has to be raised before the chain can overrun it (finalizing the
    * batch mid-chain) and set exactly once the chain ends. Guarded like every other write here, so it
    * cannot re-plan a batch someone already settled.
+   *
+   * `deferredFiles` rides along on the end-of-chain call because that set is a NARROWING: recording the
+   * shortfall in the SAME update is what stops a short chain from finalizing as a clean success. Left
+   * untouched when omitted, so the mid-chain raise cannot zero a count a later settle will write.
    */
-  async setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null> {
-    return this.guardedActiveUpdate(batchId, { totalFiles });
+  async setTotalFilesIfActive(
+    batchId: string,
+    totalFiles: number,
+    deferredFiles?: number
+  ): Promise<IDataLakeBatchDocument | null> {
+    return this.guardedActiveUpdate(batchId, {
+      totalFiles,
+      ...(deferredFiles !== undefined && { deferredFiles }),
+    });
   }
 
   async touchIfActive(batchId: string): Promise<void> {

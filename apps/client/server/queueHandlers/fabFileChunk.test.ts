@@ -53,7 +53,7 @@ const h = vi.hoisted(() => {
     getSettingsValue: vi.fn(),
     sendToClient: vi.fn(async () => undefined),
     finalizeBatchIfComplete: vi.fn(),
-    isBatchComplete: vi.fn(),
+    completedBatchStatus: vi.fn(),
     deferFailureIfRetryable: vi.fn(),
     fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
     userFindById: vi.fn(async () => ({ id: 'u1' })),
@@ -134,7 +134,7 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendTo
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
-  isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
+  completedBatchStatus: (...a: unknown[]) => h.completedBatchStatus(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
 vi.mock('@bike4mind/common', async () => {
@@ -197,7 +197,7 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
       vectorizedFiles: 0,
       totalFiles: 3,
     });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
     h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
   });
 
@@ -273,7 +273,7 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
       vectorizedFiles: 0,
       totalFiles: 3,
     });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
     h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
   });
 
@@ -883,7 +883,7 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     h.incrementCounter.mockResolvedValue({ chunkedFiles: 1, failedFiles: 0, totalFiles: 1 });
     h.markFailedIfNotAlready.mockResolvedValue(true);
     h.incrementCounters.mockResolvedValue({ failedFiles: 1, processingFailedFiles: 1, totalFiles: 3 });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
     h.deferFailureIfRetryable.mockResolvedValue(false);
     h.findVectorlessChunkIds.mockResolvedValue([]);
     h.sendToQueue.mockResolvedValue(undefined);
@@ -1160,7 +1160,7 @@ describe('fabFileChunk handler - pre-flight failures are accounted', () => {
       vectorizedFiles: 0,
       totalFiles: 3,
     });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
   });
 
   it('marks the file errored (terminal for the rescue sweep) when the user is gone, and re-throws', async () => {
