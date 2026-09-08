@@ -703,7 +703,9 @@ describe('WebSearchFreshnessPrompt default tells the model when to search', () =
   });
 
   it('requires an as-of date on any time-sensitive fact it reports', () => {
-    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/as of/i);
+    // Not /as of/i - that also matches "as of today" in the search-trigger list, so the pin would
+    // survive deleting the reporting clause this test is named for.
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/state what it is as of/i);
   });
 
   it('ships as the WebSearchFreshnessPrompt setting default (no drift between const and setting)', () => {

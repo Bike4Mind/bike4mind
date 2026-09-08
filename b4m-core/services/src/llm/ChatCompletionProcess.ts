@@ -2783,7 +2783,10 @@ export class ChatCompletionProcess {
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
-        hasWebSearch: enabledTools.includes('web_search'),
+        // Unlike the two lines above, web_search is key-gated (GATED_TOOLS in toolAvailability.ts)
+        // and can be dropped from the built schemas while the requested list still carries it, so
+        // this reads the offered set for the same reason blog_draft and navigate_view do above.
+        hasWebSearch: offeredToolNames.includes('web_search'),
         webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
         userTimezone,
         mcpTools: directMcpTools,

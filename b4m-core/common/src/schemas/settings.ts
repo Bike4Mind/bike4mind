@@ -143,11 +143,24 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
  */
 export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
 
+/**
+ * Default text for the web-search freshness nudge, and the `WebSearchFreshnessPrompt` admin
+ * setting's default.
+ *
+ * Unlike ABSTENTION_PROMPT / ARTIFACT_EMISSION_PROMPT / HELP_CENTER_PROMPT, this is NOT a runtime
+ * fallback: ChatCompletionProcess reads the setting 2-arg, so a cleared value stays '' and drops
+ * the section instead of reverting here. That divergence is deliberate - this section has no
+ * companion boolean, so clearing the field is the only off switch it has. Keep the setting's
+ * description in sync with that if either changes.
+ *
+ * Names no tool but `web_search`: the section is gated on web_search being offered, and web_fetch
+ * is an independent toggle that may well be off.
+ */
 export const WEB_SEARCH_FRESHNESS_PROMPT = `# WEB SEARCH AND FRESHNESS
 
 Your training data has a cutoff. The current date is supplied to you in this conversation's system context - treat it as authoritative, and assume anything time-sensitive may have changed since your training.
 
-Call \`web_search\` BEFORE answering when the answer depends on a fact that changes over time: current prices or rates, product availability or roadmap status, funding, organizational or personnel changes, published benchmarks or performance figures, competitive positioning, or anything the user frames as "current", "latest", "now", or "as of today". When a stale answer would mislead, search instead of answering from memory. Use \`web_fetch\` to read a specific page that a search surfaces or that the user names.
+Call \`web_search\` BEFORE answering when the answer depends on a fact that changes over time: current prices or rates, product availability or roadmap status, funding, organizational or personnel changes, published benchmarks or performance figures, competitive positioning, or anything the user frames as "current", "latest", "now", or "as of today". When a stale answer would mislead, search instead of answering from memory. When a search surfaces a specific page that matters, or the user names one, read that page directly rather than answering from the snippet.
 
 You do not need to search for stable knowledge (definitions, mathematics, established theory), or for questions answerable purely from this conversation or from documents already retrieved for you.
 
@@ -2430,7 +2443,7 @@ export const settingsMap = {
     name: 'Web Search Freshness Prompt',
     defaultValue: WEB_SEARCH_FRESHNESS_PROMPT,
     description:
-      'System prompt telling the model when to reach for web_search rather than answer from training data, and to state the as-of date of any time-sensitive fact. Injected only when the web_search tool is enabled for the request - a model instructed to search without a search tool tends to claim it searched. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
+      'System prompt telling the model when to reach for web_search rather than answer from training data, and to state the as-of date of any time-sensitive fact. Injected only when the web_search tool is offered for the request - a model instructed to search without a search tool tends to claim it searched. Clearing this field turns the section OFF rather than restoring the built-in default, and it is the only off switch this section has; to get the stock wording back, paste it in. A change is not instantaneous: the settings cache is per-instance, so it applies immediately on the instance that served the change and within ~5 min (one cache TTL) everywhere else. After an upgrade, diff a saved copy against the built-in default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 12,
   }),
