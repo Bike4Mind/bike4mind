@@ -295,7 +295,7 @@ describe('POST /api/files/createFabFile - lake write authorization beyond the cr
     const { res } = makeRes();
 
     await expect(runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res)).rejects.toThrow(
-      /do not have permission/
+      /permission to change this data lake's files/
     );
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });

@@ -125,7 +125,11 @@ export const updateFabFile = async (
   }
 
   // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
-  // why. Resolved (and gated) BEFORE the write below, applied after it.
+  // why. Resolved (and gated) BEFORE the write below, applied after it. This actor also widens
+  // what an org admin can do beyond the join gate itself: content tags under an org lake's prefix
+  // that were previously force-carried become droppable, and a manageable prefix-arm join now
+  // lands in `joins` rather than `statsOnlyJoins` - which can flip a draft lake to active. Both
+  // follow from the same fix and are wanted, but the activation is one-way.
   const lakeTags =
     params.tags === undefined
       ? undefined

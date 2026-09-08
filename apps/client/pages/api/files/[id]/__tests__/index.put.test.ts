@@ -347,7 +347,27 @@ describe('PUT /api/files/[id] - lake write authorization', () => {
   it('still refuses a caller with no manage rung at all', async () => {
     const { res } = makeRes();
 
-    await expect(runAs('u2', { tags: [{ name: META, strength: 1 }] }, res)).rejects.toThrow(/do not have permission/);
+    await expect(runAs('u2', { tags: [{ name: META, strength: 1 }] }, res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
     expect(h.update).not.toHaveBeenCalled();
+  });
+
+  // The org-admin rung joins through the same reconciler as any other caller, so it can trigger
+  // the one-way draft -> active flip too, not only the join gate itself.
+  it('lets an org admin activate a draft org lake by joining it', async () => {
+    h.administeredOrgIds = ['org-1'];
+    h.findByDatalakeTag.mockResolvedValue({ ...ORG_LAKE, status: 'draft' });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 12, totalChunkedChars: 0 });
+    h.activateIfDraft.mockResolvedValue(true);
+    const { res } = makeRes();
+
+    await runAs('u2', { tags: [{ name: META, strength: 1 }] }, res);
+
+    expect(h.recordConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
+      })
+    );
   });
 });

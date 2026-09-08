@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   listByLake: vi.fn(),
   listActiveByLakes: vi.fn(),
   findAllAccessibleByIds: vi.fn(),
+  findById: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
   computeDataLakeStats: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: { listByLake: h.listByLake, listActiveByLakes: h.listActiveByLakes },
   fabFileRepository: {
     shareable: { findAllAccessibleByIds: h.findAllAccessibleByIds },
-    findById: vi.fn(),
+    findById: h.findById,
     pushTagsByFabFileId: h.pushTagsByFabFileId,
     pullTagsByFabFileId: h.pullTagsByFabFileId,
     computeDataLakeStats: h.computeDataLakeStats,
@@ -125,10 +126,25 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
     expect(h.pushTagsByFabFileId).toHaveBeenCalledWith('f1', [META], expect.any(Number));
   });
 
+  it('admits an org admin removing a file from the lake', async () => {
+    h.administeredOrgIds = ['org-1'];
+    const file = { id: 'f1', userId: 'u2', tags: [{ name: META, strength: 1 }] };
+    h.findAllAccessibleByIds.mockResolvedValue([{ ...file, toJSON: () => file }]);
+    // removeFileFromLake re-reads the file itself to compute which tags to pull.
+    h.findById.mockResolvedValue(file);
+    const { res } = makeRes();
+
+    await call({ ids: ['f1'], tags: [META] }, res);
+
+    expect(h.pullTagsByFabFileId).toHaveBeenCalledWith('f1', [META]);
+  });
+
   it('still refuses a caller with no manage rung at all', async () => {
     const { res } = makeRes();
 
-    await expect(call({ ids: ['f1'], tags: [META] }, res)).rejects.toThrow(/do not have permission/);
+    await expect(call({ ids: ['f1'], tags: [META] }, res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
     expect(h.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
 });

@@ -150,7 +150,9 @@ export const toggleTags = async (
   // superseded creator does not still pass. Batched + cached across both prefix-arm gate passes.
   // The org rungs fire only when the caller resolved `administeredOrgIds` for us - the route door
   // does, so an org admin the route just authorized is not refused by `addFileToLake` one call
-  // later.
+  // later. This actor gates every hop `canManageLake` admits, not only the join above: the
+  // prefix-arm removal gate below and both `removeFileFromLake` calls widen the same way, so an
+  // org admin can now strip a file out of an org lake, not just add one.
   const grantResolver = makeLakeGrantResolver({ db });
 
   // A lake a file belongs to ONLY via its prefix arm (no meta-tag) is invisible to

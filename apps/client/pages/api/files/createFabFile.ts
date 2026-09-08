@@ -118,7 +118,7 @@ const handler = baseApi()
             // The other half of the same parity: the grant repo restores the grant rungs, but the
             // org rungs need the actor's administered-org set, which the service cannot read off a
             // user document.
-            administeredOrgIds: ctx.administeredOrgIds ?? [],
+            administeredOrgIds: ctx.administeredOrgIds,
           }
         );
       });
