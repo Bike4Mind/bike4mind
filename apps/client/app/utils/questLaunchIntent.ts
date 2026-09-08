@@ -25,3 +25,23 @@ export function consumeQuestLaunchIntent(): QuestLaunchIntent | null {
   pendingIntent = null;
   return intent;
 }
+
+/**
+ * Same-tab, in-memory trust flag for an in-app quest launch (the /quests modal
+ * arms it right before navigating to /new). /new consumes it once to decide
+ * whether a `goal` may auto-submit. An external `/new?goal=...` link - or a
+ * post-login `redirectTo` replay, which crosses a server round-trip - can never
+ * set this, so such a goal only ever pre-fills the composer.
+ */
+let trustedLaunchArmed = false;
+
+export function armTrustedQuestLaunch(): void {
+  trustedLaunchArmed = true;
+}
+
+/** Returns whether an in-app launch was armed and clears it (consume-once). */
+export function consumeTrustedQuestLaunch(): boolean {
+  const armed = trustedLaunchArmed;
+  trustedLaunchArmed = false;
+  return armed;
+}

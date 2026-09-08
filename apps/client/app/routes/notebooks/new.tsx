@@ -7,7 +7,7 @@ import DataLakeChatSurface from '@client/app/components/datalake/DataLakeChatSur
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
-import { setQuestLaunchIntent } from '@client/app/utils/questLaunchIntent';
+import { setQuestLaunchIntent, consumeTrustedQuestLaunch } from '@client/app/utils/questLaunchIntent';
 
 const NewNotebookPage = () => {
   const { setCurrentSession, setCurrentSessionId, setWorkBenchAgents } = useSessions();
@@ -25,12 +25,19 @@ const NewNotebookPage = () => {
   useLayoutEffect(() => {
     if (!hasProcessedQuestParams.current && search.goal) {
       hasProcessedQuestParams.current = true;
+      // Only an in-app, same-tab launch (the /quests modal) may auto-submit. A
+      // goal that arrives via an external /new?goal=... link or a post-login
+      // redirectTo replay carries no trust flag, so it only pre-fills the composer
+      // and never issues a request without a click.
+      const trusted = consumeTrustedQuestLaunch();
       setQuestLaunchIntent({
         goal: search.goal,
-        autoSubmit: true,
-        enableQuestMaster: search.questmaster === 'true',
+        autoSubmit: trusted,
+        enableQuestMaster: trusted && search.questmaster === 'true',
       });
-      setPreparingQuest(search.goal);
+      if (trusted) {
+        setPreparingQuest(search.goal);
+      }
       // Strip the params so a refresh or back-navigation cannot replay the
       // auto-submit (the intent itself is in-memory and consume-once).
       void navigate({ to: '/new', search: {}, replace: true });
