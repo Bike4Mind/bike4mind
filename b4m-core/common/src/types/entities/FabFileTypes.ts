@@ -687,14 +687,7 @@ export interface AttachmentLakeAccess {
  */
 export type CitableFabFileFields = Pick<
   IFabFileDocument,
-  | 'id'
-  | 'deletedAt'
-  | 'archivedAt'
-  | 'chunkCount'
-  | 'vectorizedChunkCount'
-  | 'embeddingModel'
-  | 'fileName'
-  | 'vectorized'
+  'id' | 'deletedAt' | 'archivedAt' | 'chunkCount' | 'vectorizedChunkCount' | 'embeddingModel' | 'fileName' | 'vectorized'
 >;
 
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
