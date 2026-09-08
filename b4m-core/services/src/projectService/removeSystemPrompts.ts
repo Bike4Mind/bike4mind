@@ -1,4 +1,4 @@
-import { IFabFileRepository, IProjectRepository, IUserDocument } from '@bike4mind/common';
+import { IFabFileRepository, IProjectDocument, IProjectRepository, IUserDocument } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -27,8 +27,17 @@ export const removeSystemPrompts = async (
   const { db } = adapters;
   const { projectId, fileIds } = secureParameters(params, removeSystemPromptsSchema);
 
-  const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  // Update-level, not read-level: dropping a system prompt mutates the project, so a read grant
+  // must not reach it. Normalized to a plain object because this predicate returns a hydrated
+  // document where findAccessibleById did not, and `project` is handed to db.projects.update below.
+  const found = await db.projects.shareable.findUpdateAccessById(user, projectId);
+  if (!found) throw new Error('Project not found');
+
+  const project = (
+    typeof (found as { toJSON?: unknown }).toJSON === 'function'
+      ? (found as unknown as { toJSON: () => IProjectDocument }).toJSON()
+      : found
+  ) as IProjectDocument;
 
   const removeSet = new Set(fileIds);
   project.systemPrompts = project.systemPrompts.filter(prompt => !removeSet.has(prompt.fileId));

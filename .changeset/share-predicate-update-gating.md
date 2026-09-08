@@ -7,10 +7,11 @@
 Content mutations now resolve through the update-level share predicate rather than the read-level
 one, so a `read` grant on a notebook, file or project authorizes viewing it and nothing more.
 Affected paths: `updateFabFile` and `toggleTags` (file bytes, metadata and tags),
-`addSystemPrompts` (project content), the chat-completion entry point (which appends to the
-notebook it runs against), and `PUT /api/sessions/[id]/chat/[messageId]`. A sharee who previously
-edited shared content while holding only `read` now needs `update`; project-derived grants already
-carry `[read, update]` and are unaffected.
+`addSystemPrompts`, `addFiles` and `removeSystemPrompts` (project content), the chat-completion
+entry point (which appends to the notebook it runs against), and
+`PUT /api/sessions/[id]/chat/[messageId]`. A sharee who previously edited shared content while
+holding only `read` now needs `update`; project-derived grants already carry `[read, update]` and
+are unaffected.
 
 `IShareableStaticMethods` gains a required `findAllUpdateAccessByIds`, the batch counterpart to
 `findUpdateAccessById`, implemented by `ShareableDocumentRepository` - an out-of-tree implementer

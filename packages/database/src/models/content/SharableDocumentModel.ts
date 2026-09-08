@@ -140,7 +140,7 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   }
 
   /** Batch counterpart to findUpdateAccessById; same id guard as findAllAccessibleByIds. */
-  async findAllUpdateAccessByIds(user: IUserDocument, ids: string[]): Promise<T[]> {
+  async findAllUpdateAccessByIds(user: Pick<IUserDocument, 'id' | 'groups'>, ids: string[]): Promise<T[]> {
     return this.model.where({
       _id: { $in: usableObjectIds(ids, `${this.model.modelName}.findAllUpdateAccessByIds`) },
       $or: [

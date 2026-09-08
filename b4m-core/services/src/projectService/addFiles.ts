@@ -33,8 +33,18 @@ export const addFiles = async (
 ) => {
   const { db } = adapters;
   const { projectId, fileIds } = secureParameters(params, addFilesProjectSchema);
-  const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  // Update-level, not read-level: adding files mutates the project and pushes share grants onto
+  // the attached files, so a read grant must not reach it. Normalized to a plain object because
+  // this predicate returns a hydrated document where findAccessibleById did not, and `project` is
+  // handed to db.projects.update below.
+  const found = await db.projects.shareable.findUpdateAccessById(user, projectId);
+  if (!found) throw new Error('Project not found');
+
+  const project = (
+    typeof (found as { toJSON?: unknown }).toJSON === 'function'
+      ? (found as unknown as { toJSON: () => IProjectDocument }).toJSON()
+      : found
+  ) as IProjectDocument;
 
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
