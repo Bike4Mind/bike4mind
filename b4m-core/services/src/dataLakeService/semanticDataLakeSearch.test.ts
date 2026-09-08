@@ -1358,6 +1358,44 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.results.map(r => r.fileId).sort()).toEqual(['fresh', 'ready']);
   });
 
+  describe("the per-document cap's widened ANN limit", () => {
+    // Every other cap test drives the SCAN path, where the widening is invisible (scanAndRank's
+    // read volume is bounded by maxChunks, not topK). The ANN backends are the only place the
+    // widened pool becomes a bigger request, so this is the one asserting the limit they receive.
+    const annLimitFor = async (budgets: { maxChunksPerFile?: number } | undefined, topK: number) => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('f1')],
+        annHits: [{ id: 'f1-c0', fabFileId: 'f1', text: 'ann hit', score: 0.95 }],
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, topK, budgets }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      return (vectorSearch.mock.calls[0][3] as { limit: number }).limit;
+    };
+
+    it('asks for exactly topK when the cap is off', async () => {
+      expect(await annLimitFor(undefined, 4)).toBe(4);
+      expect(await annLimitFor({ maxChunksPerFile: 0 }, 4)).toBe(4);
+    });
+
+    it('asks for topK * DIVERSITY_CANDIDATE_POOL_FACTOR when the cap can bind', async () => {
+      // The factor is 3, so a topK of 4 becomes 12 - the headroom capChunksPerFile needs before it
+      // can promote anything. A stream still bounded at topK would have discarded the other
+      // documents' chunks upstream of the cap.
+      expect(await annLimitFor({ maxChunksPerFile: 2 }, 4)).toBe(12);
+    });
+
+    it('stays at topK for a cap that cannot bind, rather than tripling the request for nothing', async () => {
+      // A cap at or above topK never holds a chunk back (the admit pass fills topK before any one
+      // document reaches the cap), and the setting declares no max, so this is reachable config -
+      // it must not cost a 3x ANN request for a provably identical result.
+      expect(await annLimitFor({ maxChunksPerFile: 4 }, 4)).toBe(4);
+      expect(await annLimitFor({ maxChunksPerFile: 20 }, 4)).toBe(4);
+    });
+  });
+
   it('does not warn "nothing could be compared" when Atlas served every rankable file', async () => {
     // A foreign (off-model) file elsewhere in scope makes mismatchReport.partial true; the ready
     // file goes entirely through Atlas, so scanAndRank never runs and scores 0 chunks. Without the

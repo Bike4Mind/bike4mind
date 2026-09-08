@@ -412,8 +412,16 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
  * alone and no other document is ever present to be promoted. The pool has to be wider than topK
  * for the cap to have any spread, and how much wider is a property of the crowding, not of the cap.
  *
- * 3x fills topK from distinct documents for any sane cap while keeping the widened ANN request
- * and the in-memory ranking pool to a few dozen rows. This only widens the ANN backends' own
+ * 3x gives the cap a spread to redistribute while keeping the widened ANN request and the
+ * in-memory ranking pool to a few dozen rows. Being a FIXED multiple bounds what the cap can do,
+ * and the envelope is worth stating: the cap only chooses among the chunks that reached the pool,
+ * so a document supplying `topK * DIVERSITY_CANDIDATE_POOL_FACTOR` or more of the top-scoring
+ * chunks fills the pool alone and the cap becomes a complete no-op on it - capChunksPerFile holds
+ * its surplus back, then backfills those same chunks, returning the uncapped result while still
+ * paying the widened ANN limit. That is a reachable shape, not a corner: the KB path's topK is 10,
+ * so the pool is 30 chunks and a book-length PDF clears 30 top-scoring chunks routinely. So this
+ * is a guard for CONTESTED slots, not a fix for severe single-document crowding. This only widens
+ * the ANN backends' own
  * request size and the ranked pool's memory footprint - the SCAN path reads no more rows than it
  * already would (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here
  * only changes how many of the chunks it was scanning anyway survive into `ranked`). So this is a
@@ -427,12 +435,11 @@ const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
  * more than `maxPerFile` of the slots. `maxPerFile <= 0` disables the cap and returns the list
  * untouched, which is the default and is byte-identical to the pre-cap behavior.
  *
- * Two passes, because a diversity guard must never cost a caller results it would otherwise have
- * had. The first admits candidates in score order while their document is still under the cap;
- * the second backfills any slots left open from the chunks the cap held back. So a lake whose
- * only match is one long document still serves a full top-K: the cap changes WHICH chunks win a
- * contested slot, never how many are served. That is what makes it safe to enable on a corpus
- * nobody has measured crowding on.
+ * Two passes (admit under the cap, then backfill from what it held back), because a diversity
+ * guard must never cost a caller results it would otherwise have had. So a lake whose only match
+ * is one long document still serves a full top-K: the cap changes WHICH chunks win a contested
+ * slot, never how many are served. That is what makes it safe to enable on a corpus nobody has
+ * measured crowding on.
  *
  * The survivors are re-sorted because a backfilled chunk can outscore an admitted one, and
  * callers consume a PREFIX of this list (tokenBudget.ts trims from the end, and
@@ -440,10 +447,13 @@ const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
  * the cap's business; presentation order stays strictly best-first.
  *
  * This is the ONLY place the cap is enforced, but not the only place it changes: the candidate
- * streams feeding the merge are widened to topK * cap when it is active, because each of them is
- * bounded independently and a stream that stopped at topK would have discarded the other
- * documents' chunks before the cap could promote them. Enforcement here, headroom upstream - see
- * `candidatePoolK` in `rankChunksForFiles`.
+ * streams feeding the merge are widened to `topK * DIVERSITY_CANDIDATE_POOL_FACTOR` when the cap
+ * can bind, because each of them is bounded independently and a stream that stopped at topK would
+ * have discarded the other documents' chunks before the cap could promote them. Enforcement here,
+ * headroom upstream - see `candidatePoolK` in `rankChunksForFiles`. Because that headroom is a
+ * FIXED multiple of topK rather than a function of the cap, this pass can only redistribute among
+ * whatever reached it: a document that fills the widened pool by itself is one the cap cannot
+ * touch at all. See `DIVERSITY_CANDIDATE_POOL_FACTOR` for why it is sized that way regardless.
  */
 function capChunksPerFile(candidates: SemanticChunkResult[], topK: number, maxPerFile: number): SemanticChunkResult[] {
   if (maxPerFile <= 0) return candidates;
@@ -784,11 +794,16 @@ async function rankChunksForFiles(args: {
   // A per-document cap can only choose among SURPLUS candidates, and every candidate stream below
   // (the scan's own top-K, each ANN query's limit) is bounded independently. Left at topK they
   // would each discard the lower-scoring chunks from other documents BEFORE the cap could promote
-  // them, and the cap would be a no-op on any single-stream search. So when a cap is active every
+  // them, and the cap would be a no-op on any single-stream search. So when a cap can bind every
   // stream is widened and the merge trims back to topK; with it off (the default) this is topK
   // everywhere, exactly as before.
+  //
+  // `perFileCap < topK` is the other half of "can bind": a cap at or above topK never holds a
+  // single chunk back (capChunksPerFile's admit pass stops at topK before any one document can
+  // reach the cap), and the setting declares no max, so cap 20 against topK 10 is reachable.
+  // Widening there would triple the ANN request for provably zero change in the results.
   const perFileCap = budgets.maxChunksPerFile;
-  const candidatePoolK = perFileCap > 0 ? topK * DIVERSITY_CANDIDATE_POOL_FACTOR : topK;
+  const candidatePoolK = perFileCap > 0 && perFileCap < topK ? topK * DIVERSITY_CANDIDATE_POOL_FACTOR : topK;
 
   // --- Embed the query (reuse EmbeddingFactory; pick the provider the model needs) ---
   const provider = getProviderFromModel(embeddingModel);

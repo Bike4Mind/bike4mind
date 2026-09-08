@@ -1215,7 +1215,14 @@ if (isMonitoredStage) {
    * Every failure here is a file that stayed un-chunked for another day: the sweep found it,
    * could not hand it to the queue, and the next run has to find it again. A file left
    * un-chunked is invisible to retrieval, so this is silent data loss from a user's point of
-   * view, which is why the threshold is low rather than proportional to the run budget.
+   * view, which is why the threshold is ANY failure rather than proportional to the run budget.
+   *
+   * The tolerance is in the evaluation periods, not the threshold. A run of at most 500 files can
+   * lose one to an SQS blip and recover on the next day's run, so a single failing day is not
+   * worth paging on; a threshold of `> 0` sustained across three daily periods is. Sizing it the
+   * other way (a count threshold over one day) is what would hide the failure that actually
+   * matters: one poison file that fails its send on every run contributes 1/day forever, so any
+   * threshold above zero never fires on the exact steady-state data loss this alarm is for.
    *
    * Deliberately NOT alarmed on: a run reporting zero rescues. That is the healthy steady state
    * on most installs. The gated-off and threw cases are what a zero used to hide, and they are
@@ -1231,12 +1238,12 @@ if (isMonitoredStage) {
     alarmDescription:
       'Data lake un-chunked rescue sweep is failing to enqueue - files are staying un-chunked and unretrievable',
     comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
+    evaluationPeriods: 3, // three consecutive daily runs, so a one-off SQS blip does not page
     metricName: 'ChunkRescueFailures',
     namespace: 'Lumina5/DataLakeBatch',
     period: 86400, // 1 day - matches the daily cron that emits it
     statistic: 'Sum', // a counter per run, unlike StuckBatches' gauge sample
-    threshold: 10,
+    threshold: 0, // any failure at all; see the docblock on why a count threshold hides the real case
     treatMissingData: 'notBreaching',
     alarmActions: [dataLakeChunkRescueFailuresAlarm!.arn],
     tags: {

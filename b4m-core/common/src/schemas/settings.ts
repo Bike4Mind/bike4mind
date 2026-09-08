@@ -3450,13 +3450,19 @@ export const settingsMap = {
     min: 0,
     description:
       'Most chunks from any ONE source document a data-lake semantic search may return in its ' +
-      'top-K. A diversity guard: without it a single long document can occupy every result slot ' +
-      'and crowd out other documents that also answer the question. 0 (default) disables the cap, ' +
+      'top-K. A diversity guard for CONTESTED slots: where several documents answer the question, ' +
+      'it stops the best-scoring one from taking slots the others could have filled. It is NOT a ' +
+      'fix for severe crowding - the cap redistributes only among the candidates retrieval ' +
+      'already returned, so a document that supplies enough of the top-scoring chunks to fill ' +
+      'that pool on its own is one the cap cannot change at all. On a corpus of book-length ' +
+      'documents, expect enabling this to change little beyond widening the vector-search ' +
+      'request. 0 (default) disables the cap, ' +
       'byte-identical to behavior before this setting existed. The cap never SHRINKS a result set - ' +
       'once the spread-out picks are in, any slots still open are backfilled with the highest-' +
       'scoring chunks the cap held back, so a lake whose only match is one document still returns ' +
-      "a full top-K. Enabling it widens each retrieval stream's candidate pool to a fixed " +
-      'multiple of the result count, so the cap has a spread to choose from. The scanned corpus ' +
+      'a full top-K. A value at or above the result count is also a no-op, since nothing can ever ' +
+      "be held back. Below it, each retrieval stream's candidate pool is widened to a fixed " +
+      'multiple of the result count so the cap has a spread to choose from. The scanned corpus ' +
       'itself does not grow (that is bounded separately), but the vector-search backends are ' +
       'asked for that many more matches, and a larger in-memory ranking pool costs some CPU. 2-3 ' +
       'is the useful range; 1 serves one passage per document, which suits a corpus of many short ' +

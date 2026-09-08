@@ -526,6 +526,11 @@ export async function recordReconcileRun(): Promise<void> {
  * no reason to spend three API calls on it. Dimensions stay off the two counters: their sum is
  * the question, and the outcome is already carried by the Runs metric alongside them.
  *
+ * Covers the HOSTED daily cron only. runChunkRescueSweep has a second driver, the self-host
+ * worker tick in server/worker/main.ts, which deliberately emits nothing - there is no CloudWatch
+ * on a self-host install. So a zero here means the hosted cron found no work, never that no
+ * install swept.
+ *
  * Alarm on ChunkRescueFailures: infra/alarms.ts -> dataLakeChunkRescueFailuresHigh.
  */
 export async function recordChunkRescueSweep(
