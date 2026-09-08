@@ -108,14 +108,16 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
   if (reqSessionId) {
     // Resolve an existing session through an access-scoped lookup, never a bare findById -
     // otherwise any authenticated user could read/continue another user's session by id.
-    // With an ability, honor the full access shape (owner + shares + org) exactly as the
-    // list/update paths do; without one (e.g. the Slack path), fall back to owner-only.
+    // The verb is `update`, not `read`: quests are appended to this session, and the retry path
+    // in ChatCompletionInvoke clears an existing quest's reply, so a read-only share must not
+    // reach it. With an ability, honor the full access shape (owner + shares + org) exactly as
+    // the update path does; without one (e.g. the Slack path), fall back to owner-only.
     // A miss (not found OR no access) falls through to the NotFoundError below - a 404 that
     // does not distinguish the two, matching orgAccess's anti-enumeration behavior.
     session = ability
       ? await Session.findOne({
           _id: reqSessionId,
-          ...accessibleBy(ability, Permission.read).ofType(SessionModel),
+          ...accessibleBy(ability, Permission.update).ofType(SessionModel),
         })
       : await sessionRepository.findByIdAndUserId(reqSessionId, userId);
   } else {

@@ -11,6 +11,7 @@ const {
   userRepoUpdate,
   sessionRepoFindById,
   sessionRepoFindByIdAndUserId,
+  accessibleBySpy,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -45,6 +46,7 @@ const {
     userRepoUpdate: vi.fn().mockResolvedValue(undefined),
     sessionRepoFindById: vi.fn(),
     sessionRepoFindByIdAndUserId: vi.fn(),
+    accessibleBySpy: vi.fn(() => ({ ofType: () => ({}) })),
   };
 });
 
@@ -88,7 +90,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 vi.mock('@casl/mongoose', () => ({
-  accessibleBy: () => ({ ofType: () => ({}) }),
+  accessibleBy: accessibleBySpy,
 }));
 
 import { getOrCreateSession, createSession } from './sessionCrud';
@@ -128,6 +130,17 @@ describe('sessionCrud', () => {
       expect(sessionRepoFindById).not.toHaveBeenCalled();
       expect(notifySessionCreated).not.toHaveBeenCalled();
       expect(logSessionCreatedEvent).not.toHaveBeenCalled();
+    });
+
+    it('scopes the lookup with the update verb, so a read-only share cannot continue the session', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', name: 'Existing' });
+
+      await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
+
+      // Quests are appended to this session and the retry path clears an existing quest's reply,
+      // so `read` here would let a read-only share mutate the owner's notebook.
+      expect(accessibleBySpy).toHaveBeenCalledWith(allowAbility, 'update');
+      expect(accessibleBySpy).not.toHaveBeenCalledWith(allowAbility, 'read');
     });
 
     it('throws NotFoundError when the caller has no access to the requested session (foreign session)', async () => {
