@@ -2,6 +2,7 @@ import { sessionService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  agentRepository,
   fabFileRepository,
   projectRepository,
   sessionRepository,
@@ -29,6 +30,7 @@ const handler = baseApi().post(
         sessions: sessionRepository,
         projects: projectRepository,
         fabFiles: fabFileRepository,
+        agents: agentRepository,
       },
     });
 

@@ -115,7 +115,14 @@ const handler = baseApi().post(async (req, res) => {
     session = await sessionService.createSession(
       req.user,
       { name: `Voice • ${reasoningModelId}` },
-      { db: { sessions: sessionRepository, projects: projectRepository, fabFiles: fabFileRepository } }
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          agents: agentRepository,
+        },
+      }
     );
   }
 

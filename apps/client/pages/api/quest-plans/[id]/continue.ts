@@ -1,4 +1,5 @@
 import {
+  agentRepository,
   questMasterPlanRepository,
   questRepository,
   sessionRepository,
@@ -85,6 +86,7 @@ const handler = baseApi()
               sessions: sessionRepository,
               projects: projectRepository,
               fabFiles: fabFileRepository,
+              agents: agentRepository,
             },
           }
         );

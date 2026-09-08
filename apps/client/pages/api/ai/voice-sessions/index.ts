@@ -1,5 +1,6 @@
 import {
   adminSettingsRepository,
+  agentRepository,
   apiKeyRepository,
   sessionRepository,
   projectRepository,
@@ -119,6 +120,7 @@ const handler = baseApi().post(async (req, res) => {
           sessions: sessionRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          agents: agentRepository,
         },
       }
     );

@@ -4,6 +4,7 @@ import {
   RETRIEVAL_EXCLUDE_MARKERS_MAX,
 } from '@bike4mind/utils/retrievalExclusion';
 import {
+  IAgentRepository,
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
@@ -53,6 +54,7 @@ export interface CreateSessionAdapters {
     sessions: ISessionRepository;
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
+    agents: IAgentRepository;
   };
 }
 
@@ -84,7 +86,12 @@ export const createSession = async (
     userId: user.id,
     knowledgeIds,
     artifactIds,
-    agentIds,
+    // Object-level authz: only attach agents the caller can actually access (owner +
+    // user-shares + group-shares). Foreign ids are dropped, matching the shareable
+    // pattern used elsewhere, so a caller cannot leak another user's agent prompt.
+    agentIds: agentIds.length
+      ? (await db.agents.shareable.findAllAccessibleByIds(user, agentIds)).map(agent => agent.id)
+      : agentIds,
     firstCreated: new Date(),
     lastUpdated: new Date(),
     updatedAt: new Date(),

@@ -1,6 +1,7 @@
 import { Ability } from '@server/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import {
+  agentRepository,
   compareMongoIds,
   favoriteRepository,
   mongoose,
@@ -119,6 +120,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           sessions: sessionRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          agents: agentRepository,
         },
       }
     );

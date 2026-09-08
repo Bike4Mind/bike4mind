@@ -1,4 +1,5 @@
 import {
+  agentRepository,
   questRepository,
   sessionRepository,
   userRepository,
@@ -29,6 +30,7 @@ const handler = baseApi().post(
             chatHistories: questRepository,
             projects: projectRepository,
             fabFiles: fabFileRepository,
+            agents: agentRepository,
           },
         }
       )

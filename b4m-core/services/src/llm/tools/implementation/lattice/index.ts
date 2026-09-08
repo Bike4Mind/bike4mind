@@ -399,7 +399,8 @@ export const latticeAddEntityTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          if (model) {
+          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          if (model && model.userId === context.userId) {
             // Check if entity already exists
             const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
             if (existingIndex >= 0) {
@@ -536,7 +537,8 @@ export const latticeSetValueTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          if (model) {
+          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          if (model && model.userId === context.userId) {
             // Find the entity
             const entity = model.data.entities.find(e => e.id === entityId || e.name === entityName);
             if (entity) {
@@ -675,7 +677,8 @@ export const latticeCreateRuleTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          if (model) {
+          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          if (model && model.userId === context.userId) {
             // Check if output entity exists, if not create it
             const outputEntityExists = model.data.entities.some(
               e => e.id === outputEntityId || e.name.toLowerCase() === parsedRule.outputEntity.toLowerCase()
