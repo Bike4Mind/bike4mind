@@ -7,7 +7,7 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
-import { findLakeAccessibleFabFile } from '@server/dataLakes';
+import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 
 const s3Client = new S3Client();
 
@@ -21,6 +21,7 @@ type FabFileLookupResult = {
   _id: unknown;
   mimeType?: string | null;
   moderationStatus?: string | null;
+  tags?: { name: string }[] | null;
 } | null;
 
 /**
@@ -72,13 +73,20 @@ const handler = baseApi().get(
       // Access mirrors GET /api/files/:id: per-file ACL (owner/share) OR the lake gate that
       // authorizes curated/shared lake articles by tag/prefix - so opening a shared lake article
       // still works. The lake fallback only runs for tracked files the ACL didn't already allow.
+      // Resolved at most once, and only when a file fails the per-file ACL below - a bulk sign of
+      // owned files must not pay for a lake-resolution DB read it never needs. Mirrors the
+      // resolve-once, reuse-everywhere shape of files/byIds.ts and files/[id]'s lake fallback.
+      let lakesPromise: ReturnType<typeof resolveAccessibleLakes> | undefined;
+      const accessibleLakes = () => (lakesPromise ??= resolveAccessibleLakes(req));
+
       const serveableFileKeys = await filterServeableFilePaths(
         decodedFileKeys,
         filePath => FabFile.findOne({ filePath }).lean(),
         async fabFile => {
           const id = String(fabFile._id);
           if (await fabFileRepository.shareable.findAccessibleById(req.user, id)) return true;
-          return !!(await findLakeAccessibleFabFile(req, id));
+          const lakes = await accessibleLakes();
+          return grantingLakes(lakes, fabFile.tags?.map(t => t.name) ?? []).length > 0;
         }
       );
 

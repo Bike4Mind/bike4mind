@@ -19,7 +19,8 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 vi.mock('@server/dataLakes', () => ({
-  findLakeAccessibleFabFile: vi.fn(),
+  grantingLakes: vi.fn(),
+  resolveAccessibleLakes: vi.fn(),
 }));
 
 import { filterServeableFilePaths } from '../presigned-url';
