@@ -139,6 +139,25 @@ describe('notebook export', () => {
     expect(find.mock.calls.map(([, opts]) => opts?.skip)).toEqual([0, 100]);
   });
 
+  it('stores the export at an unguessable key, not the predictable filename', async () => {
+    let uploadedPath = '';
+    const { adapters } = makeAdapters({
+      fileStorageService: {
+        getFileContent: vi.fn().mockResolvedValue(null),
+        uploadFile: vi.fn(async (p: string) => {
+          uploadedPath = p;
+        }),
+        getSignedUrl: vi.fn().mockResolvedValue('https://example.test/export.json'),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    // A random uuid segment sits between `exports/` and the readable filename, so the object is no
+    // longer at the guessable `exports/notebooks-<userid8>-<date>.json` a sign endpoint could reach.
+    expect(uploadedPath).toMatch(/^exports\/[0-9a-f-]{36}\/notebooks-user-1-\d{4}-\d{2}-\d{2}\.json$/);
+    expect(uploadedPath).not.toMatch(/^exports\/notebooks-/);
+  });
+
   it('names an artifact from its title, which is the field the entity actually has', async () => {
     const payload = await exportOnce({
       artifactRepository: {
