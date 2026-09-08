@@ -237,11 +237,15 @@ function usableFields(
  *
  * Three remedies, in order of how much the row still tells us:
  *
- * `refuse` drops the field and hands the decision to the read path. A feed reporting its whole
- * window as output has told us nothing about the real cap, and DEFAULT_MAX_OUTPUT_TOKENS is already
- * what toModelInfo means by "unknown". Note mergeRows resolves per GROUP, not per key, so the value
- * in force survives only when the refused field was this row's only `limits` claim; alongside a
- * contextWindow claim the row wins the group and that fallback applies instead.
+ * `refuse` rejects the feed's number and hands the cap to whatever the catalog already holds. When
+ * a non-starving maxOutputTokens is in force it is carried forward onto the draft (`carryForward`),
+ * because mergeRows resolves per GROUP not per key: alongside a contextWindow claim the appended row
+ * wins the whole `limits` group, so a deleted field would drop the read path to
+ * DEFAULT_MAX_OUTPUT_TOKENS (4096) - a capability cut on exactly the frontier models with the
+ * largest legitimate output. Preserving the value in force is the same rule mergeLifecycle applies:
+ * absence of a fresh claim means "did not say", never "reset to the global default". Only with no
+ * usable value in force does the field drop and the read-path fallback stand (which is already what
+ * toModelInfo means by "unknown").
  *
  * `clamp` covers a window too small to fund even that fallback. Such a model still answers at a
  * lower output setting, so it keeps its row with a reserve that leaves the budget positive - half of
@@ -251,11 +255,14 @@ function usableFields(
  * prompt and the model could not answer at any setting.
  */
 type StarvedOutputClaim =
-  { reason: string; action: 'refuse' | 'drop' } | { reason: string; action: 'clamp'; to: number };
+  | { reason: string; action: 'refuse'; carryForward?: number }
+  | { reason: string; action: 'drop' }
+  | { reason: string; action: 'clamp'; to: number };
 
 function starvedByOutputClaim(
   draft: Record<string, unknown>,
-  contributed: Map<string, unknown>
+  contributed: Map<string, unknown>,
+  inForceMaxOutputTokens: unknown
 ): StarvedOutputClaim | null {
   // Gate on the RESULTING draft, not on which field arrived. A run claiming only contextWindow
   // still lands the starving shape, because draft carries maxOutputTokens forward from the record
@@ -274,6 +281,15 @@ function starvedByOutputClaim(
     `(safety buffer ${CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS})`;
 
   if (!starves(Math.min(contextWindow, DEFAULT_MAX_OUTPUT_TOKENS))) {
+    // Carry a non-starving cap already in force forward rather than let the read path fall to the
+    // global default. Excludes the value the draft already carries when it is the starving one.
+    if (typeof inForceMaxOutputTokens === 'number' && !starves(inForceMaxOutputTokens)) {
+      return {
+        reason: `${claim}; carried forward the in-force maxOutputTokens ${inForceMaxOutputTokens}`,
+        action: 'refuse',
+        carryForward: inForceMaxOutputTokens,
+      };
+    }
     return { reason: `${claim}; maxOutputTokens dropped`, action: 'refuse' };
   }
 
@@ -308,7 +324,7 @@ function planOne(
   }
 
   const derivedGroups = new Set<FieldGroup>();
-  const outputClaim = starvedByOutputClaim(draft, contributed);
+  const outputClaim = starvedByOutputClaim(draft, contributed, base.maxOutputTokens);
   let claimsMaxOutput = contributed.has('maxOutputTokens');
   if (outputClaim) {
     if (outputClaim.action === 'drop') return { reason: outputClaim.reason };
@@ -322,6 +338,12 @@ function planOne(
     });
     if (outputClaim.action === 'clamp') {
       draft.maxOutputTokens = outputClaim.to;
+      derivedGroups.add('limits');
+    } else if (outputClaim.carryForward !== undefined) {
+      // The row wins the `limits` group, so it has to re-assert the in-force cap or the read path
+      // would fall to DEFAULT_MAX_OUTPUT_TOKENS. Credit it to discovery, not the feed that starved.
+      draft.maxOutputTokens = outputClaim.carryForward;
+      claimsMaxOutput = true;
       derivedGroups.add('limits');
     } else {
       delete draft.maxOutputTokens;

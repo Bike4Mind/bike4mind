@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 
+// Hoisted so the `vi.mock('crypto')` factory below and the assertions further down read the
+// SAME id: the two used to disagree (a fixed id mocked in, a real-UUID regex asserted out) and
+// only passed because the crypto mock did not take effect under this package's old
+// jsdom-everywhere test environment. It does under `node`, so the disagreement is now visible.
+const { MOCK_REQUEST_ID } = vi.hoisted(() => ({ MOCK_REQUEST_ID: 'test-uuid-1234' }));
+
 // Mock dependencies BEFORE importing
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: vi.fn(() => ({
@@ -36,7 +42,7 @@ vi.mock('crypto', async importOriginal => {
   const actual = await importOriginal<typeof import('crypto')>();
   return {
     ...actual,
-    randomUUID: vi.fn(() => 'test-uuid-1234'),
+    randomUUID: vi.fn(() => MOCK_REQUEST_ID),
   };
 });
 
@@ -201,13 +207,15 @@ describe('/api/jupyter/execute', () => {
             sessionId: 'session-123',
             kernelName: 'python3',
           }),
-          requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), // UUID format
+          requestId: MOCK_REQUEST_ID,
         })
       );
 
       expect(mockRes.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+          // Same id as the command above: the handler must hand the caller back the id it
+          // actually dispatched, or the client polls for a request that does not exist.
+          requestId: MOCK_REQUEST_ID,
           sent: true,
           sessionId: 'session-123',
           connections: 2,

@@ -46,6 +46,15 @@ export interface CreateUserApiKeyRequest {
   branding?: IEmbedBranding;
 }
 
+/**
+ * Admin-only mint request: the self-service shape plus `preauthorizedLakeIds` (manage-but-not-member
+ * session admission, see pages/api/sessions/create.ts). Kept out of `CreateUserApiKeyRequest` so the
+ * self-service mint path can't accept this field even at the type level.
+ */
+export interface AdminCreateUserApiKeyRequest extends CreateUserApiKeyRequest {
+  preauthorizedLakeIds?: string[];
+}
+
 /** Configure an existing embed key - only the provided fields change. */
 export interface UpdateEmbedKeyRequest {
   keyId: string;
@@ -162,7 +171,7 @@ export function useUpdateEmbedKey({ onSuccess }: { onSuccess?: () => void } = {}
 export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: CreateUserApiKeyResponse) => void } = {}) {
   const queryClient = useQueryClient();
 
-  return useMutation<CreateUserApiKeyResponse, Error, { userId: string; data: CreateUserApiKeyRequest }>({
+  return useMutation<CreateUserApiKeyResponse, Error, { userId: string; data: AdminCreateUserApiKeyRequest }>({
     mutationFn: async ({ userId, data }) => {
       const response = await api.post(`/api/admin/users/${userId}/generate-api-key`, data);
       return response.data;

@@ -1,10 +1,10 @@
-import { Types } from 'mongoose';
 import { z } from 'zod';
 import type { Request } from 'express';
 import { AdminSupportAccessAction, ISessionDocument } from '@bike4mind/common';
 import { adminSupportAccessAuditLogRepository, sessionRepository } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { getClientIp } from '@server/utils/ip';
+import { isValidObjectId } from '@server/utils/objectId';
 
 /**
  * Shared gate for the admin support READ endpoints (`/api/admin/sessions/...`).
@@ -21,9 +21,10 @@ import { getClientIp } from '@server/utils/ip';
  * They are NOT the only admin paths that reach customer content without the
  * sharing checks in `findAccessibleById` - `/api/admin/model-logs` spreads
  * `quest.promptMeta` (which carries the user's own prompt text, attached-file
- * names, and raw tool arguments) cross-user, unaudited and with no case
- * reference. Do not read this helper as a chokepoint that makes such routes
- * safe; hardening them is separate, tracked work.
+ * names, raw tool arguments, and now verbatim tool call output up to 8000
+ * chars per call) cross-user, unaudited and with no case reference. Do not
+ * read this helper as a chokepoint that makes such routes safe; hardening
+ * them is separate, tracked work.
  *
  * Read-only by construction: nothing here grants an admin write path. Support
  * remediation needs a separate, consent-aware mechanism (see the sibling issue).
@@ -82,7 +83,7 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
 
   // An id that isn't an ObjectId would make findById throw a CastError (500);
   // treat it as "no such session" instead.
-  if (!Types.ObjectId.isValid(id)) {
+  if (!isValidObjectId(id)) {
     throw new NotFoundError('Session not found');
   }
 

@@ -98,12 +98,19 @@ const makeContract = (over: Partial<Parameters<typeof defineEndpoint>[0]> = {}) 
     ...over,
   });
 
-function fire({ method = 'POST', apiKey = null as string | null, jwt = false, body = { message: 'hi' } as unknown }) {
+function fire({
+  method = 'POST',
+  apiKey = null as string | null,
+  jwt = false,
+  body = { message: 'hi' } as unknown,
+  query = {} as Record<string, string>,
+}) {
   const payload = JSON.stringify(body);
   const { req, res } = createMocks(
     {
       method: method as 'POST',
       url: '/api/fixture',
+      query,
       headers: {
         'content-type': 'application/json',
         'content-length': String(Buffer.byteLength(payload)),
@@ -210,6 +217,24 @@ describe('nextRouteForContract', () => {
       expect(handlerFn).not.toHaveBeenCalled();
     });
 
+    it('runs the rateLimit option BEFORE validation, so a malformed body counts against it', async () => {
+      // The option lives at the front of the prelude, so unlike a caller-mounted
+      // `.use()` it beats validation as a hard guarantee - a flood of malformed
+      // bodies still meters instead of 422ing for free ahead of the limiter.
+      const limiter = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
+      const handlerFn = vi.fn();
+      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as any }).post(handlerFn);
+
+      validKey([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 'hi', count: -1 } });
+      await route(req, res);
+
+      expect(res._getStatusCode()).toBe(422);
+      expect(limiter).toHaveBeenCalledTimes(1);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
     it('validates and exposes the parsed body as req.validated', async () => {
       validKey([ApiKeyScope.AI_CHAT]);
       let seen: unknown;
@@ -252,6 +277,70 @@ describe('nextRouteForContract', () => {
         const route = nextRouteForContract(makeContract()) as unknown as Record<string, (h: unknown) => unknown>;
         expect(() => route[verb](vi.fn()), verb).toThrow(/method 'post'/i);
       }
+    });
+  });
+
+  describe('pathParams', () => {
+    // id arrives via req.query (Next's file-based routing convention), not req.params -
+    // node-mocks-http's `query` option is what stands in for that here.
+    const ParamsSchema = z.object({ id: z.string() });
+    const makeParamContract = (over: Partial<Parameters<typeof defineEndpoint>[0]> = {}) =>
+      makeContract({ pathParams: ParamsSchema, scopes: [], ...over });
+
+    it('exposes the parsed path param as req.validatedParams, distinct from req.validated (body)', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenParams: unknown;
+      let seenBody: unknown;
+      const route = nextRouteForContract(makeParamContract()).post((req, res) => {
+        seenParams = req.validatedParams;
+        seenBody = req.validated;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_key', query: { id: 'sess-1' }, body: { message: 'hi' } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenParams).toEqual({ id: 'sess-1' });
+      expect(seenBody).toEqual({ message: 'hi', count: 1 });
+    });
+
+    it('422s when the path param is missing, without reaching the handler', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(makeParamContract()).post(handlerFn);
+      const { req, res } = fire({ apiKey: 'b4m_live_key', query: {}, body: { message: 'hi' } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
+    it('ignores unrelated query-string keys alongside the path param', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenParams: unknown;
+      const route = nextRouteForContract(makeParamContract()).post((req, res) => {
+        seenParams = req.validatedParams;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', unrelated: 'x' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenParams).toEqual({ id: 'sess-1' });
+    });
+
+    it('leaves validatedParams unset for a contract that declares no pathParams (no regression on the body-only path)', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenParams: unknown = 'not-yet-set';
+      const route = nextRouteForContract(makeContract()).post((req, res) => {
+        seenParams = req.validatedParams;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 'hi' } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenParams).toBeUndefined();
     });
   });
 });

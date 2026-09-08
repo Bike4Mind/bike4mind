@@ -40,8 +40,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // attempt (they all see a non-'queued' status and silently no-op), so the real error was
     // never actually retried and the batch only reached 'failed' ~10 minutes later via the
     // reconciler's generic "Timed out" message - discarding the real cause.
+    // Also refresh taxonomyStartedAt here, matching the claim's own refresh: the stuck-job
+    // reconciler's staleness guard now runs off this clock, so leaving it at the original
+    // claim's timestamp would let a batch waiting between ordinary SQS redeliveries (up to
+    // ~2x the 6-minute visibility timeout) read as stale and get force-failed mid-retry.
     if (batchId) {
-      await dataLakeBatchRepository.setTaxonomyStatusIfActive(batchId, ['analyzing'], 'queued').catch(() => {});
+      await dataLakeBatchRepository
+        .setTaxonomyStatusIfActive(batchId, ['analyzing'], 'queued', { taxonomyStartedAt: new Date() })
+        .catch(() => {});
     }
     throw err; // DB/network - let SQS retry, then DLQ.
   }

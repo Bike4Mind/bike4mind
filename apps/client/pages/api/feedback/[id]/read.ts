@@ -2,6 +2,7 @@ import { FeedbackModel } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -22,7 +23,8 @@ const handler = baseApi().get(
       throw new NotFoundError('Feedback not found');
     }
 
-    return res.json(feedback);
+    const [hydrated] = await hydrateFeedbackText([toRedactedFeedback(feedback)]);
+    return res.json(hydrated);
   })
 );
 

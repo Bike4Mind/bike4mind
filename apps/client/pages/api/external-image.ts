@@ -1,4 +1,5 @@
-import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
@@ -19,7 +20,7 @@ import { z } from 'zod';
 //   4. Follows at most one redirect with SSRF re-check on the Location header
 //      to support Gravatar, GitHub avatars, and other CDN redirects.
 
-const s3Client = new S3Client({});
+const s3Client = createS3Client();
 
 const ExternalImageQuery = z.object({
   url: z.string().url('url must be a valid URL'),

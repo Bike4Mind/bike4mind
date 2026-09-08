@@ -13,9 +13,10 @@ import type { IChatHistoryItem } from '@bike4mind/common';
 export const QUEST_TIMEOUT_THRESHOLD_MS = 120_000;
 
 /** The subset of a quest the recovery decision reads. */
-export type QuestTimeoutView = Pick<IChatHistoryItem, 'status' | 'reply' | 'replies' | 'images' | 'videos'> & {
-  updatedAt: Date | string | number;
-};
+export type QuestTimeoutView = Pick<IChatHistoryItem, 'status'> &
+  QuestContentView & {
+    updatedAt: Date | string | number;
+  };
 
 /**
  * The recovery decision for a possibly-stuck quest:
@@ -30,8 +31,56 @@ export type QuestTimeoutRecovery = { status: 'done'; type?: 'error'; reply?: str
 
 const TIMEOUT_REPLY = 'This request timed out. The server did not respond in time. Please try again.';
 
-function hasRenderableContent(quest: QuestTimeoutView): boolean {
-  return Boolean(quest.reply || quest.replies?.some(r => r) || quest.images?.length || quest.videos?.length);
+/**
+ * Shown when the abandoned sweep terminates a run that never produced anything.
+ * Distinct from TIMEOUT_REPLY because the causes differ operationally: a timeout
+ * means the server was too slow, whereas this means the run was declared dead
+ * hours later by a background sweep and nobody was waiting on it any more.
+ */
+export const ABANDONED_REPLY =
+  'This request was ended because the run was abandoned before it produced a response. Please try again.';
+
+/** The subset of a quest the terminal-patch decision reads. */
+export type QuestContentView = Pick<
+  IChatHistoryItem,
+  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+>;
+
+/**
+ * `structuredReplies` / `toolResults` count as content. A tool-heavy run can
+ * produce a fully renderable answer (notebook cells, tool output) while leaving
+ * `reply`, `replies`, `images` and `videos` all empty, and calling that "nothing
+ * to show" stamps an error message next to work the user can actually see.
+ *
+ * Every field is tested for content rather than for presence, because the two
+ * failure modes are not symmetric. Mistaking content for emptiness replaces a
+ * real answer with an error; mistaking emptiness for content produces a
+ * terminal bubble with neither an answer nor an error - the silent blank the
+ * abandoned-run message exists to prevent. An assistant turn carrying no
+ * content blocks and a tool result with an empty body both render nothing.
+ */
+function hasRenderableContent(quest: QuestContentView): boolean {
+  return Boolean(
+    quest.reply ||
+    quest.replies?.some(r => r) ||
+    quest.images?.length ||
+    quest.videos?.length ||
+    quest.structuredReplies?.some(sr => sr?.content?.length) ||
+    quest.toolResults?.some(t => t?.content)
+  );
+}
+
+/**
+ * The terminal patch for a quest that will never be written to again, whatever
+ * declared it dead. Content that survived is preserved by flipping only
+ * `status`; `emptyReply` is synthesized ONLY when there is nothing to show, so a
+ * partial answer is never replaced by an error message.
+ *
+ * Shared by the liveness path below and the abandoned sweep, so the two cannot
+ * drift on the one rule that matters: never destroy content to report a failure.
+ */
+export function terminalRecoveryFor(quest: QuestContentView, emptyReply: string): NonNullable<QuestTimeoutRecovery> {
+  return hasRenderableContent(quest) ? { status: 'done' } : { status: 'done', type: 'error', reply: emptyReply };
 }
 
 /**
@@ -49,5 +98,5 @@ export function resolveQuestTimeoutRecovery(quest: QuestTimeoutView, nowMs: numb
   const isStuck = quest.status === 'running' && ageMs > QUEST_TIMEOUT_THRESHOLD_MS;
   if (!isStuck) return null;
 
-  return hasRenderableContent(quest) ? { status: 'done' } : { status: 'done', type: 'error', reply: TIMEOUT_REPLY };
+  return terminalRecoveryFor(quest, TIMEOUT_REPLY);
 }

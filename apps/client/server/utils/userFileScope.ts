@@ -2,12 +2,10 @@ import { getDataLakeTags } from '@bike4mind/common';
 
 /**
  * The set of files this user can reach, for the surfaces that count them and the one that lists
- * them. Three endpoints MUST agree: GET /api/files/tags (whose `fileCount` is derived per tag
- * document), GET /api/files/tags/counts (which backs the tag tree and the workspace rows), and
- * GET /api/files/search (the list those counts are read against). Passing different scopes makes
- * a badge disagree with the list beside it, which is exactly the class of bug deriving the counts
- * was meant to end - and the list is the one the others are compared to, so drift there breaks the
- * headline claim rather than just badge-versus-tree.
+ * them: GET /api/files/tags (per-tag-document `fileCount`), the `tagCounts`/Tags-view half of
+ * GET /api/files/tags/counts, and GET /api/files/search. These three MUST agree - passing
+ * different scopes makes a badge disagree with the list beside it, which is exactly the class of
+ * bug deriving the counts was meant to end.
  *
  * This returns the WHO, not the whether: the count aggregates widen on the mere presence of a
  * scope object, but the list path widens only when `includeShared` is also true
@@ -18,6 +16,11 @@ import { getDataLakeTags } from '@bike4mind/common';
  *
  * `dataLakeTags` reaches an ownership-bypass arm in buildOwnershipConditions, so it must stay the
  * registry-derived set for lakes this user can reach - never the user's raw tags.
+ *
+ * WORKSPACES (Home/Overview) is the deliberate exception, NOT covered by "the three agree": its
+ * `workspaceTagCounts`/`namespaceCounts` pair additionally opts into `excludePersonalShares` - see
+ * ./counts.ts and buildOwnershipConditions for the full why and which response fields carry it.
+ * This function itself stays exclusion-free; each caller decides.
  */
 // `groups` and `tags` are nullable on IUserDocument, not merely optional - a user record can hold
 // an explicit null, so the parameter has to admit it rather than only `undefined`.

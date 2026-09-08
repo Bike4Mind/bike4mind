@@ -73,4 +73,29 @@ describe('parseStreamEvent', () => {
     expect(parseStreamEvent('[DONE]')).toBeNull();
     expect(parseStreamEvent(null)).toBeNull();
   });
+
+  // This schema strips unknown keys, so an undeclared field is dropped at the boundary no
+  // matter what the server sends - which is exactly how the truncation signal went missing.
+  it('preserves stopReason on content and tool_use events', () => {
+    expect(parseStreamEvent({ type: 'content', text: 'cut', stopReason: 'max_tokens' })).toEqual({
+      type: 'content',
+      text: 'cut',
+      stopReason: 'max_tokens',
+    });
+    expect(parseStreamEvent({ type: 'tool_use', text: '', stopReason: 'max_tokens' })).toEqual({
+      type: 'tool_use',
+      text: '',
+      stopReason: 'max_tokens',
+    });
+  });
+
+  // Left as a free-form string on purpose: a provider-specific or newly-added reason must
+  // reach the client rather than fail validation and drop the whole event.
+  it('accepts an unrecognized stop reason verbatim', () => {
+    expect(parseStreamEvent({ type: 'content', text: 'x', stopReason: 'some_future_reason' })).toEqual({
+      type: 'content',
+      text: 'x',
+      stopReason: 'some_future_reason',
+    });
+  });
 });

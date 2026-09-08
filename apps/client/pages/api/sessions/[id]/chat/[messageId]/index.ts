@@ -2,7 +2,7 @@ import { questRepository, sessionRepository } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IChatHistoryItem } from '@bike4mind/common';
+import { IChatHistoryItem, redactPromptMetaForViewer } from '@bike4mind/common';
 
 const handler = baseApi()
   /**
@@ -24,12 +24,19 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Not authorized to access this session' });
       }
 
-      const message = await questRepository.findById(messageId!);
+      // Bound to sessionId, not a bare findById(messageId) - the userHasAccess check above only
+      // proves the caller belongs to the session named in the URL, not that messageId is one of
+      // ITS quests. A bare findById would let a caller who owns ANY session pass isOwner for a
+      // quest belonging to someone else's session entirely, handing back that owner's promptMeta.
+      const message = await questRepository.findBySessionIdAndId(sessionId!, messageId!);
       if (!message) {
         return res.status(404).json({ error: 'Message not found' });
       }
 
-      return res.json(message);
+      // A share grant authorizes reading the conversation, not re-reading whatever the
+      // owner's tools touched on the owner's behalf - see redactPromptMetaForViewer.
+      const isOwner = session.userId === userId;
+      return res.json({ ...message, promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner) });
     })
   )
   /**
@@ -73,7 +80,8 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Not authorized to update this session' });
       }
 
-      const message = await questRepository.findById(messageId!);
+      // See the GET handler's comment: bound to sessionId, not a bare findById(messageId).
+      const message = await questRepository.findBySessionIdAndId(sessionId!, messageId!);
       if (!message) {
         return res.status(404).json({ error: 'Message not found' });
       }
@@ -94,10 +102,22 @@ const handler = baseApi()
         ...allowedUpdates,
       });
 
+      // Only reachable if the quest was deleted between the findBySessionIdAndId check above and
+      // this update (or update() encounters some other unmatched-document case) - report it as a
+      // real failure rather than a 200 whose data.promptMeta is silently undefined.
+      if (!updatedMessage) {
+        return res.status(404).json({ error: 'Message not found' });
+      }
+
+      // A share grant authorizes reading the conversation, not re-reading whatever the
+      // owner's tools touched on the owner's behalf - see redactPromptMetaForViewer.
+      // (updatedMessage is already a plain object here - BaseRepository.update calls
+      // .toJSON() internally before returning.)
+      const isOwner = session.userId === userId;
       return res.json({
         success: true,
         message: 'Message updated successfully',
-        data: updatedMessage,
+        data: { ...updatedMessage, promptMeta: redactPromptMetaForViewer(updatedMessage.promptMeta, isOwner) },
       });
     })
   );

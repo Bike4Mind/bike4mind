@@ -17,6 +17,13 @@ declare global {
       billingOwnerType?: ApiKeyBillingOwnerType;
       /** Organization the key bills, present iff billingOwnerType is Organization. */
       organizationId?: string;
+      /**
+       * Lake ids this key is bound to for the manage-but-not-member session admission
+       * (`preauthorizedLakeIds` on a session). Admin-minted only. A request from this key that
+       * names a `preauthorizedLakeIds` id outside this set is refused at session-create, even when
+       * the underlying user could otherwise manage that lake.
+       */
+      preauthorizedLakeIds?: string[];
     }
 
     interface ApiKeyUsageInfo {
@@ -33,7 +40,13 @@ declare global {
       logger: Logger;
       /** Correlation ID for this request, echoed back as the X-Request-ID header. */
       requestId: string;
-      user: IUserDocument;
+      /**
+       * The authenticated user, plus the transient auth claims `verifyJwtPayload` attaches from
+       * the access-token JWT (never persisted on the document): `sid` (session id, for per-device
+       * logout), `mfaPending`, and `impersonatedBy`. All optional - API-key auth sets `user`
+       * without them, and legacy/mfaPending tokens omit `sid`.
+       */
+      user: IUserDocument & { sid?: string; mfaPending?: boolean; impersonatedBy?: string };
       ability?: Ability;
       /**
        * Per-request memoized entitlement keys (Quest 3). Set ONLY by

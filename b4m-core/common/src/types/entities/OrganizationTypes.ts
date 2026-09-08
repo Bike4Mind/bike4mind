@@ -95,8 +95,9 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
 
   /**
    * Atomically add a member and raise the seat ceiling to fit, in a single update (#1239).
-   * Race-safe: idempotent on a duplicate add, and raises `seats` only to the post-add member count
-   * (never a double-raise). The raise is clamped at `ORGANIZATION_SUBSCRIPTION_MAX_SEATS` (#1424), so
+   * Race-safe: idempotent on a duplicate add, and raises `seats` only to the post-add owner-inclusive
+   * team size (owner + members, #1423; never a double-raise). The raise is clamped so that size stays
+   * <= `ORGANIZATION_SUBSCRIPTION_MAX_SEATS` (#1424), so
    * a full org matches no doc and returns null - the caller routes that to 'at-capacity' rather than
    * growing a seat floor no `setSeats` value can satisfy. Returns the PRE-image (before/after seats are
    * derived from it), or null if the user is already a member, the org is gone, OR the org is at the
@@ -126,6 +127,26 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * @returns Bare list of organization IDs, suitable for an `$in` filter
    */
   findIdsAdministeredBy(userId: string): Promise<string[]>;
+
+  /**
+   * IDs of every organization the user is a MEMBER of: the org's owner (`userId`) or a
+   * `users[]` ACL row with read/write permission - the same membership arms
+   * `shareable.findAllAccessible` grants on (groups deliberately excluded: org membership
+   * is direct). Normalized strings, suitable for an `$in` filter. This is the authoritative
+   * set lake authorization consumes (see AccessContext.organizationIds, #1674) - NOT
+   * `user.organizationId`, which is a display preference.
+   */
+  findMembershipOrgIds(userId: string): Promise<string[]>;
+
+  /**
+   * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`), team
+   * manager (`managerId`), OR an appointed org admin (`adminUserIds`). Broader than
+   * `findIdsAdministeredBy` (which omits appointed admins) - deliberately a separate method so its
+   * existing consumers keep their narrower semantics. This is the org-admin set data-lake management
+   * consults: an org admin may manage any lake scoped to that org (see `canManageLake`). Returns a
+   * bare id list, suitable for an `$in` filter or membership test.
+   */
+  findIdsWithAdminRights(userId: string): Promise<string[]>;
 
   /**
    * Find an organization by its ID and user ID

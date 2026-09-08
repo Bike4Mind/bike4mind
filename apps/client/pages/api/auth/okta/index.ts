@@ -22,6 +22,7 @@ import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@s
 import { NotFoundError } from '@server/utils/errors';
 import { validateAppUrl } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 const handler = baseApi({ auth: false })
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000 })) // 10 requests per minute
@@ -73,7 +74,7 @@ const handler = baseApi({ auth: false })
 
       // Build callback URL - in dev, derive from request host so OAuth
       // redirects back to the correct port (Next.js may not be on :3000)
-      const callbackUrl = process.env.APP_URL?.includes('localhost')
+      const callbackUrl = isLocalAppUrl()
         ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}/api/auth/okta/callback`
         : `${appUrl}/api/auth/okta/callback`;
 

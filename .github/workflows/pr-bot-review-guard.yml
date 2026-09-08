@@ -1,0 +1,30 @@
+name: PR Bot Review Guard
+
+# Runs the self-tests for the pr-bot-review transcript redactor.
+#
+# The redactor only ever runs inside a real Actions run, where a mistake is
+# expensive and silent: it is the single control keeping the private bot-review
+# skill body out of an artifact that anyone can download from this public repo.
+# A regression that stops it matching would still exit 0 and publish, so the
+# fail-closed paths are pinned by tests that CI runs before that can happen.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/pr-bot-review.yml'
+      - '.github/workflows/pr-bot-review-guard.yml'
+      - '.github/scripts/redact-review-transcript.py'
+      - '.github/scripts/redact-review-transcript.test.sh'
+  merge_group:
+    branches: [main]
+
+jobs:
+  check:
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Transcript redactor tests
+        run: bash .github/scripts/redact-review-transcript.test.sh

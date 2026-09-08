@@ -11,6 +11,7 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readRefreshCookie, setRefreshCookie } from '@server/auth/refreshCookie';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
+import { logAuthAudit } from '@server/utils/authAudit';
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -35,12 +36,15 @@ const handler = baseApi({ auth: false })
     // localStorage from before this change sends it in the body ONCE with this flag, and is
     // moved onto the cookie without being logged out.
     const useCookie = !bodyToken || req.body.cookie === true;
-    const respond = (payload: Record<string, unknown>, refreshToken: string) => {
+    // `refreshToken: null` means this refresh did not advance the chain (a concurrent sibling did),
+    // so the caller's existing token is still the live one. Emitting nothing is what keeps the
+    // cookie jar on the single surviving token - see rotateSession's `coalesced` outcome.
+    const respond = (payload: Record<string, unknown>, refreshToken: string | null) => {
       if (useCookie) {
-        setRefreshCookie(res, refreshToken);
+        if (refreshToken) setRefreshCookie(res, refreshToken);
         return res.status(200).json(payload);
       }
-      return res.status(200).json({ ...payload, refreshToken });
+      return res.status(200).json(refreshToken ? { ...payload, refreshToken } : payload);
     };
 
     const signAccessToken = (id: string, tokenVersion: number, extra?: Record<string, unknown>) =>
@@ -52,6 +56,11 @@ const handler = baseApi({ auth: false })
       const rotated = await authSessionService.rotateSession(token, {
         db: { authSessions: authSessionRepository, users: userRepository },
         signAccessToken,
+        // Involuntary session outcomes -> the forensic audit log. The service's event types are
+        // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
+        // dropped so the service can await the write on the paths that throw immediately after
+        // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
+        audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { sid: event.sid } }),
         logger: req.logger,
       });
       requireNonSystemUser(rotated.user);
@@ -63,7 +72,7 @@ const handler = baseApi({ auth: false })
           accessToken: rotated.accessToken,
           impersonating: !!rotated.impersonatedBy,
         },
-        rotated.refreshToken
+        rotated.status === 'rotated' ? rotated.refreshToken : null
       );
     }
 

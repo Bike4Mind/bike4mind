@@ -27,13 +27,9 @@ import {
   usageEventRepository,
   organizationRepository,
 } from '@bike4mind/database';
-import {
-  verifyJwtToken,
-  checkRateLimit,
-  verifyApiKey,
-  checkApiKeyRateLimitOrThrow,
-  type ApiKeyInfo,
-} from '@server/cli/auth';
+import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
+import { resolveContractAuth } from '@server/cli/resolveContractAuth';
+import { createCompletionContract } from '@bike4mind/common';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@server/utils/config';
 import { z } from 'zod';
@@ -144,45 +140,47 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         return;
       }
 
-      // 3. Authenticate - API key first, then JWT (mirrors v1).
+      // 3. Authenticate per the contract (API key first, then JWT), then rate-limit.
+      // Auth failure and rate-limit failure are surfaced separately so a valid but
+      // rate-limited caller sees the real rate-limit message, not a generic auth error.
+      let authResult;
       try {
-        apiKeyInfo = await verifyApiKey(headers);
-        userId = apiKeyInfo.userId;
-        logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+        authResult = await resolveContractAuth(headers, createCompletionContract);
+      } catch {
+        write(
+          serializeSSEEvent(
+            formatSSEError(new Error('Authentication failed. Provide a valid API key or JWT token.'), requestId)
+          )
+        );
+        end();
+        return;
+      }
+      userId = authResult.userId;
 
-        await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
-          userId: apiKeyInfo.userId,
-          endpoint: COMPLETIONS_ENDPOINT,
-          method: req.method,
-        });
-      } catch (apiKeyError) {
-        // API key path failed (missing/invalid key, or rate limit). If a key was present and
-        // valid but rate-limited, surface that rather than falling through to JWT.
-        if (apiKeyInfo) {
-          write(
-            serializeSSEEvent(
-              formatSSEError(apiKeyError instanceof Error ? apiKeyError : new Error('Rate limit exceeded'), requestId)
-            )
-          );
-          end();
-          return;
-        }
-
-        const token = headers.authorization?.replace('Bearer ', '');
-        try {
-          const user = await verifyJwtToken(token);
-          userId = user.id;
+      try {
+        if (authResult.method === 'apiKey') {
+          apiKeyInfo = authResult.apiKeyInfo;
+          logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+          await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
+            userId: apiKeyInfo.userId,
+            endpoint: COMPLETIONS_ENDPOINT,
+            method: req.method,
+          });
+        } else {
           logger.info('[CLI_LLM] Authenticated via JWT', { userId });
           await checkRateLimit(userId, source);
-        } catch (jwtError) {
-          write(
-            serializeSSEEvent(
-              formatSSEError(new Error('Authentication failed. Provide a valid API key or JWT token.'), requestId)
-            )
-          );
-          end();
-          return;
         }
+      } catch (rateLimitError) {
+        write(
+          serializeSSEEvent(
+            formatSSEError(
+              rateLimitError instanceof Error ? rateLimitError : new Error('Rate limit exceeded'),
+              requestId
+            )
+          )
+        );
+        end();
+        return;
       }
 
       logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });

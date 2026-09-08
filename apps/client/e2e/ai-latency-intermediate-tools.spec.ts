@@ -5,7 +5,10 @@ import type { PromptScenario } from './ai-latency-helpers';
 createAiLatencySuite({
   prompts: config.prompts as PromptScenario[],
   describeLabel: 'Run 3 intermediate prompts using tools',
-  timeoutMultiplier: 15,
+  // 20 * TEST = 1200s so a real failure surfaces as a clean assertion, not an opaque test
+  // timeout: an artifact prompt can spend the image-generation send budget twice (the one
+  // "request timed out" retry in sendMessageAndWaitForResponse) plus the artifact settle wait.
+  timeoutMultiplier: 20,
   thresholdSec: config.thresholdSec,
   resultsFilename: 'ai-latency-intermediate-tools-results.json',
 });

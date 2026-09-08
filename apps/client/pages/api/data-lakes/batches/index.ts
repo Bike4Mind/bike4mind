@@ -1,12 +1,20 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  adminSettingsRepository,
+  scopedSettingsRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { CreateBatchRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -25,7 +33,14 @@ const handler = baseApi()
     // terminal state (guarded), and recompute lake stats from source. The daily
     // dataLakeBatchReconcile cron is the fallback for batches nobody ever opens the list for.
     await dataLakeService.reconcileStuckBatches(ingestActive, dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS, {
-      db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+      // Audit repos wired: this reconciler forces terminal the batches that never reached
+      // finalizeBatchIfComplete, so it is the only path that can activate those lakes.
+      db: {
+        dataLakes: dataLakeRepository,
+        batches: dataLakeBatchRepository,
+        fabFiles: fabFileRepository,
+        ...lakeConfigAuditDb,
+      },
       logger: console,
       // Forced-terminal is rare, so the awaited emit only costs latency on the exceptional path; the
       // stuck gauge is deliberately omitted here (it belongs on the cron's fixed cadence, not per read).
@@ -69,7 +84,7 @@ const handler = baseApi()
     // don't own. Not-found-style denial when the lake isn't even readable; manage-denied when
     // readable but not owned.
     const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     // Don't accept new uploads into an archived/deleted (or transitional) lake - only
@@ -77,6 +92,15 @@ const handler = baseApi()
     if (dataLake.status !== 'draft' && dataLake.status !== 'active') {
       return res.status(400).json({ error: `Cannot create a batch for a data lake in '${dataLake.status}' status` });
     }
+
+    // Admission contract (#1680) at the earliest point the intent is known: refusing the BATCH is
+    // what makes the refusal legible in the upload UI, rather than letting the user pick files and
+    // fail at presign. The files do not exist yet, so the subject is the uploader as owner-to-be.
+    // Report-only unless this lake's EnforceLakeAdmission lever is on.
+    await dataLakeService.assertLakeAdmission([dataLake], [{ userId }], {
+      db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+      logger: req.logger,
+    });
 
     const batch = await dataLakeBatchRepository.create({
       dataLakeId: dataLake.id,

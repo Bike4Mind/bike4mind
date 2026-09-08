@@ -1,10 +1,10 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import React from 'react';
 import { Chip, Tooltip } from '@mui/joy';
 import { CheckCircle, RadioButtonUnchecked } from '@mui/icons-material';
-import { IUserDocument } from '@bike4mind/common';
 
 interface MFAStatusBadgeProps {
-  user: IUserDocument;
+  user: AdminUserListItem;
   size?: 'sm' | 'md' | 'lg';
 }
 

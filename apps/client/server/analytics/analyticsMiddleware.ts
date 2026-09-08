@@ -82,7 +82,21 @@ export function analyticsMiddleware() {
     }
     emitted.set(pseudoUserId, today);
 
-    // Deterministic sessionId: forensic-only; downstream never groups on it
+    // Deterministic sessionId: sha256 of the pseudonymous id plus the UTC date, so it is
+    // stable for a whole day rather than scoped to a visit.
+    //
+    // It IS grouped on downstream: a consumer of OverwatchRawEvent counts distinct
+    // sessionIds per product. An earlier version of this comment said "forensic-only;
+    // downstream never groups on it" - true when written, false once that consumer
+    // shipped, and it went uncorrected long enough to be quoted elsewhere as evidence
+    // the value was not used. Describe what this is, not what nothing does with it: a
+    // claim about the absence of consumers rots the moment one appears, and unlike a
+    // claim about the value itself, nothing here fails when it does.
+    //
+    // Consequence worth knowing before relying on that grouping: because the input is
+    // (user, day) rather than (user, visit), a distinct-sessionId count is a count of
+    // distinct user-days for this emitter, and of real sessions for a product supplying
+    // its own. The two are not comparable.
     const sessionId = crypto.createHash('sha256').update(`${pseudoUserId}:${today}`).digest('hex');
 
     const userType = resolveUserType({ level: req.user.level, subscribedUntil: req.user.subscribedUntil });

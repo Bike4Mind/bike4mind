@@ -122,6 +122,11 @@ const handler = baseApi().post(async (req, res) => {
           fabFiles: fabFileRepository,
           agents: agentRepository,
         },
+        // Imported at CALL time - see the other call sites.
+        // See resolveRetrievalLakeScopeForUser - request-free so the lake arm of the lake-tag
+        // derivation runs here too, not only on the two session routes that have a `req`.
+        resolveLakeAccess: async () =>
+          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
       }
     );
   }

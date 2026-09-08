@@ -10,8 +10,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
  * Renders for two `routingSource` values:
  * - `classifier`: the M4 classifier upgraded a `'contextual'` query.
  * - `complexity`: the rule-based `complexity === 'complex'` fallback
- *   fired under the `'auto'` Smart Routing default, replacing the user's Smart
- *   Tools selection with the agent's fixed toolset.
+ *   fired under the `'auto'` Smart Routing default.
  *
  * The "Dismiss" action flips `disableAutoRouteForThisSession`, suppressing both
  * auto-route paths for the remainder of the session - primary remediation for
@@ -23,13 +22,13 @@ import { useLLM } from '@client/app/contexts/LLMContext';
  */
 export type AutoRouteSource = 'classifier' | 'complexity';
 
-// User-facing explanation keyed by which auto-route fired. The `complexity`
-// line additionally calls out that the rule-based reroute replaced the user's
-// Smart Tools selection with the agent's fixed toolset.
+// User-facing explanation keyed by which auto-route fired. Neither line claims
+// anything about the Smart Tools selection: an agentless run now carries the
+// user's picks unioned with the agent-mode defaults (see `resolveDispatchTools`),
+// so the old "your selection was replaced" copy would be untrue.
 const MESSAGE_BY_SOURCE: Record<AutoRouteSource, string> = {
   classifier: 'Agent mode auto-engaged - multi-step research detected.',
-  complexity:
-    'Agent mode auto-engaged - complex prompt detected. Your Smart Tools selection was replaced by the agent toolset.',
+  complexity: 'Agent mode auto-engaged - complex prompt detected.',
 };
 
 export const AutoRouteBadge: FC<{ source?: AutoRouteSource }> = ({ source = 'classifier' }) => {

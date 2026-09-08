@@ -105,4 +105,62 @@ describe('checkStaleModelReferences', () => {
     run({ fallbackChains: chains });
     expect(chains).toEqual({ 'live-1': ['sunset-1'] });
   });
+
+  describe('agent model surfaces', () => {
+    it('reports nothing when an agent names live models', () => {
+      const found = run({ agentModels: { researcher: { model: 'live-1', fallbackModels: ['live-2'] } } });
+      expect(forSurface(found, 'agent-model')).toEqual([]);
+      expect(forSurface(found, 'agent-fallback')).toEqual([]);
+    });
+
+    it('flags an agent whose primary model the deployment cannot serve', () => {
+      // The production condition behind #2010: the id is absent from the merged
+      // list entirely, so every delegation by this agent degrades or fails.
+      const found = forSurface(run({ agentModels: { researcher: { model: 'never-existed' } } }), 'agent-model');
+
+      expect(found).toEqual([
+        { surface: 'agent-model', key: 'researcher', referencedId: 'never-existed', problem: 'unknown' },
+      ]);
+    });
+
+    it('separates a dead primary from a dead fallback', () => {
+      // Different severities: a dead primary costs every delegation, a dead
+      // fallback only costs that rung of the ladder.
+      const found = run({
+        agentModels: { researcher: { model: 'sunset-1', fallbackModels: ['gone-1', 'live-1'] } },
+      });
+
+      expect(forSurface(found, 'agent-model')).toEqual([
+        { surface: 'agent-model', key: 'researcher', referencedId: 'sunset-1', problem: 'deprecated' },
+      ]);
+      expect(forSurface(found, 'agent-fallback')).toEqual([
+        { surface: 'agent-fallback', key: 'researcher', referencedId: 'gone-1', problem: 'retired' },
+      ]);
+    });
+
+    it('classifies a catalog-known but unlisted model as not-invocable', () => {
+      // The subtle one: the catalog knows the id, but the merge never promoted
+      // it, so routing to it fails exactly as if it did not exist.
+      const found = forSurface(run({ agentModels: { analyst: { model: 'found-1' } } }), 'agent-model');
+
+      expect(found).toEqual([
+        { surface: 'agent-model', key: 'analyst', referencedId: 'found-1', problem: 'not-invocable' },
+      ]);
+    });
+
+    it('reports every agent, keyed by name', () => {
+      const found = forSurface(
+        run({ agentModels: { researcher: { model: 'never-existed' }, analyst: { model: 'gone-1' } } }),
+        'agent-model'
+      );
+
+      expect(found.map(f => f.key)).toEqual(['analyst', 'researcher']);
+    });
+
+    it('is inert when no agent declarations are supplied', () => {
+      const found = run({ fallbackChains: { 'live-1': ['live-2'] } });
+      expect(forSurface(found, 'agent-model')).toEqual([]);
+      expect(forSurface(found, 'agent-fallback')).toEqual([]);
+    });
+  });
 });

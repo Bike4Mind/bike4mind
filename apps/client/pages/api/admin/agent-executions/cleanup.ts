@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, BadRequestError } from '@server/utils/errors';
 import { agentExecutionRepository } from '@bike4mind/database';
+import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import { Connection } from '@bike4mind/database/social';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { Resource } from 'sst';
@@ -17,6 +18,8 @@ export type CleanupResponse = {
   requested: number;
   marked: number;
   notifiedConnections: number;
+  /** Stranded quest bubbles given a terminal state alongside the executions. */
+  questsSettled: number;
 };
 
 /**
@@ -40,10 +43,20 @@ const handler = baseApi().post(async (req, res) => {
 
   const swept = await agentExecutionRepository.markAbandoned(executionIds);
 
+  // Same settle step the abandoned-sweep cron runs. Without it this endpoint
+  // silently defeats itself: an admin "cleans up" a stuck execution and the
+  // user's bubble is left exactly as stuck as before.
+  const quests = await settleStrandedQuests(
+    swept.map(s => s.id),
+    Logger,
+    '[AgentExecutionsCleanup]'
+  );
+
   Logger.info('[AgentExecutionsCleanup] Marked abandoned', {
     adminUserId,
     requested: executionIds.length,
     marked: swept.length,
+    questsSettled: quests.settled,
   });
 
   // Best-effort notify every open connection of each affected user. Sends are
@@ -100,6 +113,7 @@ const handler = baseApi().post(async (req, res) => {
     requested: executionIds.length,
     marked: swept.length,
     notifiedConnections: notified,
+    questsSettled: quests.settled,
   };
   return res.json(body);
 });

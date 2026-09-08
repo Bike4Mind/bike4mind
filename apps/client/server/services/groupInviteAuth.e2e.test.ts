@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { InviteType, Permission } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   Group,
   Organization,
@@ -17,6 +17,10 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * End-to-end guard for the group-scoped invite auth path, driving the REAL
@@ -50,11 +54,11 @@ const platformAdminUser = { id: 'platform-1', username: 'padmin', groups: [], is
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, 30000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 // Targeted deletes, not dropDatabase(): dropping the database discards the indexes too, so every
 // subsequent test pays to rebuild them on first write, which is a real cost across 8 cases on a
 // contended CI shard. Group.deleteMany also clears the raw `groups` insert the legacy-group case

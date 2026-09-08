@@ -1,4 +1,5 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
+import { SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -16,7 +17,7 @@ const ID_PATTERN = /^[a-zA-Z0-9_.-]+$/;
 const UpdateProgressSchema = z.object({
   questId: z.string().min(1).max(100).regex(ID_PATTERN, 'Invalid questId format'),
   subQuestId: z.string().min(1).max(100).regex(ID_PATTERN, 'Invalid subQuestId format'),
-  status: z.enum(['not_started', 'in_progress', 'completed', 'skipped', 'deleted']).optional(),
+  status: z.enum(SUBQUEST_STATUS_VALUES).optional(),
   timeSpent: z.number().min(0).optional(),
   chatMessageId: z.string().max(100).regex(ID_PATTERN, 'Invalid chatMessageId format').optional(),
   startedAt: z.number().optional(),

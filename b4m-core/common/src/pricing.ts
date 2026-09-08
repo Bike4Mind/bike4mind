@@ -142,3 +142,75 @@ export const usdToCreditsStochastic = (
   const fraction = raw - base;
   return base + (rng() < fraction ? 1 : 0);
 };
+
+/**
+ * Output tokens the pre-flight credit hold prices when a request's max_tokens
+ * ceiling exceeds it.
+ *
+ * max_tokens is a *ceiling*, not a prediction: adaptive reasoning models stop at
+ * end_turn well short of it, so pricing the hold at the full window (128K on the
+ * flagship models) reserved several thousand credits per turn regardless of answer
+ * length. The excess was always refunded at settlement, but the hold IS the
+ * insufficient-funds gate, so users whose balance sat between their real cost and
+ * the worst case were falsely blocked.
+ *
+ * 16K covers the realistic long answer with headroom - the largest replies seen in
+ * practice are HTML-artifact turns at roughly 10-11K output tokens (see
+ * buildThinkingParams in llm-adapters/thinkingParams.ts, whose max_tokens floor was
+ * sized off the same measurement).
+ *
+ * UNDER-RESERVATION IS ACCEPTED, NOT PREVENTED. A turn that emits more than this
+ * settles as a shortfall debit at reconciliation, which is already a supported path
+ * (provider-basis settlement could always exceed a hold priced on the local
+ * estimate). The two sites clamp the shortfall differently: chat's
+ * computeSettlementDelta (services/llm/ChatCompletionProcess.ts) floors the debit at
+ * the balance snapshot taken at its OWN admission and reports the remainder as
+ * writtenOffCredits; cliCompletions.ts does an unclamped $inc on success and only
+ * logs an ALERT if it lands negative. Neither is a non-negativity guarantee: the
+ * chat snapshot predates any sibling turn's spend (see that function's own "best
+ * effort" note), and when the shortfall still fits the stale snapshot the debit
+ * applies in full - writtenOffCredits 0, and no BILLING_SHORTFALL_CLAMP log - so a
+ * concurrent holder can land negative there too. Either way the resulting balance
+ * fails the *next* turn's own admission gate - but that bound is per turn, not per
+ * holder: turns admitted concurrently are each checked against the balance at their
+ * own admission and settle against a snapshot that predates their siblings' spend,
+ * so a holder running turns in parallel can be shorted once per in-flight turn, not
+ * once total.
+ */
+export const PREFLIGHT_RESERVATION_OUTPUT_TOKENS = 16_384;
+
+/**
+ * Reservation ceiling for models that spend reasoning tokens inside their output
+ * budget (see reasonsWithinOutputBudget in llm-adapters/thinkingParams.ts). Those
+ * tokens bill as output on top of the visible answer, so the 16K figure above -
+ * which was measured on visible artifact size alone - under-reserves them badly.
+ *
+ * Deliberately below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR (64K), which sizes the
+ * request's real ceiling and therefore has to cover the worst case: exceeding it
+ * truncates a reply mid-tag, an unrecoverable failure. A hold has no such duty -
+ * exceeding it settles as a shortfall debit - so it is sized for the long turn
+ * (roughly 3x the largest observed visible answer, leaving the rest for the trace)
+ * rather than the worst one, which is what keeps the gate off affordable requests.
+ */
+export const PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS = 32_768;
+
+/**
+ * Output-token figure to price a pre-flight credit hold at, given the max_tokens
+ * this request will actually send. Never raises the caller's ceiling: a request
+ * that asks for less than the cap holds only what it can possibly spend.
+ *
+ * Reserving only, never gating: the per-member org credit cap is still priced on
+ * the unshrunk ceiling at both call sites, since that check has no settlement
+ * counterpart to correct an under-estimate. That is a strictly larger figure than
+ * the hold, not a true upper bound on the turn - it prices one model round trip,
+ * at the uncached input rate, on the primary model - so it still under-counts a
+ * multi-round tool loop, a cache-write turn, or a fallback hop onto pricier pricing.
+ *
+ * @param reasonsWithinOutputBudget - reasonsWithinOutputBudget(modelInfo); passed as
+ *   a boolean because common cannot import llm-adapters.
+ */
+export const reservationOutputTokens = (requestedMaxTokens: number, reasonsWithinOutputBudget = false): number =>
+  Math.min(
+    requestedMaxTokens,
+    reasonsWithinOutputBudget ? PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS : PREFLIGHT_RESERVATION_OUTPUT_TOKENS
+  );

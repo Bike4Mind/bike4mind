@@ -226,6 +226,11 @@ jobs:
         env:
           DISCOVERED_GPT: ${{ needs.discover-models.outputs.latest_gpt }}
           DISCOVERED_CLAUDE: ${{ needs.discover-models.outputs.latest_claude }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_FULL_MATRIX: ${{ inputs.run_full_matrix }}
+          RUN_ALL_SPECS: ${{ inputs.run_all_specs }}
+          AI_MODEL: ${{ inputs.ai_model }}
+          SPEC_FILE: ${{ inputs.spec_file }}
         run: |
           ALL_SPECS='["ai-latency-short-answers","ai-latency-long-answers","ai-latency-tool-prompts","ai-latency-intermediate-tools"]'
 
@@ -240,16 +245,16 @@ jobs:
             echo "ai_models=$(jq -cn --arg c "$DISCOVERED_CLAUDE" --arg g "$DISCOVERED_GPT" '[$c, $g]')" >> $GITHUB_OUTPUT
           }
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_full_matrix }}" = "true" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$RUN_FULL_MATRIX" = "true" ]; then
             build_full_matrix
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all_specs }}" = "true" ]; then
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$RUN_ALL_SPECS" = "true" ]; then
             # All specs on the single selected model.
             echo "spec_files=$ALL_SPECS" >> $GITHUB_OUTPUT
-            echo "ai_models=[\"${{ inputs.ai_model }}\"]" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ai_models=$(jq -cn --arg m "$AI_MODEL" '[$m]')" >> $GITHUB_OUTPUT
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # Single cell: selected spec × selected model.
-            echo "spec_files=[\"${{ inputs.spec_file }}\"]" >> $GITHUB_OUTPUT
-            echo "ai_models=[\"${{ inputs.ai_model }}\"]" >> $GITHUB_OUTPUT
+            echo "spec_files=$(jq -cn --arg s "$SPEC_FILE" '[$s]')" >> $GITHUB_OUTPUT
+            echo "ai_models=$(jq -cn --arg m "$AI_MODEL" '[$m]')" >> $GITHUB_OUTPUT
           else
             # Scheduled run: full matrix.
             build_full_matrix
@@ -284,20 +289,26 @@ jobs:
     steps:
       - name: Sanitize names for artifact labels
         id: sanitize
+        env:
+          AI_MODEL: ${{ matrix.ai_model }}
         run: |
-          MODEL_SAFE="${{ matrix.ai_model }}"
+          MODEL_SAFE="$AI_MODEL"
           MODEL_SAFE="${MODEL_SAFE// /-}"
           MODEL_SAFE="${MODEL_SAFE//./-}"
           echo "model_safe=$MODEL_SAFE" >> $GITHUB_OUTPUT
 
       - name: Compute per-cell E2E test ID
         id: testid
+        env:
+          E2E_TEST_ID_INPUT: ${{ inputs.e2e_test_id }}
+          MODEL_SAFE: ${{ steps.sanitize.outputs.model_safe }}
+          SPEC_FILE: ${{ matrix.spec_file }}
         run: |
           # Derive a unique-per-cell ID so concurrent matrix cells isolate their test data.
           # Without this, the cleanup endpoint (no testId) deletes ALL e2e users globally,
           # causing the first-finishing cell to wipe data for the rest.
-          USER_PREFIX="${{ inputs.e2e_test_id }}"
-          CELL_ID="${{ steps.sanitize.outputs.model_safe }}-${{ matrix.spec_file }}"
+          USER_PREFIX="$E2E_TEST_ID_INPUT"
+          CELL_ID="${MODEL_SAFE}-${SPEC_FILE}"
           if [ -n "$USER_PREFIX" ]; then
             TEST_ID="${USER_PREFIX}-${CELL_ID}"
           else
@@ -315,6 +326,8 @@ jobs:
           STAGE_INPUT: ${{ inputs.stage }}
           PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
           STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
+          SPEC_FILE: ${{ matrix.spec_file }}
+          AI_MODEL: ${{ matrix.ai_model }}
         run: |
           if [ -n "$PR_NUMBER" ]; then
             if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
@@ -331,8 +344,8 @@ jobs:
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
           echo "Stage: $STAGE"
           echo "API URL: $API_URL"
-          echo "Spec: ${{ matrix.spec_file }}"
-          echo "AI Model: ${{ matrix.ai_model }}"
+          echo "Spec: $SPEC_FILE"
+          echo "AI Model: $AI_MODEL"
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -413,6 +426,7 @@ jobs:
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           AI_MODEL: ${{ matrix.ai_model }}
+          SPEC_FILE: ${{ matrix.spec_file }}
           AI_LATENCY_RUN: 'true'
           PW_WORKERS: '3'
           CI: 'true'
@@ -425,38 +439,40 @@ jobs:
                 echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
                 exit 1
               fi
-              pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
+              pnpm --filter client exec playwright test "e2e/${SPEC_FILE}.spec.ts" \
                 2>&1 | tee apps/client/playwright-output.txt
               ;;
             *)
               # dev (same account): resolve the secret from SST.
               pnpm sst shell --stage "$STAGE" -- \
-                pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
+                pnpm --filter client exec playwright test "e2e/${SPEC_FILE}.spec.ts" \
                 2>&1 | tee apps/client/playwright-output.txt
               ;;
           esac
 
       - name: Persist test results
         if: always()
+        env:
+          SPEC_FILE: ${{ matrix.spec_file }}
         run: |
           mkdir -p apps/client/playwright-report
           # Prefer the deterministic path from `apps/client/playwright.config.ts`.
           if [ -f apps/client/playwright-report/pw-results.json ]; then
-            cp apps/client/playwright-report/pw-results.json apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+            cp apps/client/playwright-report/pw-results.json "apps/client/playwright-report/${SPEC_FILE}-pw-results.json"
           elif [ -f apps/client/pw-results.json ]; then
             # Backwards-compat fallback.
-            cp apps/client/pw-results.json apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+            cp apps/client/pw-results.json "apps/client/playwright-report/${SPEC_FILE}-pw-results.json"
           else
             # Last-resort: Playwright may have written relative to a different CWD or config resolution.
             FOUND="$(find . -type f -name 'pw-results.json' 2>/dev/null | head -1 || true)"
             if [ -n "$FOUND" ]; then
-              cp "$FOUND" apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+              cp "$FOUND" "apps/client/playwright-report/${SPEC_FILE}-pw-results.json"
             fi
           fi
 
           echo "=== pw-results debug ==="
-          echo "Spec file: ${{ matrix.spec_file }}"
-          echo "Copied summary exists? $(test -f apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json && echo yes || echo no)"
+          echo "Spec file: $SPEC_FILE"
+          echo "Copied summary exists? $(test -f "apps/client/playwright-report/${SPEC_FILE}-pw-results.json" && echo yes || echo no)"
           echo "Found pw-results.json candidates:"
           find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
 
@@ -482,12 +498,16 @@ jobs:
     steps:
       - name: Resolve environment URL
         id: config
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
+          STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
         run: |
-          if [ -n "${{ inputs.pr_number }}" ]; then
-            API_URL="https://app.pr${{ inputs.pr_number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}"
-            ENV_LABEL="preview-${{ inputs.pr_number }}"
+          if [ -n "$PR_NUMBER" ]; then
+            API_URL="https://app.pr${PR_NUMBER}.${PREVIEW_SERVER_DOMAIN}"
+            ENV_LABEL="preview-${PR_NUMBER}"
           else
-            API_URL="https://app.${{ vars.STAGING_SERVER_DOMAIN }}"
+            API_URL="https://app.${STAGING_SERVER_DOMAIN}"
             ENV_LABEL="Staging"
           fi
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
@@ -495,8 +515,10 @@ jobs:
 
       - name: Set trigger label
         id: trigger
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "label=Run via Dispatch" >> $GITHUB_OUTPUT
           else
             echo "label=Run via Schedule" >> $GITHUB_OUTPUT
@@ -521,6 +543,11 @@ jobs:
         env:
           AI_MODELS_JSON: ${{ needs.setup-matrix.outputs.ai_models }}
           SPEC_FILES_JSON: ${{ needs.setup-matrix.outputs.spec_files }}
+          TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
+          BRANCH: ${{ github.ref_name }}
+          NOTIFY_API_URL: ${{ steps.config.outputs.api_url }}
+          ENV_LABEL: ${{ steps.config.outputs.env_label }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
         run: |
           mapfile -t ALL_PW_RESULTS < <(find downloaded-results -type f -name '*-pw-results.json' 2>/dev/null | sort)
           mapfile -t ALL_LATENCY_JSONS < <(find downloaded-results -type f -name '*-results.json' ! -name '*-pw-results.json' 2>/dev/null | sort)
@@ -677,13 +704,13 @@ jobs:
 
           jq -n \
             --arg overall_status "$OVERALL_STATUS" \
-            --arg trigger_label "${{ steps.trigger.outputs.label }}" \
-            --arg branch "${{ github.ref_name }}" \
-            --arg api_url "${{ steps.config.outputs.api_url }}" \
-            --arg env_label "${{ steps.config.outputs.env_label }}" \
+            --arg trigger_label "$TRIGGER_LABEL" \
+            --arg branch "$BRANCH" \
+            --arg api_url "$NOTIFY_API_URL" \
+            --arg env_label "$ENV_LABEL" \
             --arg latency_summary "$LATENCY_SUMMARY" \
             --arg normal_prompts "$NORMAL_PROMPTS_TEXT" \
-            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts" \
+            --arg run_url "$RUN_URL" \
             '{
               "text": ("AI Latency — " + $overall_status),
               "blocks": [

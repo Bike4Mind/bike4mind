@@ -8,6 +8,15 @@ import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
+import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+
+// Scopes this admin endpoint may mint: the standard self-service set plus the
+// admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -
+// those must come through their own dedicated flows.
+const ADMIN_ENDPOINT_MINTABLE_SCOPES = new Set<string>([
+  ...USER_API_KEY_SCOPE_VALUES,
+  ...ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value),
+]);
 
 interface RequestQuery {
   userId: string;
@@ -21,6 +30,8 @@ interface CreateApiKeyBody {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  /** Lake ids to bind this key to for the manage-but-not-member session admission. Admin-only. */
+  preauthorizedLakeIds?: string[];
 }
 
 /**
@@ -48,7 +59,14 @@ const handler = baseApi({ auth: true })
         throw new BadRequestError('User not found');
       }
 
-      const { name, scopes, expiresAt, rateLimit } = req.body as CreateApiKeyBody;
+      const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
+
+      // Reject any scope outside the mintable allowlist, including admin:* and cc-bridge:connect.
+      const requestedScopes = Array.isArray(scopes) ? scopes : [];
+      const invalidScopes = requestedScopes.filter(s => !ADMIN_ENDPOINT_MINTABLE_SCOPES.has(s));
+      if (invalidScopes.length > 0) {
+        throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
+      }
 
       const newApiKey = await userApiKeyService.createUserApiKey(
         userId,
@@ -57,6 +75,7 @@ const handler = baseApi({ auth: true })
           scopes: scopes as Parameters<typeof userApiKeyService.createUserApiKey>[1]['scopes'],
           expiresAt: expiresAt ? new Date(expiresAt) : undefined,
           rateLimit,
+          preauthorizedLakeIds,
           metadata: {
             clientIP: req.ip,
             userAgent: req.headers['user-agent'],

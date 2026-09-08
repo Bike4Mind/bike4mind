@@ -9,7 +9,7 @@
  * @see https://platform.openai.com/docs/guides/function-calling
  */
 
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, type QuestComplexity } from '@bike4mind/common';
 import { ICompletionOptionTools } from './llm/backend';
 
 // Length limit constants to prevent oversized data from LLMs.
@@ -34,7 +34,7 @@ export interface QuestPlanFunctionResult {
     id: string;
     title: string;
     description: string;
-    complexity: 'Easy' | 'Medium' | 'Hard';
+    complexity: QuestComplexity;
     subQuests: Array<{
       id: string;
       title: string;

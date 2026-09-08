@@ -5,7 +5,9 @@ import { Breadcrumbs, Link, Typography } from '@mui/joy';
  * sub-view: crumb labels and handlers are entirely caller-supplied.
  *
  * `OptiModeBreadcrumb.tsx` re-exports this under its historical name for the
- * premium mode sub-views.
+ * premium mode sub-views, which since #1943 are its ONLY callers - the standalone
+ * /data-lakes page was the last in-repo one. Kept deliberately: it is a live seam,
+ * not a leftover, so don't sweep it for having no local consumer.
  */
 
 interface SurfaceBreadcrumbProps {

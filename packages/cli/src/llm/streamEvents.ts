@@ -62,6 +62,11 @@ export type ToolUse = z.infer<typeof toolUseSchema>;
  * Discriminated union of streaming events. `thinking` blocks are opaque
  * provider-shaped objects (Anthropic extended thinking) replayed verbatim into
  * the next request, so they stay `unknown[]` rather than being modeled.
+ *
+ * `stopReason` must be declared to survive: this schema strips unknown keys, so a
+ * field absent here is dropped at the boundary no matter what the server sends.
+ * 'max_tokens' is the one value with user-visible consequences - it means the reply
+ * was cut off rather than finished.
  */
 export const streamEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -69,6 +74,7 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     text: z.string().optional(),
     usage: usageSchema.optional(),
     credits: creditsSchema.optional(),
+    stopReason: z.string().optional(),
   }),
   z.object({
     type: z.literal('tool_use'),
@@ -77,6 +83,7 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     thinking: z.array(z.unknown()).optional(),
     usage: usageSchema.optional(),
     credits: creditsSchema.optional(),
+    stopReason: z.string().optional(),
   }),
   z.object({
     type: z.literal('error'),

@@ -200,6 +200,7 @@ describe('sreRevision handler', () => {
 
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'wont_fix',
         expect.objectContaining({
@@ -208,6 +209,7 @@ describe('sreRevision handler', () => {
       );
       expect(mockAtomicTransition).not.toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'fixing',
         expect.anything()
@@ -234,6 +236,7 @@ describe('sreRevision handler', () => {
 
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'wont_fix',
         expect.any(Object)
@@ -367,6 +370,7 @@ describe('sreRevision handler', () => {
       // CAS attempted; no follow-up side effects since we lost the race
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'wont_fix',
         expect.any(Object)
@@ -399,6 +403,7 @@ describe('sreRevision handler', () => {
       // Still transitioned to wont_fix
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'wont_fix',
         expect.any(Object)
@@ -420,6 +425,7 @@ describe('sreRevision handler', () => {
 
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'fixing',
         expect.any(Object)
@@ -476,6 +482,7 @@ describe('sreRevision handler', () => {
 
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'failed',
         expect.any(Object)
@@ -524,6 +531,7 @@ describe('sreRevision handler', () => {
 
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-123',
+        'MillionOnMars/lumina5',
         'revision_requested',
         'failed',
         expect.objectContaining({ errorMessage: expect.stringContaining('Escalated to human') })

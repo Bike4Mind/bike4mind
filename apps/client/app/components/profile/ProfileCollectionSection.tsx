@@ -36,6 +36,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { ReactNode, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 dayjs.extend(relativeTime);
 
@@ -105,7 +106,7 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
     try {
       // CORS Workaround for local development
       if (isLocalDev()) {
-        window.open(selectedImage || '', '_blank');
+        openInNewTab(selectedImage);
         toast.success('Image opened in a new tab. Right-click and select "Save Image As..." to save it.');
         setSaving(false);
         return;
@@ -139,7 +140,7 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
     try {
       // CORS Workaround for local development
       if (isLocalDev()) {
-        window.open(selectedImage || '', '_blank');
+        openInNewTab(selectedImage);
         toast.success('Image opened in a new tab. Right-click and select "Copy Image" to copy it.');
         setCopying(false);
         return;
@@ -166,7 +167,7 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
     try {
       // CORS Workaround for local development
       if (isLocalDev()) {
-        window.open(selectedImage || '', '_blank');
+        openInNewTab(selectedImage);
         toast.success('Image opened in a new tab. Right-click and select "Save As..." to download it.');
         setDownloading(false);
         return;

@@ -16,30 +16,11 @@ export interface IAgentOpsSettings {
   versions: IMetaPromptVersion[];
   currentVersionNumber: number;
 
-  // Generation settings
-  generationLlmModel:
-    | 'claude-opus-5'
-    | 'claude-opus-4-8'
-    | 'claude-opus-4-7'
-    | 'claude-opus-4-6'
-    | 'claude-sonnet-5'
-    | 'claude-sonnet-4-6'
-    | 'claude-opus-4-20250514'
-    | 'claude-sonnet-4-5-20250929'
-    | 'claude-haiku-4-5-20251001'
-    | 'o3-2025-04-16'
-    | 'gpt-4.1-2025-04-14'
-    | 'grok-4.5'
-    | 'gpt-4o'
-    | 'gpt-4o-mini'
-    // Deprecated - kept for backward compat with existing DB documents
-    | 'grok-3'
-    | 'claude-sonnet-4-20250514'
-    | 'gpt-4-turbo'
-    | 'claude-3-7-sonnet-20250219'
-    | 'claude-3-5-sonnet-20241022'
-    | 'claude-3-opus-20240229'
-    | 'claude-3-haiku-20240307';
+  // Generation settings.
+  // A catalog model id, not a closed union: the selectable set is the live model catalog,
+  // validated at the agent-ops-settings endpoint. Enumerating ids here would make every newly
+  // shipped model a type error, and stored documents may still hold long-retired ids.
+  generationLlmModel: string;
 
   // Rate limiting
   rateLimitSeconds: number; // Minimum seconds between generations per agent

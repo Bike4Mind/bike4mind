@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
@@ -9,6 +10,15 @@ import { toSafeOrganization } from '@bike4mind/common';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+
+const updateOrgBodySchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  billingContact: z.string().optional(),
+  currentCredits: z.coerce.number().optional(),
+  systemPrompt: z.string().max(10000).optional(),
+  maxCreditsPerMember: z.number().positive().nullable().optional(),
+});
 
 const handler = baseApi()
   .get(
@@ -32,11 +42,12 @@ const handler = baseApi()
   )
   .put(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const orgId = req.query.id;
+      const orgId = req.query.id!;
 
+      const body = updateOrgBodySchema.parse(req.body);
       const updatedOrganization = await organizationService.update(
         req.user!,
-        { id: orgId, ...(req.body as any) },
+        { id: orgId, ...body },
         {
           db: {
             organizations: organizationRepository,

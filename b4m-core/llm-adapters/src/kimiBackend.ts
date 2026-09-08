@@ -7,11 +7,13 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -178,7 +180,7 @@ export class KimiBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
 
@@ -292,7 +294,7 @@ export class KimiBackend implements ICompletionBackend {
         throw new Error('No choices returned from the Moonshot API');
       }
 
-      const turnCacheReadTokens = this.cachedTokensOf(response.usage as Record<string, unknown> | undefined);
+      const turnCacheReadTokens = cachedTokensFromUsage(response.usage as Record<string, unknown> | undefined);
 
       for (const c of response.choices) {
         if (!c.message) continue;
@@ -343,6 +345,12 @@ export class KimiBackend implements ICompletionBackend {
                 this.logger.warn(`JSON parse error for ${toolCall.function.name} arguments`);
                 const entry = toolsUsed.find(t => t.name === toolCall.function.name && t.id === toolCall.id);
                 if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id: toolCall.id, name: toolCall.function.name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -381,17 +389,22 @@ export class KimiBackend implements ICompletionBackend {
 
             for (const outcome of outcomes) {
               if (outcome.ok) {
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -416,7 +429,7 @@ export class KimiBackend implements ICompletionBackend {
           } else {
             this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
             await callback([null], {
-              ...this.splitCachedInput(
+              ...splitCacheInclusiveInput(
                 accumInputTokens + (response.usage?.prompt_tokens || 0),
                 accumCacheReadTokens + turnCacheReadTokens
               ),
@@ -455,7 +468,7 @@ export class KimiBackend implements ICompletionBackend {
       const finishReason = normalizeOpenAIFinishReason(response.choices[0]?.finish_reason);
       const totalCacheReadTokens = accumCacheReadTokens + turnCacheReadTokens;
       await callback(streamedText, {
-        ...this.splitCachedInput(accumInputTokens + (response.usage?.prompt_tokens || 0), totalCacheReadTokens),
+        ...splitCacheInclusiveInput(accumInputTokens + (response.usage?.prompt_tokens || 0), totalCacheReadTokens),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
@@ -476,7 +489,7 @@ export class KimiBackend implements ICompletionBackend {
       if (chunk.usage) {
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
         outputTokens += chunk.usage?.completion_tokens || 0;
-        const chunkCached = this.cachedTokensOf(chunk.usage as unknown as Record<string, unknown>);
+        const chunkCached = cachedTokensFromUsage(chunk.usage as unknown as Record<string, unknown>);
         if (chunkCached > 0) cachedTokensFromStream = chunkCached;
       }
 
@@ -520,7 +533,7 @@ export class KimiBackend implements ICompletionBackend {
 
       const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
-        ...this.splitCachedInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
@@ -534,7 +547,7 @@ export class KimiBackend implements ICompletionBackend {
     // bleeds into the answer after the tool recursion.
     if (isInThinkingBlock) {
       await callback(['</think>'], {
-        ...this.splitCachedInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       });
@@ -567,7 +580,7 @@ export class KimiBackend implements ICompletionBackend {
 
     if (nativeFormat && func.length === 0) {
       await callback([], {
-        ...this.splitCachedInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         responseFormatMode: 'native',
@@ -605,6 +618,12 @@ export class KimiBackend implements ICompletionBackend {
             this.logger.warn(`JSON parse error for ${name} arguments (streaming)`);
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
+            recordToolResult(
+              toolsUsed,
+              { id, name },
+              'Error: Tool arguments were malformed and could not be parsed.',
+              false
+            );
           }
         }
 
@@ -643,17 +662,22 @@ export class KimiBackend implements ICompletionBackend {
 
         for (const outcome of outcomes) {
           if (outcome.ok) {
+            const resultStr = outcome.result.toString();
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              outcome.result.toString()
+              resultStr
             );
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+            const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              observation
             );
           }
         }
@@ -677,54 +701,12 @@ export class KimiBackend implements ICompletionBackend {
       } else {
         this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
         await callback([null], {
-          ...this.splitCachedInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+          ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         });
       }
     }
-  }
-
-  /**
-   * Convert Moonshot's CACHE-INCLUSIVE `prompt_tokens` into the cache-EXCLUSIVE
-   * convention getTextModelCost expects, which is Anthropic's: `inputTokens`
-   * counts only uncached tokens and cache reads are billed separately at their
-   * own (much cheaper) rate.
-   *
-   * Verified live 2026-07-28: a repeated 1220-token prompt returned
-   * `prompt_tokens: 1220` WITH `cached_tokens: 1220` - the same tokens, reported
-   * twice, not 1220 fresh plus 1220 cached. So passing prompt_tokens through as
-   * inputTokens while also forwarding cacheReadInputTokens would bill the cached
-   * portion twice; passing it through and forwarding NOTHING (the previous
-   * behavior) charges the full input rate on tokens Moonshot billed at roughly a
-   * sixth of it - on k2.6, $0.95/MTok against $0.16. Subtracting is the only
-   * split that bills what the provider actually charged.
-   *
-   * Clamped at zero: if a feed ever reports more cached than prompt tokens, a
-   * negative input count would silently credit the user.
-   */
-  private splitCachedInput(
-    totalPromptTokens: number,
-    cacheReadTokens: number
-  ): { inputTokens: number; cacheReadInputTokens?: number } {
-    if (cacheReadTokens <= 0) return { inputTokens: totalPromptTokens };
-    const cached = Math.min(cacheReadTokens, totalPromptTokens);
-    return { inputTokens: Math.max(0, totalPromptTokens - cached), cacheReadInputTokens: cached };
-  }
-
-  /**
-   * Cached prompt tokens from a usage object. Moonshot publishes BOTH a flat
-   * `usage.cached_tokens` and the nested OpenAI `prompt_tokens_details.cached_tokens`
-   * - confirmed live, both present with the same value - so either spelling is
-   * accepted and reading neither would bill every hit at the full input rate.
-   */
-  private cachedTokensOf(usage: Record<string, unknown> | undefined): number {
-    if (!usage) return 0;
-    const flat = usage.cached_tokens;
-    if (typeof flat === 'number' && Number.isFinite(flat) && flat >= 0) return flat;
-    const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
-    const nested = details?.cached_tokens;
-    return typeof nested === 'number' && Number.isFinite(nested) && nested >= 0 ? nested : 0;
   }
 
   private formatMessages(messages: IMessage[]): OpenAI.ChatCompletionMessageParam[] {
