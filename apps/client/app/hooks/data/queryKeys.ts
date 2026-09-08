@@ -24,3 +24,10 @@ export const ADMIN_SETTINGS_ARRAY_QUERY_KEY = ['adminsettings'] as const;
  * Must be invalidated when logo settings are updated
  */
 export const BRANDING_SETTINGS_QUERY_KEY = ['brandingSettings'] as const;
+
+/**
+ * Query key for the scoped setting override inventory (admin only)
+ * Used by useScopedSettingOverrides() - returns IScopedSetting[]
+ * Must be invalidated when an override is set or cleared
+ */
+export const SCOPED_SETTING_OVERRIDES_QUERY_KEY = ['scopedSettingOverrides'] as const;
