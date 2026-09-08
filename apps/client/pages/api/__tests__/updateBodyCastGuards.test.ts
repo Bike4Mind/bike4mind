@@ -398,6 +398,48 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
       expect(wrote).toBe(false);
     });
 
+    // 'write' is not junk: `ORG_MEMBERSHIP_ACL_PERMISSIONS` documents it as legacy/out-of-band ACL
+    // data that the `$in: ['read', 'write']` accessibility statics still honour, and it is
+    // deliberately not a `Permission` enum member (adding it would widen the share contracts).
+    // Mongoose never enforced the enum here, so this wrote with a 200 at base. Rejecting it is the
+    // cost of using the canonical schema; pinned by name so the choice stays visible.
+    it("rejects the legacy 'write' permission, which is live ACL data rather than junk", async () => {
+      const { outcome, status, wrote } = await run(byRoute('agents/[id]'), {
+        users: [{ userId: 'u1', permissions: ['write'] }],
+      });
+
+      const threw400 = outcome !== null && (outcome as { statusCode?: number }).statusCode === 400;
+      const sent400 = status.mock.calls.some(call => call[0] === 400);
+      expect(threw400 || sent400).toBe(true);
+      expect(wrote).toBe(false);
+    });
+
+    // `extraData` is a closed object whose one declared field is a `Date`, so a JSON body can write
+    // nothing into it: an undeclared key is stripped, and the declared one only accepts a form JSON
+    // cannot carry. That is the accepted cost of reusing the canonical schema (nothing on Agent
+    // reads `extraData` today), pinned here so it stays a deliberate tradeoff rather than a surprise.
+    it('strips even a legal key from users[].extraData, so a JSON body writes nothing into it', async () => {
+      const { outcome, payload, wrote } = await run(byRoute('agents/[id]'), {
+        users: [{ userId: 'u1', permissions: ['read'], extraData: { foo: 1 } }],
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+      const written = (payload as { users?: { extraData?: Record<string, unknown> }[] })?.users;
+      expect(written?.[0]?.extraData ?? {}).not.toHaveProperty('foo');
+    });
+
+    it('rejects users[].extraData.lastExportDate as an ISO string, the only form JSON can send', async () => {
+      const { outcome, status, wrote } = await run(byRoute('agents/[id]'), {
+        users: [{ userId: 'u1', permissions: ['read'], extraData: { lastExportDate: '2026-09-08T00:00:00.000Z' } }],
+      });
+
+      const threw400 = outcome !== null && (outcome as { statusCode?: number }).statusCode === 400;
+      const sent400 = status.mock.calls.some(call => call[0] === 400);
+      expect(threw400 || sent400).toBe(true);
+      expect(wrote).toBe(false);
+    });
+
     it('still accepts a well-formed share pair', async () => {
       const { outcome, wrote } = await run(byRoute('agents/[id]'), {
         users: [{ userId: 'u1', permissions: ['read', 'update'] }],
