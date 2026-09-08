@@ -129,9 +129,10 @@ describe('data-lake org scope: the manager list agrees with what the org grants 
   });
 
   it('lists an org lake for an appointed admin whose ACL row carries no permissions', async () => {
-    // The appointment route (`POST /api/organizations/:id/admins`) requires the target to be in
-    // `users[]` but never inspects `permissions`, so this row is a state the product can really
-    // reach - and it confers admin rights while conferring no membership.
+    // `PUT /api/organizations/:id/admins` now refuses to MINT this shape - it requires an ACL row
+    // that confers membership. The state is still reachable, which is why the case stays: rows
+    // appointed before that check existed persist, and the route grandfathers them on resend rather
+    // than revoking retroactively. So the datastore really does hold admin rights with no membership.
     const orgA = await Organization.create({
       name: 'org-a',
       userId: 'org-owner',

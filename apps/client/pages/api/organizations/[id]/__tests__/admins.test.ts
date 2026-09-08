@@ -110,6 +110,51 @@ describe('PUT /api/organizations/[id]/admins - appointee eligibility', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  // Eligibility binds what this call ADDS, not the roster's history. PUT is a full replace, so a
+  // sitting admin is resent on every save; refusing them would let one row appointed before the
+  // check existed block every later edit of the roster (#2005).
+  it('grandfathers a sitting admin whose ACL row confers no membership', async () => {
+    findById.mockResolvedValue({
+      ...org([{ userId: 'legacy1' }, { userId: 'member1', permissions: ['read'] }]),
+      adminUserIds: ['legacy1'],
+    });
+
+    const { res, run } = put(['legacy1', 'member1']);
+    await run();
+
+    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['legacy1', 'member1'] });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  // The grandfather clause must not become a hole: it waives the permissions requirement for an
+  // existing appointment only, never for a new one arriving in the same batch.
+  it('still refuses a NEW permission-less appointee alongside a grandfathered one', async () => {
+    findById.mockResolvedValue({
+      ...org([{ userId: 'legacy1' }, { userId: 'bad1' }]),
+      adminUserIds: ['legacy1'],
+    });
+
+    const { run } = put(['legacy1', 'bad1']);
+
+    // Names bad1 and only bad1 - the grandfathered id is not an error the operator must act on.
+    await expect(run()).rejects.toThrow(/^Not organization members with read access: bad1$/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // Roster membership is not waived by the grandfather clause. A sitting admin removed from the org
+  // entirely has no users[] row, so resending them is still an outsider reference.
+  it('does not grandfather a sitting admin who has been removed from the roster', async () => {
+    findById.mockResolvedValue({
+      ...org([{ userId: 'member1', permissions: ['read'] }]),
+      adminUserIds: ['departed1'],
+    });
+
+    const { run } = put(['departed1', 'member1']);
+
+    await expect(run()).rejects.toThrow(/departed1/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('still refuses a user with no ACL row at all (the pre-existing outsider check)', async () => {
     findById.mockResolvedValue(org([{ userId: 'member1', permissions: ['read'] }]));
 

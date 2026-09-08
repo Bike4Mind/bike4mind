@@ -57,7 +57,12 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
   return (
     <Stack spacing={3} data-testid="org-groups-section">
       {canSetAdmins && (
-        <OrgAdminsEditor organization={organization} members={assignableMembers} adminsMutation={adminsMutation} />
+        <OrgAdminsEditor
+          organization={organization}
+          members={members}
+          assignableMembers={assignableMembers}
+          adminsMutation={adminsMutation}
+        />
       )}
 
       <OrganizationGroupsList organization={organization} />
@@ -68,9 +73,12 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
 /** Appoint/remove org admins (billing owner + platform admin only). */
 const OrgAdminsEditor: FC<{
   organization: WithId<IOrganizationDocument>;
+  /** The whole org roster - resolves the CURRENT appointments to chips, eligible or not. */
   members: IUserDocument[];
+  /** The subset that may be newly appointed (see `orgAclRowConfersMembership` at the call site). */
+  assignableMembers: IUserDocument[];
   adminsMutation: { mutate: (ids: string[]) => void; isPending: boolean };
-}> = ({ organization, members, adminsMutation }) => {
+}> = ({ organization, members, assignableMembers, adminsMutation }) => {
   const current = organization.adminUserIds ?? [];
   const [selected, setSelected] = useState<string[]>(current);
 
@@ -86,7 +94,16 @@ const OrgAdminsEditor: FC<{
   }
 
   const isDirty = selected.length !== current.length || selected.some(id => !current.includes(id));
+  // Eligibility narrows the OPTIONS only; the chips resolve against the full roster. Narrowing both
+  // would turn a display filter into a write: an admin appointed before the eligibility rule existed
+  // stays in `selected` but renders no chip, so the next unrelated edit rebuilds `selected` from the
+  // visible chips and the full-replace PUT silently revokes them (#2005). Appending them to the
+  // options as well keeps removal an explicit act and keeps MUI's value/option identity matching.
   const selectedMembers = members.filter(member => selected.includes(member.id));
+  const options = [
+    ...assignableMembers,
+    ...selectedMembers.filter(member => !assignableMembers.some(assignable => assignable.id === member.id)),
+  ];
 
   return (
     <Card variant="outlined" sx={{ p: 2 }} data-testid="org-admins-card">
@@ -96,7 +113,7 @@ const OrgAdminsEditor: FC<{
           <FormLabel>Appointed admins</FormLabel>
           <Autocomplete
             multiple
-            options={members}
+            options={options}
             value={selectedMembers}
             getOptionLabel={member => member.name || member.email || member.id}
             isOptionEqualToValue={(option, value) => option.id === value.id}

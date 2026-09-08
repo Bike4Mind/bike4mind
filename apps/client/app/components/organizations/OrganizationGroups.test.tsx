@@ -190,6 +190,25 @@ describe('OrganizationGroups', () => {
     expect(options).not.toContain('Bob');
   });
 
+  // The eligibility filter governs the OPTIONS only. Resolving the chips through it too would hide
+  // an admin appointed before the filter existed: they stay in the selection but render nothing, so
+  // the next unrelated edit rebuilds the selection from the visible chips and the full-replace save
+  // silently revokes them - the operator asked to add one admin and revoked another (#2005).
+  it('still shows a sitting admin whose ACL row confers no membership', async () => {
+    const withLegacyAdmin = {
+      ...org,
+      users: [{ userId: 'u1', permissions: ['read'] }, { userId: 'u2' }],
+      adminUserIds: ['u2'],
+    } as typeof org;
+    renderGroups(withLegacyAdmin, true);
+
+    const card = await screen.findByTestId('org-admins-card');
+    // Bob's name can only reach this card as a chip; Alice is the negative control proving the card
+    // renders the appointed set rather than the whole roster.
+    await waitFor(() => expect(card).toHaveTextContent('Bob'));
+    expect(card).not.toHaveTextContent('Alice');
+  });
+
   // The admins roster must follow the persisted set. PUT /admins is a full replace, so a stale
   // local selection would silently de-appoint whoever was added elsewhere.
   it('resyncs the admins selection when the persisted set changes', async () => {

@@ -38,7 +38,19 @@ const handler = baseApi().put(
     const memberIds = new Set(
       organization.users.filter(member => orgAclRowConfersMembership(member)).map(member => member.userId)
     );
-    const notMembers = adminUserIds.filter(userId => !memberIds.has(userId));
+
+    // The membership requirement binds the appointments this call ADDS. Because the endpoint is a
+    // full replace, every sitting admin is resent on every save, so validating the whole set would
+    // let one row appointed before this check existed block every later edit of the roster until the
+    // operator de-appointed them - a stricter rule turning into a retroactive revocation. Resends of
+    // an existing appointment are grandfathered instead; that mints no new principal, and it agrees
+    // with the read side, which still serves such an admin. Roster membership itself is NOT waived:
+    // a grandfathered id must still hold a users[] row, so removal from the org still ejects them.
+    const rosterUserIds = new Set(organization.users.map(member => member.userId));
+    const sittingAdminIds = new Set(organization.adminUserIds ?? []);
+    const notMembers = adminUserIds.filter(
+      userId => !memberIds.has(userId) && !(sittingAdminIds.has(userId) && rosterUserIds.has(userId))
+    );
     if (notMembers.length > 0) {
       throw new BadRequestError(`Not organization members with read access: ${notMembers.join(', ')}`);
     }
