@@ -408,7 +408,7 @@ describe('ReplSession non-finite cost handling', () => {
       budget: { maxSubLlmCalls: 100, maxCostUsd: 1 },
     });
 
-  it.each([[NaN], [Infinity], [-Infinity]])('refuses a reservation estimated at %p', estimate => {
+  it.each([[NaN], [Infinity], [-Infinity]])('refuses a reservation estimated at %s', estimate => {
     // Coercing this to 0 (the old behaviour) meant an UNPRICED call - exactly
     // what the cap exists for - was the one shape that skipped cost admission
     // control entirely, and did it silently.

@@ -84,7 +84,7 @@ describe('subAgentQuery model allowlist', () => {
   // truthiness check, and reached the provider priced at whatever that
   // function coerced to.
   it.each([['constructor'], ['toString'], ['valueOf'], ['__proto__'], ['hasOwnProperty']])(
-    'refuses the prototype-chain key %p',
+    'refuses the prototype-chain key %s',
     async model => {
       const session = new ReplSession({ sessionId: `proto-${model}`, executor: 'in-process-unsafe' });
       const { subAgentQuery } = toolsFor(session);
@@ -190,5 +190,59 @@ describe('subAgentQuery reservation cannot leak', () => {
     // The one authorized call is still there to be spent.
     await expect(subAgentQuery({ prompt: 'retry' })).resolves.toBe('ok');
     expect(session.getUsage().subLlmCalls).toBe(1);
+  });
+});
+
+describe('subAgentQuery provider-call bounds', () => {
+  beforeEach(() => {
+    createSpy.mockReset();
+    createSpy.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+  });
+
+  /**
+   * The abort signal is the only thing stopping this call from outliving its
+   * tool-dispatch bound and billing for an answer nobody is waiting on, and
+   * it lives in the SECOND argument to `messages.create` - the request
+   * options, not the payload - so nothing about the payload assertions
+   * elsewhere in this file would notice it disappearing.
+   */
+  it('bounds the provider call with an abort signal', async () => {
+    const session = new ReplSession({ sessionId: 'signal', executor: 'in-process-unsafe' });
+    const { subAgentQuery } = toolsFor(session);
+
+    await subAgentQuery({ prompt: 'hi' });
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const options = createSpy.mock.calls[0][1];
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
+    expect(options.signal.aborted).toBe(false);
+  });
+
+  /**
+   * The ceiling is half of one decision with `SUB_LLM_HTTP_TIMEOUT_MS`: a
+   * request at the ceiling must be able to finish inside the deadline. The
+   * literal is written out rather than imported, because importing the
+   * constant would assert only that it equals itself - and it was an 8000
+   * against a 15s bound that made every large request a billed abort.
+   */
+  it('clamps the output ceiling to what the deadline can deliver', async () => {
+    const session = new ReplSession({ sessionId: 'ceiling', executor: 'in-process-unsafe' });
+    const { subAgentQuery } = toolsFor(session);
+
+    await subAgentQuery({ prompt: 'hi', max_tokens: 8000 });
+
+    expect(createSpy.mock.calls[0][0].max_tokens).toBe(2000);
+  });
+
+  it('still honours a caller asking for less than the ceiling', async () => {
+    const session = new ReplSession({ sessionId: 'under', executor: 'in-process-unsafe' });
+    const { subAgentQuery } = toolsFor(session);
+
+    await subAgentQuery({ prompt: 'hi', max_tokens: 256 });
+
+    expect(createSpy.mock.calls[0][0].max_tokens).toBe(256);
   });
 });

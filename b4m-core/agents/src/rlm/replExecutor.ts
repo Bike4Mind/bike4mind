@@ -29,6 +29,13 @@ export const replExecutorNameList = (): string => REPL_EXECUTOR_NAMES.map(n => `
  * reports it to the agent as a capability that is gone rather than a step that
  * failed, so an agent loop stops re-calling a tool that cannot work and paying
  * an iteration for each attempt.
+ *
+ * Retirement is reported two ways, and every backend must use both. The run
+ * that CAUSES the retirement resolves with `ReplRunResult.sandboxRetired`
+ * (see ReplContext.ts), so the stdout it printed before the kill survives; a
+ * throw would discard exactly the material the agent now has to answer from.
+ * This error is for the calls that arrive AFTER, where there is no run and so
+ * nothing to preserve.
  */
 export class ReplSandboxRetiredError extends Error {
   constructor(message: string) {

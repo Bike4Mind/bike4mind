@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   HARD_TIMEOUT_MS,
   PER_CALL_REPL_TIMEOUT_MS,
+  SUB_LLM_HTTP_TIMEOUT_MS,
+  SUB_LLM_MAX_OUTPUT_TOKENS,
   TOOL_HTTP_TIMEOUT_MS,
   hostDeadlineMs,
   toolDispatchTimeoutMs,
@@ -18,7 +20,8 @@ import {
  */
 describe('the REPL timeout ladder', () => {
   it('orders every rung innermost-first', () => {
-    expect(TOOL_HTTP_TIMEOUT_MS).toBeLessThan(toolDispatchTimeoutMs());
+    expect(TOOL_HTTP_TIMEOUT_MS).toBeLessThanOrEqual(SUB_LLM_HTTP_TIMEOUT_MS);
+    expect(SUB_LLM_HTTP_TIMEOUT_MS).toBeLessThan(toolDispatchTimeoutMs());
     expect(toolDispatchTimeoutMs()).toBeLessThan(PER_CALL_REPL_TIMEOUT_MS);
     expect(PER_CALL_REPL_TIMEOUT_MS).toBeLessThan(hostDeadlineMs());
     expect(hostDeadlineMs()).toBeLessThan(HARD_TIMEOUT_MS);
@@ -31,6 +34,18 @@ describe('the REPL timeout ladder', () => {
    */
   it('leaves the request room to answer after a step has timed out', () => {
     expect(HARD_TIMEOUT_MS - hostDeadlineMs()).toBeGreaterThanOrEqual(20_000);
+  });
+
+  /**
+   * The sub-LLM rung and its output ceiling are one decision: a request at the
+   * ceiling has to be able to stream inside the deadline. Asserted as a rate
+   * because that is the relationship that was violated - an 8000-token
+   * ceiling against a 15s bound needs ~533 tok/s, which no model here does,
+   * so every request near the ceiling was billed and then discarded.
+   */
+  it('keeps the sub-LLM output ceiling deliverable inside its own rung', () => {
+    const requiredTokensPerSecond = SUB_LLM_MAX_OUTPUT_TOKENS / (SUB_LLM_HTTP_TIMEOUT_MS / 1000);
+    expect(requiredTokensPerSecond).toBeLessThanOrEqual(150);
   });
 
   /**

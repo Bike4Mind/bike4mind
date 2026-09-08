@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ReplToolMap, ReplSession } from '@bike4mind/agents';
 import type { PrincipalAuthHeaders } from './principalAuthHeaders';
-import { TOOL_HTTP_TIMEOUT_MS } from './timeouts';
+import { SUB_LLM_HTTP_TIMEOUT_MS, SUB_LLM_MAX_OUTPUT_TOKENS, TOOL_HTTP_TIMEOUT_MS } from './timeouts';
 
 /**
  * Tool functions that get exposed inside the REPL for an RLM-style agent.
@@ -71,6 +71,9 @@ const ESTIMATE_CHARS_PER_TOKEN = 4;
 
 /** One shared abort signal per tool call - see `timeouts.ts` for the ladder. */
 const toolHttpDeadline = () => AbortSignal.timeout(TOOL_HTTP_TIMEOUT_MS);
+
+/** The sub-LLM call waits on token generation, not a lookup - its own rung. */
+const subLlmHttpDeadline = () => AbortSignal.timeout(SUB_LLM_HTTP_TIMEOUT_MS);
 
 interface SemanticSearchArgs {
   query: string;
@@ -284,7 +287,10 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
           `Allowed models: ${[...SUB_LLM_PRICING.keys()].join(', ')} (or "haiku").`
       );
     }
-    const maxTokens = Math.min(Math.max(a.max_tokens ?? 1500, 16), 8000);
+    // Ceiling paired with SUB_LLM_HTTP_TIMEOUT_MS: a request AT the ceiling
+    // has to be able to finish inside the deadline, or the cap just bills the
+    // caller for an aborted generation. See the docblock in `timeouts.ts`.
+    const maxTokens = Math.min(Math.max(a.max_tokens ?? 1500, 16), SUB_LLM_MAX_OUTPUT_TOKENS);
 
     // Claim the budget BEFORE the request goes out. Booking on the way back
     // cannot bound a fan-out: `await Promise.all(...)` over N calls would see
@@ -298,17 +304,19 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     });
 
     try {
-      // Same deadline every other tool's HTTP work gets. Without it this call
-      // was the one tool that could outlive its own tool-dispatch bound: the
-      // dispatcher abandons the await at that bound, but the request kept
-      // running and kept billing, and a retry paid for it a second time.
+      // Without a deadline this call was the one tool that could outlive its
+      // own tool-dispatch bound: the dispatcher abandons the await at that
+      // bound, but the request kept running and kept billing, and a retry
+      // paid for it a second time. Its own rung rather than the generic tool
+      // one, because this is the only tool that waits on token generation -
+      // and the output ceiling above is sized to fit it.
       const msg = await anthropic.messages.create(
         {
           model: requestedModel,
           max_tokens: maxTokens,
           messages: [{ role: 'user', content: a.prompt }],
         },
-        { signal: toolHttpDeadline() }
+        { signal: subLlmHttpDeadline() }
       );
       // settle() throws BudgetExceededError when the real cost tips the
       // ceiling. Let it propagate: that throw is how the agent finds out.

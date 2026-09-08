@@ -176,17 +176,36 @@ describe('WorkerReplExecutor', () => {
 });
 
 describe('WorkerReplExecutor - the main thread enforces its own deadline', () => {
+  /** Long enough for the worker's mirrored stdout to reach the main thread. */
+  const MIRROR_SETTLE_MS = 300;
+  const settle = () => new Promise(r => setTimeout(r, MIRROR_SETTLE_MS));
+
+  /**
+   * Reach past the public surface on purpose. A real `'error'`/`'exit'` event
+   * cannot be provoked from guest code - the run is wrapped in try/catch
+   * inside the worker, and an OOM via `resourceLimits` is slow and flaky
+   * under parallel test load. What these two paths must guarantee is the
+   * protocol, not the provocation: retirement RESOLVES with the flag and the
+   * mirrored stdout, and never throws.
+   */
+  type CrashSeams = {
+    handleWorkerError: (e: Error) => void;
+    handleWorkerExit: (code: number) => void;
+  };
+  const seams = (ex: WorkerReplExecutor) => ex as unknown as CrashSeams;
+
   it('does not wait forever on a busy loop that starts after an await', async () => {
     // The worker's inner vm timeout only bounds the synchronous head of the
     // run, so this continuation never lets the worker post a runResult. Before
     // the main-thread deadline existed, this call never returned.
     const ex = new WorkerReplExecutor({ timeoutMs: 400 });
     const t0 = Date.now();
-    // Terminal, and typed as such on the breaching run: this path terminates
-    // the worker, so the run that blew the deadline is the last one this
-    // executor can serve. A plain Error here read as retryable and left the
-    // agent to discover the loss on its next call.
-    await expect(ex.runCode('await 0; while (true) {}')).rejects.toThrow(ReplSandboxRetiredError);
+    // Terminal, and reported on the breaching run itself: this path terminates
+    // the worker, so this is the last run the executor can serve. A flag
+    // rather than a throw because a throw carries no stdout - see below.
+    const r = await ex.runCode('await 0; while (true) {}');
+    expect(r.sandboxRetired).toBe(true);
+    expect(r.error).toMatch(/exceeded the 400ms cap/);
     expect(Date.now() - t0).toBeLessThan(5000);
     await ex.dispose();
   }, 20_000);
@@ -194,11 +213,71 @@ describe('WorkerReplExecutor - the main thread enforces its own deadline', () =>
   it('does not wait forever on a run that is merely pending', async () => {
     const ex = new WorkerReplExecutor({ timeoutMs: 400 });
     const t0 = Date.now();
-    await expect(ex.runCode('await new Promise(() => {});')).rejects.toThrow(ReplSandboxRetiredError);
+    const r = await ex.runCode('await new Promise(() => {});');
+    expect(r.sandboxRetired).toBe(true);
     expect(Date.now() - t0).toBeLessThan(5000);
-    // Message still names the cap that fired, for the log a human reads.
-    await expect(ex.runCode('console.log(1)')).rejects.toThrow(/disposed|terminated|crashed/i);
+    // A call arriving AFTER retirement still throws - there is no run, so
+    // there is no stdout to preserve. Asserted on the error TYPE, not just a
+    // word in the message: a plain Error satisfies /disposed|terminated/ too,
+    // so the old regex could not tell the typed signal from an ordinary
+    // failure and would have passed if this producer regressed.
+    await expect(ex.runCode('console.log(1)')).rejects.toThrow(ReplSandboxRetiredError);
     expect(Date.now() - t0).toBeLessThan(5000);
+    await ex.dispose();
+  }, 20_000);
+
+  it('refuses a run on an executor disposed before it was ever called', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 400 });
+    await ex.dispose();
+    await expect(ex.runCode('console.log(1)')).rejects.toThrow(ReplSandboxRetiredError);
+  }, 20_000);
+
+  it('keeps the stdout a run printed before the deadline killed the worker', async () => {
+    // The whole reason retirement is a flagged result and not a throw: output
+    // captured before the sandbox died is the agent's best material for the
+    // answer it now has to give without a REPL.
+    const ex = new WorkerReplExecutor({ timeoutMs: 500 });
+    const r = await ex.runCode('console.log("marker-before-hang"); await new Promise(() => {});');
+    expect(r.sandboxRetired).toBe(true);
+    expect(r.stdout).toContain('marker-before-hang');
+    await ex.dispose();
+  }, 20_000);
+
+  it('retires an in-flight run when dispose() races it, keeping stdout', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 10_000 });
+    await ex.runCode('console.log("warm")');
+    const inflight = ex.runCode('console.log("marker-before-dispose"); await new Promise(() => {});');
+    await settle();
+    await ex.dispose();
+    const r = await inflight;
+    expect(r.sandboxRetired).toBe(true);
+    expect(r.stdout).toContain('marker-before-dispose');
+    expect(r.error).toMatch(/disposed before runCode/);
+  }, 20_000);
+
+  it('retires an in-flight run when the worker emits an error event', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 10_000 });
+    await ex.runCode('console.log("warm")');
+    const inflight = ex.runCode('console.log("marker-before-crash"); await new Promise(() => {});');
+    await settle();
+    seams(ex).handleWorkerError(new Error('boom'));
+    const r = await inflight;
+    expect(r.sandboxRetired).toBe(true);
+    expect(r.stdout).toContain('marker-before-crash');
+    expect(r.error).toMatch(/worker crashed: boom/);
+    await ex.dispose();
+  }, 20_000);
+
+  it('retires an in-flight run when the worker exits non-zero (memory limit)', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 10_000 });
+    await ex.runCode('console.log("warm")');
+    const inflight = ex.runCode('console.log("marker-before-exit"); await new Promise(() => {});');
+    await settle();
+    seams(ex).handleWorkerExit(137);
+    const r = await inflight;
+    expect(r.sandboxRetired).toBe(true);
+    expect(r.stdout).toContain('marker-before-exit');
+    expect(r.error).toMatch(/exited unexpectedly with code 137/);
     await ex.dispose();
   }, 20_000);
 
@@ -207,6 +286,7 @@ describe('WorkerReplExecutor - the main thread enforces its own deadline', () =>
     const r = await ex.runCode('await 0; console.log("done");');
     expect(r.error).toBeNull();
     expect(r.stdout).toBe('done');
+    expect(r.sandboxRetired).toBeUndefined();
     await ex.dispose();
   }, 20_000);
 });

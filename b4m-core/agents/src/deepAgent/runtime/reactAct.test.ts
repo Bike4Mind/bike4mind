@@ -204,7 +204,14 @@ describe('createReActRunAct sandbox wiring', () => {
     await runAct();
 
     expect(mockReplSessionCtor).toHaveBeenCalledTimes(1);
-    expect(mockReplSessionCtor.mock.calls[0][0]).toMatchObject({ executor: 'isolated' });
+    // The literal 25_000 rather than an import of WAKE_PER_CALL_REPL_TIMEOUT_MS:
+    // importing the constant would assert it equals itself and move with any
+    // edit. A wake step has to stay under the 55s request cap to be observable
+    // at all, so the number is the invariant and belongs written out here.
+    expect(mockReplSessionCtor.mock.calls[0][0]).toMatchObject({
+      executor: 'isolated',
+      perCallTimeoutMs: 25_000,
+    });
     expect(mockMakeCodeExecuteTool).toHaveBeenCalledTimes(1);
   });
 

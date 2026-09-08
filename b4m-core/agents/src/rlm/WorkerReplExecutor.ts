@@ -108,7 +108,23 @@ interface MsgToolCall {
   name: string;
   args: unknown[];
 }
-type WorkerToMain = MsgReady | MsgRunResult | MsgToolCall;
+/**
+ * Stdout mirrored to the main thread AS IT IS PRODUCED, so a run that is
+ * later preempted can still report what it printed. `runResult` is the
+ * authoritative stdout for a run that completes; this exists only because a
+ * terminated worker never gets to send one.
+ */
+interface MsgStdout {
+  type: 'stdout';
+  id: number;
+  chunk: string;
+  /**
+   * Set on the final chunk the worker will mirror for this run. The mirror is
+   * byte-capped, so output after this point is lost if the sandbox is killed.
+   */
+  elided?: boolean;
+}
+type WorkerToMain = MsgReady | MsgRunResult | MsgStdout | MsgToolCall;
 
 // --- Worker script (inlined as a string) ---------------------------------
 // IMPORTANT: lives entirely on built-in Node modules. Do NOT add imports
@@ -125,6 +141,31 @@ const HARD_PER_LINE_BYTES = ${HARD_PER_LINE_BYTES};
 let stdoutChunks = [];
 let stdoutBytes = 0;
 let truncated = false;
+// Mirror state. The mirror costs one postMessage per captured line, which is
+// why it is capped at the head budget: a chatty loop stops paying for it once
+// the main thread already holds as much as the retired-run observation shows.
+let currentRunId = null;
+let mirroredBytes = 0;
+let mirrorStopped = false;
+function mirrorLine(capped) {
+  if (currentRunId === null || mirrorStopped) return;
+  if (mirroredBytes >= STDOUT_HEAD_BYTES) {
+    mirrorStopped = true;
+    try {
+      parentPort.postMessage({
+        type: 'stdout',
+        id: currentRunId,
+        chunk: '[...further output not mirrored before shutdown...]',
+        elided: true,
+      });
+    } catch { /* worker being torn down; nothing to preserve */ }
+    return;
+  }
+  mirroredBytes += capped.length + 1;
+  try {
+    parentPort.postMessage({ type: 'stdout', id: currentRunId, chunk: capped });
+  } catch { /* worker being torn down; nothing to preserve */ }
+}
 function captureLine(args) {
   const line = args.map(a => {
     if (typeof a === 'string') return a;
@@ -137,6 +178,7 @@ function captureLine(args) {
     : line;
   stdoutChunks.push(capped);
   stdoutBytes += capped.length + 1;
+  mirrorLine(capped);
 }
 function jsonReplacer(_k, v) {
   if (v instanceof Error) return { name: v.name, message: v.message };
@@ -238,6 +280,7 @@ parentPort.on('message', async (msg) => {
   if (msg.type === 'runCode') {
     const t0 = Date.now();
     stdoutChunks = []; stdoutBytes = 0; truncated = false;
+    currentRunId = msg.id; mirroredBytes = 0; mirrorStopped = false;
     let error = null;
     const wrapped = '(async () => {\n' + msg.code + '\n})()';
     try {
@@ -249,6 +292,9 @@ parentPort.on('message', async (msg) => {
     } catch (e) {
       error = serializeError(e);
     }
+    // Stop mirroring before the authoritative result goes out, so a late
+    // console.log from an abandoned continuation cannot attach to this run.
+    currentRunId = null;
     parentPort.postMessage({
       type: 'runResult',
       id: msg.id,
@@ -266,9 +312,14 @@ parentPort.on('message', async (msg) => {
 
 interface PendingRun {
   resolve: (r: ReplRunResult) => void;
-  reject: (e: unknown) => void;
   /** Main-thread deadline for this run. Cleared whenever the run settles. */
   timer?: ReturnType<typeof setTimeout>;
+  /** Stdout mirrored from the worker so far - the only copy that survives a
+   *  terminate(), since the worker's own buffer dies with the thread. */
+  stdoutChunks: string[];
+  /** The mirror hit its byte cap, so `stdoutChunks` is not the whole story. */
+  stdoutElided: boolean;
+  startedAt: number;
 }
 
 export class WorkerReplExecutor implements ReplExecutor {
@@ -346,24 +397,30 @@ export class WorkerReplExecutor implements ReplExecutor {
       // continuation still owns the thread - so terminating it is the
       // preemption. dispose() rejects every other in-flight run for us.
       const timer = setTimeout(() => {
-        if (!this.pendingRuns.has(id)) return;
+        const pending = this.pendingRuns.get(id);
+        if (!pending) return;
         this.pendingRuns.delete(id);
+        // Flagged on the breaching run itself, not left to the next call:
+        // this path TERMINATES the worker, so this run is the last one this
+        // executor can serve. Reported as a result rather than a throw so the
+        // stdout mirrored before the kill reaches the agent.
+        this.settleRetired(
+          pending,
+          `REPL run exceeded the ${this.timeoutMs}ms cap (async continuation or unresolved tool ` +
+            `call); worker [${this.label}] was terminated`
+        );
         void this.dispose().catch(() => {
           // terminate() failing changes nothing for this caller
         });
-        // Typed, not a plain Error: this path TERMINATES the worker, so the
-        // run that breached the deadline is the last one this executor can
-        // serve. Rejecting with an ordinary error made the breaching call look
-        // retryable and left the terminal signal to the next call.
-        reject(
-          new ReplSandboxRetiredError(
-            `REPL run exceeded the ${this.timeoutMs}ms cap (async continuation or unresolved tool ` +
-              `call); worker [${this.label}] was terminated`
-          )
-        );
       }, this.timeoutMs + MAIN_THREAD_DEADLINE_GRACE_MS);
 
-      this.pendingRuns.set(id, { resolve, reject, timer });
+      this.pendingRuns.set(id, {
+        resolve,
+        timer,
+        stdoutChunks: [],
+        stdoutElided: false,
+        startedAt: Date.now(),
+      });
       const msg: MsgRunCode = { type: 'runCode', id, code, timeoutMs: this.timeoutMs };
       // Synchronous postMessage failures (e.g., ERR_WORKER_NOT_RUNNING if
       // the worker exited between our checks and now) must clean up the
@@ -378,15 +435,38 @@ export class WorkerReplExecutor implements ReplExecutor {
     });
   }
 
+  /**
+   * Settle a run whose sandbox died underneath it, mirroring the isolate
+   * path's protocol (`ReplRunResult.sandboxRetired`, see ReplContext.ts):
+   * report the retirement on the breaching run itself, and RESOLVE rather
+   * than throw so stdout captured before the kill survives. A throw carries
+   * only a message, which discarded exactly the material the agent needs to
+   * answer now that the REPL is gone.
+   */
+  private settleRetired(pending: PendingRun, error: string): void {
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.resolve({
+      stdout: pending.stdoutChunks.join('\n'),
+      error,
+      truncated: pending.stdoutElided,
+      durationMs: Date.now() - pending.startedAt,
+      sandboxRetired: true,
+    });
+  }
+
+  /** Retire every in-flight run with the same cause. */
+  private retireAllPending(cause: (id: number) => string): void {
+    for (const [id, pending] of this.pendingRuns) {
+      this.settleRetired(pending, cause(id));
+    }
+    this.pendingRuns.clear();
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    // Reject pending runs so callers don't hang forever
-    for (const [id, pending] of this.pendingRuns) {
-      if (pending.timer) clearTimeout(pending.timer);
-      pending.reject(new ReplSandboxRetiredError(`WorkerReplExecutor disposed before runCode #${id} returned`));
-    }
-    this.pendingRuns.clear();
+    // Settle pending runs so callers don't hang forever.
+    this.retireAllPending(id => `WorkerReplExecutor disposed before runCode #${id} returned`);
     await this.worker.terminate();
   }
 
@@ -402,6 +482,13 @@ export class WorkerReplExecutor implements ReplExecutor {
         truncated: msg.truncated,
         durationMs: msg.durationMs,
       });
+      return;
+    }
+    if (msg.type === 'stdout') {
+      const pending = this.pendingRuns.get(msg.id);
+      if (!pending) return;
+      if (msg.elided) pending.stdoutElided = true;
+      else pending.stdoutChunks.push(msg.chunk);
       return;
     }
     if (msg.type === 'toolCall') {
@@ -454,11 +541,7 @@ export class WorkerReplExecutor implements ReplExecutor {
     // throws ERR_WORKER_NOT_RUNNING and leaks pending entries). Reject
     // all in-flight runs so awaiting callers don't hang forever.
     this.disposed = true;
-    for (const [, pending] of this.pendingRuns) {
-      if (pending.timer) clearTimeout(pending.timer);
-      pending.reject(new ReplSandboxRetiredError(`worker crashed: ${err.message}`));
-    }
-    this.pendingRuns.clear();
+    this.retireAllPending(() => `worker crashed: ${err.message}`);
   };
 
   private handleWorkerExit = (code: number): void => {
@@ -467,10 +550,6 @@ export class WorkerReplExecutor implements ReplExecutor {
     // disposed treatment as handleWorkerError so the executor isn't
     // half-alive (rejected pending but accepting new runs).
     this.disposed = true;
-    for (const [, pending] of this.pendingRuns) {
-      if (pending.timer) clearTimeout(pending.timer);
-      pending.reject(new ReplSandboxRetiredError(`worker exited unexpectedly with code ${code} (likely memory limit)`));
-    }
-    this.pendingRuns.clear();
+    this.retireAllPending(() => `worker exited unexpectedly with code ${code} (likely memory limit)`);
   };
 }
