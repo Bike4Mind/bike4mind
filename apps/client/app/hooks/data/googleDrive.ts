@@ -66,15 +66,23 @@ export function useDisconnectGoogleDrive() {
 export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
   return useQuery({
     queryKey: lakeDriveConnectionKey(dataLakeId),
-    // `enabled` lets a caller skip a request that cannot succeed: the route resolves the lake's
-    // ORGANIZATION, so a personal lake always 404s. Passing false there keeps a guaranteed failure
-    // (and its console error) off every personal lake, instead of firing and discarding it.
+    // `enabled` lets a caller skip a request it already knows the answer to: the route resolves the
+    // lake's ORGANIZATION, so a personal lake always 404s. Passing false there keeps a pointless
+    // round trip off every personal lake, instead of firing it and mapping the 404 below.
     enabled: !!dataLakeId && enabled,
     queryFn: async () => {
-      const response = await api.get<{ connection: LakeDriveConnection | null }>(
-        `/api/data-lakes/${dataLakeId}/drive-connection`
-      );
-      return response.data.connection;
+      try {
+        const response = await api.get<{ connection: LakeDriveConnection | null }>(
+          `/api/data-lakes/${dataLakeId}/drive-connection`
+        );
+        return response.data.connection;
+      } catch (error) {
+        // The route 404s when the lake has no organization (a personal lake), which is "no
+        // connection", not a failure. Leaving it to reject puts every personal lake into `isError`,
+        // and callers that distinguish the two - PurgeDriveWarning - then warn about an unknown.
+        if ((error as { response?: { status?: number } })?.response?.status === 404) return null;
+        throw error;
+      }
     },
   });
 }
