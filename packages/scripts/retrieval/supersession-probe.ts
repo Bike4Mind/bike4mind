@@ -47,7 +47,7 @@
  * anyone else.
  *
  * Usage (needs DB + an embedding key, which `sst shell` provides):
- *   for-env dev pnpm sst shell --stage dev -- tsx packages/scripts/retrieval/supersession-probe.ts
+ *   for-env dev pnpm sst shell --stage dev -- pnpm --filter @bike4mind/scripts retrieval:supersession-probe
  *
  * No CLI flags: the probe user, lake and documents are fixed and idempotent (see SETUP below), so
  * the whole thing is safe to re-run - every run deletes and recreates its own FabFiles first.
@@ -84,7 +84,9 @@ import {
 } from '@bike4mind/common';
 import {
   assertAllAttributed,
+  assertSupersessionSampleAttributed,
   attributeChunks,
+  supersededCountFor,
   tallyGenerations,
   type ChunkAttribution,
   type Generation,
@@ -363,13 +365,20 @@ async function clearPreviousRun(): Promise<void> {
   if (existingIds.length === 0) return;
   logger.log(`Removing ${existingIds.length} FabFile(s) from a previous run...`);
   for (const id of existingIds) await fabFileChunkRepository.deleteManyByFabFileId(id);
-  await fabFileRepository.deleteManyInIds(existingIds);
+  // hardDeleteByIds, NOT deleteManyInIds: `FabFileSchema` carries the soft-delete plugin, whose
+  // `deleteMany` override only stamps `deletedAt`, while `findIdsByDataLakeTag` above reads with
+  // `includeDeleted`. A soft delete therefore leaves every prior run's rows in that id list forever,
+  // so the count logged above becomes an all-time total rather than this clear's work and the probe
+  // lake accumulates tombstones on a shared stage. The measurement itself was never at risk - chunks
+  // are hard-deleted and the search's scoped-file read is plugin-filtered, so a stale generation has
+  // no chunks and is out of scope - but the log line was wrong and the growth was unbounded.
+  await fabFileRepository.hardDeleteByIds(existingIds);
 }
 
 /**
- * Backdate the OLD generation's `createdAt` with the raw Mongoose model, bypassing the
- * `timestamps: true` hook via `{ timestamps: false }`, then READ IT BACK. `fabFileRepository.create`
- * cannot do this itself - its signature is `Omit<T, 'id' | 'updatedAt' | 'createdAt'>`
+ * Backdate the OLD generation's `createdAt` through the NATIVE driver, which is the only thing that
+ * actually bypasses the `timestamps: true` hook here (see the comment below), then READ IT BACK.
+ * `fabFileRepository.create` cannot do this itself - its signature is `Omit<T, 'id' | 'updatedAt' | 'createdAt'>`
  * (`b4m-core/db-core/src/models/BaseModel.ts`), which exists specifically so Mongoose's own
  * timestamp hook stamps every normal write. Unverified in code review, so it is verified HERE,
  * at runtime, every run: if the write did not stick, the two generations are not actually
@@ -518,6 +527,19 @@ async function seedCorpus(userId: string): Promise<SeededFile[]> {
     // a failure partway through never leaves a backdated OLD with no NEW sibling to compare it to.
     const older = await seedOneGeneration(doc, 'OLD', doc.oldText, userId, embedding, docIndex);
     const newer = await seedOneGeneration(doc, 'NEW', doc.newText, userId, embedding, docIndex);
+    // Assert the ordering rather than trust it: it is the entire load-bearing precondition of the
+    // comment above, and a bson counter wrap or a backwards clock step between the two inserts would
+    // hand OLD the LARGER id, silently re-aiming the tiebreaker at NEW and restoring exactly the
+    // over-determined measurement the ordering exists to prevent. `backdateAndVerify` below already
+    // sets the standard of verifying its own precondition at runtime; this is the same one line.
+    if (!(older.fabFileId < newer.fabFileId)) {
+      throw new Error(
+        `Seeded OLD (${older.fabFileId}) does not sort BEFORE NEW (${newer.fabFileId}) for ` +
+          `"${doc.fileName}". winsOver breaks a createdAt tie on the SMALLER id, so this ordering is what ` +
+          `points the tiebreaker at OLD and keeps "0 old / N new" attributable to createdAt alone. Refusing ` +
+          `to measure with both arms aimed at NEW.`
+      );
+    }
     await backdateAndVerify(older.fabFileId, doc.fileName);
     seeded.push(older, newer);
   }
@@ -628,24 +650,25 @@ async function runQuery(
     }
   );
 
+  const context = `collapse=${collapseEnabled ? 'on' : 'off'} query "${doc.query}"`;
   const chunks: ChunkAttribution[] = attributeChunks(search.results, byFabFileId);
-  assertAllAttributed(chunks, `collapse=${collapseEnabled ? 'on' : 'off'} query "${doc.query}"`);
+  assertAllAttributed(chunks, context);
 
-  return {
-    docIndex,
-    fileName: doc.fileName,
-    query: doc.query,
-    chunks,
-    supersession: {
-      count: search.supersession.count,
-      sample: search.supersession.sample.map(s => ({
-        fileId: s.fileId,
-        fileName: s.fileName,
-        tier: s.tier,
-        supersededBy: s.supersededBy,
-      })),
-    },
+  const supersession: SupersessionSummary = {
+    count: search.supersession.count,
+    sample: search.supersession.sample.map(s => ({
+      fileId: s.fileId,
+      fileName: s.fileName,
+      tier: s.tier,
+      supersededBy: s.supersededBy,
+    })),
   };
+  // The second output needs its own guard. The chunk guard above sees only what was SERVED, and a
+  // superseded file is suppressed before ranking by definition, so foreign content can inflate the
+  // count below without ever showing up in a result row.
+  assertSupersessionSampleAttributed(supersession.sample, byFabFileId, context);
+
+  return { docIndex, fileName: doc.fileName, query: doc.query, chunks, supersession };
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +681,6 @@ type ConfigRun = {
 };
 
 function printConfigTable(run: ConfigRun): { oldCount: number; newCount: number; supersededCount: number } {
-  let supersededCount = 0;
   logger.log(`\n--- collapse=${run.collapseEnabled ? 'on' : 'off'} ---`);
   logger.log(['docIndex', 'fileName', 'generation', 'score', 'fabFileId', 'chunkId'].join('  |  '));
   for (const q of run.queries) {
@@ -670,21 +692,25 @@ function printConfigTable(run: ConfigRun): { oldCount: number; newCount: number;
         [String(q.docIndex), c.fileName, c.generation, c.score.toFixed(4), c.fabFileId, c.chunkId].join('  |  ')
       );
     }
-    supersededCount += q.supersession.count;
-    if (q.supersession.count > 0) {
-      logger.log(
-        `  supersession (doc ${q.docIndex}): ${q.supersession.count} suppressed - ` +
-          q.supersession.sample
-            .map(s => `${s.fileName ?? s.fileId} (tier=${s.tier}, kept ${s.supersededBy})`)
-            .join('; ')
-      );
-    }
   }
   // `runQuery` has already refused any UNKNOWN chunk, so oldCount + newCount is the full total.
   const { oldCount, newCount } = tallyGenerations(run.queries.flatMap(q => q.chunks));
+  // Chunks accumulate across queries; the superseded report does NOT - it is built once from the
+  // scoped file set before ranking, so every query returns the same one. See `supersededCountFor`.
+  // Reported here, once, rather than inside the loop above: printing it per query labelled the same
+  // corpus-wide constant as `doc 0`, `doc 1`, `doc 2`, which reads as three separate suppressions.
+  const supersededCount = supersededCountFor(run.queries, `collapse=${run.collapseEnabled ? 'on' : 'off'}`);
+  if (supersededCount > 0) {
+    logger.log(
+      `  supersession: ${supersededCount} file(s) suppressed for this configuration - ` +
+        run.queries[0].supersession.sample
+          .map(s => `${s.fileName ?? s.fileId} (tier=${s.tier}, kept ${s.supersededBy})`)
+          .join('; ')
+    );
+  }
   logger.log(
     `collapse=${run.collapseEnabled ? 'on ' : 'off'}  ${oldCount + newCount} chunks: ${oldCount} old / ${newCount} new` +
-      `  (${supersededCount} superseded across ${run.queries.length} queries)`
+      `  (${supersededCount} superseded)`
   );
   return { oldCount, newCount, supersededCount };
 }

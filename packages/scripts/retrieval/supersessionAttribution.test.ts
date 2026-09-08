@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertAllAttributed,
+  assertSupersessionSampleAttributed,
   attributeChunks,
+  supersededCountFor,
   tallyGenerations,
   type ChunkAttribution,
   type SearchHit,
@@ -89,6 +91,18 @@ describe('assertAllAttributed', () => {
     ];
     expect(() => assertAllAttributed(chunks, 'collapse=off')).toThrow(/served 2 chunk\(s\) from 1 FabFile\(s\)/);
   });
+
+  it('enumerates every distinct offender, not just the first, so the operator chases all of them', () => {
+    const chunks = [
+      { ...chunk('UNKNOWN', 'stranger'), chunkId: 'c1' },
+      { ...chunk('UNKNOWN', 'stranger'), chunkId: 'c2' },
+      { ...chunk('UNKNOWN', 'interloper'), chunkId: 'c3' },
+    ];
+    const refuse = () => assertAllAttributed(chunks, 'collapse=off');
+    expect(refuse).toThrow(/served 3 chunk\(s\) from 2 FabFile\(s\)/);
+    expect(refuse).toThrow(/stranger/);
+    expect(refuse).toThrow(/interloper/);
+  });
 });
 
 describe('tallyGenerations', () => {
@@ -104,5 +118,53 @@ describe('tallyGenerations', () => {
 
   it('is all zeroes on an empty result', () => {
     expect(tallyGenerations([])).toEqual({ oldCount: 0, newCount: 0, unknownCount: 0 });
+  });
+});
+
+describe('assertSupersessionSampleAttributed', () => {
+  const sample = (fileId: string, fileName?: string) => ({ fileId, fileName });
+
+  it('passes when every superseded file was seeded by this run', () => {
+    expect(() =>
+      assertSupersessionSampleAttributed([sample('old-1')], byId(seeded('old-1', 'OLD')), 'collapse=on')
+    ).not.toThrow();
+  });
+
+  it('passes on an empty report, which collapse=off produces by definition', () => {
+    expect(() => assertSupersessionSampleAttributed([], byId(seeded('old-1', 'OLD')), 'collapse=off')).not.toThrow();
+  });
+
+  it('refuses a superseded file this run did not seed, since no served chunk can reveal it', () => {
+    expect(() =>
+      assertSupersessionSampleAttributed(
+        [sample('old-1'), sample('foreign-1', 'Other Lake.txt')],
+        byId(seeded('old-1', 'OLD')),
+        'collapse=on'
+      )
+    ).toThrow(/foreign-1/);
+  });
+
+  it('names the context and counts the offenders', () => {
+    expect(() =>
+      assertSupersessionSampleAttributed([sample('foreign-1'), sample('foreign-2')], byId(), 'collapse=on')
+    ).toThrow(/^collapse=on reported 2 superseded file\(s\) from 2 FabFile\(s\)/);
+  });
+});
+
+describe('supersededCountFor', () => {
+  const q = (count: number) => ({ supersession: { count } });
+
+  it('reports the single per-configuration count rather than the sum across queries', () => {
+    expect(supersededCountFor([q(3), q(3), q(3)], 'collapse=on')).toBe(3);
+  });
+
+  it('is zero when a configuration ran no queries', () => {
+    expect(supersededCountFor([], 'collapse=off')).toBe(0);
+  });
+
+  it('refuses a divergent count rather than picking one, naming the query that disagreed', () => {
+    expect(() => supersededCountFor([q(3), q(3), q(4)], 'collapse=on')).toThrow(
+      /query 0 reported 3, query 2 reported 4/
+    );
   });
 });
