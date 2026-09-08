@@ -53,6 +53,11 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     disableUserIntegrations: { type: Boolean, required: false },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
+    // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
+    // member admission, distinct from an ordinary session that never went through it. Written ONLY
+    // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake
+    // check - never part of session creation's own input, so fork/clone/snip cannot copy it.
+    preauthorizedLakeIds: { type: [String], default: undefined },
     // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
     // a session not created for a lake must read back undefined, which the completion path's corpus
     // defer plan treats as its pre-existing size-only behavior (a default here would change that).

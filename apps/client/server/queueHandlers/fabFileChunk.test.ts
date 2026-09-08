@@ -62,6 +62,7 @@ const h = vi.hoisted(() => {
     fabFileFindOneAndUpdate: vi.fn(async () => ({ _id: 'ff1' })),
     selfHostOpenSearchEnabled: vi.fn(() => false),
     recomputeFileChunkPolicyConflict: vi.fn(async () => null),
+    detectAdmissionDuplicates: vi.fn(async () => [] as unknown[]),
     resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
     sendToQueue: vi.fn(),
     fabFileUpdate: vi.fn(async () => null),
@@ -125,6 +126,10 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
     recomputeFileChunkPolicyConflict: h.recomputeFileChunkPolicyConflict,
+    // #2238. Declared here rather than omitted: an absent export arrives as `undefined`, the
+    // handler's call throws, and its own best-effort catch swallows it - so the "no [admission]
+    // warn" assertion below would keep passing while the check never ran.
+    detectAdmissionDuplicates: h.detectAdmissionDuplicates,
     deriveAdmissionStatus: (conflict: unknown) => (conflict ? 'quarantined' : 'admitted'),
     admissionDoorLabel: (sourceType: string | undefined) => sourceType ?? 'unknown',
   },
@@ -497,6 +502,55 @@ describe('fabFileChunk handler - cross-lake chunk-policy conflict (#1662)', () =
     expect(admissionLine).toBeDefined();
     expect(admissionLine).toContain('quarantined');
     expect(admissionLine).toContain('google_drive');
+  });
+
+  it('runs the same-identity check with the fingerprint THIS run committed (#2238)', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    // The pre-chunk document still carries the PREVIOUS run's hash. Passing that would bucket the
+    // group against text the file no longer has.
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      userId: 'u1',
+      fileName: 'policy.md',
+      relativePath: 'docs/',
+      driveFileId: 'd1',
+      serverTextHash: 'stale-hash',
+      tags: [{ name: 'datalake:sales' }],
+    });
+    h.prepareFabFileChunks.mockImplementation(async (...args: unknown[]) => ({
+      args,
+      serverTextHash: 'fresh-hash',
+    }));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.detectAdmissionDuplicates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'ff1',
+        fileName: 'policy.md',
+        relativePath: 'docs/',
+        driveFileId: 'd1',
+        serverTextHash: 'fresh-hash',
+      }),
+      expect.anything()
+    );
+  });
+
+  it('a same-identity check failure does not fail the chunk run (#2238)', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.detectAdmissionDuplicates.mockRejectedValue(new Error('sibling read failed'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+
+  it('does not run the same-identity check for a zero-chunk file (#2238)', async () => {
+    // Nothing was fingerprinted, so a decision recorded now would be stamped over an identity that
+    // moves as soon as the file is re-processed.
+    h.chunkFabfile.mockResolvedValue([]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.detectAdmissionDuplicates).not.toHaveBeenCalled();
   });
 
   it('does not log an admission quarantine when the member honors every applicable policy (#1679)', async () => {

@@ -10,12 +10,16 @@ import type { ISession } from '../types/entities/SessionTypes';
  * consumer reads it. Returning it on a session read leaks the prompt to anyone who can
  * access the session, including a non-entitled user it was deliberately shared with.
  *
+ * `preauthorizedLakeIds` records a manager's manage-but-not-member admission to a lake (see
+ * ISession.preauthorizedLakeIds) - an authorization detail set once by pages/api/sessions/create.ts,
+ * not something a client consumer reads or needs to render.
+ *
  * This list is the single source of truth: add a field here and every response boundary
  * that routes through {@link redactSessionForClient} inherits the redaction. Any future
  * need to echo a server-owned field to its owner must be a dedicated, separately-authorized
  * endpoint - never a relaxation of this strip.
  */
-export const SERVER_OWNED_SESSION_FIELDS = ['systemPromptText'] as const;
+export const SERVER_OWNED_SESSION_FIELDS = ['systemPromptText', 'preauthorizedLakeIds'] as const;
 
 export type ServerOwnedSessionField = (typeof SERVER_OWNED_SESSION_FIELDS)[number];
 

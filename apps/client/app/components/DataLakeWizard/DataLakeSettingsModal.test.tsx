@@ -42,6 +42,22 @@ const useDataLakeProposalsMock = vi.fn(() => ({
 }));
 const reviewProposalMutate = vi.fn();
 
+// Steady state for the tests that don't care about the research tab: a manager with no saved
+// configuration yet and no run history. The research suite below overrides these per test.
+const useDataLakeResearchConfigsMock = vi.fn(() => ({
+  data: [] as unknown[],
+  isLoading: false,
+  isForbidden: false,
+  error: null,
+}));
+const useDataLakeResearchRunsMock = vi.fn(() => ({
+  data: [] as unknown[],
+  isLoading: false,
+  isForbidden: false,
+  error: null,
+}));
+const startResearchRunMutate = vi.fn();
+
 // Steady state for tests that don't exercise the "Test this lake" picker: two reachable lakes,
 // loaded. The Test-scope suite below overrides this per test.
 type MockPickerLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean };
@@ -63,7 +79,19 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
   useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
   useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),
+  // The research tab (#1682). Mocked here rather than in its own file because the modal
+  // value-imports every one of these at module load - a missing export throws before a single
+  // assertion runs, whether or not the test touches that tab.
+  useDataLakeResearchConfigs: (...args: unknown[]) => useDataLakeResearchConfigsMock(...args),
+  useDataLakeResearchRuns: (...args: unknown[]) => useDataLakeResearchRunsMock(...args),
+  useCreateDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useUpdateDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useDeleteDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useStartDataLakeResearchRun: () => ({ mutate: startResearchRunMutate, isPending: false, variables: undefined }),
 }));
+
+// Only the model list this tab offers as relevance judges; the modal filters it to text models.
+vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [] }) }));
 
 const startChatWithLakesMock = vi.fn();
 vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
@@ -98,6 +126,14 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: (...a: unknown[]) => warn(...a) },
+}));
+
+// Platform lake-memory flag: on by default so the toggle's helper text describes the feature
+// rather than "disabled platform-wide" - the platform-off suite below overrides it per test.
+const lakeMemoryPlatformEnabled = vi.fn(() => true);
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useFeatureFlags: (features: string[]) =>
+    Object.fromEntries(features.map(f => [f, f === 'EnableLakeMemory' ? lakeMemoryPlatformEnabled() : false])),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -154,6 +190,7 @@ const gatedLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -169,6 +206,7 @@ const openLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -184,6 +222,7 @@ const entitlementGatedLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -1091,6 +1130,104 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
   });
 });
 
+describe('DataLakeSettingsModal - Research tab', () => {
+  const manageableLake = { ...openLake, id: 'lake-res-1' };
+  const readerLake = { ...openLake, id: 'lake-res-2', canManage: false };
+
+  beforeEach(() => {
+    useDataLakeResearchConfigsMock.mockClear();
+    useDataLakeResearchRunsMock.mockClear();
+    startResearchRunMutate.mockClear();
+    useDataLakeResearchConfigsMock.mockReturnValue({ data: [], isLoading: false, isForbidden: false, error: null });
+    useDataLakeResearchRunsMock.mockReturnValue({ data: [], isLoading: false, isForbidden: false, error: null });
+  });
+
+  // Unlike Proposals, this tab shows even with nothing in it: it is where a configuration is
+  // CREATED, so hiding it while empty would hide the only way to make the first one.
+  it('offers the tab to a manager who has no configuration yet', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-research')).toBeInTheDocument();
+  });
+
+  it('never offers it to a caller who cannot manage the lake, and never reads on their behalf', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-research')).not.toBeInTheDocument();
+    expect(useDataLakeResearchConfigsMock).toHaveBeenCalledWith('lake-res-2', { enabled: false });
+  });
+
+  // The whole point of the tab-gated `enabled`: opening the modal must not pay for two reads a
+  // manager who came for the Settings form will never look at.
+  it('does not read the configurations until the tab is opened', async () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(useDataLakeResearchConfigsMock).toHaveBeenCalledWith('lake-res-1', { enabled: false });
+
+    await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
+
+    await waitFor(() => expect(useDataLakeResearchConfigsMock).toHaveBeenCalledWith('lake-res-1', { enabled: true }));
+  });
+
+  // The end-to-end wiring check: a tab that renders nothing is the failure mode the diff cannot
+  // show, because the panel and the modal each look complete on their own.
+  it('renders the panel when the tab is opened', async () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
+
+    expect(await screen.findByTestId('datalake-research-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-research-empty')).toBeInTheDocument();
+  });
+
+  it('starts a run against the lake and the chosen configuration', async () => {
+    useDataLakeResearchConfigsMock.mockReturnValue({
+      data: [
+        {
+          id: 'config-1',
+          name: 'Weekly sweep',
+          query: 'coastal erosion',
+          maxResults: 10,
+          maxProposals: 5,
+          minRelevance: 0.6,
+          costCeilingMicroUsd: 250_000,
+          allowedDomains: [],
+          blockedDomains: [],
+          proposedTags: [],
+        },
+      ],
+      isLoading: false,
+      isForbidden: false,
+      error: null,
+    });
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
+    await userEvent.click(await screen.findByTestId('datalake-research-run-btn'));
+
+    expect(startResearchRunMutate).toHaveBeenCalledWith('config-1');
+  });
+});
+
 describe('DataLakeSettingsModal - Test this lake', () => {
   it('hides the action for a reader (canManage: false)', () => {
     const readerLake = { ...openLake, id: 'lake-11', canManage: false };
@@ -1124,11 +1261,12 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
     // Tags come back in the fetched-lakes list order, not selection order. The fixture tags are
     // deliberately unequal to the lake ids and carry the `datalake:` prefix, so this discriminates
-    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that no
-    // `corpusGroundingMode` rides along: /api/sessions/create strips it off any request without a
-    // `dataLakeId`, so sending one would be a silent no-op.
+    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that the
+    // lake-under-test's own `groundingMode` rides along, not some other value.
     expect(startChatWithLakesMock).toHaveBeenCalledWith({
       retrievalTags: ['datalake:test-lake', 'datalake:open-lake'],
+      preauthorizedLakeIds: [],
+      groundingMode: 'retrieve',
     });
     // The scope dialog is a separate flow from the settings form - confirming it must not also
     // close the settings modal out from under the caller.
@@ -1149,5 +1287,92 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not start a test chat for this lake'));
     expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
+  });
+
+  it("surfaces the route's own refusal rather than the generic fallback", async () => {
+    // An axios rejection, not a plain Error: the route's reason lives on response.data.error, and
+    // axios's `message` is only "Request failed with status code N" - a plain-Error mock cannot
+    // tell a working extraction from a broken one.
+    startChatWithLakesMock.mockRejectedValue({
+      message: 'Request failed with status code 403',
+      response: { data: { error: 'You do not manage data lake lake-1' } },
+    });
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId(`datalake-settings-test-btn-${openLake.id}`));
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('You do not manage data lake lake-1'));
+  });
+});
+
+describe('DataLakeSettingsModal - lake memory toggle', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+    lakeMemoryPlatformEnabled.mockReset();
+    lakeMemoryPlatformEnabled.mockReturnValue(true);
+  });
+
+  it('renders for an editor, seeded from the lake, and does not render for a non-editor', () => {
+    const readerLake = { ...openLake, id: 'lake-mem-1', canManage: false };
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-2', lakeMemoryEnabled: true }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-memory-toggle')).toBeChecked();
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-memory-toggle')).not.toBeInTheDocument();
+  });
+
+  it('sends the toggled value only when the editor changes it', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-memory-toggle'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ lakeMemoryEnabled: true });
+  });
+
+  it('never sends lakeMemoryEnabled when the editor leaves it unchanged', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-4' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('lakeMemoryEnabled');
+  });
+
+  it('explains the platform kill-switch when it is off, without hiding the toggle', () => {
+    lakeMemoryPlatformEnabled.mockReturnValue(false);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-5', lakeMemoryEnabled: true }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-memory-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-memory-toggle-help')).toHaveTextContent(/disabled platform-wide/i);
   });
 });

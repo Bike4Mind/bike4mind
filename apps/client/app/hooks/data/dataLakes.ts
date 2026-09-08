@@ -5,6 +5,9 @@ import type {
   DataLakeMembershipArm,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
+  IDataLakeResearchConfigDocument,
+  IDataLakeResearchRunDocument,
+  ResearchRunTrigger,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeSpendResponse,
@@ -12,21 +15,26 @@ import type {
   LakeAccessView,
   LakeOwnershipCandidateList,
   LakeHealthApiResponse,
+  LakeMemoryHealth,
   LakeConfigHistoryView,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
+import { DATA_LAKES, isResearchRunInFlight, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
+  DuplicateBucket,
+  RepairDecision,
+  SourceIdentityTier,
+  MembershipRepairPlanRead,
   UpdateDataLakeRequestInputType,
   UpdateFallbackLakeSettingsRequestInputType,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -105,6 +113,30 @@ export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) 
     staleTime: 1000 * 60 * 2,
     queryFn: async () => {
       const response = await api.get<LakeHealthApiResponse>(`/api/data-lakes/${dataLakeId}/health`);
+      return response.data;
+    },
+  });
+}
+
+/**
+ * One lake's unanswered duplicate groups (#2238): the same document held twice, narrowed to the
+ * groups no ruling has settled. The read the duplicate chip and its dialog render.
+ *
+ * A separate read from `useGetDataLakeHealth` rather than a slice of it, matching the routes: health
+ * is readable by anyone who can read the lake and is blind to rulings, while this is manage-gated and
+ * suppresses what an owner has already answered. `enabled` is how a caller declines to ask on a lake
+ * it knows it cannot manage - a mere reader gets a 4xx, and like the other manage-gated reads it does
+ * not retry that.
+ */
+export function useGetLakeMembershipDuplicates(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.membershipDuplicates(dataLakeId ?? ''),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
+    queryFn: async () => {
+      const response = await api.get<MembershipRepairPlanRead>(`/api/data-lakes/${dataLakeId}/membership-duplicates`);
       return response.data;
     },
   });
@@ -827,6 +859,8 @@ export function invalidateLakeFileMembershipQueries(
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
   // Membership changes the lake's reachable-content denominator and predicate tallies.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+  // Adding or removing a member can open a duplicate group or empty one out (#2238).
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.membershipDuplicates(dataLakeId) });
   // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
   // A membership write can reach activateIfDraft's draft -> active flip (see
@@ -906,6 +940,97 @@ export function useAddFileToDataLake() {
       const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
       const message = refusal || error.message || 'Failed to restore the file to the data lake';
       toast.error(message, toastId !== undefined ? { id: toastId } : undefined);
+    },
+  });
+}
+
+/**
+ * Hook: record the owner's answer to "this lake already holds this document" and carry it out
+ * (#2238). The question is raised by the same-identity check at the post-chunk admission
+ * checkpoint; this is the answer.
+ *
+ * `keep-newest` removes the older copies through the ordinary lake-scoped removal door, so the file
+ * survives in its owner's Files list and in every other lake, and the server mints the same
+ * short-TTL restore record every removal does. `keep-both` records the ruling and removes nothing,
+ * so a later repair run does not re-ask about a pair the owner deliberately kept. Cancelling is not
+ * an answer, so there is nothing to send for it - the caller simply closes the dialog.
+ *
+ * Offers Undo on the replacement toast for the same reason `useRemoveFileFromDataLake` does, and
+ * SPENDS the same records: `removedFabFileIds` names every member the ruling removed, and each one
+ * carries a short-TTL restore record on the server. That toast is the only affordance that can spend
+ * them (see UNDO_TOAST_DURATION_MS), and the dialog's copy promises it, so a plain success toast
+ * here would have made a destructive action irreversible for a non-owner in practice.
+ *
+ * Invalidates through `invalidateLakeFileMembershipQueries` rather than a bespoke list, because a
+ * `keep-newest` genuinely IS a membership change and stales exactly what a removal stales.
+ */
+export interface MembershipDecisionVariables {
+  dataLakeId: string;
+  fileName: string;
+  decision: RepairDecision;
+  /** Required for `keep-specific` and rejected for anything else - the server enforces both. */
+  keptFabFileId?: string | null;
+}
+
+export interface MembershipDecisionResponse {
+  success: true;
+  fileName: string;
+  decision: RepairDecision;
+  tier: SourceIdentityTier;
+  bucket: DuplicateBucket;
+  removedFabFileIds: string[];
+}
+
+export function useRecordMembershipDecision() {
+  const queryClient = useQueryClient();
+  const addFileToDataLake = useAddFileToDataLake();
+  return useMutation({
+    mutationFn: async ({ dataLakeId, fileName, decision, keptFabFileId }: MembershipDecisionVariables) => {
+      const res = await api.post<MembershipDecisionResponse>(`/api/data-lakes/${dataLakeId}/membership-decisions`, {
+        fileName,
+        decision,
+        ...(keptFabFileId ? { keptFabFileId } : {}),
+      });
+      return res.data;
+    },
+    onSuccess: (data, { dataLakeId }) => {
+      invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
+
+      const removed = data.removedFabFileIds;
+      if (removed.length === 0) {
+        // "every copy", not "both": a group of three is routine (the duplicated corpus this lane
+        // came from held several generations of one name), and there is nothing to undo here.
+        toast.success(`Kept every copy of "${data.fileName}". You will not be asked again unless they change.`);
+        return;
+      }
+
+      const toastId = toast.success(
+        `Replaced: ${removed.length} older ${removed.length === 1 ? 'copy' : 'copies'} of ` +
+          `"${data.fileName}" left this lake.`,
+        {
+          duration: UNDO_TOAST_DURATION_MS,
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              // One restore per removed member, and no per-call callbacks: this click routinely
+              // happens after the dialog holding the hook has unmounted, which is exactly when those
+              // are dropped. Every restore addresses THIS toast, so the last one to land - a success
+              // or a refusal - is what the manager is left reading. Sequential ordering is not
+              // needed: the restores are independent lake writes over distinct files.
+              for (const fabFileId of removed) {
+                addFileToDataLake.mutate({ dataLakeId, fabFileId, toastId });
+              }
+            },
+          },
+        }
+      );
+    },
+    onError: (error: Error) => {
+      // Surface the server's own refusal text: "You do not have permission to resolve duplicates in
+      // this data lake" and "That file name no longer has duplicate members in this data lake" are
+      // both actionable, and a status string is the one message that cannot help.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to record the decision');
     },
   });
 }
@@ -1141,6 +1266,103 @@ export function useRechunkDataLake(dataLakeId: string | null) {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to start rebuild');
+    },
+  });
+}
+
+/**
+ * Wire shape of `LakeMemoryHealth`: `lastBuiltAt` crosses JSON as an ISO string, not a Date.
+ */
+export type LakeMemoryHealthResponse = Omit<LakeMemoryHealth, 'lastBuiltAt'> & { lastBuiltAt: string | null };
+
+export const LAKE_MEMORY_POLL_MS = 5_000;
+
+/**
+ * Poll cadence for the lake-memory build door. Exported and pure for the same reason
+ * `nextRebuildPoll` is: an inline poll predicate is executed by nothing in a test, so a bug in it
+ * ships green.
+ *
+ * Keys off `running` - a lease actually held - and NOT `state === 'building'`, which is also true for
+ * a parked continuation cursor. That distinction is the whole termination argument: a cursor left by
+ * a chain that ended unfinished never changes on its own, so polling `building` meant a tick every
+ * 5s for as long as the panel stayed open, against a state nothing was going to move. A lease, by
+ * contrast, either expires or is released.
+ */
+export function lakeMemoryPollInterval(data: Pick<LakeMemoryHealthResponse, 'running' | 'state'> | undefined) {
+  return data?.running ? LAKE_MEMORY_POLL_MS : (false as const);
+}
+
+/**
+ * The manual build door's own state (GET /api/data-lakes/:id/lake-memory) - kept separate
+ * from the whole-lake /health report so the UI can poll it while a build runs without paying for
+ * health's per-file member scan on every tick. Cadence in `lakeMemoryPollInterval`.
+ */
+export function useGetLakeMemoryHealth(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.lakeMemory(dataLakeId ?? ''),
+    queryFn: async (): Promise<LakeMemoryHealthResponse> => {
+      const res = await api.get<LakeMemoryHealthResponse>(`/api/data-lakes/${dataLakeId}/lake-memory`);
+      return res.data;
+    },
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: query => lakeMemoryPollInterval(query.state.data),
+  });
+}
+
+/** Hook: queue a full-lake (re)build of the memory profile. */
+export function useBuildLakeMemory(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post<{ ok: true; queued: true }>(`/api/data-lakes/${dataLakeId}/lake-memory`);
+      return res.data;
+    },
+    onSuccess: () => {
+      toast.success("Building this lake's memory profile...");
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeMemory(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      if (refusal) {
+        toast.error(refusal);
+        return;
+      }
+      toast.error(error.message || 'Failed to start the lake memory build');
+    },
+  });
+}
+
+/**
+ * Crypto-shred a lake's WHOLE memory profile, via the existing `DELETE /api/memory/lake/:id`
+ * door (built for the V2 memory dashboard, not new here). Irreversible: the ledger survives but every
+ * fact becomes unreadable, so the lake is treated as never-built until it is rebuilt from scratch.
+ */
+export function usePurgeLakeMemory(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.delete<{ ok: true; shredded: number }>(`/api/memory/lake/${dataLakeId}`);
+      return res.data;
+    },
+    onSuccess: data => {
+      toast.success(
+        data.shredded > 0
+          ? `Erased this lake's memory profile (${data.shredded} fact(s)).`
+          : 'This lake had no memory profile to erase.'
+      );
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeMemory(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || "Failed to erase this lake's memory profile");
     },
   });
 }
@@ -1604,8 +1826,18 @@ export function useDataLakeProposals(
  * ("already been reviewed", "the source returned HTTP 404") never reached the reviewer.
  */
 export function reviewProposalFailureMessage(error: unknown): string {
-  const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
-  return refusal || 'Could not record that decision. Try again shortly.';
+  return serverRefusalMessage(error) || 'Could not record that decision. Try again shortly.';
+}
+
+/**
+ * The server's own refusal text, if it sent one. The body key is `error`, per
+ * server/middlewares/errorHandler.ts - every data-lake surface that shows a refusal to a human
+ * reads it through here so none of them can drift back onto `message` and silently show only
+ * their fallback.
+ */
+function serverRefusalMessage(error: unknown): string | undefined {
+  if (!isAxiosError(error)) return undefined;
+  return (error.response?.data as { error?: string } | undefined)?.error || undefined;
 }
 
 /**
@@ -1641,6 +1873,183 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
     },
     onError: (error: unknown) => {
       toast.error(reviewProposalFailureMessage(error));
+    },
+  });
+}
+
+// -- Research runs (#1682) ---------------------------------------------------
+
+/**
+ * The lever set a config form submits. Every field is optional so an edit can send a patch, and
+ * `recencyDays`/`model` are nullable because null is how the form CLEARS them - `undefined` means
+ * "unchanged" and would leave the stored value in place.
+ */
+export type ResearchConfigInput = {
+  name?: string;
+  trigger?: ResearchRunTrigger;
+  query?: string;
+  model?: string | null;
+  maxResults?: number;
+  maxProposals?: number;
+  recencyDays?: number | null;
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+  minRelevance?: number;
+  costCeilingMicroUsd?: number;
+  proposedTags?: string[];
+};
+
+/** How often the run list re-reads while a run is queued or running. */
+const RESEARCH_RUN_POLL_MS = 1000 * 5;
+
+/**
+ * One lake's saved research configurations. Manage-gated server-side, so a mere reader gets a 4xx -
+ * surfaced as `isForbidden` and never retried, matching `useDataLakeSpend` and `useDataLakeProposals`.
+ */
+export function useDataLakeResearchConfigs(dataLakeId: string | null, opts?: { enabled?: boolean }) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.researchConfigs(dataLakeId),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeResearchConfigDocument[] }>(
+        `/api/data-lakes/${dataLakeId}/research/configs`
+      );
+      return data.data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 1000 * 60,
+  });
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+export function useCreateDataLakeResearchConfig(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: ResearchConfigInput) => {
+      const { data } = await api.post<{ data: IDataLakeResearchConfigDocument }>(
+        `/api/data-lakes/${dataLakeId}/research/configs`,
+        input
+      );
+      return data.data;
+    },
+    onSuccess: config => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      toast.success(`Saved "${config.name}"`);
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not save that research configuration.');
+    },
+  });
+}
+
+export function useUpdateDataLakeResearchConfig(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ configId, ...input }: ResearchConfigInput & { configId: string }) => {
+      const { data } = await api.put<{ data: IDataLakeResearchConfigDocument }>(
+        `/api/data-lakes/${dataLakeId}/research/configs/${configId}`,
+        input
+      );
+      return data.data;
+    },
+    onSuccess: config => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      toast.success(`Updated "${config.name}"`);
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not update that research configuration.');
+    },
+  });
+}
+
+export function useDeleteDataLakeResearchConfig(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (configId: string) => {
+      await api.delete(`/api/data-lakes/${dataLakeId}/research/configs/${configId}`);
+      return configId;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      // Run history deliberately NOT invalidated: deleting a config leaves its past runs standing,
+      // because a proposal's provenance points at a run.
+      toast.success('Research configuration deleted');
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not delete that research configuration.');
+    },
+  });
+}
+
+/**
+ * One lake's research run history. Polls only while a run is unsettled: a run is executed by a
+ * worker off a queue, so the row a user just started changes underneath them with no client event
+ * to hang a refetch on. Once every run is settled the interval stops, so an idle panel is free.
+ *
+ * "Unsettled" is `isResearchRunInFlight`, which is age-bounded, so a run killed hard - whose row
+ * keeps `running` forever because its catch never ran - stops the poll at the stale bound instead
+ * of leaving the panel refetching every 5s for the life of the tab.
+ */
+export function useDataLakeResearchRuns(dataLakeId: string | null, opts?: { enabled?: boolean; limit?: number }) {
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: dataLakeKeys.researchRuns(dataLakeId, opts?.limit),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeResearchRunDocument[] }>(
+        `/api/data-lakes/${dataLakeId}/research/runs`,
+        { params: opts?.limit ? { limit: opts.limit } : undefined }
+      );
+      return data.data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 1000 * 10,
+    refetchInterval: query =>
+      query.state.data?.some(run => isResearchRunInFlight(run)) ? RESEARCH_RUN_POLL_MS : false,
+  });
+
+  // A run settling is the moment proposals appear, and the review queue is a SEPARATE surface
+  // mirroring that same fact - its tab count included. Without this the reviewer watches a run
+  // report "3 proposed" and then finds Proposals still reading (0) until the window loses and
+  // regains focus. Edge-triggered on the in-flight -> settled transition, so a poll that returns an
+  // unchanged history does not invalidate anything.
+  const anyInFlight = query.data?.some(run => isResearchRunInFlight(run)) ?? false;
+  const wasInFlight = useRef(anyInFlight);
+  useEffect(() => {
+    const settled = wasInFlight.current && !anyInFlight;
+    wasInFlight.current = anyInFlight;
+    if (!settled || !dataLakeId) return;
+    // Only the queue. `lastRunAt` is the config row's single run-derived field and it is stamped at
+    // START, not at settle, so the invalidation the start mutation already does covers it.
+    queryClient.invalidateQueries({ queryKey: dataLakeKeys.proposalsOf(dataLakeId) });
+  }, [anyInFlight, dataLakeId, queryClient]);
+
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+/**
+ * Start a run from a saved configuration. The route returns 202 with a `queued` row, so the
+ * history is invalidated (the new row appears and starts the poll) along with the config list,
+ * whose `lastRunAt` the start just stamped. Nothing is proposed yet - the worker does that, and a
+ * reviewer still has to approve each proposal before anything enters the lake.
+ */
+export function useStartDataLakeResearchRun(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (configId: string) => {
+      const { data } = await api.post<{ data: IDataLakeResearchRunDocument }>(
+        `/api/data-lakes/${dataLakeId}/research/runs`,
+        { configId }
+      );
+      return data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchRunsOf(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      toast.success('Research run started. Results land in the review queue.');
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not start that research run.');
     },
   });
 }

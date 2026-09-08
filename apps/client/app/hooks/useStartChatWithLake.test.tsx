@@ -60,20 +60,61 @@ describe('useStartChatWithLake (single lake)', () => {
 });
 
 describe('useStartChatWithLakes (multi-lake subset)', () => {
-  it('sends retrievalTags and forceKnowledgeRetrieval only - no dataLakeId, no corpusGroundingMode', async () => {
+  it('sends retrievalTags, forceKnowledgeRetrieval, and the given groundingMode - no dataLakeId', async () => {
     apiPost.mockResolvedValue({ data: { id: 'session-2' } });
     const { result } = renderWithClient(() => useStartChatWithLakes());
 
     await act(async () => {
-      await result.current({ retrievalTags: ['datalake:a', 'datalake:b'] });
+      await result.current({ retrievalTags: ['datalake:a', 'datalake:b'], groundingMode: 'inline' });
     });
 
     expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
       name: 'New Notebook',
       retrievalTags: ['datalake:a', 'datalake:b'],
       forceKnowledgeRetrieval: true,
+      corpusGroundingMode: 'inline',
     });
     expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-2' });
+  });
+
+  it('sends preauthorizedLakeIds when the caller may admit some of the checked lakes', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'session-3' } });
+    const { result } = renderWithClient(() => useStartChatWithLakes());
+
+    await act(async () => {
+      await result.current({
+        retrievalTags: ['datalake:a', 'datalake:b'],
+        groundingMode: 'retrieve',
+        preauthorizedLakeIds: ['lake-a'],
+      });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
+      name: 'New Notebook',
+      retrievalTags: ['datalake:a', 'datalake:b'],
+      forceKnowledgeRetrieval: true,
+      corpusGroundingMode: 'retrieve',
+      preauthorizedLakeIds: ['lake-a'],
+    });
+  });
+
+  it('omits preauthorizedLakeIds entirely when the admission list is empty', async () => {
+    // An empty array must not appear in the body: the route treats a present-but-empty list as a
+    // request to admit nothing, and an ordinary test session's payload should be byte-identical to
+    // what it was before the admission existed.
+    apiPost.mockResolvedValue({ data: { id: 'session-4' } });
+    const { result } = renderWithClient(() => useStartChatWithLakes());
+
+    await act(async () => {
+      await result.current({ retrievalTags: ['datalake:a'], groundingMode: 'retrieve', preauthorizedLakeIds: [] });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
+      name: 'New Notebook',
+      retrievalTags: ['datalake:a'],
+      forceKnowledgeRetrieval: true,
+      corpusGroundingMode: 'retrieve',
+    });
   });
 
   it('propagates a request failure so the caller can surface its own error UX', async () => {
@@ -82,7 +123,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
 
     await expect(
       act(async () => {
-        await result.current({ retrievalTags: ['datalake:a'] });
+        await result.current({ retrievalTags: ['datalake:a'], groundingMode: 'retrieve' });
       })
     ).rejects.toThrow('network down');
     expect(setCurrentSession).not.toHaveBeenCalled();

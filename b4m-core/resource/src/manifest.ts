@@ -73,6 +73,10 @@ export const DEFAULT_MANIFEST = {
   // --- queue ---
   agentContinuationQueue: { kind: 'queue' },
   agentProactiveMessageQueue: { kind: 'queue' },
+  // Optional for the same reason as the taxonomy queue: the start-a-run route checks for the URL
+  // and refuses with an actionable message, so a self-host install without it degrades cleanly
+  // rather than queueing a run nothing will ever execute.
+  dataLakeResearchQueue: { kind: 'queue', optional: true },
   dataLakeTaxonomyQueue: { kind: 'queue', optional: true },
   deepAgentWakeQueue: { kind: 'queue' },
   // Read by the drive-sync route, the resync poll cron and the ingest handler's own redrive.

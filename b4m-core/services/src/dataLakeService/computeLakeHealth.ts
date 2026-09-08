@@ -1,6 +1,8 @@
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
+  deriveLakeMemoryState,
   findDuplicateMembers,
+  isLeaseHeld,
   resolveLakeHealthPolicy,
   selectLakeHealthMembers,
   summarizeLakeHealth,
@@ -8,6 +10,7 @@ import {
   type IDataLakeDocument,
   type IFabFileRepository,
   type IScopedSettingsRepository,
+  type LakeMemoryHealth,
   summarizeLakeMembership,
   toWireMembershipReport,
   effectiveTagPrefixArm,
@@ -25,7 +28,7 @@ import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSet
  * handful of numbers, so this is generous; it exists so a pathological lake degrades LOUDLY (a logged,
  * flagged partial report) instead of trying to load unbounded rows. Real lakes are far below it.
  */
-const MEMBER_SCAN_LIMIT = 25_000;
+export const MEMBER_SCAN_LIMIT = 25_000;
 /** How many failing members the report carries for the drill-down. The count is always exact. */
 const AFFECTED_MEMBERS_RETURNED = 200;
 /**
@@ -54,13 +57,27 @@ const MEMBERSHIP_GROUPS_RETURNED = 100;
  * objects. Mirrors AFFECTED_MEMBERS_RETURNED, and like it every group keeps an exact `memberCount`
  * beside the capped array so no reader can be told there are fewer.
  */
-const MEMBERSHIP_GROUP_MEMBERS_RETURNED = 200;
+export const MEMBERSHIP_GROUP_MEMBERS_RETURNED = 200;
+
+/**
+ * Structural, not imported from `@bike4mind/database` (services cannot depend on it - see
+ * `ledgerMemoryStore.ts`'s `LedgerRepo`, the template this copies). `principalKind` is a literal
+ * `'lake'` rather than the database package's `MemoryPrincipalKind` union for the same reason.
+ */
+export interface LakeMemoryLedgerRepo {
+  aggregateLakeMemoryCoverage(
+    principalKind: 'lake',
+    principalId: string,
+    ownerUserId: string
+  ): Promise<{ lastBuiltAt: string | null; factCount: number; sourceDocumentCount: number }>;
+}
 
 export interface ComputeLakeHealthAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findDataLakeHealthMembers' | 'findDataLakeMembershipMembers'>;
-    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll' | 'getSettingsValue'>;
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    memoryLedger: LakeMemoryLedgerRepo;
   };
   logger?: Logger;
 }
@@ -94,6 +111,10 @@ export async function computeLakeHealth(
     | 'requiredPassageTokenTarget'
     | 'inconsistencyReport'
     | 'inconsistencyComputedAt'
+    | 'lakeMemoryEnabled'
+    | 'lakeMemoryExtractionAt'
+    | 'lakeMemoryCursor'
+    | 'lastSyncAt'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
@@ -109,6 +130,10 @@ export async function computeLakeHealth(
       : DEFAULT_PASSAGE_TOKEN_TARGET;
 
   const policy = resolveLakeHealthPolicy({ explicitTarget: lake.requiredPassageTokenTarget, inheritedTarget });
+
+  // Independent of the content-predicate scan below and of the empty-lake early return, so it is
+  // computed once and reused by both.
+  const lakeMemory = await computeLakeMemoryHealth(lake, db);
 
   // ONE scope for both reads and for the disclosure. A registry lake has no backing document, so its
   // `createdByUserId` is `''` (assertLakeAccess) and an `owned` scope would fail closed to
@@ -131,6 +156,7 @@ export async function computeLakeHealth(
       membership: toWireMembershipReport(summarizeLakeMembership([], { scope: membershipScopeDisclosure(scope) })),
       duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
       inconsistency: storedInconsistency(lake),
+      lakeMemory,
     };
   }
 
@@ -173,6 +199,65 @@ export async function computeLakeHealth(
     // READ, never computed here: detection needs chunk text and this function may not touch the chunk
     // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
     inconsistency: storedInconsistency(lake),
+    lakeMemory: { ...lakeMemory, memberCount: members.length },
+  };
+}
+
+export interface LakeMemoryHealthAdapters {
+  adminSettings: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
+  memoryLedger: LakeMemoryLedgerRepo;
+}
+
+/**
+ * Lake memory's state and headline counts. `everBuilt`/`lastBuiltAt`/`factCount`/
+ * `sourceDocumentCount` are ledger-derived - NEVER from `lakeMemoryExtractionAt`, which is a
+ * concurrency lease, not a completion stamp, and reads `null` in the steady state of a lake that has
+ * built successfully. `building` is the one signal the lake document itself carries: a held lease, or
+ * a non-null continuation cursor (a chain claims/releases its lease per slice, so the cursor is what
+ * survives across slices - see `isLeaseHeld`).
+ *
+ * Exported (not local to `computeLakeHealth`): the build door's own GET returns this same shape
+ * directly, without paying for the content-predicate member scan health also does - see
+ * `LakeMemoryHealth`'s doc comment on the one-type invariant between the two endpoints.
+ */
+export async function computeLakeMemoryHealth(
+  lake: Pick<
+    IDataLakeDocument,
+    | 'datalakeTag'
+    | 'createdByUserId'
+    | 'lakeMemoryEnabled'
+    | 'lakeMemoryExtractionAt'
+    | 'lakeMemoryCursor'
+    | 'lastSyncAt'
+  >,
+  db: LakeMemoryHealthAdapters
+): Promise<LakeMemoryHealth> {
+  const now = new Date();
+  const platformEnabled = (await db.adminSettings.getSettingsValue('EnableLakeMemory').catch(() => undefined)) === true;
+  const lakeEnabled = lake.lakeMemoryEnabled === true;
+  // Split deliberately: `running` is a live lease, `building` widens that to a parked continuation
+  // cursor. Only the first means someone should wait (see LakeMemoryHealth.running).
+  const running = isLeaseHeld(lake.lakeMemoryExtractionAt, now);
+  const building = running || lake.lakeMemoryCursor != null;
+
+  const coverage =
+    lake.datalakeTag && lake.createdByUserId
+      ? await db.memoryLedger.aggregateLakeMemoryCoverage('lake', lake.datalakeTag, lake.createdByUserId)
+      : { lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 };
+
+  const everBuilt = coverage.factCount > 0;
+  const stale =
+    everBuilt && !!lake.lastSyncAt && !!coverage.lastBuiltAt && lake.lastSyncAt.toISOString() > coverage.lastBuiltAt;
+
+  return {
+    state: deriveLakeMemoryState({ platformEnabled, lakeEnabled, building, everBuilt, stale }),
+    running,
+    lastBuiltAt: coverage.lastBuiltAt ? new Date(coverage.lastBuiltAt) : null,
+    factCount: coverage.factCount,
+    sourceDocumentCount: coverage.sourceDocumentCount,
+    // Overwritten by the caller with the actual scanned member count where one was computed (the
+    // empty-lake early return has none to give, so 0 stands).
+    memberCount: 0,
   };
 }
 
@@ -215,7 +300,7 @@ function storedInconsistency(
  * name an arm that did not run - which it did on every registry lake, and would again for any other
  * reason the filter drops a prefix (a reserved namespace, say).
  */
-function membershipScopeDisclosure(scope: DataLakeMembershipScope): LakeMembershipReport['scope'] {
+export function membershipScopeDisclosure(scope: DataLakeMembershipScope): LakeMembershipReport['scope'] {
   return {
     // Empty string rather than null is how a registry lake's synthetic document spells "no creator",
     // so `??` was not enough: it shipped `''`, which matches neither documented state. The polarity
