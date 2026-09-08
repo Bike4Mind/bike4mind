@@ -46,7 +46,6 @@ import {
   fabFileChunkRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
-  dataLakeAccessGrantRepository,
   fallbackLakeSettingsRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,

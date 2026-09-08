@@ -30,7 +30,6 @@ import {
   projectRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
-  dataLakeAccessGrantRepository,
   fallbackLakeSettingsRepository,
   mongoose,
   agentExecutionRepository,

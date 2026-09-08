@@ -26,7 +26,6 @@ import {
   mementoRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
-  dataLakeAccessGrantRepository,
   fallbackLakeSettingsRepository,
   latticeModelRepository,
   imageModerationIncidentRepository,

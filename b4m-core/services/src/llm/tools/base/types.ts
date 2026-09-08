@@ -109,12 +109,6 @@ export interface ToolContext {
       'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
     >;
     /**
-     * Access-grant lookup for the retrieval resolver's grant arm, so a lake the caller reaches
-     * only by an owner/curator grant grounds chat as it browses. Optional - absent means the
-     * knowledge tools resolve lake access with no grant arm (see getDynamicDataLakeAccess).
-     */
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
-    /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
      * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch;
      * absent means zero registry lakes ever contribute an injected prompt.
@@ -142,12 +136,17 @@ export interface ToolContext {
      */
     organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
     /**
-     * Grant reader for the per-turn manage re-check on a session's `preauthorizedLakeIds`
-     * (filterStillManagedLakes). Optional in the type but REQUIRED in practice on any host that
-     * creates pre-authorized sessions: without it the curator / org-grant / transferred-owner rungs
-     * cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+     * Access-grant lookup shared by two independent optional features:
+     * - the retrieval resolver's grant arm, so a lake the caller reaches only by an
+     *   owner/curator grant grounds chat as it browses (`listByPrincipal`, see
+     *   getDynamicDataLakeAccess);
+     * - the per-turn manage re-check on a session's `preauthorizedLakeIds`
+     *   (`listActiveByLakes`, filterStillManagedLakes). REQUIRED in practice on any host that
+     *   creates pre-authorized sessions: without it the curator / org-grant / transferred-owner
+     *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+     * Optional here - absent means both features resolve lake access with no grant arm.
      */
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
     /**
      * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
