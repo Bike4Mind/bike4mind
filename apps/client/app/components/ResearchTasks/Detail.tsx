@@ -32,7 +32,7 @@ import ResearchTaskDetailLiveStatus from './Detail/LiveStatus';
 import ResearchTaskDetailInfo from './Detail/Info';
 import ResearchTaskFileList from './FileList';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
-import { sanitizeHtmlForIframe } from '@client/app/utils/htmlSanitizer';
+import { sanitizeHtmlStrict } from '@client/app/utils/htmlSanitizer';
 
 interface ResearchTaskDetailProps {
   task: IResearchTask;
@@ -435,8 +435,11 @@ const ResearchTaskDetail: FC<ResearchTaskDetailProps> = ({ task: propTask, onEdi
                       )}
                       {viewMode === 'html' && content && (
                         <div
-                          // Scraped third-party page HTML - strip active content before rendering.
-                          dangerouslySetInnerHTML={{ __html: sanitizeHtmlForIframe(content).cleanHtml }}
+                          // Scraped third-party page HTML into a plain app-origin DOM sink (no
+                          // sandbox iframe). Strict policy strips active content plus
+                          // <style>/<link>/document-shell so the scraped page cannot apply
+                          // app-origin CSS (UI redress / attribute-selector exfil).
+                          dangerouslySetInnerHTML={{ __html: sanitizeHtmlStrict(content) }}
                           style={{
                             fontSize: '14px',
                             lineHeight: '1.7',

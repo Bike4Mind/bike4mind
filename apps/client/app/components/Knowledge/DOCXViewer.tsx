@@ -1,7 +1,7 @@
 import React, { FC, useEffect, useState } from 'react';
 import mammoth from 'mammoth';
 import styles from '@/styles/content.module.css';
-import { sanitizeHtmlForIframe } from '@client/app/utils/htmlSanitizer';
+import { sanitizeHtmlStrict } from '@client/app/utils/htmlSanitizer';
 
 type DocxViewerProps = {
   fileUrl: string;
@@ -17,9 +17,11 @@ const DocxViewer: FC<DocxViewerProps> = ({ fileUrl }) => {
         return mammoth.convertToHtml({ arrayBuffer });
       })
       .then(result => {
-        // mammoth emits HTML from an untrusted .docx (event handlers, javascript: links);
-        // strip active content before it reaches the DOM sink below.
-        setHtmlContent(sanitizeHtmlForIframe(result.value).cleanHtml);
+        // mammoth emits HTML from an untrusted .docx into a plain app-origin DOM sink (no
+        // sandbox iframe). Use the strict policy so injected <style>/<link>/document-shell
+        // tags cannot smuggle app-origin CSS or external resource loads; inline style="..."
+        // attributes (which mammoth uses for layout) survive.
+        setHtmlContent(sanitizeHtmlStrict(result.value));
       })
       .catch(error => {
         console.error('Error fetching and converting DOCX to HTML', error);

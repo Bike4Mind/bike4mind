@@ -155,11 +155,8 @@ describe('sanitizeHtmlStrict', () => {
     const config = mockSanitize.mock.calls[0][1];
     expect(config.ADD_TAGS).toBeUndefined();
   });
-
-  it('returns the sanitized string', () => {
-    mockSanitize.mockImplementation(() => '<p>clean</p>');
-    expect(sanitizeHtmlStrict('<style>x</style><p>clean</p>')).toBe('<p>clean</p>');
-  });
+  // Behavioural assertions (real DOMPurify actually stripping tags) live in
+  // htmlSanitizer.behaviour.test.ts - dompurify is mocked to identity in this file.
 });
 
 describe('absolutizeBlessedScripts', () => {
