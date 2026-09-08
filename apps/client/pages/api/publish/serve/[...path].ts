@@ -1420,38 +1420,93 @@ function cleanViewerTitle(rawTitle: string | undefined, artifacts: ParsedArtifac
   return named?.title || SHARED_FALLBACK_TITLE;
 }
 
+/** An artifact carrying its own JS. Non-global so `.test` stays stateless across calls. */
+const ARTIFACT_HAS_SCRIPT = /<script[\s>]/i;
+
+/**
+ * How one embedded artifact renders. Single source of truth so `renderArtifactBlock` and the
+ * lead-artifact hero check in `renderViewerPage` can never disagree about what appears:
+ * - `sub-document`: an iframe at `?a={index}`, which needs a path whose fresh, credential-free
+ *   sub-request re-authorizes (`canFrame`).
+ * - `srcdoc`: the document inlined into the frame, so no sub-request happens at all.
+ * - `card`: a placeholder, for a type the static viewer cannot host or a document whose JS
+ *   would not survive inlining.
+ */
+type ArtifactRenderMode = 'sub-document' | 'srcdoc' | 'card';
+
+function artifactRenderMode(
+  artifact: ParsedArtifact,
+  selfPath: string,
+  canFrame: boolean,
+  standalone: boolean
+): ArtifactRenderMode {
+  if (artifact.type !== 'html' && artifact.type !== 'svg') return 'card';
+  if (standalone) return 'srcdoc';
+  if (canFrame && selfPath) return 'sub-document';
+  // Bearer-gated page: no `?a=` sub-request can carry the header, but a script-free document
+  // renders identically inline. A scripted one would not (see renderArtifactBlock), so: card.
+  return ARTIFACT_HAS_SCRIPT.test(artifact.content) ? 'card' : 'srcdoc';
+}
+
+/** Whether this artifact renders as a frame rather than a placeholder card. */
+function willFrame(artifact: ParsedArtifact, selfPath: string, canFrame: boolean, standalone: boolean): boolean {
+  return artifactRenderMode(artifact, selfPath, canFrame, standalone) !== 'card';
+}
+
+/** Opaque-origin frame whose document travels in the attribute, so it needs no sub-request. */
+function srcdocFrame(titleHtml: string, content: string, extraClass = ''): string {
+  // srcdoc attribute escape: inside a double-quoted value only `&` and `"` are unsafe -
+  // `<`/`>` are literal data. Escaping them would corrupt the framed document (see the
+  // identical note in renderBundleWrapper). `&` first so it can't double-escape `&quot;`.
+  const doc = content.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<iframe class="${artifactFrameClass(
+    extraClass
+  )}" sandbox="${VIEWER_SANDBOX}" title="${titleHtml}" srcdoc="${doc}"></iframe>`;
+}
+
+function artifactFrameClass(extraClass: string): string {
+  return extraClass ? `b4m-artifact ${extraClass}` : 'b4m-artifact';
+}
+
 /**
  * Render one embedded artifact as viewer markup. An HTML/SVG artifact renders in its own
  * SANDBOXED iframe pointed at the `?a={index}` sub-document (so its JS runs isolated on an
  * opaque origin, never on the script-free reply page) - but ONLY when `canFrame` says the
- * sub-request will authorize (see the call site); a Bearer-gated reply falls back to the card so
- * we never emit a frame that dead-ends at a loader shell. Every other type (react/code/python/
- * mermaid/recharts) needs the app runtime the static viewer can't provide, so it also gets a
+ * sub-request will authorize (see the call site). Every other type (react/code/python/
+ * mermaid/recharts) needs the app runtime the static viewer can't provide, so it gets a
  * clean placeholder card instead of leaking raw markup. `index` MUST match the position in the
  * same parseArtifactsWithFallback result the `?a` handler indexes into.
  *
  * `standalone` (the `?export=html` download) has no `?a=` route to point at, so an html/svg
  * artifact is inlined as an iframe `srcdoc` instead - same `VIEWER_SANDBOX` opaque-origin
  * posture, but self-contained, so the saved file renders offline.
+ *
+ * A Bearer-gated page (org/domain visibility, reached through the loader shell) can't frame
+ * `?a=` either, since an iframe navigation carries no Authorization header. There it inlines
+ * the SAME srcdoc, which is the identical opaque-origin posture minus script execution: the
+ * page's `script-src 'none'` CSP is inherited by an about:srcdoc child, so a SCRIPTED artifact
+ * would render half-broken (markup and CSS, dead JS) and is kept as a card instead. Script-free
+ * documents (a styled report, an SVG) render fully, which is what the gated owner came for.
  */
 function renderArtifactBlock(
   artifact: ParsedArtifact,
   index: number,
   selfPath: string,
   canFrame: boolean,
-  standalone = false
+  standalone = false,
+  opts: { hero?: boolean } = {}
 ): string {
   const title = escapeHtml(artifact.title || 'Artifact');
-  if (standalone && (artifact.type === 'html' || artifact.type === 'svg')) {
-    // srcdoc attribute escape: inside a double-quoted value only `&` and `"` are unsafe -
-    // `<`/`>` are literal data. Escaping them would corrupt the framed document (see the
-    // identical note in renderBundleWrapper). `&` first so it can't double-escape `&quot;`.
-    const doc = artifact.content.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-    return `<iframe class="b4m-artifact" sandbox="${VIEWER_SANDBOX}" title="${title}" srcdoc="${doc}"></iframe>`;
+  const extraClass = opts.hero ? 'b4m-hero' : '';
+  const mode = artifactRenderMode(artifact, selfPath, canFrame, standalone);
+  if (mode === 'srcdoc') {
+    return srcdocFrame(title, artifact.content, extraClass);
   }
-  if (canFrame && selfPath && (artifact.type === 'html' || artifact.type === 'svg')) {
+  if (mode === 'sub-document') {
     const src = escapeHtml(`${selfPath}?a=${index}`);
-    return `<iframe class="b4m-artifact" sandbox="${VIEWER_SANDBOX}" loading="lazy" title="${title}" src="${src}"></iframe>`;
+    return `<iframe class="${artifactFrameClass(
+      extraClass
+    )}" sandbox="${VIEWER_SANDBOX}" loading="lazy" title="${title}" src="${src}"></iframe>`;
   }
   return `<div class="b4m-artifact-card"><strong>${title}</strong><span>${escapeHtml(
     artifact.type
@@ -1461,8 +1516,10 @@ function renderArtifactBlock(
 /**
  * Render a reply/fabfile snapshot to a standalone HTML page. Replies are markdown (rendered via
  * marked) with any embedded `<artifact>` blocks extracted: the surrounding prose renders inline,
- * and each HTML/SVG artifact renders in its own sandboxed `?a=` iframe (non-embeddable types get
- * a placeholder card). Fabfiles render their literal text as an escaped <pre>, with only explicit
+ * and each HTML/SVG artifact renders in its own sandboxed iframe (non-embeddable types get a
+ * placeholder card). A reply that OPENS with a frameable artifact leads with it as a full-bleed
+ * hero above the prose; every other reply keeps prose-then-artifacts order. Fabfiles render
+ * their literal text as an escaped <pre> in the original order, with only explicit
  * embedded `<artifact>` blocks extracted and framed the same way. The PAGE is served with
  * script-src 'none' so injected markup cannot execute; artifact JS runs only inside the sandbox.
  */
@@ -1503,10 +1560,26 @@ function renderViewerPage(
     const article = cleanedContent
       ? sanitizeRenderedHtml(marked.parse(cleanedContent, { async: false }) as string)
       : '';
-    const blocks = artifacts
-      .map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts, standalone))
-      .join('\n');
-    contentHtml = `${article}${blocks}`;
+    const block = (a: ParsedArtifact, i: number, hero = false) =>
+      renderArtifactBlock(a, i, selfPath, canFrameArtifacts, standalone, { hero });
+    // A reply that LEADS with an html/svg artifact IS that artifact; the prose after it is the
+    // text fallback. Hoist that first block above the article as a full-bleed hero, but only if
+    // it actually renders as a frame - promoting a placeholder card to hero would be a downgrade.
+    // Ordering only; `i` stays the artifact's position in this same parser result, so `?a={i}`
+    // still resolves to the block rendered at slot i.
+    const leadsWithArtifact =
+      /^<artifact\b/i.test(body.trim()) &&
+      artifacts.length > 0 &&
+      willFrame(artifacts[0], selfPath, canFrameArtifacts, standalone);
+    if (leadsWithArtifact) {
+      const rest = artifacts
+        .slice(1)
+        .map((a, i) => block(a, i + 1))
+        .join('\n');
+      contentHtml = `${block(artifacts[0], 0, true)}${article}${rest}`;
+    } else {
+      contentHtml = `${article}${artifacts.map((a, i) => block(a, i)).join('\n')}`;
+    }
     displayTitle = cleanViewerTitle(artifact.title, artifacts);
   } else {
     // Fabfile: a file is literal text, not markdown prose, so the non-artifact remainder stays an
@@ -1571,6 +1644,9 @@ function renderViewerPage(
   img { max-width: 100%; height: auto; }
   iframe.b4m-artifact { display: block; width: 100%; height: 600px; margin: 1.5rem 0; border: 1px solid rgba(127,127,127,.3);
          border-radius: 8px; background: #fff; }
+  /* Lead artifact: break out of the 760px column to full-bleed. The negative top margin
+     cancels the body's 2rem top padding so the hero starts at the very top of the page. */
+  iframe.b4m-artifact.b4m-hero { width: 100vw; margin: -2rem 0 2rem calc(50% - 50vw); height: 100vh; border: 0; border-radius: 0; }
   .b4m-artifact-card { display: flex; flex-direction: column; gap: .25rem; margin: 1.5rem 0; padding: 1rem 1.25rem;
          border: 1px solid rgba(127,127,127,.3); border-radius: 8px; background: rgba(127,127,127,.08); }
   .b4m-artifact-card span { font-size: .85rem; opacity: .75; }
