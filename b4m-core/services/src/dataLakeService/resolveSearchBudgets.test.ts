@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CreditHolderType,
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IScopedSetting,
@@ -19,11 +20,17 @@ import {
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { resetServeCeilingWarnLimiter, resolveSearchBudgets } from './resolveSearchBudgets';
 
-/** The three #1955 kb* fields at their coded, behavior-preserving defaults. */
-const KB_DEFAULTS = {
+/**
+ * Every resolved field OTHER than the scan budgets, at its coded behavior-preserving default: the
+ * three #1955 kb* fields plus the per-document cap. Spread into the exhaustive `toEqual` assertions
+ * below, which is what makes a newly-added field that some resolution path forgot to set show up
+ * as a failure here rather than as a setting that silently does nothing on that path.
+ */
+const NON_SCAN_DEFAULTS = {
   kbDefaultResults: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   kbResultTokenBudget: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
   kbMinRelevance: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100,
+  maxChunksPerFile: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
 };
 
 function makeDb(
@@ -89,7 +96,7 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
       maxFiles: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
       maxChunkChars: DEFAULT_SERVE_CHARS,
-      ...KB_DEFAULTS,
+      ...NON_SCAN_DEFAULTS,
     });
   });
 
@@ -97,7 +104,7 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
     const budgets = await resolveSearchBudgets(
       makeDb({ dataLakeSearchMaxFiles: '10', dataLakeSearchMaxChunks: '200' })
     );
-    expect(budgets).toEqual({ maxFiles: 10, maxChunks: 200, maxChunkChars: DEFAULT_SERVE_CHARS, ...KB_DEFAULTS });
+    expect(budgets).toEqual({ maxFiles: 10, maxChunks: 200, maxChunkChars: DEFAULT_SERVE_CHARS, ...NON_SCAN_DEFAULTS });
   });
 
   it('floors a non-integer and ignores an unusable value with a warning', async () => {
@@ -279,7 +286,7 @@ describe('resolveSearchBudgets - serve budget', () => {
       maxFiles: 10,
       maxChunks: 250,
       maxChunkChars: deriveServeCharBudget(512).maxChunkChars,
-      ...KB_DEFAULTS,
+      ...NON_SCAN_DEFAULTS,
     });
   });
 
@@ -304,7 +311,7 @@ describe('resolveSearchBudgets - serve budget', () => {
       maxFiles: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
       maxChunkChars: deriveServeCharBudget(undefined).maxChunkChars,
-      ...KB_DEFAULTS,
+      ...NON_SCAN_DEFAULTS,
     });
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -415,6 +422,55 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     expect(budgets.kbMinRelevance).toBeCloseTo(0.4);
   });
 
+  it('resolves a configured per-document cap', async () => {
+    expect((await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '3' }))).maxChunksPerFile).toBe(3);
+  });
+
+  it('honors an explicit 0 as disabled, with no warning', async () => {
+    // Its own test rather than a second call in the one above: this resolver reads through a
+    // process-wide settings cache, so two resolutions in a single test would have the first db's
+    // rows silently answer the second, and the assertion would pass or fail on cache order.
+    // 0 is the disabled value, not an unusable one: warning on it would fire on every search for
+    // every install that leaves the cap off, which is all of them by default.
+    const logger = loggerStub();
+    expect((await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '0' }), logger)).maxChunksPerFile).toBe(
+      0
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('warns and falls back to disabled for a negative or non-numeric per-document cap', async () => {
+    // Falling back to DISABLED rather than to some positive cap matters: a bad row must not start
+    // silently dropping passages that retrieval used to serve.
+    const logger = loggerStub();
+    const budgets = await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: 'three' }), logger);
+    expect(budgets.maxChunksPerFile).toBe(DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('dataLakeSearchMaxChunksPerFile'));
+  });
+
+  it('the scoped path resolves a lake-rung override for the per-document cap', async () => {
+    // The scoped path is a SECOND resolution path with its own key list and its own return object.
+    // A key added to one and not the other is invisible at runtime: the search just never sees the
+    // operator's cap on whichever path it took. That is what this pins.
+    //
+    // NOT end-to-end, deliberately: no caller passes a lakeId today. The KB tool resolves on the
+    // caller's org/owner rung on purpose (a KB search spans a mixed multi-lake corpus, so there is
+    // no single lake to key on - see resolveKbBudgets), and the semantic-search route passes no
+    // scope at all. The Lake rung is declared to match the sibling scan budgets, which are equally
+    // unreachable at that rung, so it starts working the moment a lake-scoped caller exists rather
+    // than needing a settings change then.
+    const lakeScope: SettingScope = { organizationId: 'org-1', lakeId: 'lake-1' };
+    const db = makeDb({ dataLakeSearchMaxChunksPerFile: '0' }, [
+      {
+        scopeLevel: SettingScopeLevel.Lake,
+        scopeId: 'lake-1',
+        settingName: 'dataLakeSearchMaxChunksPerFile',
+        settingValue: '2',
+      },
+    ]);
+    expect((await resolveSearchBudgets(db, undefined, lakeScope)).maxChunksPerFile).toBe(2);
+  });
+
   it('two-way drift guard: the resolver falls back to each setting-schema default, not a hand-copied literal', async () => {
     // settings.test.ts pins the schema side (defaultValue === the same imported constant); this
     // pins the RESOLVER side against the setting's declared defaultValue directly, so the two
@@ -424,5 +480,6 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     expect(budgets.kbDefaultResults).toBe(settingsMap.kbSearchDefaultResults.defaultValue);
     expect(budgets.kbResultTokenBudget).toBe(settingsMap.kbSearchResultTokenBudget.defaultValue);
     expect(budgets.kbMinRelevance).toBe((settingsMap.kbSearchMinRelevancePct.defaultValue as number) / 100);
+    expect(budgets.maxChunksPerFile).toBe(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue);
   });
 });

@@ -1,5 +1,6 @@
 import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   defaultEmbeddingModelForEnv,
   FabFileChunkVector,
@@ -116,6 +117,11 @@ export interface SemanticSearchBudgets {
   maxFiles?: number;
   /** Hard cap on chunk vectors fetched and scored. Default DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT. */
   maxChunks?: number;
+  /**
+   * Most chunks any ONE source document may contribute to the served top-K. `0` (the default)
+   * disables the cap. Unlike the budgets around it this one shapes the RESULT, not the scan.
+   */
+  maxChunksPerFile?: number;
   /** fabfiles.search page size while paginating the scope. Default 2000. */
   filePageSize?: number;
   /** Files per chunk query. Default 200. */
@@ -398,6 +404,68 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
 }
 
 /**
+ * How much surplus the per-document cap gets to choose from, as a multiple of topK.
+ *
+ * Deliberately NOT scaled by the cap value. Sizing the pool as `topK * cap` looks natural - it is
+ * the most a capped selection could consume - but it collapses exactly where the cap matters most:
+ * at a cap of 1 the pool is topK, so a single document that owns the top topK chunks fills it
+ * alone and no other document is ever present to be promoted. The pool has to be wider than topK
+ * for the cap to have any spread, and how much wider is a property of the crowding, not of the cap.
+ *
+ * 3x fills topK from distinct documents for any sane cap while keeping the widened ANN limit and
+ * scan top-K to a few dozen rows - the pool is bounded work per query, so this is the knob that
+ * trades latency for diversity, and it is a constant rather than a setting until an operator has a
+ * reason to want a different one.
+ */
+const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
+
+/**
+ * Trim a score-ordered candidate list to `topK` while letting no single source document occupy
+ * more than `maxPerFile` of the slots. `maxPerFile <= 0` disables the cap and returns the list
+ * untouched, which is the default and is byte-identical to the pre-cap behavior.
+ *
+ * Two passes, because a diversity guard must never cost a caller results it would otherwise have
+ * had. The first admits candidates in score order while their document is still under the cap;
+ * the second backfills any slots left open from the chunks the cap held back. So a lake whose
+ * only match is one long document still serves a full top-K: the cap changes WHICH chunks win a
+ * contested slot, never how many are served. That is what makes it safe to enable on a corpus
+ * nobody has measured crowding on.
+ *
+ * The survivors are re-sorted because a backfilled chunk can outscore an admitted one, and
+ * callers consume a PREFIX of this list (tokenBudget.ts trims from the end, and
+ * search_knowledge_base promises the first passage back before any budget applies). Membership is
+ * the cap's business; presentation order stays strictly best-first.
+ *
+ * This is the ONLY place the cap is enforced, but not the only place it changes: the candidate
+ * streams feeding the merge are widened to topK * cap when it is active, because each of them is
+ * bounded independently and a stream that stopped at topK would have discarded the other
+ * documents' chunks before the cap could promote them. Enforcement here, headroom upstream - see
+ * `candidatePoolK` in `rankChunksForFiles`.
+ */
+function capChunksPerFile(candidates: SemanticChunkResult[], topK: number, maxPerFile: number): SemanticChunkResult[] {
+  if (maxPerFile <= 0) return candidates;
+
+  const takenPerFile = new Map<string, number>();
+  const admitted: SemanticChunkResult[] = [];
+  const heldBack: SemanticChunkResult[] = [];
+  for (const candidate of candidates) {
+    if (admitted.length >= topK) break;
+    const taken = takenPerFile.get(candidate.fileId) ?? 0;
+    if (taken >= maxPerFile) {
+      heldBack.push(candidate);
+      continue;
+    }
+    takenPerFile.set(candidate.fileId, taken + 1);
+    admitted.push(candidate);
+  }
+  for (const candidate of heldBack) {
+    if (admitted.length >= topK) break;
+    admitted.push(candidate);
+  }
+  return admitted.sort(compareByScore);
+}
+
+/**
  * `??` only replaces null/undefined, so a caller-supplied 0 or negative would flow straight into
  * the page-ceiling arithmetic and make it Infinity. Clamp every budget to at least 1 here, once,
  * rather than defending against it at each use.
@@ -405,9 +473,18 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
 function resolveBudgets(budgets: SemanticSearchBudgets | undefined) {
   const atLeastOne = (value: number | undefined, fallback: number) =>
     Math.max(1, Math.floor(value ?? fallback) || fallback);
+  // Sibling of atLeastOne for the one budget where 0 is a MEANINGFUL value ("no cap") rather than
+  // an unusable one. atLeastOne cannot express it: its `|| fallback` turns a deliberate 0 back into
+  // the fallback, and the Math.max(1, ...) would then floor it to 1 - a cap of one chunk per
+  // document, the most aggressive setting rather than the disabled one asked for.
+  const atLeastZero = (value: number | undefined, fallback: number) => {
+    const parsed = Math.floor(value ?? fallback);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  };
   return {
     maxFiles: atLeastOne(budgets?.maxFiles, DATA_LAKE_SEARCH_MAX_FILES_DEFAULT),
     maxChunks: atLeastOne(budgets?.maxChunks, DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT),
+    maxChunksPerFile: atLeastZero(budgets?.maxChunksPerFile, DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT),
     filePageSize: atLeastOne(budgets?.filePageSize, DEFAULT_FILE_PAGE_SIZE),
     fileGroupSize: atLeastOne(budgets?.fileGroupSize, DEFAULT_FILE_GROUP_SIZE),
     // Undefined stays undefined so the dimension-derived default still applies downstream.
@@ -701,6 +778,15 @@ async function rankChunksForFiles(args: {
 }): Promise<SemanticDataLakeSearchResult> {
   const { query, fileIds, fileById, topK, minScore, embeddingModel, apiKeyTable, budgets, logger } = args;
 
+  // A per-document cap can only choose among SURPLUS candidates, and every candidate stream below
+  // (the scan's own top-K, each ANN query's limit) is bounded independently. Left at topK they
+  // would each discard the lower-scoring chunks from other documents BEFORE the cap could promote
+  // them, and the cap would be a no-op on any single-stream search. So when a cap is active every
+  // stream is widened and the merge trims back to topK; with it off (the default) this is topK
+  // everywhere, exactly as before.
+  const perFileCap = budgets.maxChunksPerFile;
+  const candidatePoolK = perFileCap > 0 ? topK * DIVERSITY_CANDIDATE_POOL_FACTOR : topK;
+
   // --- Embed the query (reuse EmbeddingFactory; pick the provider the model needs) ---
   const provider = getProviderFromModel(embeddingModel);
   const { config: embeddingConfig, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
@@ -882,11 +968,11 @@ async function rankChunksForFiles(args: {
       ? atlasVectorSearch({
           ...a,
           fileById,
-          limit: topK,
+          limit: candidatePoolK,
           minScore,
           adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
         })
-      : openSearchVectorSearch({ ...a, fileById, limit: topK, minScore, adapters: args.vectorIndex! });
+      : openSearchVectorSearch({ ...a, fileById, limit: candidatePoolK, minScore, adapters: args.vectorIndex! });
 
   let annResult: AnnVectorSearchResult = {
     results: [],
@@ -1033,7 +1119,7 @@ async function rankChunksForFiles(args: {
     fileIds: scanEligible.map(f => f.id),
     fileById,
     queryEmbedding,
-    topK,
+    topK: candidatePoolK,
     minScore,
     fileGroupSize: budgets.fileGroupSize,
     chunkPageSize,
@@ -1059,7 +1145,7 @@ async function rankChunksForFiles(args: {
   const alternateModelsQueried = outcomes.filter(o => o.embedded).length;
 
   // Merge every source into one bounded top-K - each already ranks its own subset, so this is a
-  // cheap second pass over at most (2 + alternates)*topK items, not a rescore of the corpus.
+  // cheap second pass over at most (2 + alternates)*candidatePoolK items, not a rescore of the corpus.
   //
   // Cross-model caveat: raw cosine is NOT directly comparable across different embedding models -
   // their score distributions differ (see MEMENTO_MIN_SIMILARITY's documented history of exactly
@@ -1075,11 +1161,15 @@ async function rankChunksForFiles(args: {
   // not as excluded; a caller relying on `partial`/`excludedFiles` to catch every zero-result
   // cause under a custom minScore already has this gap for the primary model today. See the
   // pinned test for the accepted rank-bias behavior.
-  const merged = new BoundedTopK<SemanticChunkResult>(topK, compareByScore);
+  //
+  // Held at candidatePoolK, not topK: capChunksPerFile below is what trims to topK, and a pool
+  // bounded at topK here would throw away the surplus the cap exists to choose among (see the
+  // note where candidatePoolK is computed).
+  const merged = new BoundedTopK<SemanticChunkResult>(candidatePoolK, compareByScore);
   for (const result of scanned.results) merged.offer(result);
   for (const result of annResult.results) merged.offer(result);
   for (const result of alternateResults) merged.offer(result);
-  const mergedResults = merged.drain();
+  const mergedResults = capChunksPerFile(merged.drain(), topK, perFileCap);
 
   const scan: SemanticSearchScanAccounting = {
     truncated: args.fileBudgetHit || scanned.chunkBudgetHit,

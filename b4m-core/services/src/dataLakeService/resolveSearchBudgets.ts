@@ -1,5 +1,6 @@
 import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IAdminSettingsRepository,
@@ -41,6 +42,13 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
    * the /100 conversion lives here so exactly one place owns it. `0` = today's behavior.
    */
   kbMinRelevance: number;
+  /**
+   * Most chunks one source document may contribute to the served top-K; `0` = no cap. Declared
+   * REQUIRED here even though `SemanticSearchBudgets` has it optional: the intersection narrows it,
+   * so a resolution path that forgot to set it fails to compile instead of silently ignoring an
+   * operator's configured cap - the failure mode a purely optional field would have hidden.
+   */
+  maxChunksPerFile: number;
 };
 
 /**
@@ -98,6 +106,7 @@ export async function resolveSearchBudgets(
           'kbSearchDefaultResults',
           'kbSearchResultTokenBudget',
           'kbSearchMinRelevancePct',
+          'dataLakeSearchMaxChunksPerFile',
         ],
         scope,
         db,
@@ -127,6 +136,12 @@ export async function resolveSearchBudgets(
           logger
         ),
         kbMinRelevance: resolveRelevancePct(values.kbSearchMinRelevancePct, logger),
+        maxChunksPerFile: nonNegativeIntOr(
+          values.dataLakeSearchMaxChunksPerFile,
+          DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+          'dataLakeSearchMaxChunksPerFile',
+          logger
+        ),
       };
     } catch (err) {
       logger?.warn?.('[semanticSearch] scoped budget resolution failed; falling back to platform', err);
@@ -143,6 +158,7 @@ export async function resolveSearchBudgets(
         'kbSearchDefaultResults',
         'kbSearchResultTokenBudget',
         'kbSearchMinRelevancePct',
+        'dataLakeSearchMaxChunksPerFile',
       ],
       db,
       { logger }
@@ -169,6 +185,12 @@ export async function resolveSearchBudgets(
         logger
       ),
       kbMinRelevance: resolveRelevancePct(values.kbSearchMinRelevancePct, logger),
+      maxChunksPerFile: nonNegativeIntOr(
+        values.dataLakeSearchMaxChunksPerFile,
+        DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+        'dataLakeSearchMaxChunksPerFile',
+        logger
+      ),
     };
   } catch (err) {
     logger?.warn?.('[semanticSearch] could not read scan-budget settings; using defaults', err);
@@ -180,6 +202,7 @@ export async function resolveSearchBudgets(
       kbDefaultResults: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
       kbResultTokenBudget: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
       kbMinRelevance: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100,
+      maxChunksPerFile: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
     };
   }
 }

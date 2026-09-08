@@ -724,6 +724,86 @@ describe('semanticDataLakeSearch determinism', () => {
   });
 });
 
+describe('semanticDataLakeSearch per-document cap', () => {
+  // Three documents, four chunks each, scores descending strictly by chunk index across the
+  // whole corpus: dA beats every dB chunk, which beats every dC chunk. Uncapped, dA alone owns
+  // the entire top-4 - the crowding the cap exists to break.
+  const THREE_DOCS = [
+    { id: 'dA', fileName: 'A.pdf', tags: [] },
+    { id: 'dB', fileName: 'B.pdf', tags: [] },
+    { id: 'dC', fileName: 'C.pdf', tags: [] },
+  ];
+  const rankedCorpus = [...chunkRows('dA', 4), ...chunkRows('dB', 4), ...chunkRows('dC', 4)].map((row, i) => ({
+    ...row,
+    vector: [1, (100 - i) / 1000],
+  }));
+
+  const runCapped = async (maxChunksPerFile: number | undefined, topK = 4) => {
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK, budgets: { maxChunksPerFile } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: THREE_DOCS, hasMore: false, total: 3 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rankedCorpus as never) },
+      },
+    } as never);
+    return result.results;
+  };
+
+  it('is off by default: one document may still own the whole top-K', async () => {
+    // Pins the pre-cap behavior as the DEFAULT, so enabling the cap is opt-in and this change
+    // cannot quietly alter what every existing install serves.
+    expect((await runCapped(undefined)).map(r => r.fileId)).toEqual(['dA', 'dA', 'dA', 'dA']);
+  });
+
+  it('caps a crowding document and admits the next documents instead', async () => {
+    const capped = await runCapped(2);
+
+    expect(capped.map(r => r.fileId)).toEqual(['dA', 'dA', 'dB', 'dB']);
+    // Still exactly topK, and still best-first: the cap changed WHICH chunks won the contested
+    // slots, not how many were served or the order they are served in.
+    expect(capped).toHaveLength(4);
+    expect(capped.map(r => r.score)).toEqual([...capped.map(r => r.score)].sort((a, b) => b - a));
+  });
+
+  it('never serves fewer results than the uncapped search would', async () => {
+    // The backfill pass. A lake whose only match is one long document has no diversity to offer,
+    // and a cap that shrank the result set there would be a straight quality regression - the
+    // reason this can ship enabled on a corpus nobody has measured crowding on.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const oneDoc = [{ id: 'dA', fileName: 'A.pdf', tags: [] }];
+    const rows = chunkRows('dA', 4).map((row, i) => ({ ...row, vector: [1, (100 - i) / 1000] }));
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 4, budgets: { maxChunksPerFile: 2 } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneDoc, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rows as never) },
+      },
+    } as never);
+
+    expect(result.results).toHaveLength(4);
+    expect(result.results.map(r => r.chunkId)).toEqual(['dA-c0000', 'dA-c0001', 'dA-c0002', 'dA-c0003']);
+  });
+
+  it('a cap of 1 reaches every document before serving any document twice', async () => {
+    const capped = await runCapped(1);
+
+    // Three distinct documents in four slots, where the uncapped search reaches exactly one.
+    expect(new Set(capped.map(r => r.fileId)).size).toBe(3);
+    // The fourth slot is a backfill (only three documents exist), and the re-sort puts it back in
+    // score order rather than at the end - which is why this asserts the SET reached plus the
+    // ordering, not a positional sequence that would just re-encode the sort.
+    expect(capped.map(r => r.chunkId)).toEqual(['dA-c0000', 'dA-c0001', 'dB-c0000', 'dC-c0000']);
+    expect(capped.map(r => r.score)).toEqual([...capped.map(r => r.score)].sort((a, b) => b - a));
+  });
+
+  it('a zero cap is disabled, not a cap of zero', async () => {
+    // The trap in threading this through: a budget resolver that clamps to "at least 1" turns
+    // the disabled value into the most aggressive one, and a `|| fallback` turns it back into
+    // the default. Either way the operator's setting means the opposite of what it says.
+    expect((await runCapped(0)).map(r => r.fileId)).toEqual(['dA', 'dA', 'dA', 'dA']);
+  });
+});
+
 /**
  * Per-lake supersession collapse at the lake-scoped entrypoint. Both halves of the opt-in are
  * exercised - the admin flag AND the resolved lakes - because either alone must leave today's
