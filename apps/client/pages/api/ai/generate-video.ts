@@ -4,6 +4,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { GenerateVideoRequestBodySchema, GenerateVideoInvokeParams } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { resolveBillingOrgId } from '@server/utils/orgAccess';
 
 type GenerateVideoRequestBody = z.infer<typeof GenerateVideoRequestBodySchema>;
 
@@ -37,11 +38,9 @@ const handler = baseApi().post(async (req: GenerateVideoRequest, res) => {
     req.logger.log(`[DEBUG API] Calling videoGeneration.invoke...`);
     const startTime = performance.now();
 
-    // organizationId: null means personal account (no org), undefined means not sent (fall back to user's org)
-    const effectiveOrgId =
-      invokeParams.organizationId !== undefined
-        ? invokeParams.organizationId
-        : (req.user.organizationId?.toString() ?? null);
+    // Resolve the billing org from the client-supplied value, rejecting any org the caller is
+    // not a member of. null = personal account, undefined = fall back to the caller's own org.
+    const effectiveOrgId = await resolveBillingOrgId(req.user, invokeParams.organizationId);
 
     const invokeBody: GenerateVideoInvokeParams = {
       ...invokeParams,

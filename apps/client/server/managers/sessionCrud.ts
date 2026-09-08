@@ -106,7 +106,18 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
   let wasCreated = false;
 
   if (reqSessionId) {
-    session = await sessionRepository.findById(reqSessionId);
+    // Resolve an existing session through an access-scoped lookup, never a bare findById -
+    // otherwise any authenticated user could read/continue another user's session by id.
+    // With an ability, honor the full access shape (owner + shares + org) exactly as the
+    // list/update paths do; without one (e.g. the Slack path), fall back to owner-only.
+    // A miss (not found OR no access) falls through to the NotFoundError below - a 404 that
+    // does not distinguish the two, matching orgAccess's anti-enumeration behavior.
+    session = ability
+      ? await Session.findOne({
+          _id: reqSessionId,
+          ...accessibleBy(ability, Permission.read).ofType(SessionModel),
+        })
+      : await sessionRepository.findByIdAndUserId(reqSessionId, userId);
   } else {
     const createdSession = await sessionService.createSession(
       user,

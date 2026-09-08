@@ -262,6 +262,13 @@ export class ChatCompletionInvoke {
               );
               return null;
             }
+            // Bind the retry to the caller's target session. `sessionId` was resolved through an
+            // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
+            // to a different session stops a caller retrying/overwriting another user's quest by id.
+            if (q.sessionId !== sessionId) {
+              this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+              return null;
+            }
             // Retry path: clear prior replies and images.
             q.type = 'message';
             q.reply = null;

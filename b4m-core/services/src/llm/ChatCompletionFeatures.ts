@@ -27,6 +27,7 @@ import {
   IMcpServerRepository,
   IMcpServerDocument,
   IQuestMasterPlanRepository,
+  IQuestMasterPlanDocument,
   IPromptDocument,
   ICacheRepository,
   ICreditTransactionRepository,
@@ -1139,6 +1140,21 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     }
   }
 
+  /**
+   * Guard mutations of a QuestMaster plan. The plan/quest/sub-quest ids arrive from
+   * client-supplied `questMaster` params, so a bare findById would let one user drive
+   * status changes on another user's plan. Access = plan owner or explicit sharee;
+   * legacy plans without a userId bind to their owning notebook's owner.
+   */
+  private async callerCanWritePlan(plan: IQuestMasterPlanDocument): Promise<boolean> {
+    const userId = this.user.id;
+    if (plan.userId) {
+      return plan.userId === userId || (plan.sharedWith?.includes(userId) ?? false);
+    }
+    const session = plan.notebookId ? await this.chatCompletion.db.sessions.findById(plan.notebookId) : null;
+    return session?.userId === userId;
+  }
+
   async onComplete({
     quest,
     questMaster,
@@ -1151,6 +1167,13 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
     if (!questMasterPlan) {
       this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
+      return;
+    }
+
+    if (!(await this.callerCanWritePlan(questMasterPlan))) {
+      this.logger.warn(
+        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
+      );
       return;
     }
 
@@ -1177,6 +1200,13 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
     if (!questMasterPlan) {
       this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
+      return;
+    }
+
+    if (!(await this.callerCanWritePlan(questMasterPlan))) {
+      this.logger.warn(
+        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
+      );
       return;
     }
 
