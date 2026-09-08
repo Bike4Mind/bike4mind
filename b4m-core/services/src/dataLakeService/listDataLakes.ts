@@ -126,7 +126,8 @@ interface ListDataLakesAdapters {
    * Optional pre-resolved grant-id set (#2425 P3): skips this function's own `grantedLakeIdsFor`
    * call when the caller already ran the identical query. Only safe to pass when the caller never
    * threads `db.settings` above, so `resolveEnforceReadGrants` (and thus the `includeReaders` this
-   * function would otherwise resolve to) is always `false` - `handleList`
+   * function would otherwise resolve to) is always `false` - enforced below with a thrown error if
+   * both are supplied together, rather than left as a caller-observed precondition only. `handleList`
    * (apps/client/server/slack/handleDataLakeCommand.ts) is the one caller today, and it satisfies
    * that precondition by construction. Absent -> recomputes exactly as before.
    */
@@ -351,6 +352,16 @@ export const listDataLakes = async (
   { db, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
+  // The precomputed set is only valid under includeReaders=false (see the field's doc comment) -
+  // a caller that also threads `settings` could get includeReaders=true here, silently mismatching
+  // what the precomputed set was actually resolved with. Guarded rather than assumed, so that
+  // combination fails loudly instead of quietly dropping reader/org grants.
+  if (precomputedGrantedLakeIds && db.settings) {
+    throw new Error(
+      'listDataLakes: grantedLakeIds and db.settings cannot both be supplied - the precomputed set ' +
+        'is only valid when includeReaders is forced false (no settings adapter)'
+    );
+  }
   const grantedLakeIds =
     precomputedGrantedLakeIds ??
     (await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders));
