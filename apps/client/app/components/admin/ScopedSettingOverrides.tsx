@@ -6,6 +6,7 @@ import {
 } from '@client/app/hooks/data/settings';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
+  Alert,
   Box,
   Button,
   FormControl,
@@ -40,7 +41,7 @@ export const OVERRIDE_STALENESS_NOTE =
   'A change applies immediately on the instance that served it and within ~5 min (one cache TTL) everywhere else.';
 
 /** Booleans are stored as 'true'/'false'; show the operator the switch position, not the string. */
-const displayValue = (setting: AdminSetting, storedValue: string): string =>
+export const displayValue = (setting: AdminSetting, storedValue: string): string =>
   setting.type === 'boolean' ? (storedValue === 'true' ? 'On' : 'Off') : storedValue;
 
 /**
@@ -65,7 +66,8 @@ const ScopedSettingOverrides = ({ setting }: { setting: AdminSetting }) => {
   const rows = (allOverrides ?? []).filter(row => row.settingName === setting.key);
 
   // Only number settings declare bounds, and only some of those, so they are read through the
-  // type discriminant rather than off the union - same as the platform field above.
+  // type discriminant rather than off the union - same as the platform field in
+  // AdminSettingInputField.
   const bounds: { min?: number; max?: number } = setting.type === 'number' ? setting : {};
   const valueError =
     setting.type !== 'number'
@@ -253,8 +255,14 @@ const ScopedSettingOverrides = ({ setting }: { setting: AdminSetting }) => {
       </Box>
 
       <FormHelperText data-testid={`scoped-override-${setting.key}-helper`}>
-        {valueError ?? writeError ?? clearError ?? `Overrides this setting for one scope. ${OVERRIDE_STALENESS_NOTE}`}
+        {valueError ?? `Overrides this setting for one scope. ${OVERRIDE_STALENESS_NOTE}`}
       </FormHelperText>
+
+      {(writeError ?? clearError) && (
+        <Alert color="danger" variant="soft" data-testid={`scoped-override-${setting.key}-error`}>
+          {writeError ?? clearError}
+        </Alert>
+      )}
     </Stack>
   );
 };

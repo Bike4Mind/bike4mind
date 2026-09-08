@@ -6,12 +6,14 @@ import { settingsMap, type IScopedSetting } from '@bike4mind/common';
 
 const setMutate = vi.fn();
 const clearMutate = vi.fn();
-// Read at render time so a test can stage the inventory the section renders from.
+// Read at render time so a test can stage the inventory the section renders from, or put a
+// mutation into its rejected state.
 let overrides: IScopedSetting[] = [];
+let setError: unknown;
 
 vi.mock('@client/app/hooks/data/settings', () => ({
   useScopedSettingOverrides: () => ({ data: overrides }),
-  useSetScopedSettingOverride: () => ({ mutate: setMutate, isPending: false, error: undefined }),
+  useSetScopedSettingOverride: () => ({ mutate: setMutate, isPending: false, error: setError }),
   useClearScopedSettingOverride: () => ({ mutate: clearMutate, isPending: false, error: undefined }),
 }));
 
@@ -50,6 +52,7 @@ const chooseOption = (selectTestId: string, optionTestId: string) => {
 describe('ScopedSettingOverrides level options', () => {
   beforeEach(() => {
     overrides = [];
+    setError = undefined;
     vi.clearAllMocks();
   });
 
@@ -76,6 +79,7 @@ describe('ScopedSettingOverrides level options', () => {
 describe('ScopedSettingOverrides owner type', () => {
   beforeEach(() => {
     overrides = [];
+    setError = undefined;
     vi.clearAllMocks();
   });
 
@@ -128,6 +132,7 @@ describe('ScopedSettingOverrides owner type', () => {
 describe('ScopedSettingOverrides number values', () => {
   beforeEach(() => {
     overrides = [];
+    setError = undefined;
     vi.clearAllMocks();
   });
 
@@ -191,6 +196,7 @@ describe('ScopedSettingOverrides number values', () => {
 describe('ScopedSettingOverrides existing rows', () => {
   beforeEach(() => {
     overrides = [];
+    setError = undefined;
     vi.clearAllMocks();
   });
 
@@ -226,6 +232,17 @@ describe('ScopedSettingOverrides existing rows', () => {
     expect(screen.getByTestId('scoped-override-PauseLakeConvergence-empty')).toBeInTheDocument();
     expect(screen.getByTestId('scoped-override-PauseLakeConvergence-helper')).toHaveTextContent(
       'within ~5 min (one cache TTL) everywhere else'
+    );
+  });
+
+  // A refused write is otherwise silent - the button just stops spinning. The server's message is
+  // the only thing that names which rule was broken (the route preserves the service's wording).
+  it('surfaces a refused write', () => {
+    setError = new Error("[scopedSettings] 'PauseLakeConvergence' is not settable at scope level 'owner'");
+    renderSection(settingsMap.PauseLakeConvergence);
+
+    expect(screen.getByTestId('scoped-override-PauseLakeConvergence-error')).toHaveTextContent(
+      'is not settable at scope level'
     );
   });
 });
