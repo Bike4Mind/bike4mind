@@ -12,7 +12,14 @@ import {
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
 } from '../notebookExportService/types';
-import { DefaultLLMParams, isValidEnumValue, KnowledgeType } from '@bike4mind/common';
+import {
+  ArtifactTypeSchema,
+  DefaultLLMParams,
+  isValidEnumValue,
+  KnowledgeType,
+  remintArtifactId,
+} from '@bike4mind/common';
+import type { ArtifactType } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 import type { IChatHistoryItem } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
@@ -58,12 +65,46 @@ export interface NotebookImportAdapters {
   };
   knowledgeRepository: AttachmentRepository;
   /**
-   * The exception, and the reason is the read side rather than the schema: artifacts are looked up
-   * by their own `id` (`artifact_<ts>_<rand>`, not ObjectId-castable), so the id this service
-   * generates is the one readers will use. Knowledge, tools and agents resolve by `_id`, so theirs
-   * has to come from the store.
+   * Whether ANY row already occupies this id - the artifact itself or one of the two documents
+   * created alongside it, each of which has its own unique key. Only consulted for `preserveIds`,
+   * where the id comes from the export rather than being minted, so it can already be taken.
+   *
+   * Deliberately not named `artifactExists`, which is what the same question is called in
+   * apps/client/server/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
+   * and MUST stay that narrow, because that module tells a real collision apart from a repairable
+   * orphan by exactly that difference. Two ports, one name, opposite safety properties.
    */
-  artifactRepository: { create: (data: Record<string, unknown> & { id: string }) => Promise<unknown> };
+  artifactIdTaken: (id: string) => Promise<boolean>;
+  /**
+   * Not a bare repository, unlike the others: an artifact is three documents (body, version, then
+   * the artifact pointing at both), and the required `contentId`/`contentHash`/`contentSize` can
+   * only be derived while writing the body - so the caller wires the app's own creation path, which
+   * also keeps those three writes inside the import's transaction.
+   *
+   * Returns the created row, not its id: `takeStoreId` takes the id from it, the same seam the
+   * three sibling attachment kinds go through. Artifacts resolve by their own `id` rather than by
+   * `_id`, and the caller cannot assume the id it passed was the one stored.
+   */
+  createArtifact: (params: {
+    userId: string;
+    /**
+     * Always set by this service: either the preserved source id, or one minted by
+     * `createArtifactId` that carries the source identifier segment across. Optional only because
+     * the creation path behind this port mints its own when a caller omits it.
+     */
+    id?: string;
+    /**
+     * The notebook the artifact belongs to. Recorded on the artifact itself because that is what
+     * the viewer reads back (`GET /api/artifacts?sessionId=`); `session.artifactIds` is a
+     * denormalised copy that no display path consults. Omitting it imported artifacts that
+     * existed but were unreachable, so the notebook opened empty.
+     */
+    sessionId: string;
+    type: ArtifactType;
+    title: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }) => Promise<{ id: unknown }>;
   toolRepository: AttachmentRepository;
   agentRepository: AttachmentRepository;
   fileStorageService: {
@@ -81,6 +122,16 @@ export interface NotebookImportAdapters {
  * know would otherwise fail the write and lose the file. */
 function toKnowledgeType(raw: string | undefined): KnowledgeType {
   return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
+}
+
+/** Refused rather than degraded, unlike knowledge above: the type picks the mime type and the
+ * renderer, so there is no value that stands in for an unknown one. */
+function toArtifactType(raw: string): ArtifactType {
+  const parsed = ArtifactTypeSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(`unrecognised artifact type "${raw}"`);
+  }
+  return parsed.data;
 }
 
 // Declared here rather than imported: `types.ts` is re-exported wholesale from the package entry
@@ -230,6 +281,13 @@ export class NotebookImportService {
       return this.handleExistingSession(existingSession, notebook, options);
     }
 
+    const attachmentIds = {
+      knowledgeIds: [] as string[],
+      artifactIds: [] as string[],
+      toolIds: [] as string[],
+      agentIds: [] as string[],
+    };
+
     const sessionData = {
       userId: targetUserId,
       name: this.generateSessionName(notebook.name, options),
@@ -241,37 +299,46 @@ export class NotebookImportService {
       tags: notebook.tags || [],
       isAutoNamed: notebook.isAutoNamed,
       lastUsedModel: notebook.lastUsedModel,
-      knowledgeIds: [] as string[],
-      artifactIds: [] as string[],
-      toolIds: [] as string[],
-      agentIds: [] as string[],
+      ...attachmentIds,
     };
 
-    // Import attachments first to get IDs
+    // The notebook is created BEFORE its attachments, and the id arrays are written back below.
+    // An artifact records the notebook it belongs to on itself, and that `sessionId` is what the
+    // viewer lists a notebook's artifacts by - `session.artifactIds` is a denormalised copy no
+    // display path reads. Creating the notebook last meant there was no id to record while the
+    // artifacts were being written, so every imported artifact landed unreachable and the notebook
+    // opened empty on an import that reported success. Ordering is the fix; a second write is the
+    // price, and both sit inside the caller's transaction.
+    const createdSession = await this.adapters.sessionRepository.create(sessionData);
+
     if (options.importKnowledge && notebook.knowledge.length > 0) {
-      sessionData.knowledgeIds = await this.importKnowledgeFiles(notebook.knowledge, targetUserId);
+      attachmentIds.knowledgeIds = await this.importKnowledgeFiles(notebook.knowledge, targetUserId);
     }
 
     if (options.importArtifacts && notebook.artifacts.length > 0) {
-      sessionData.artifactIds = await this.importArtifacts(notebook.artifacts, targetUserId, options);
+      attachmentIds.artifactIds = await this.importArtifacts(
+        notebook.artifacts,
+        targetUserId,
+        createdSession.id,
+        options
+      );
     }
 
     if (options.importTools && notebook.tools.length > 0) {
-      sessionData.toolIds = await this.importTools(notebook.tools, targetUserId);
+      attachmentIds.toolIds = await this.importTools(notebook.tools, targetUserId);
     }
 
     if (options.importAgents && notebook.agents.length > 0) {
-      sessionData.agentIds = await this.importAgents(notebook.agents, targetUserId);
+      attachmentIds.agentIds = await this.importAgents(notebook.agents, targetUserId);
     }
 
     this.attachmentsWritten +=
-      sessionData.knowledgeIds.length +
-      sessionData.artifactIds.length +
-      sessionData.toolIds.length +
-      sessionData.agentIds.length;
+      attachmentIds.knowledgeIds.length +
+      attachmentIds.artifactIds.length +
+      attachmentIds.toolIds.length +
+      attachmentIds.agentIds.length;
 
-    // Create session
-    const createdSession = await this.adapters.sessionRepository.create(sessionData);
+    await this.adapters.sessionRepository.updateById(createdSession.id, attachmentIds);
 
     // Import chat history
     if (notebook.chatHistory.length > 0) {
@@ -449,33 +516,70 @@ export class NotebookImportService {
   private async importArtifacts(
     artifacts: ExportedArtifact[],
     targetUserId: string,
+    sessionId: string,
     options: NotebookImportOptions
   ): Promise<string[]> {
     const importedIds: string[] = [];
 
     for (const artifact of artifacts) {
       try {
-        const newArtifactId = options.preserveIds ? artifact.id : this.adapters.generateId();
+        // Refused rather than written as a shell: the artifact schema requires contentId, contentHash
+        // and contentSize, all derived from the body, so an artifact without one could only be stored
+        // as a row pointing at content that does not exist. An export taken before the export side
+        // joined the body lands here.
+        if (!artifact.content) {
+          throw new Error('the export carries no body for this artifact');
+        }
 
-        const artifactData = {
-          id: newArtifactId,
+        // Truthiness, not just the flag: an export can carry an empty id, and `??` below would
+        // keep it as the id to store - skipping the collision check and losing the remint, with
+        // only `providedId || ...` inside the creation path to stop an empty id being written.
+        const preservedId = options.preserveIds && artifact.id ? artifact.id : undefined;
+
+        // A reminted id keeps the SOURCE identifier rather than a slug of the title, because the
+        // imported reply still carries the original `<artifact identifier=...>` attribute and that
+        // attribute - not the title - is what `findExistingArtifactId` compares segment 2 against.
+        // The two agree only by luck (`identifier="todo-app"` for title "Todo List App" is the
+        // parser's own example), and when they disagree the rendered card cannot find this row and
+        // mints an id of its own, losing the version history the round trip just restored.
+        const artifactType = toArtifactType(artifact.type);
+        const storedId = preservedId ?? remintArtifactId(artifact.id, artifactType, artifact.name);
+
+        // Checked before the write, not left to the catch below: re-importing an export into the
+        // account it came from duplicates a unique key, and a server-side error aborts the whole
+        // transaction - so the catch would log one warning while every later write failed with
+        // NoSuchTransaction. Only reachable with `preserveIds`, since a minted id cannot collide.
+        if (preservedId && (await this.adapters.artifactIdTaken(preservedId))) {
+          throw new Error(`an artifact with id "${preservedId}" already exists`);
+        }
+
+        // The export's createdAt/updatedAt are deliberately not carried, so an imported artifact is
+        // stamped at import time - unlike tools and agents below. Mongoose would honour them, but
+        // artifactService.create takes no timestamps, and widening it would let any caller of the
+        // artifacts API backdate a row.
+        const created = await this.adapters.createArtifact({
           userId: targetUserId,
-          name: artifact.name,
-          type: artifact.type,
+          id: storedId,
+          sessionId,
+          type: artifactType,
+          // The export calls it `name`; the schema calls it `title`.
+          title: artifact.name,
           content: artifact.content,
-          createdAt: new Date(artifact.createdAt),
-          updatedAt: new Date(artifact.updatedAt),
           metadata: artifact.metadata,
-        };
-
-        await this.adapters.artifactRepository.create(artifactData);
-        importedIds.push(newArtifactId);
+        });
+        importedIds.push(this.takeStoreId(created, 'artifact'));
       } catch (error) {
         this.attachmentWarnings.push(
           `Failed to import artifact "${artifact.name}": ${error instanceof Error ? error.message : String(error)}`
         );
         this.adapters.logger.warn('Failed to import artifact', {
           artifactName: artifact.name,
+          // Names are not unique within an export; the id is what ties this back to the source.
+          artifactId: artifact.id,
+          // The message as its own string: the logger JSON.stringifies its metadata and an Error
+          // serialises to {}, so `error` alone reaches the logs empty and every refusal reads the
+          // same. This is the only place the reason survives.
+          reason: error instanceof Error ? error.message : String(error),
           error,
         });
       }

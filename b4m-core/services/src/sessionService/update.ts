@@ -26,6 +26,21 @@ const updateSessionParamtersSchema = SessionUpdateRequestSchema.extend({
 
 type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
 
+/**
+ * Compile-time guard for the manage-but-not-member admission, mirroring the one in
+ * sessionService/create.ts. `preauthorizedLakeIds` must never become an `updateSession` input: it is
+ * set once at session-create after the route's own `canManageLake` check, and a session update must
+ * not be able to grant or alter it. Adding the key to `SessionUpdateRequestSchema` resolves the
+ * argument to `false` and fails the build.
+ *
+ * This lives here rather than as a `@ts-expect-error` in update.test.ts because tsconfig.json
+ * excludes test files, so an assertion in one is in no typecheck program and can never fail.
+ */
+type AssertTrue<T extends true> = T;
+export type UpdateSessionParametersOmitPreauthorizedLakeIds = AssertTrue<
+  'preauthorizedLakeIds' extends keyof UpdateSessionParameters ? false : true
+>;
+
 interface UpdateSessionAdapters {
   db: {
     sessions: ISessionRepository;

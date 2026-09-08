@@ -60,6 +60,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetDataLakes: () => useGetDataLakes(),
     // LakeInfoPanel renders <LakeHealthBadge> unconditionally; the badge renders null on no data.
     useGetDataLakeHealth: () => ({ data: undefined, isLoading: false }),
+    useGetLakeMemoryHealth: () => ({ data: undefined, isLoading: false }),
+    useBuildLakeMemory: mutation,
+    usePurgeLakeMemory: mutation,
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),

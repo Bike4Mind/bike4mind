@@ -15,6 +15,7 @@ import { dayjs, isImageServeable } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import type {
   IAgentDocument,
+  IArtifactContentDocument,
   IArtifactDocument,
   IChatHistoryItem,
   IFabFileDocument,
@@ -92,6 +93,8 @@ type KnowledgeRow = Pick<
 
 /** No `content`: the body lives in a separate collection, reached via contentId. */
 type ArtifactRow = Pick<IArtifactDocument, 'id' | 'title' | 'type' | 'createdAt' | 'updatedAt' | 'metadata'>;
+/** The body, which lives in its own collection keyed by (artifactId, version). */
+type ArtifactContentRow = Pick<IArtifactContentDocument, 'artifactId' | 'version' | 'content'>;
 
 type ToolRow = Pick<IToolDocument, 'id' | 'name' | 'createdAt'>;
 
@@ -131,6 +134,8 @@ export interface NotebookExportAdapters {
     findOne(query: ExportQuery): Promise<KnowledgeRow | null>;
   };
   artifactRepository: ExportReads<ArtifactRow>;
+  /** Separate from the artifact itself: an artifact row carries no body. */
+  artifactContentRepository: ExportReads<ArtifactContentRow>;
   toolRepository: ExportReads<ToolRow>;
   agentRepository: ExportReads<AgentRow>;
   fileStorageService: ExportFileStorage;
@@ -280,7 +285,7 @@ export class NotebookExportService {
     const knowledge = options.includeKnowledge ? await this.exportKnowledge(session.knowledgeIds || [], options) : [];
 
     const artifacts = options.includeArtifacts
-      ? await this.exportArtifacts(session.artifactIds || [], options, userId)
+      ? await this.exportArtifacts(session.artifactIds || [], session.id, options, userId)
       : [];
 
     const tools = options.includeTools ? await this.exportTools(session.toolIds || [], options) : [];
@@ -420,10 +425,19 @@ export class NotebookExportService {
 
   private async exportArtifacts(
     artifactIds: string[],
+    sessionId: string,
     options: NotebookExportOptions,
     userId: string
   ): Promise<ExportedArtifact[]> {
-    if (artifactIds.length === 0) return [];
+    // No early return on an empty `artifactIds`: the array is not where most artifacts live. An
+    // artifact records its own `sessionId` when it is created, while `session.artifactIds` is a
+    // denormalised copy that only the artifact viewer's edit-then-save path writes back to. So an
+    // artifact generated in chat - the ordinary case - has `sessionId` set and is absent from the
+    // array, and keying the export on the array alone exported nothing at all for it.
+    //
+    // Matching both is what makes the export agree with the UI, which lists a notebook's artifacts
+    // with `GET /api/artifacts?sessionId=...`. Anything the user can see in the notebook is now
+    // what the export carries.
 
     // Artifact ids are `artifact_<ts>_<rand>`, not ObjectIds, so an `_id` query throws a CastError.
     // `deletedAt: null` matches every read helper on ArtifactRepository - it only started to
@@ -442,10 +456,22 @@ export class NotebookExportService {
     // `GET /artifacts/:id` and no stricter, which is the right default but is a change. And in a
     // collaborative session an artifact owned by another participant now leaves the owner's
     // export. Widen both together with the normal read path, never here alone.
+    // Both clauses are `$or`s, so they nest under `$and`: two `$or` keys in one object literal is
+    // a duplicate key, and the second silently replaces the first - which would drop the access
+    // check entirely. Membership first, access second; an artifact must satisfy both.
     const artifacts = await this.adapters.artifactRepository.find({
-      id: { $in: artifactIds },
       deletedAt: null,
-      $or: [{ userId }, { 'permissions.canRead': userId }, { visibility: 'public' }, { 'permissions.isPublic': true }],
+      $and: [
+        { $or: [{ id: { $in: artifactIds } }, { sessionId }] },
+        {
+          $or: [
+            { userId },
+            { 'permissions.canRead': userId },
+            { visibility: 'public' },
+            { 'permissions.isPublic': true },
+          ],
+        },
+      ],
     });
 
     // Covers three causes, and deliberately does not distinguish them: an artifact the user has
@@ -459,15 +485,57 @@ export class NotebookExportService {
       this.adapters.logger.warn('Some artifacts were not exported', { notExported });
     }
 
-    return artifacts.map((artifact: ArtifactRow) => ({
-      id: artifact.id,
-      // Artifacts store this as `title`; reading `name` here always produced undefined.
-      name: artifact.title,
-      type: artifact.type,
-      createdAt: artifact.createdAt?.toISOString() || new Date().toISOString(),
-      updatedAt: artifact.updatedAt?.toISOString() || new Date().toISOString(),
-      metadata: artifact.metadata,
-    }));
+    // The body is the whole point of exporting an artifact: `contentId`, `contentHash` and
+    // `contentSize` are all required on import and can only be derived from it, so a label-only
+    // export cannot be imported at all.
+    //
+    // The body is the NEWEST content row, which is the same rule the viewer resolves by
+    // (`artifactService/get` -> `findLatestContent`). Keying on `artifact.version` instead looks
+    // stricter and is wrong: `create` and `update` write the content row, the version row and the
+    // artifact row as three separate calls with no transaction (documented at
+    // apps/client/server/utils/persistAgentArtifacts.ts) and assign `version` only after the
+    // content write returns, so the pointer can only ever LAG the newest row, never lead it. An
+    // export keyed on it ships the older body while the user is looking at the newer one.
+    //
+    // Sorted descending so the first row seen for an artifact is its newest; one query for the
+    // batch, guarded because an empty `$in` is a query with no answer worth making.
+    const contents =
+      artifacts.length === 0
+        ? []
+        : await this.adapters.artifactContentRepository.find(
+            { artifactId: { $in: artifacts.map((a: ArtifactRow) => a.id) } },
+            { sort: { version: -1 } }
+          );
+
+    const bodyFor = new Map<string, string>();
+    for (const row of contents as ArtifactContentRow[]) {
+      if (!bodyFor.has(row.artifactId)) bodyFor.set(row.artifactId, row.content);
+    }
+
+    const bodyless: string[] = [];
+    const exported = artifacts.map((artifact: ArtifactRow) => {
+      const content = bodyFor.get(artifact.id);
+      if (content === undefined) bodyless.push(artifact.id);
+      return {
+        id: artifact.id,
+        // Artifacts store this as `title`; reading `name` here always produced undefined.
+        name: artifact.title,
+        type: artifact.type,
+        content,
+        createdAt: artifact.createdAt?.toISOString() || new Date().toISOString(),
+        updatedAt: artifact.updatedAt?.toISOString() || new Date().toISOString(),
+        metadata: artifact.metadata,
+      };
+    });
+
+    // Named rather than silently dropped: an artifact whose body is missing still exports its
+    // label, and the import refuses it. Saying so here is what distinguishes "the source had no
+    // body" from "the import lost it".
+    if (bodyless.length > 0) {
+      this.adapters.logger.warn('Some artifacts exported without their body', { artifactIds: bodyless });
+    }
+
+    return exported;
   }
 
   private async exportTools(toolIds: string[], options: NotebookExportOptions): Promise<ExportedTool[]> {

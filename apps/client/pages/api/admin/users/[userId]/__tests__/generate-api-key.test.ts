@@ -137,4 +137,25 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     await expect(mockRefs.postHandler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
     expect(mockCreateKey).not.toHaveBeenCalled();
   });
+
+  it('forwards preauthorizedLakeIds to the service', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'], preauthorizedLakeIds: ['lake1', 'lake2'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ preauthorizedLakeIds: ['lake1', 'lake2'] }),
+      expect.anything()
+    );
+  });
+
+  it('omits preauthorizedLakeIds from the service call when not given', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ preauthorizedLakeIds: undefined }),
+      expect.anything()
+    );
+  });
 });

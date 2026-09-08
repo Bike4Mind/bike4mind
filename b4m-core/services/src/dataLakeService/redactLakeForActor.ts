@@ -33,6 +33,7 @@ export const READER_LAKE_FIELDS = [
   'requiredEntitlement',
   'isPublic',
   'auditQueryTextEnabled',
+  'lakeMemoryEnabled',
   'status',
   'fileCount',
   'totalSizeBytes',
@@ -86,6 +87,10 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   isPublic: 'reader',
   // A reader whose questions may be logged should be able to see that the lake records them.
   auditQueryTextEnabled: 'reader',
+  // A reader should be able to see whether this lake's memory is enabled, matching
+  // auditQueryTextEnabled's rationale. The derived `building`/`current`/etc. state (health) is what
+  // actually answers "is there a profile" - this field only answers "is the option on".
+  lakeMemoryEnabled: 'reader',
   status: 'reader',
   fileCount: 'reader',
   totalSizeBytes: 'reader',
@@ -99,9 +104,16 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // Same rationale, archive axis.
   filesArchivedAt: 'withheld',
   // Lake-memory producer bookkeeping (#1440): internal lease + continuation cursor. Of no use to a
-  // reader, and the lease timestamp would leak when/whether extraction is running.
+  // reader, and the lease timestamp would leak when/whether extraction is running. NOTE: the
+  // lake-memory `state` on the health payload deliberately reverses the spirit of this withholding -
+  // its `building` value is derived from this same lease (see computeLakeHealth) and IS reader-visible.
+  // That is intentional: a build button that cannot say "already running" is dishonest, and the
+  // derived state leaks only a boolean, never the raw timestamp this field withholds.
   lakeMemoryExtractionAt: 'withheld',
   lakeMemoryCursor: 'withheld',
+  // Purge fence: same class of internal bookkeeping, and it would tell a reader when a manager wiped
+  // what the lake had learned - a management action, not a property of the corpus they can search.
+  lakeMemoryPurgedAt: 'withheld',
   // Withheld: the report carries EXCERPTS of the lake's documents, and a reader who can see the lake
   // is not necessarily entitled to read every member's prose. It is also an editorial-quality signal
   // for whoever curates the lake, not information a consumer of it acts on.

@@ -33,8 +33,11 @@ export async function recallLakeMemoryForSession(input: {
         // active set - otherwise the read would outlive the authorization that granted it.
         // `status` is the lake's lifecycle state: only 'active' is authorized to read (draft, archived,
         // deleting, and deleted all fall out here), matching the authorizing access query.
+        // lakeMemoryEnabled !== true (rather than !lakeMemoryEnabled) is deliberate: this repository
+        // read is unprojected (see DataLakeModel.ts), so a future `.select()` allow-list here would
+        // otherwise fail this check CLOSED for every lake and silently disable the feature outright.
         const lake = await dataLakeRepository.findByDatalakeTag(datalakeTag);
-        if (!lake?.createdByUserId || lake.status !== 'active') return null;
+        if (!lake?.createdByUserId || lake.status !== 'active' || lake.lakeMemoryEnabled !== true) return null;
         return { datalakeTag, ownerUserId: lake.createdByUserId };
       })
     )

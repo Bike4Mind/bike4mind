@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import {
   canManageLake,
+  canShredLakeMemory,
   isEffectiveOwner,
   isLakeCreator,
   resolveEffectiveOwnerIds,
@@ -248,5 +249,50 @@ describe('resolveLakeManageRung branch ORDER', () => {
     );
 
     expect(rung).toBe('org-admin');
+  });
+});
+
+describe('canShredLakeMemory', () => {
+  it('admits the creator and a platform admin', () => {
+    expect(canShredLakeMemory(lake('creator'), actor({ userId: 'creator' }))).toBe(true);
+    expect(canShredLakeMemory(lake('creator'), actor({ userId: 'someone', isAdmin: true }))).toBe(true);
+  });
+
+  it('refuses everyone else, including actors `canManageLake` admits', () => {
+    // The whole point of the separate predicate. Each of these three CAN manage the lake - and a
+    // crypto-shred destroys facts derived from documents the rest of the org contributed, so it stays
+    // creator-or-platform-admin. `canShredLakeMemory` takes no grants and no org, so there is no
+    // argument shape by which a caller could accidentally widen it back to `canManageLake`.
+    const orgLake = lake('creator', 'org-1');
+    const curator = actor({ userId: 'curator-1' });
+    const orgAdmin = actor({ userId: 'org-admin-1', administeredOrgIds: ['org-1'] });
+    const grants = [grant('user', 'curator-1', 'curator')];
+
+    expect(canManageLake(orgLake, curator, grants)).toBe(true);
+    expect(canShredLakeMemory(orgLake, curator)).toBe(false);
+
+    expect(canManageLake(orgLake, orgAdmin)).toBe(true);
+    expect(canShredLakeMemory(orgLake, orgAdmin)).toBe(false);
+
+    expect(canShredLakeMemory(orgLake, actor({ userId: 'reader-1' }))).toBe(false);
+  });
+
+  it('does NOT follow an ownership transfer - the creator keeps the shred, the new owner does not get it', () => {
+    // Recorded as a decision rather than an oversight: this predicate exists to describe what the API
+    // gate already enforces (creator or platform admin, grants unread), and the UI is being aligned to
+    // it. Widening both to the effective owner is a policy change, not a bug fix, and would want the
+    // transfer flow to say so.
+    const transferred = lake('creator');
+    const grants = [grant('user', 'new-owner', 'owner')];
+
+    expect(isEffectiveOwner(transferred, actor({ userId: 'new-owner' }), grants)).toBe(true);
+    expect(canShredLakeMemory(transferred, actor({ userId: 'new-owner' }))).toBe(false);
+    expect(canShredLakeMemory(transferred, actor({ userId: 'creator' }))).toBe(true);
+  });
+
+  it('fails closed on a blank identity, so the synthetic fallback lake is never shreddable', () => {
+    // `''  === ''` would otherwise make an anonymous actor the "creator" of the fallback document.
+    expect(canShredLakeMemory(lake(''), actor({ userId: '' }))).toBe(false);
+    expect(canShredLakeMemory(lake(''), actor({ userId: 'someone' }))).toBe(false);
   });
 });

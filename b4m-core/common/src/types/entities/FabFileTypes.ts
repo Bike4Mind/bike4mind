@@ -679,6 +679,17 @@ export interface AttachmentLakeAccess {
  *
  * Defines the database methods that are available on the FabFile model.
  */
+/**
+ * The FabFile fields the lake-memory citability predicate reads, and nothing else. Exists so the
+ * read can be projected: the predicate needs eight scalars, while a FabFile document carries a
+ * `tags` array of arbitrary objects, a `versions` subdocument array and a Mixed `sourceMetadata` of
+ * no fixed size - all of it hydrated per id by the unprojected reader this replaces.
+ */
+export type CitableFabFileFields = Pick<
+  IFabFileDocument,
+  'id' | 'deletedAt' | 'archivedAt' | 'chunkCount' | 'vectorizedChunkCount' | 'embeddingModel' | 'fileName' | 'vectorized'
+>;
+
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
   getAccessibleFiles: (
@@ -783,6 +794,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to an array of files.
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
+  /**
+   * Existence only: which of these ids still resolve to a file. Projects `_id` and nothing else -
+   * the alternative, `findAllByIds`, hydrates a full mongoose document per id (`tags`, `versions`,
+   * Mixed `sourceMetadata` included) to answer a question about existence.
+   */
+  findExistingIdsByIds(ids: string[]): Promise<string[]>;
+  /** Just the fields the citability predicate reads - see `CitableFabFileFields`. */
+  findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
