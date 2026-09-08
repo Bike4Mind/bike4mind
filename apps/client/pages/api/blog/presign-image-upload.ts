@@ -46,6 +46,11 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
     const host = user.blogIntegration.baseUrl.replace(/\/+$/, '');
     const apiKey = decryptToken(user.blogIntegration.apiKey) ?? '';
 
+    // Bound the outbound call to a user-controlled host so a hung blog cannot pin the
+    // handler to the platform timeout (matches blog/publish.ts).
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s
+
     let response: Response;
     try {
       response = await fetch(`${host}/api/posts/images/presigned-url`, {
@@ -55,10 +60,17 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
           'X-API-Key': apiKey,
         },
         body: JSON.stringify({ fileName, fileSize, mimeType, postId }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
     } catch (error) {
+      clearTimeout(timeoutId);
       req.logger.error('[Blog presign] request to blog failed:', error);
-      throw new BadRequestError('Failed to reach the blog to request an upload URL');
+      throw new BadRequestError(
+        error instanceof Error && error.name === 'AbortError'
+          ? 'Blog upload URL request timed out after 15s'
+          : 'Failed to reach the blog to request an upload URL'
+      );
     }
 
     if (!response.ok) {

@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 
 export interface BlogImageUploadResult {
@@ -59,6 +60,24 @@ export async function uploadBlogImage(file: File, postId?: string): Promise<Blog
     url: data.imageUrl,
     key: data.key || file.name,
   };
+}
+
+/**
+ * Pull a human-readable message out of an upload failure. The presign step goes through
+ * axios, whose interceptor rethrows the AxiosError untouched, so `error.message` is the
+ * generic "Request failed with status code 400" - the real reason lives in the server's
+ * `{ error }` envelope. Read that first, then fall back to a plain Error's message, then
+ * the caller's default. Callers must NOT use `error instanceof Error` first: an AxiosError
+ * IS an Error, so that branch would swallow the server text.
+ */
+export function getBlogUploadErrorMessage(error: unknown, fallback: string): string {
+  if (isAxiosError(error)) {
+    const data = error.response?.data as { error?: string; message?: string } | undefined;
+    if (typeof data?.error === 'string' && data.error) return data.error;
+    if (typeof data?.message === 'string' && data.message) return data.message;
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
 }
 
 /**

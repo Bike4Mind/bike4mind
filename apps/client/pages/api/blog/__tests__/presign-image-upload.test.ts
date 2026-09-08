@@ -75,6 +75,7 @@ describe('POST /api/blog/presign-image-upload', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': 'decrypted:enc-key' },
       body: JSON.stringify({ fileName: 'a.jpg', fileSize: 10, mimeType: 'image/jpeg', postId: 'p1' }),
+      signal: expect.any(AbortSignal),
     });
     expect(res._getJSONData()).toEqual({ uploadUrl: 'https://s3/u', imageUrl: 'https://blog/i.jpg', key: 'k' });
   });
@@ -91,6 +92,13 @@ describe('POST /api/blog/presign-image-upload', () => {
     const body = res._getJSONData();
     expect(body.uploadUrl).toBe('https://s3/u');
     expect(body.imageUrl).toBe('https://blog/i.jpg');
+  });
+
+  it('surfaces a timeout when the blog request aborts', async () => {
+    // A hung blog host must not pin the handler to the platform timeout (matches publish.ts).
+    global.fetch = vi.fn().mockRejectedValueOnce(Object.assign(new Error('aborted'), { name: 'AbortError' })) as never;
+    const { req, res } = request(validBody, configured);
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow(/timed out/i);
   });
 
   it('surfaces a blog error response', async () => {

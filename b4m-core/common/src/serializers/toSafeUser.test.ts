@@ -39,6 +39,8 @@ const fullUser = {
     workspaceId: 'w',
     workspaceName: 'WS',
     botId: 'b',
+    allowedPages: [{ id: 'p1', title: 'Page 1' }],
+    excludedPageIds: ['ex1', 'ex2'],
     connectedAt: new Date(),
   },
   slackSettings: { slackUserId: 'U1', slackUserToken: 'SLACK-TOKEN', defaultNotebookId: 'n1' },
@@ -192,6 +194,10 @@ describe('redactUserSecretsForSelf', () => {
     const notion = self.notionConnect as Record<string, unknown>;
     expect(notion.workspaceName).toBe('WS');
     expect('accessToken' in notion).toBe(false);
+    // Page-scoping config (not a token) must survive: the settings UI reads these back
+    // and PATCHes them on save, so redacting them wipes the user's exclusions.
+    expect(notion.allowedPages).toEqual([{ id: 'p1', title: 'Page 1' }]);
+    expect(notion.excludedPageIds).toEqual(['ex1', 'ex2']);
 
     const slack = self.slackSettings as Record<string, unknown>;
     expect(slack.slackUserId).toBe('U1');

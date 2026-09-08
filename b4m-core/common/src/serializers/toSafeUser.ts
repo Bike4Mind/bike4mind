@@ -181,6 +181,7 @@ export function redactUserSecretsForSelf(
       writeEnabled: n.writeEnabled,
       accessMode: n.accessMode,
       allowedPages: n.allowedPages,
+      excludedPageIds: n.excludedPageIds,
       rootPageId: n.rootPageId,
       connectedAt: n.connectedAt,
       disconnectReason: n.disconnectReason,

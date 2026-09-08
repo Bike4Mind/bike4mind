@@ -16,7 +16,9 @@ vi.mock('sonner', () => ({
   },
 }));
 
-vi.mock('@client/app/utils/blogImageUpload', () => ({
+vi.mock('@client/app/utils/blogImageUpload', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/blogImageUpload')>()),
+  // Keep the real getBlogUploadErrorMessage; only stub the network/util calls.
   uploadBlogImage: vi.fn(),
   generatePostIdFromTitle: vi.fn((title: string) => title.toLowerCase().replace(/\s+/g, '-')),
 }));

@@ -143,6 +143,23 @@ describe('POST /api/secret-rotations/renewed', () => {
     expect(secondCall.rotatedAt.getTime()).toBeGreaterThanOrEqual(firstRotatedAt.getTime());
   });
 
+  it('stores previousKey encrypted at rest, recoverable by the grace-window verifiers', async () => {
+    const { configureSecretsAtRest, decryptAtRest, generateEncryptionKey } = await import('@bike4mind/utils/security');
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
+      const { req, res } = request({ id: 's1' });
+      await mockRefs.postHandler!(req, res);
+
+      const stored = mockUpdate.mock.calls[0][0].previousKey as string;
+      // Never the plaintext signing secret at rest, but the verifiers can still recover it.
+      expect(stored).not.toBe('server-held-jwt-secret');
+      expect(decryptAtRest(stored)).toBe('server-held-jwt-secret');
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
+  });
+
   it('leaves previousKey unset for secrets no verifier reads it for', async () => {
     mockFindById.mockResolvedValue({ id: 's2', keyName: 'STRIPE_SECRET_KEY', rotationIntervalDays: 90 });
     const { req, res } = request({ id: 's2' });

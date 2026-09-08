@@ -1,6 +1,7 @@
 import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError, InternalServerError, NotFoundError } from '@bike4mind/utils';
+import { encryptAtRest } from '@bike4mind/utils/security';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 import { Config } from '@server/utils/config';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -27,7 +28,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   // any verifier reads (see server/auth/secretRotationGrace.ts). Re-capturing on every
   // renew advances the grace window instead of extending a stale key's life, so the
   // runbook is: click Renew BEFORE deploying the replacement secret.
-  const previousKey = secret.keyName === 'JWT_SECRET' ? Config.JWT_SECRET : undefined;
+  // Encrypt at rest: this is a live signing secret and must not sit in Mongo as
+  // plaintext; the two verifiers that read it (auth.ts, verifyWsAccessToken.ts)
+  // decryptAtRest it. Plaintext rows written before this keep working (decrypt passes
+  // a non-ciphertext value through unchanged) and re-encrypt on the next renew.
+  const previousKey = secret.keyName === 'JWT_SECRET' ? encryptAtRest(Config.JWT_SECRET) : undefined;
 
   try {
     const updated = await secretRotationRepository.update({

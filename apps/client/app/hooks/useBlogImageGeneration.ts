@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
-import { uploadBlogImage, generatePostIdFromTitle } from '@client/app/utils/blogImageUpload';
+import { uploadBlogImage, generatePostIdFromTitle, getBlogUploadErrorMessage } from '@client/app/utils/blogImageUpload';
 import { useLLM } from '@client/app/contexts/LLMContext';
 
 interface UseBlogImageGenerationProps {
@@ -105,19 +105,7 @@ export const useBlogImageGeneration = ({ content, title, summary, onImageGenerat
         prompt: imagePrompt,
       };
     } catch (error) {
-      let errorMessage = 'Failed to generate image. Please try again.';
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      } else if (error && typeof error === 'object' && 'response' in error) {
-        const response = (error as any).response;
-        if (response?.data?.message) {
-          errorMessage = response.data.message;
-        } else if (response?.data?.error) {
-          errorMessage = response.data.error;
-        }
-      }
-
-      toast.error(errorMessage);
+      toast.error(getBlogUploadErrorMessage(error, 'Failed to generate image. Please try again.'));
       throw error;
     } finally {
       setIsGeneratingImage(false);

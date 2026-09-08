@@ -36,7 +36,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import ShimmerWrapper from '../ShimmerWrapper';
 import dynamic from 'next/dynamic';
 import { useUser } from '@client/app/contexts/UserContext';
-import { uploadBlogImage, generatePostIdFromTitle } from '@client/app/utils/blogImageUpload';
+import { uploadBlogImage, generatePostIdFromTitle, getBlogUploadErrorMessage } from '@client/app/utils/blogImageUpload';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import ImageBrowserModal from '../Agent/ImageBrowserModal';
 import { openInNewTab } from '@client/app/utils/externalLinks';
@@ -113,7 +113,7 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
 
   const handleSelectFabFileImage = async (fabFileId: string) => {
     if (!currentUser?.blogIntegration?.baseUrl) {
-      toast.error('Blog integration not configured. Please set up your blog API key in Settings.');
+      toast.error('Blog integration not configured. Please configure blog publishing in Settings.');
       return;
     }
 
@@ -152,8 +152,7 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
       setFeaturedImageUrl(result.url);
       toast.success('✅ Featured image uploaded!');
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to upload selected image';
-      toast.error(errorMessage);
+      toast.error(getBlogUploadErrorMessage(error, 'Failed to upload selected image'));
     } finally {
       setIsUploadingFeaturedImage(false);
     }
@@ -211,7 +210,7 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
 
   const handleImageUpload = async (file: File): Promise<string> => {
     if (!currentUser?.blogIntegration?.baseUrl) {
-      toast.error('Blog integration not configured. Please set up your blog API key in Settings.');
+      toast.error('Blog integration not configured. Please configure blog publishing in Settings.');
       throw new Error('Blog integration not configured');
     }
 
@@ -238,8 +237,7 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
         return next;
       });
 
-      const errorMessage = error instanceof Error ? error.message : 'Failed to upload image';
-      toast.error(errorMessage);
+      toast.error(getBlogUploadErrorMessage(error, 'Failed to upload image'));
       throw error;
     }
   };
@@ -249,7 +247,7 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
     if (!file) return;
 
     if (!currentUser?.blogIntegration?.baseUrl) {
-      toast.error('Blog integration not configured. Please set up your blog API key in Settings.');
+      toast.error('Blog integration not configured. Please configure blog publishing in Settings.');
       return;
     }
 
@@ -263,8 +261,7 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
       setFeaturedImageUrl(result.url);
       toast.success('✅ Featured image uploaded!');
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to upload featured image';
-      toast.error(errorMessage);
+      toast.error(getBlogUploadErrorMessage(error, 'Failed to upload featured image'));
     } finally {
       setIsUploadingFeaturedImage(false);
     }

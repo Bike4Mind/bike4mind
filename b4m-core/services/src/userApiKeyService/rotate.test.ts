@@ -61,6 +61,15 @@ describe('rotateUserApiKey - no escalation by rotation', () => {
     expect(result.key).toMatch(/^b4m_live_/);
   });
 
+  it('denies an empty-scope caller rotating any scoped key (fail-closed, not read as unrestricted)', async () => {
+    // The empty array is truthy, so it MUST enter the containment check and deny. Guards
+    // against a "simplify to a truthiness/length test" cleanup silently reopening fail-open.
+    const adapters = makeAdapters(key({ scopes: [ApiKeyScope.READ_NOTEBOOKS] }), []);
+
+    await expect(rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never)).rejects.toThrow(/scopes/i);
+    expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
+  });
+
   it('refuses on a partial overlap, not just a total mismatch', async () => {
     const adapters = makeAdapters(key({ scopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.ADMIN] }), [
       ApiKeyScope.READ_NOTEBOOKS,
