@@ -14,7 +14,10 @@
  *    `onManage`-style prop whose affordance is already hidden when unset (see
  *    `DataLakeExplorer`).
  *  - `ManageKnowledgeButton` - the affordance, gate folded in. Renders nothing when
- *    the user may not manage, so a nav can mount it unconditionally.
+ *    the user may not manage, so a nav can mount it unconditionally. Since #1943 no
+ *    in-repo surface renders it (the in-chat tree puts Manage on its own footer and
+ *    consumes the hook above instead); it stays because deleting the shared affordance
+ *    is precisely what let overlays grow their own drifting copies before #841.
  *
  * Anything product-flavored (the label) stays a surface token, per surfaceTokens.tsx.
  */
@@ -32,7 +35,7 @@ export interface ManageKnowledgeOptions {
    * Require platform admin on top of the `EnableDataLakes` flag.
    *
    * `false` (default) suits a surface where the user manages their OWN lakes - the
-   * standalone `/data-lakes` home. Curated, admin-managed knowledge surfaces (the
+   * in-chat Data Lake surface. Curated, admin-managed knowledge surfaces (the
    * product overlays, whose lakes are seeded per environment) pass `true`; that was
    * the `isAdmin && EnableDataLakes` predicate each of them used to hand-roll.
    */

@@ -81,3 +81,37 @@ describe('userApiKeyService - createUserApiKey org billing', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 });
+
+describe('userApiKeyService - createUserApiKey preauthorizedLakeIds', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo();
+  });
+
+  it('persists preauthorizedLakeIds without any existence or manage check at mint time', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...baseParams, preauthorizedLakeIds: ['lake1', 'lake2'] },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.preauthorizedLakeIds).toEqual(['lake1', 'lake2']);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ preauthorizedLakeIds: ['lake1', 'lake2'] }));
+  });
+
+  it('leaves preauthorizedLakeIds undefined when not given', async () => {
+    const result = await createUserApiKey('user1', baseParams, { db: { userApiKeys: repo } });
+
+    expect(result.preauthorizedLakeIds).toBeUndefined();
+  });
+
+  it('rejects more than 25 pre-authorized lake ids', async () => {
+    const ids = Array.from({ length: 26 }, (_, i) => `lake${i}`);
+    await expect(
+      createUserApiKey('user1', { ...baseParams, preauthorizedLakeIds: ids }, { db: { userApiKeys: repo } })
+    ).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});

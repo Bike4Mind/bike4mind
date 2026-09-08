@@ -1,6 +1,8 @@
 export * from './ChatCompletionProcess';
 export * from './ChatCompletionInvoke';
 export * from './mementoGating';
+export * from './artifactGating';
+export * from './forcedRetrievalAbstention';
 export * from './ImageGeneration';
 export * from './VideoGeneration';
 export * from './ChatCompletionFeatures';
@@ -20,7 +22,9 @@ export {
   type IntentPromptContext,
 } from './intentClassifier.prompt';
 export * from './sharedToolBuilder';
-export { ServerAgentStore } from './agents/ServerAgentStore';
+export * from './systemPromptDisclosure';
+export * from './toolAvailability';
+export { ServerAgentStore, builtInAgentModelReferences } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';
 export {
   ServerSubagentOrchestrator,
@@ -41,7 +45,8 @@ export * from './smallLLMHelpers';
 export * from './reranker';
 export { StatusManager } from './StatusManager';
 export { firecrawlFetch } from './tools/implementation/webfetch';
-export { serpApiSearch } from './tools/implementation/websearch';
+export { serpApiSearch, resolveWebSearchProvider } from './tools/implementation/websearch';
+export type { WebSearchOptions, WebSearchProvider, WebSearchProviderResult } from './tools/implementation/websearch';
 export { scrapeWithRetry } from './tools/implementation/webfetch/scrapeWithRetry';
 
 // Phase 4a - DAG task decomposition (coordinate_task)

@@ -120,6 +120,15 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           projects: projectRepository,
           fabFiles: fabFileRepository,
         },
+        // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
+        // and it is only needed when files are actually attached.
+        // Lets the lake-tag derivation see lake-membership files - an ownership/share reader cannot
+        // follow the creator-identity widening an organization lake uses. Request-free variant: this
+        // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
+        resolveLakeAccess: async () =>
+          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, {
+            logger,
+          }),
       }
     );
     // Bind into the outer `let session` and keep a narrowed const for the rest of the block -

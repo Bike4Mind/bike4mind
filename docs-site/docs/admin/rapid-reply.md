@@ -50,7 +50,7 @@ Model mappings define which rapid model responds for each main model. The mappin
 | Column | Description |
 |--------|-------------|
 | Main Model | The primary (slower, more capable) model |
-| Rapid Model | The fast model that provides the instant acknowledgment |
+| Rapid Model | The fast model that provides the instant acknowledgment. A **Model unavailable** chip appears here when the mapped model can no longer run -- see [When a mapped model becomes unavailable](#when-a-mapped-model-becomes-unavailable) |
 | Fallback Priority | Numeric priority for fallback ordering (1-100) |
 | Max Tokens | Maximum token count for the rapid reply (10-150) |
 | Response Style | The reply style (e.g., "auto", or other values from `RapidReplyResponseStylesCommon`) |
@@ -74,6 +74,24 @@ The mapping edit modal provides:
 #### Deleting Mappings
 
 Deleting a mapping requires confirmation via a browser dialog before removal.
+
+#### When a mapped model becomes unavailable
+
+A mapping stores a model **id**, and that id ages. A model catalog lifecycle row can sunset it,
+or an operator can disable it, and the mapping keeps pointing at the same id.
+
+Rapid Reply does not fail when that happens. It resolves the id in three steps:
+
+1. If the id has a known successor, the successor is used.
+2. Otherwise the shared model fallback chain picks the closest reachable model. For the
+   Bedrock-hosted Haiku ids, that chain leads with the Anthropic-direct equivalent, so the
+   substitution stays in the same latency class.
+3. If nothing in the chain is reachable, Rapid Reply is skipped for that request. The user's
+   chat answer is unaffected either way -- only the instant acknowledgment is lost.
+
+Because steps 2 and 3 are silent to the user, the mappings table flags the row with a
+**Model unavailable** chip. Treat the chip as a to-do: repoint the mapping at a current model so
+you control which rapid model runs rather than leaving it to the fallback chain.
 
 ## Metrics Tab
 
@@ -131,6 +149,7 @@ The most recent 3 tests are shown in a history panel. Each entry shows the model
 - **Monitor Metrics** -- Regularly check the Metrics tab to identify mappings that exceed latency or success rate thresholds
 - **Test Before Enabling** -- Use the Test tab to verify a mapping produces acceptable results before enabling it for users
 - **Set Conservative Latency Limits** -- If a rapid reply takes longer than the main model's first token, it defeats the purpose; keep max latency below 2000ms
+- **Clear the Model unavailable chips** -- A flagged mapping still works, but on a fallback model you did not choose. Repoint it when a model is sunset
 
 ## Related Articles
 

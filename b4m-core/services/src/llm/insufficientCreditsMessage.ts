@@ -24,3 +24,23 @@ export function buildInsufficientCreditsMessage(params: {
     ? `Your organization "${organizationName}" is out of credits. This request needs about ${required} credits, but only ${available} are available. Contact your organization administrator to add more credits.`
     : `You're out of credits. This request needs about ${required} credits, but only ${available} are available. Add credits to keep going.`;
 }
+
+/**
+ * Message shown when a member is blocked by their organization's per-member
+ * credit cap (distinct from the org pool running dry: the pool may be full, but
+ * this member has spent their individual allotment). Paired with
+ * `InsufficientCreditsError`'s `code: 'insufficient_credits'`; the remedy is the
+ * org administrator, since a member cannot raise their own cap.
+ */
+export function buildMemberCreditCapMessage(params: {
+  /** Credits this member has already spent against the org pool. */
+  used: number;
+  /** The member's configured cap. */
+  cap: number;
+  /** Organization name, when known. */
+  organizationName?: string;
+}): string {
+  const { used, cap, organizationName } = params;
+  const orgLabel = organizationName ? `for "${organizationName}"` : 'for your organization';
+  return `You've reached your per-member credit limit ${orgLabel} (${used} of ${cap} credits used). Contact your organization administrator to raise your limit.`;
+}

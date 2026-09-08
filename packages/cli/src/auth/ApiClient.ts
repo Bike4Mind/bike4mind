@@ -117,16 +117,21 @@ export class ApiClient {
               throw new Error('Not authenticated');
             }
 
-            // Skip refresh if the access token is still fresh (issued within the last hour).
-            // A 401 with a fresh token is likely a transient server error, not an auth issue.
+            // Skip refresh while the stored access token has not expired yet: a 401 against a
+            // token that is still inside its own lifetime is far more likely a transient server
+            // error than an auth failure, and refreshing would spend a rotation for nothing.
+            //
+            // This reads `expiresAt` directly rather than reconstructing an issue time by
+            // subtracting an assumed lifetime from it. The old form subtracted a hardcoded 7 days,
+            // which stopped being true when access tokens became short-lived - it reported every
+            // token as ~7 days old and the branch never fired.
+            //
             // NOTE: this means a tokenVersion kill-switch bump is not detected as a revocation
-            // for up to ~1h on a freshly-logged-in session (checkSessionValid reports it valid
-            // until the token ages past this window). REST calls still 401 in the meantime, so
-            // it is a bounded no-teardown delay, not retained access.
-            const tokenAge = Date.now() - (new Date(tokens.expiresAt).getTime() - 7 * 24 * 60 * 60 * 1000);
-            const ONE_HOUR = 60 * 60 * 1000;
-            if (tokenAge < ONE_HOUR) {
-              logger.debug('AUTH: Access token is fresh, skipping refresh — 401 is likely transient');
+            // until the token actually expires (checkSessionValid reports it valid until then).
+            // REST calls still 401 in the meantime, so it is a bounded no-teardown delay, not
+            // retained access.
+            if (new Date(tokens.expiresAt).getTime() > Date.now()) {
+              logger.debug('AUTH: Access token has not expired, skipping refresh - 401 is likely transient');
               return Promise.reject(error);
             }
 
@@ -138,10 +143,12 @@ export class ApiClient {
             // Calculate new expiry time
             const expiresAt = new Date(Date.now() + newTokens.expires_in * 1000).toISOString();
 
-            // Store new tokens
+            // Store new tokens. `refresh_token` is absent when the server did not rotate the chain
+            // (RFC 6749 s6) - keep the one we presented rather than persisting undefined, which
+            // would erase the credential and force a re-login on the next call.
             await this.configStore.setAuthTokens({
               accessToken: newTokens.access_token,
-              refreshToken: newTokens.refresh_token,
+              refreshToken: newTokens.refresh_token ?? tokens.refreshToken,
               expiresAt,
               userId: tokens.userId, // Preserve userId
             });

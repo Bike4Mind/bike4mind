@@ -26,7 +26,7 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://exam
 
 import { analyzeBatchTaxonomy } from './analyzeBatchTaxonomy';
 
-const logger = { error: vi.fn() };
+const logger = { error: vi.fn(), warn: vi.fn() };
 
 describe('analyzeBatchTaxonomy', () => {
   beforeEach(() => {
@@ -150,6 +150,30 @@ describe('analyzeBatchTaxonomy', () => {
       'wss://example',
       expect.objectContaining({ taxonomyStatus: 'ready' })
     );
+  });
+
+  it('warns when the model returns more categories than sanitizeCategories will keep', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'ready' }); // finalize
+    h.runTaxonomyInference.mockResolvedValue({
+      suggestedPrefix: 'acme:',
+      suggestedName: '',
+      categories: Array.from({ length: 150 }, (_, i) => ({ tagName: `acme:type:cat${i}` })),
+      fileAssignments: [],
+    });
+
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('150 categories - capped to 100'));
+  });
+
+  it('does not warn when the model stays within the category cap', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'ready' }); // finalize
+
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   // The core race this guards: inference took long enough that the stuck-job reconciler

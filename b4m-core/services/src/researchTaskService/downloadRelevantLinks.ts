@@ -3,6 +3,8 @@ import {
   IFabFileRepository,
   IFileTagRepository,
   IAdminSettingsRepository,
+  IScopedSettingsRepository,
+  IDataLakeRepository,
   IResearchDataRepository,
   IResearchTaskRepository,
   IResearchTaskScrape,
@@ -37,6 +39,11 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
     fabFiles: IFabFileRepository;
     fileTags: IFileTagRepository;
     adminSettings: IAdminSettingsRepository;
+    // Optional, but wire it: this `db` reaches `createFabFile`, whose admission contract (#1680)
+    // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a
+    // per-org/owner/lake override silently does nothing on this door.
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
   };
   storage: CreateFabFileAdapters['storage'];
   logger?: {

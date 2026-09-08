@@ -93,6 +93,24 @@ describe('HearthPresencePanel', () => {
     ]);
   });
 
+  it('badges the actor kind on every row, so color is never the only identity signal', async () => {
+    apiGetMock.mockResolvedValue(
+      respondWith([
+        // A session-derived human and an agent that named itself after one: the
+        // badge is what tells them apart, since the names cannot.
+        row('erik', 'running', { actorKind: 'human' }),
+        row('erik', 'running', { actorKind: 'agent' }),
+      ])
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getAllByTestId('hearth-presence-actor-kind-chip')).toHaveLength(2));
+    expect(screen.getAllByTestId('hearth-presence-actor-kind-chip').map(c => c.textContent)).toEqual([
+      'Human',
+      'Agent',
+    ]);
+  });
+
   it('shows workspace, tool, and a relative last-seen when present', async () => {
     apiGetMock.mockResolvedValue(
       respondWith([

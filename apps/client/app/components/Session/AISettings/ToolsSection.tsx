@@ -7,6 +7,7 @@ import {
   Casino as DiceIcon,
   Image as ImageIcon,
   MusicNote as MusicIcon,
+  GraphicEq as AudioIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -35,25 +36,21 @@ import type { BoxProps } from '@mui/joy';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerDocument, classifyQueryComplexity } from '@bike4mind/common';
+import { B4MLLMTools, IMcpServerDocument } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useTheme } from '@mui/joy';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { useChatInput } from '@client/app/hooks/useChatInput';
-import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
-import { commandHandlers } from '@client/app/components/Session/SessionBottom/sessionBottomConstants';
-import { isImageModel, isVideoModel, type CommandKey } from '@client/app/utils/commands';
-import { green } from '@client/app/utils/themes/colors';
+import { brand, gray, green } from '@client/app/utils/themes/colors';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import DeepResearchConfigModal from './DeepResearchConfigModal';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
 import {
   getToolDisplayName,
   getToolDescription,
-  isToolAvailableInAgentMode,
   isToolKeyMissing,
   filterToolsForDisplay,
 } from '@client/app/utils/toolMapping';
@@ -80,6 +77,7 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   image_generation:
     'Requires an image generation API key (e.g. BFL or OpenAI) in Admin > API Keys, or a self-hosted local image server (IMAGE_GEN_BASE_URL).',
   music_generation: 'Requires an ElevenLabs API key, configured in Admin > API Keys.',
+  audio_generation: 'Requires an OpenAI or ElevenLabs API key, configured in Admin > API Keys.',
   search_knowledge_base:
     'Requires an embeddings API key (VoyageAI or OpenAI) in Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',
 };
@@ -113,19 +111,26 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
   const content = (
     <Box
       className="tool-container"
+      // Every gated tool row is addressable by its own id. Hand-added per-tool testids drifted
+      // (image/music/audio had one, deep_research did not), which is exactly the tool an e2e run
+      // for a cancellation change needs to reach.
+      data-testid={toolId ? `tool-row-${toolId}` : undefined}
       sx={theme => {
         const baseStyles = {
-          backgroundColor: () =>
-            theme.palette.mode === 'light' ? theme.palette.background.surface2 : theme.palette.background.body,
+          // The row needs its own frame colour, distinct from the surface behind it. Dark mode
+          // used to fall back to background.body - the same colour - so the frame vanished.
+          backgroundColor: theme.palette.mode === 'light' ? gray[0] : theme.palette.background.surface2,
           borderRadius: 5,
           display: 'flex',
           alignItems: 'center',
-          p: '8px',
+          p: '12px 16px',
           gap: 2,
-          '&:hover': {
-            bgcolor: theme.palette.notebooklist.hoverBg,
-          },
-          transition: 'background-color 0.2s',
+          // Fills the grid cell so every card in a row matches the tallest one; descriptions
+          // run one or two lines, which otherwise leaves short cards visibly stunted. No-op in
+          // the single-column layout, where a row holds one card.
+          height: '100%',
+          boxSizing: 'border-box' as const,
+          // No hover: the row is not clickable, only its toggle is.
           border: 'none',
         };
 
@@ -154,7 +159,8 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
       <Box
         aria-disabled
         data-tool-disabled="true"
-        sx={{ width: '100%', opacity: 0.45, '& .tool-container': { pointerEvents: 'none' } }}
+        // height passes the grid cell's stretch through to the card inside.
+        sx={{ width: '100%', height: '100%', opacity: 0.45, '& .tool-container': { pointerEvents: 'none' } }}
       >
         {content}
       </Box>
@@ -240,34 +246,55 @@ interface ToolsSectionProps {
   onModalOpenChange?: (isOpen: boolean) => void;
   toolContainerSx?: BoxProps['sx'];
   onClose?: () => void;
+  /**
+   * The host is previewing a model that is not the active one. These are all shared session
+   * settings, so nothing here may be changed - and, critically, the two normalizing effects below
+   * must not fire either: they would reconfigure the RUNNING model to suit the previewed one.
+   */
+  readOnly?: boolean;
+  /**
+   * Parks the mode toggle on the title row so the description gets the full width below,
+   * instead of wrapping in a narrow column beside it. For hosts too narrow to afford the
+   * side-by-side layout - the composer dropdown is 500px against the settings dialog's 820px.
+   * Mobile takes this path regardless of the flag.
+   */
+  stackedHeader?: boolean;
 }
 
 const ToolsSection = ({
   tools: propTools,
+  model: propModel,
   setTools,
   columns = 2,
   onModalOpenChange,
   toolContainerSx,
   onClose,
+  stackedHeader = false,
+  readOnly = false,
 }: ToolsSectionProps = {}) => {
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
   const toolMode = useLLM(state => state.toolMode);
   const isQuestMasterEnabled = useLLM(state => state.isQuestMasterEnabled);
   const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
-  const agentMode = useLLM(state => state.agentMode);
   const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
   const researchMode = useLLM(state => state.researchMode);
   const enabledMcpServers = useLLM(state => state.enabledMcpServers);
   const { setState: setLLM } = useLLM;
   const { settings: userSettings, updatePreferences } = useUserSettings();
-  const showIndividualTools = !userSettings.toolsCatalogCollapsed;
-  const showFunTools = userSettings.showFunTools;
+  // Forced shut while previewing: the point is what the model supports, not a browsable catalogue,
+  // and the rows are inert anyway. Deliberately not persisted - the user's own expand/collapse
+  // preference has to survive a look at another model.
+  const showIndividualTools = !readOnly && !userSettings.toolsCatalogCollapsed;
+  const showFunTools = !readOnly && userSettings.showFunTools;
   const {
     data: mcpServersData = [],
     isPending: isLoadingMcpServers,
     isFetching: isFetchingMcpServers,
   } = useMcpServers();
+
+  // Must stay above the unsupported-model early return further down, which cuts off hooks.
+  const isMobile = useIsMobile();
 
   const { isFeatureEnabled: checkFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const isQuestMasterFeatureEnabled = checkFeatureEnabled('enableQuestMaster');
@@ -282,7 +309,13 @@ const ToolsSection = ({
   const toolAvailability = serverConfig?.toolAvailability;
   const tools = propTools ?? contextTools;
   const theme = useTheme();
-  const model = useLLM(s => s.model);
+  // The `model` prop was declared but never read, so both callers' values were ignored and this
+  // panel always described the ACTIVE model. That is right for the composer dropdown, which passes
+  // nothing, but wrong for the settings dialog, which can be previewing a model that is not
+  // running - it showed "does not support tools" for a tool-capable model whenever an image model
+  // happened to be selected.
+  const activeModel = useLLM(s => s.model);
+  const model = propModel ?? activeModel;
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = useMemo(() => modelInfoRepo?.find(m => m.id === model), [model, modelInfoRepo]);
 
@@ -426,84 +459,10 @@ const ToolsSection = ({
     [setLLM, setTools, tools, toolAvailability]
   );
 
-  // Agent mode runs the agent executor (fixed toolset, ignoring Smart Tools) when
-  // the composer bolt is ON and the feature is available. Mirrors the real routing
-  // gate in useSendMessage (`agentToggleActive` = isFeatureEnabled('agentMode') &&
-  // agentMode.enabled && !isRealSlashCommand), so it must use the RESOLVED feature
-  // flag (checkFeatureEnabled, which honors the admin EnableAgentModeDefault), NOT
-  // the raw experimentalFeatures.agentMode pref: an account enabled via the admin
-  // default has a working bolt but an unset raw pref, so keying on the raw pref
-  // left the bolt visibly ON yet the tools ungreyed. This is NOT enableAgents /
-  // isAgentsEnabled (the unrelated "@help Agent Detection" feature); gating on that
-  // would no-op the dimming for dogfooders with agentMode on but enableAgents off.
-  const agentModeActive = checkFeatureEnabled('agentMode') && (agentMode?.enabled ?? false);
-
-  // Predict whether the CURRENT draft prompt would silently auto-route to the
-  // agent via the rule-based complexity path (mirrors `autoRouteEnabled &&
-  // complexity === 'complex'` in routeQuery). When it would, the agent runs its
-  // fixed toolset and ignores the user's Smart Tools, so we grey the ignored
-  // tools here, BEFORE send, exactly like the explicit-toggle dimming. The LLM
-  // intent-classifier's decision isn't knowable client-side (it only fires at
-  // send), so this hint covers the rule-based complexity path only.
-  const chatDraft = useChatInput(s => s.chatInputValue);
-  const disableAutoRouteForThisSession = useLLM(s => s.disableAutoRouteForThisSession);
-  // Mirrors the send path's `liveAI` flag - the send only injects a generation
-  // command on image/video models when liveAI is on (see the image/video guard).
-  const liveAI = useAdvancedAISettings(state => state.liveAI);
-  const autoRouteEnabled = checkFeatureEnabled('agentMode') && userSettings.agentModeDefault === 'auto';
-  const predictedComplexityRoute = useMemo(() => {
-    if (!isAgentsEnabled || !autoRouteEnabled || disableAutoRouteForThisSession) return false;
-    const draft = chatDraft?.trim();
-    if (!draft) return false;
-    // Real slash commands (e.g. `/gen_image ...`) run their own handler and
-    // never auto-route, mirroring the `!isRealSlashCommand` gate in
-    // useSendMessage. Skip the prediction for them so the panel doesn't grey
-    // tools that will actually run. `/llm` is the implicit default, not a real
-    // command, so it stays subject to auto-routing (matches useSendMessage).
-    const firstToken = draft.split(/\s+/)[0];
-    if (firstToken !== '/llm' && commandHandlers[firstToken as CommandKey] !== undefined) return false;
-    // On image/video models the send path (extractCommandAndParams) injects
-    // `/gen_image` / `/gen_video` for a non-command draft, turning it into a
-    // real slash command that runs generation and never auto-routes. Mirror
-    // that here so a plain complex-scoring draft on an image/video model isn't
-    // greyed for a send that won't reroute. Gated on `liveAI` because the send
-    // only injects when `liveAI && !startsWithCommand` (commands.ts) - with
-    // liveAI off there's no injection, so a complex draft WOULD auto-route and
-    // the tools should still grey. Uses the same isImageModel/isVideoModel
-    // predicates the send path uses, keeping the two in lockstep.
-    if (liveAI && (isImageModel(model) || isVideoModel(model))) return false;
-    // Session file / agent context isn't available in this component, so those
-    // args are passed empty - omitting them can only lower the score, never
-    // raise it, so it won't grey spuriously on that account. (The tools /
-    // researchMode signals ARE passed: an enabled forcing tool - recharts /
-    // image_generation / deep_research / chess / research mode - makes
-    // classifyQueryComplexity return 'complex' regardless of draft text, which
-    // is correct and matches routeQuery, not an over-count bug.)
-    //
-    // Limitation: this prediction is draft-only and history-agnostic,
-    // while the real send can decline to auto-route for session-state reasons
-    // (e.g. `isAgentsEnabled` resolves false in a continued session after a
-    // model switch). So the greying can occasionally over-predict on follow-up
-    // messages - the copy says the request "may" auto-route rather than "will",
-    // and the badge/normal-chat outcome is the source of truth.
-    return classifyQueryComplexity(draft, [], [], tools, researchMode) === 'complex';
-  }, [
-    chatDraft,
-    tools,
-    researchMode,
-    model,
-    liveAI,
-    isAgentsEnabled,
-    autoRouteEnabled,
-    disableAutoRouteForThisSession,
-  ]);
-
-  // The agent runs its fixed toolset (ignoring Smart Tools) when either the
-  // explicit toggle is on OR the draft would auto-route on complexity.
-  const agentWillRunFixedToolset = agentModeActive || predictedComplexityRoute;
-
   // Per-tool availability for the current mode. Fast mode uses no tools at all;
-  // Agent mode honors only its fixed toolset. Smart mode allows everything.
+  // Smart mode allows everything. Agent mode is deliberately NOT a gate here: an
+  // agentless run carries the user's Smart Tools unioned with the agent-mode
+  // defaults (see `resolveDispatchTools`), so nothing below is ignored.
   const getToolGate = useCallback(
     (toolId: B4MLLMTools): { reason: string } | null => {
       // A missing API key is a hard, mode-independent blocker: without it the
@@ -515,16 +474,9 @@ const ToolsSection = ({
       if (toolMode === 'fast') {
         return { reason: 'Disabled in Fast mode. Switch to Smart mode to let the AI use tools.' };
       }
-      if (agentWillRunFixedToolset && !isToolAvailableInAgentMode(toolId)) {
-        return {
-          reason: agentModeActive
-            ? 'Not available in Agent mode. Agent mode runs a fixed toolset and ignores this Smart Tool.'
-            : 'This request may auto-route to Agent mode, which runs a fixed toolset that would ignore this Smart Tool.',
-        };
-      }
       return null;
     },
-    [toolMode, agentWillRunFixedToolset, agentModeActive, toolAvailability]
+    [toolMode, toolAvailability]
   );
 
   const toggleQuestMaster = () => {
@@ -541,13 +493,15 @@ const ToolsSection = ({
 
   // Todo: Turn off and hide other tools that are not supported by the other models
   useEffect(() => {
+    if (readOnly) return;
     if (!modelInfo?.supportsTools) {
       setLLM({ tools: [] });
     }
-  }, [modelInfo?.supportsTools, setLLM]);
+  }, [modelInfo?.supportsTools, setLLM, readOnly]);
 
   // Disable thinking when switching to a non-thinking model
   useEffect(() => {
+    if (readOnly) return;
     if (!modelSupportsThinking && thinking?.enabled) {
       setLLM({
         thinking: {
@@ -556,7 +510,7 @@ const ToolsSection = ({
         },
       });
     }
-  }, [modelSupportsThinking, thinking?.enabled, thinking?.budget_tokens, setLLM]);
+  }, [modelSupportsThinking, thinking?.enabled, thinking?.budget_tokens, setLLM, readOnly]);
 
   if (!modelInfo?.supportsTools) {
     return (
@@ -567,7 +521,7 @@ const ToolsSection = ({
           alignItems: 'center',
           flex: 1,
           m: '-8px',
-          p: '16px',
+          p: '4px',
           width: 'auto',
           minWidth: 0,
         }}
@@ -604,15 +558,30 @@ const ToolsSection = ({
   const individualToolsCount = displayTools.length - funPinnedCount;
   const pinnedCount = individualToolsCount + enabledMcpServerCount + specialToolsCount;
 
-  // Second line appended to the Smart tools description in Smart mode, only when Agent-mode
-  // routing would ignore the Smart Tools below; null otherwise so it stays a single line.
-  // (Fast mode has its own dedicated two-line description - see the master switch below.)
-  const agentModeNote =
-    toolMode === 'smart' && agentWillRunFixedToolset
-      ? agentModeActive
-        ? 'Agent mode is on. It runs a fixed toolset; greyed-out Smart Tools below are ignored while Agent mode is active.'
-        : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
-      : null;
+  // One instance, placed differently per host: on the title row where the header stacks,
+  // in the column on the right otherwise. Rendering it twice would duplicate its test id.
+  const modeToggle = (
+    <SquareSlideToggle
+      onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
+      checked={toolMode === 'smart'}
+      data-testid="tool-mode-toggle"
+    />
+  );
+
+  // Narrow hosts put the toggle beside the title; mobile is always one of them.
+  const stackHeader = isMobile || stackedHeader;
+
+  const toggleGroup = (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+      {/* Mobile drops the label - the title row has no width to spare for it. */}
+      {!isMobile && (
+        <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
+          Enable
+        </Typography>
+      )}
+      {modeToggle}
+    </Box>
+  );
 
   return (
     <>
@@ -664,25 +633,6 @@ const ToolsSection = ({
         </Box>
       )}
 
-      {/* Modal embed (no header) keeps a descriptor + inline help; the dropdown drops
-          it in favor of the header's help button. */}
-      {!onClose && (
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-          <Typography
-            level="body-xs"
-            sx={{ color: 'text.primary50', flex: 1, lineHeight: 1.3 }}
-            data-testid="smart-tools-descriptor"
-          >
-            Enable tools the AI can use during this conversation.
-          </Typography>
-          <ContextHelpButton
-            helpId="features/smart-tools"
-            tooltipText="Learn about Smart Tools"
-            data-testid="help-button-smart-tools"
-          />
-        </Box>
-      )}
-
       {/* Smart tools master switch. On = Smart (enabled tools + prompt-based auto-recommend),
           Off = Fast (no tools). No surface2 frame so it reads as a master control, not a tool.
           The description gains a second line only when there's non-obvious context to add
@@ -690,57 +640,64 @@ const ToolsSection = ({
       <Box
         sx={{
           display: 'flex',
-          // Center the toggle against the multi-line text on desktop; keep it top-aligned on mobile.
-          alignItems: { xs: 'flex-start', sm: 'center' },
+          alignItems: 'flex-start',
           justifyContent: 'space-between',
           gap: '24px',
           mb: '20px',
-          pl: '4px',
-          pr: '12px',
+          opacity: readOnly ? 0.6 : 1,
         }}
       >
-        <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-          <Typography level="body-sm" sx={{ color: 'text.primary', lineHeight: 1.2, mb: 0.5, fontWeight: 600 }}>
-            Smart tools
-          </Typography>
-          {toolMode === 'fast' ? (
-            <>
-              <Typography
-                level="body-xs"
-                data-testid="tool-mode-caption-fast"
-                sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3 }}
-              >
-                No tools are currently used. AI replies are as quick as possible.
+        <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, px: '8px' }}>
+          {/* Title, help button and description match the model title/description in the
+              settings dialog header. The dropdown skips the help button - its own header
+              already carries one. */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: stackHeader ? '12px' : '4px' }}>
+            <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>Smart tools</Typography>
+            {!onClose && (
+              <ContextHelpButton
+                helpId="features/smart-tools"
+                tooltipText="Learn about Smart Tools"
+                size="sm"
+                sx={HEADER_ICON_BUTTON_SX}
+                data-testid="help-button-smart-tools"
+              />
+            )}
+            {stackHeader && !readOnly && <Box sx={{ display: 'flex', ml: 'auto' }}>{toggleGroup}</Box>}
+          </Box>
+          {!readOnly &&
+            (toolMode === 'fast' ? (
+              <>
+                <Typography
+                  data-testid="tool-mode-caption-fast"
+                  sx={{ color: 'primary.500', fontSize: '14px', lineHeight: '1.4' }}
+                >
+                  No tools are currently used. AI replies are as quick as possible.
+                </Typography>
+                <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4', mt: '4px' }}>
+                  Turn on Smart tools to let the AI use your enabled tools.
+                </Typography>
+              </>
+            ) : (
+              <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}>
+                AI uses enabled tools as needed. Off is fastest.
               </Typography>
-              <Typography
-                level="body-xs"
-                sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.25 }}
-              >
-                Turn on Smart tools to let the AI use your enabled tools.
-              </Typography>
-            </>
-          ) : (
-            <Typography
-              level="body-xs"
-              sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3 }}
-              data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
-            >
-              AI uses enabled tools as needed. Turn off for the fastest reply.
-              {agentModeNote && (
-                <>
-                  <br />
-                  {agentModeNote}
-                </>
-              )}
-            </Typography>
-          )}
+            ))}
         </Box>
-        <SquareSlideToggle
-          onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
-          checked={toolMode === 'smart'}
-          data-testid="tool-mode-toggle"
-        />
+        {/* Wide hosts only: the group sits in its own column, mirroring the Research Mode
+            toggle. Narrow ones moved it onto the title row above. */}
+        {!stackHeader && !readOnly && toggleGroup}
       </Box>
+
+      {readOnly && (
+        <Typography
+          data-testid="tools-readonly-note"
+          // Full strength: it is the way out of this state, so it must not read as dimmed content.
+          // That is why the opacity sits on the blocks around it - a child cannot undo a parent's.
+          sx={{ color: brand[800], fontSize: '14px', fontWeight: '500', lineHeight: 1.4, mt: '-8px', mb: '20px' }}
+        >
+          These are the tools this model supports. Use this model to adjust them.
+        </Typography>
+      )}
 
       {/* Collapsible individual tools header (default expanded; collapse state persisted per-user) */}
       <Box
@@ -762,6 +719,7 @@ const ToolsSection = ({
           cursor: 'pointer',
           py: 0.5,
           mb: showIndividualTools ? 1 : 0,
+          opacity: readOnly ? 0.6 : 1,
           userSelect: 'none',
           '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
         }}
@@ -769,7 +727,7 @@ const ToolsSection = ({
         <Typography
           className="tools-collapsible-title"
           level="body-xs"
-          sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '4px' }}
+          sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '8px' }}
         >
           Individual tools{pinnedCount > 0 ? ` (${pinnedCount} pinned)` : ''}
         </Typography>
@@ -804,7 +762,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="web_search">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <SearchIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -822,7 +780,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="web_fetch">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <LanguageIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -841,7 +799,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="search_knowledge_base">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <KnowledgeBaseIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -864,7 +822,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="fmp_financial_data">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <FinanceIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -886,7 +844,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <SearchIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -904,7 +862,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   {server.name === 'atlassian' ? (
                     <AtlassianIcon
@@ -933,7 +891,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="prompt_enhancement">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <PromptEnhancementIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -955,7 +913,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="deep_research">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <ScienceIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1014,7 +972,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="image_generation">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <ImageIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1091,12 +1049,34 @@ const ToolsSection = ({
               />
             </ToolContainer>
           </Grid>
+          {/* Audio Generation (TTS + sound effects) */}
+          <Grid xs={12} className="tool-item tool-item-audio-generation">
+            <ToolContainer sx={toolContainerSx} toolId="audio_generation">
+              <Box
+                className="tool-content"
+                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+              >
+                <AudioIcon
+                  sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                />
+                <ToolLabel
+                  name={getToolDisplayName('audio_generation')}
+                  description={getToolDescription('audio_generation')}
+                />
+              </Box>
+              <SquareSlideToggle
+                onChange={() => handleToggleTool('audio_generation')}
+                checked={displayTools.includes('audio_generation')}
+                data-testid="tool-toggle-audio-generation"
+              />
+            </ToolContainer>
+          </Grid>
           {/* Mermaid Chart */}
           <Grid xs={12} className="tool-item tool-item-mermaid-chart">
             <ToolContainer sx={toolContainerSx} toolId="mermaid_chart">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <MermaidIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1117,7 +1097,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="excel_generation">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <ExcelIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1142,7 +1122,7 @@ const ToolsSection = ({
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '12px',
+                  gap: '16px',
                   flex: 1,
                   minWidth: 0,
                   opacity: modelSupportsThinking ? 1 : 0.5,
@@ -1229,7 +1209,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <AutoAwesomeIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1256,7 +1236,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <AutoAwesomeIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1276,7 +1256,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <LatticeIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1299,7 +1279,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="current_datetime">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <DateTimeIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1320,7 +1300,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="math_evaluate">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <MathIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1341,7 +1321,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="wolfram_alpha">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <WolframIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1363,7 +1343,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <CompareIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1383,7 +1363,7 @@ const ToolsSection = ({
           {/* Recharts */}
           <Grid xs={12}>
             <ToolContainer sx={toolContainerSx} toolId="recharts">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}>
                 <RechartsIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
                 />
@@ -1444,6 +1424,7 @@ const ToolsSection = ({
             py: 0.5,
             mt: '20px',
             mb: showFunTools ? 1 : '12px',
+            opacity: readOnly ? 0.6 : 1,
             userSelect: 'none',
             '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
           }}
@@ -1451,7 +1432,7 @@ const ToolsSection = ({
           <Typography
             className="tools-collapsible-title"
             level="body-xs"
-            sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '4px' }}
+            sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '8px' }}
           >
             Fun & Novelty{funPinnedCount > 0 ? ` (${funPinnedCount} pinned)` : ''}
           </Typography>
@@ -1482,7 +1463,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="chess_engine">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <ChessIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1503,7 +1484,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="dice_roll">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <DiceIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1521,7 +1502,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="weather_info">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <WeatherIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1542,7 +1523,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="wikipedia_on_this_day">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <HistoryIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1563,7 +1544,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="iss_tracker">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <SatelliteIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1581,7 +1562,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="sunrise_sunset">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <SunriseIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1602,7 +1583,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="moon_phase">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <MoonIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1620,7 +1601,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="planet_visibility">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <PlanetIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}

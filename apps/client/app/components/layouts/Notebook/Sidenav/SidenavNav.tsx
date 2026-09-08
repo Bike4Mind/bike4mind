@@ -202,8 +202,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    // No Data Lakes sidebar destination: Data Lakes is reached via the in-chat Data Lakes
-    // toggle (the standalone /data-lakes page stays reachable by URL). See datalake-in-chat-mode.
+    // No Data Lakes sidebar destination: the in-chat Data Lakes toggle is the only entry point,
+    // and since #1943 the only surface - the standalone page is retired.
     ...(gearOpen('files')
       ? [
           {

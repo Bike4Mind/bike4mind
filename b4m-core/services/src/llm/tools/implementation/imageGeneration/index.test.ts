@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
+import { ImageModels } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 
 // The agent-tool image_generation path must run the SAME moderation gate the
@@ -21,7 +22,23 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
   };
 });
 
-// Imported after the mock so `processAndStoreImages` picks up the mocked service.
+const mockGeminiGenerate = vi.fn();
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    GeminiImageService: vi.fn().mockImplementation(function () {
+      return { generate: mockGeminiGenerate };
+    }),
+  };
+});
+
+vi.mock('../../../../apiKeyService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../apiKeyService')>();
+  return { ...actual, getEffectiveApiKey: vi.fn().mockResolvedValue('fake-gemini-key') };
+});
+
+// Imported after the mocks so `processAndStoreImages` and the Gemini branch pick up the fakes.
 const { processAndStoreImages, imageGenerationTool } = await import('./index');
 
 // 1x1 transparent PNG - downloadImage() short-circuits data: URLs with no network call.
@@ -108,5 +125,41 @@ describe('image_generation local-image env gating (self-host only)', () => {
     // requireApiKey sees no base URL (env ignored outside self-host) and throws
     // the generic "unavailable" error rather than dispatching a free generation.
     await expect(toolFn({ prompt: 'a red bike' })).rejects.toThrow(/unavailable/i);
+  });
+});
+
+describe('image_generation Gemini branch parameter passthrough', () => {
+  // The tool passes safety_tolerance/prompt_upsampling/seed/output_format straight through to
+  // GeminiImageService.generate() - buildGenerationConfig() is the single place that refuses to
+  // forward prompt_upsampling/seed to Google's API (see GeminiImageService's own test suite),
+  // since Google rejects the mere PRESENCE of those two fields. This just confirms the tool isn't
+  // dropping anything before it gets there.
+  beforeEach(() => {
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]);
+  });
+
+  it('forwards prompt_upsampling, seed, safety_tolerance, and output_format to GeminiImageService.generate', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      prompt_upsampling: true,
+      seed: 42,
+      safety_tolerance: 1,
+      output_format: 'jpeg',
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockGeminiGenerate).toHaveBeenCalledWith(
+      'a red bike',
+      expect.objectContaining({
+        prompt_upsampling: true,
+        seed: 42,
+        safety_tolerance: 1,
+        output_format: 'jpeg',
+      })
+    );
   });
 });

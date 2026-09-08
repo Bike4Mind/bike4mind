@@ -1,8 +1,17 @@
 import { z } from 'zod';
-import { humanSessionActorName, sanitizeSessionLabel, reasonForHookEvent, type HearthEvent } from '@bike4mind/hearth';
+import {
+  presencePayloadSchema,
+  humanSessionActorName,
+  sanitizeSessionLabel,
+  reasonForHookEvent,
+  selfClaimedActorKindSchema,
+  type ActorKind,
+  type HearthEvent,
+} from '@bike4mind/hearth';
 import {
   hearthRepository,
   MAX_PRESENCE_FIELD_LENGTH,
+  type HearthActorIdentity,
   type HearthPresenceState,
   type IHearthPresenceDoc,
   type UpsertPresenceInput,
@@ -13,16 +22,17 @@ type WireHearthEvent = IHearthEventAction['event'];
 
 /**
  * Domain HearthEvent -> wire shape shared by the /api/hearth responses and
- * the hearth_event WS action (Dates become ISO strings; actorName is resolved
- * server-side so surfaces need no actor lookup).
+ * the hearth_event WS action (Dates become ISO strings; the actor's name and
+ * kind are resolved server-side so surfaces need no actor lookup).
  */
-export function toWireHearthEvent(event: HearthEvent, actorName?: string): WireHearthEvent {
+export function toWireHearthEvent(event: HearthEvent, actor?: HearthActorIdentity): WireHearthEvent {
   return {
     id: event.id,
     channelId: event.channelId,
     seq: event.seq,
     actorId: event.actorId,
-    actorName,
+    actorName: actor?.displayName,
+    actorKind: actor?.kind,
     kind: event.kind,
     human: event.human,
     machine: event.machine,
@@ -45,7 +55,7 @@ export function toWireHearthEvent(event: HearthEvent, actorName?: string): WireH
  */
 export const HearthActorParamSchema = z
   .object({
-    kind: z.enum(['agent', 'gateway', 'device']).prefault('agent'),
+    kind: selfClaimedActorKindSchema.prefault('agent'),
     displayName: z.string().min(1).max(200),
   })
   .optional();
@@ -67,11 +77,20 @@ export const HearthActorParamSchema = z
  * for the session (a notebook name) used for display only. Forging either can
  * at most mislabel one of the caller's OWN sessions - the authenticated
  * username is always the prefix - which is why neither needs to be trusted.
+ *
+ * `kind` exists because "the name is server-derived" and "the caller is a human"
+ * are separate facts, and only the first one is a security property. Every post
+ * the B4M CLI makes comes from an LLM tool call, so without this the account's
+ * own agent sessions persisted and badged as Human - indistinguishable from the
+ * owner typing. It only accepts the self-claimable kinds, so this stays a
+ * downgrade a caller makes about ITSELF while the name keeps the authenticated
+ * prefix; claiming 'human' remains impossible on every path.
  */
 export const HearthSessionParamSchema = z
   .object({
     id: z.string().min(1).max(200),
     label: z.string().max(200).optional(),
+    kind: selfClaimedActorKindSchema.optional(),
   })
   .optional();
 
@@ -94,32 +113,6 @@ export function assertHearthWriteScope(req: { apiKeyInfo?: { scopes?: string[] }
 type ActorParam = z.infer<typeof HearthActorParamSchema>;
 type SessionParam = z.infer<typeof HearthSessionParamSchema>;
 
-/**
- * Machine payload the roster projects from: the body written by the Claude Code
- * hook (packages/cli/bin/hearth-hook.mjs, schema 'hearth.claude-code-hook@1').
- * Every field is optional and unknown keys are dropped, so a presence event
- * posted by hand - or by a low-disclosure hook tier that forwards no activity -
- * still refreshes lastSeen; it just carries no detail. No length caps here on
- * purpose: an over-long value is truncated rather than rejected, because losing
- * a whole presence update over a long workspace name is the worse failure.
- */
-const PresencePayloadSchema = z.object({
-  hook_event_name: z.string().nullish(),
-  session_id: z.string().nullish(),
-  slug: z.string().nullish(),
-  workspace: z.string().nullish(),
-  activity: z
-    .object({
-      reason: z.string().nullish(),
-      tool: z.string().nullish(),
-      permission_mode: z.string().nullish(),
-      effort: z.string().nullish(),
-      subagent: z.string().nullish(),
-      background_tasks: z.number().int().min(0).nullish(),
-    })
-    .nullish(),
-});
-
 function clamp(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
   return value.slice(0, MAX_PRESENCE_FIELD_LENGTH);
@@ -129,13 +122,19 @@ function clamp(value: string | null | undefined): string | undefined {
  * Map a presence event onto the roster row it projects. Returns null when the
  * payload is not a shape we recognize at all, so the caller can skip the write
  * instead of stamping a contentless row.
+ *
+ * THE ONLY writer of a presence roster row, deliberately: every reporter's live
+ * write goes through here, so the live row and a row rebuilt by replaying the
+ * log cannot disagree. The bridge used to build its own UpsertPresenceInput
+ * instead, which is how it kept a correct live roster while every one of its
+ * events replayed to `running`.
  */
 export function toPresenceProjection(args: {
   event: HearthEvent;
   userId: string;
   payload: unknown;
 }): UpsertPresenceInput | null {
-  const parsed = PresencePayloadSchema.safeParse(args.payload ?? {});
+  const parsed = presencePayloadSchema.safeParse(args.payload ?? {});
   if (!parsed.success) return null;
   const { activity } = parsed.data;
 
@@ -171,6 +170,7 @@ export function toPresenceProjection(args: {
 export interface WireHearthPresence {
   actorId: string;
   actorName?: string;
+  actorKind?: ActorKind;
   state: HearthPresenceState;
   reason?: string;
   lastSeen: string;
@@ -184,10 +184,11 @@ export interface WireHearthPresence {
 }
 
 /** Roster row -> wire shape for GET /api/hearth/presence. */
-export function toWireHearthPresence(row: IHearthPresenceDoc, actorName?: string): WireHearthPresence {
+export function toWireHearthPresence(row: IHearthPresenceDoc, actor?: HearthActorIdentity): WireHearthPresence {
   return {
     actorId: row.actorId.toString(),
-    actorName,
+    actorName: actor?.displayName,
+    actorKind: actor?.kind,
     state: row.state,
     reason: row.reason,
     lastSeen: row.lastSeen.toISOString(),
@@ -204,9 +205,10 @@ export function toWireHearthPresence(row: IHearthPresenceDoc, actorName?: string
 /**
  * Find-or-create the acting Hearth actor for this request.
  *
- * A machine that named itself takes that name. Otherwise the actor is the
- * authenticated human, named from the account - per SESSION when the caller
- * supplied one, so concurrent CLI sessions get independent cursors.
+ * A machine that named itself takes that name. Otherwise the actor is named from
+ * the authenticated account - per SESSION when the caller supplied one, so
+ * concurrent CLI sessions get independent cursors - and is a human actor unless
+ * the session declared itself one of the self-claimable kinds.
  *
  * The identity key deliberately uses the slug form (no label): see
  * humanSessionActorName for why a renameable string must not reach it.
@@ -228,11 +230,29 @@ export async function resolveRequestActor(
   // stored for this session; omitting it leaves that stored value alone.
   const safeLabel = sanitizeSessionLabel(session?.label);
   const displayLabel = safeLabel ? humanSessionActorName(base, session?.id, safeLabel) : undefined;
+  const kind = session?.kind ?? 'human';
 
   // Omit the options argument entirely when there is no label, rather than
   // passing an explicit undefined: ensureActor treats a missing label as "leave
   // whatever is stored alone", and this keeps the common call shape unchanged.
   return displayLabel
-    ? hearthRepository.ensureActor(user.id, 'human', identity, { displayLabel })
-    : hearthRepository.ensureActor(user.id, 'human', identity);
+    ? hearthRepository.ensureActor(user.id, kind, identity, { displayLabel })
+    : hearthRepository.ensureActor(user.id, kind, identity);
+}
+
+/**
+ * The identity a freshly resolved actor renders as, matching what
+ * actorIdentitiesById returns for the SAME actor read back later.
+ *
+ * Both preferences live here because they have to agree: the batch read prefers
+ * the renameable friendly label, so a route that passed displayName straight
+ * through made one event render under the slug live and under the label once it
+ * came back through catchup.
+ */
+export function wireActorIdentity(actor: {
+  displayName: string;
+  displayLabel?: string | null;
+  kind: ActorKind;
+}): HearthActorIdentity {
+  return { displayName: actor.displayLabel ?? actor.displayName, kind: actor.kind };
 }

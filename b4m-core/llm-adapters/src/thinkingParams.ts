@@ -90,10 +90,33 @@ export function resolveOutputMaxTokens({
   /** Default for models that do not reason inside the output budget. */
   fallback: number;
   modelInfo: ModelInfo;
-  modelMaxOutputTokens: number;
+  /**
+   * The model's own output cap, which clamps the resolved budget. Typed optional
+   * deliberately: `ModelInfo.max_tokens` is declared `number`, but that is a claim about
+   * catalog data rather than a guarantee about it - a row assembled anywhere other than
+   * toModelInfo can omit it. Callers must be able to pass what they actually have.
+   */
+  modelMaxOutputTokens: number | undefined;
 }): number {
-  const preferred = requested ?? (reasonsWithinOutputBudget(modelInfo) ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
-  return Math.min(preferred, modelMaxOutputTokens);
+  const preferred =
+    usableTokenCount(requested) ??
+    (reasonsWithinOutputBudget(modelInfo) ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
+  const cap = usableTokenCount(modelMaxOutputTokens);
+  // An unusable cap must not clamp. `Math.min(n, undefined)` is NaN, and this result sizes
+  // a credit reservation downstream, so the resolver has to be total or a malformed catalog
+  // row puts NaN on a money path. Substituting `fallback` instead would be a sizing decision
+  // wearing a safety hat: it would silently shrink an explicit request and re-pin a
+  // reasons-within-the-budget model to 4096, which is the starvation this function prevents.
+  return cap === undefined ? preferred : Math.min(preferred, cap);
+}
+
+/**
+ * Token counts reaching this module come from catalog rows and external callers, so they are
+ * only trustworthy when finite and positive - a zero or negative cap would clamp the budget
+ * to an unsendable value just as surely as NaN poisons it.
+ */
+function usableTokenCount(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 export interface ThinkingResult {

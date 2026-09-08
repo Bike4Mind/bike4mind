@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
@@ -7,6 +8,11 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
+  findOverrides: vi.fn(),
+  listByLake: vi.fn(),
+  // The acting principal's org-admin set, as a test input rather than a Mongo read. The gates that
+  // consume it are the real ones.
+  administeredOrgIds: [] as string[],
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
@@ -23,11 +29,27 @@ vi.mock('@server/utils/storage', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // Scoped-override store the admission contract's lever (#1680) resolves through.
+  scopedSettingsRepository: { findOverrides: h.findOverrides },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
+  dataLakeAccessGrantRepository: { listByLake: h.listByLake },
   FabFile: { create: h.fabFileCreate },
   User: { findById: h.userFindById },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+
+// The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
+// entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
+// comes from req.user (never the body), preserving the security property the route depends on.
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
+    userId: req.user.id,
+    isAdmin: !!req.user.isAdmin,
+    userTags: [],
+    entitlementKeys: [],
+    administeredOrgIds: h.administeredOrgIds,
+  })),
 }));
 
 // Only the settings read is stubbed; checkStorageLimitForFile, resolveSupportedMimeType, etc.
@@ -55,10 +77,10 @@ const makeRes = () => {
   return { res, json };
 };
 
-const req = (body: unknown) =>
+const req = (body: unknown, userId = 'u1') =>
   ({
     method: 'POST',
-    user: { id: 'u1', isAdmin: false },
+    user: { id: userId, isAdmin: false },
     ability: {},
     body,
     logger: { error: vi.fn(), warn: vi.fn() },
@@ -66,12 +88,22 @@ const req = (body: unknown) =>
 
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
 
+const runAs = (userId: string, body: unknown, res: unknown) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, userId), res);
+
 const body = (overrides: Record<string, unknown> = {}) => ({
   fileName: 'report.txt',
   mimeType: 'text/plain',
   fileSize: 10,
   type: KnowledgeType.FILE,
   ...overrides,
+});
+
+// File-scoped so every describe below starts from "no grants, administers nothing" - the two
+// inputs that decide whether the lake gates fall back to the creator rung alone.
+beforeEach(() => {
+  h.listByLake.mockResolvedValue([]);
+  h.administeredOrgIds = [];
 });
 
 const tagNamesOf = (callIndex = 0) => {
@@ -115,6 +147,47 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
 
     expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The admission contract (#1680) at this door. It reaches it through
+ * `assertCanWriteDataLakeTags`' `members` option - the contract's ONLY opt-in signal - and the real
+ * service runs here, so deleting that option makes this refusal disappear.
+ */
+describe('POST /api/files/createFabFile - admission contract', () => {
+  // Deliberately not a round number: the owner's chunk policy resolves to a coded default here, and
+  // a required target that happened to match it would satisfy the contract instead of violating it.
+  const ENFORCING_LAKE = { ...LAKE, requiredPassageTokenTarget: 4321 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+    h.findByDatalakeTag.mockResolvedValue(ENFORCING_LAKE);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+    h.findOverrides.mockResolvedValue([
+      { scopeLevel: 'lake', scopeId: 'lake-1', settingName: 'EnforceLakeAdmission', settingValue: 'true' },
+    ]);
+  });
+
+  it('refuses the create when the lake enforces and the chunk policy disagrees', async () => {
+    const { res } = makeRes();
+
+    await expect(run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res)).rejects.toThrow(
+      /requires passages of 4321/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('allows it when no scoped override turns the lever on - report-only is the default', async () => {
+    h.findOverrides.mockResolvedValue([]);
+    const { res } = makeRes();
+
+    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -166,6 +239,64 @@ describe('POST /api/files/createFabFile - batch ownership (IDOR guard)', () => {
     const { res } = makeRes();
 
     await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The write authorization at this door, run for real: the route's prologue gate AND the re-gate
+ * inside `fabFilesService.createFabFile` both have to admit the caller. The service builds its own
+ * actor and loads its own grants from the adapters it is handed, so a `db` without
+ * `dataLakeAccessGrants` or a missing `administeredOrgIds` refuses a caller the prologue accepted
+ * one function call earlier.
+ */
+describe('POST /api/files/createFabFile - lake write authorization beyond the creator', () => {
+  // Created by someone else and scoped to an org, so neither the creator nor the admin rung can be
+  // what admits the caller.
+  const ORG_LAKE = { ...LAKE, createdByUserId: 'someone-else', organizationId: 'org-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.listByLake.mockResolvedValue([]);
+    h.administeredOrgIds = [];
+    h.findByDatalakeTag.mockResolvedValue(ORG_LAKE);
+    h.userFindById.mockResolvedValue({ id: 'u2', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('admits an org admin of the lake org who holds no grant and did not create it', async () => {
+    h.administeredOrgIds = ['org-1'];
+    const { res } = makeRes();
+
+    await runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits a curator grant holder', async () => {
+    h.listByLake.mockResolvedValue([{ principalType: 'user', principalId: 'u2', role: 'curator' }]);
+    const { res } = makeRes();
+
+    await runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits a transferred owner - an owner grant supersedes the creator', async () => {
+    h.listByLake.mockResolvedValue([{ principalType: 'user', principalId: 'u2', role: 'owner' }]);
+    const { res } = makeRes();
+
+    await runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a caller with no manage rung at all', async () => {
+    const { res } = makeRes();
+
+    await expect(runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 });

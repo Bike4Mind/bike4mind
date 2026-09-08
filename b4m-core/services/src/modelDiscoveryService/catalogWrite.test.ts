@@ -668,8 +668,9 @@ describe('planCatalogWrites', () => {
     });
 
     it('leaves the value in force standing when the starving claim was the only limits field', () => {
-      // Refusing the field also un-claims the group, so nothing is appended and the seed's own
-      // figure stays in force. Clamping instead would append a row and overwrite it.
+      // The starving claim is refused and the seed's own non-starving figure is carried forward, so
+      // the draft matches what is already in force and nothing is appended. Clamping instead would
+      // append a row and overwrite it.
       const seed = gpt6Seed({ maxOutputTokens: 32_000 });
       const result = plan({
         base: asBase([], [seed]),
@@ -682,7 +683,58 @@ describe('planCatalogWrites', () => {
       expect(result.rows).toEqual([]);
       expect(asBase(result.rows, [seed]).get('gpt-6')?.record.maxOutputTokens).toBe(32_000);
       expect(result.dropped.map(drop => drop.reason)).toContain(
-        'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); maxOutputTokens dropped'
+        'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); ' +
+          'carried forward the in-force maxOutputTokens 32000'
+      );
+    });
+
+    it('carries the cap in force forward when the starving claim wins the limits group', () => {
+      // The common case: a feed sends a bogus maxOutputTokens alongside a real contextWindow, so
+      // the appended row wins the whole `limits` group. Deleting the field would drop the read path
+      // to DEFAULT_MAX_OUTPUT_TOKENS (4096) - a 31x cut on a frontier model - so the non-starving
+      // 128000 already in force is carried forward and credited to discovery, not the feed.
+      const seed = gpt6Seed({ maxOutputTokens: 128_000 });
+      const result = plan({
+        base: asBase([], [seed]),
+        resolveDispatch: dispatchable,
+        contributions: [
+          {
+            name: 'openai',
+            kind: 'provider',
+            records: [{ modelId: 'gpt-6', patch: { contextWindow: 1_000_000, maxOutputTokens: 1_000_000 } }],
+          },
+        ],
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ contextWindow: 1_000_000, maxOutputTokens: 128_000 });
+      expect(result.rows[0].contributors).toContainEqual({ group: 'limits', source: 'discovery' });
+      expect(asBase(result.rows, [seed]).get('gpt-6')?.record.maxOutputTokens).toBe(128_000);
+      expect(result.dropped.map(drop => drop.reason)).toContain(
+        'maxOutputTokens 1000000 leaves no input budget in a contextWindow of 1000000 (safety buffer 1000); ' +
+          'carried forward the in-force maxOutputTokens 128000'
+      );
+    });
+
+    it('drops the field when the value in force also starves the window', () => {
+      // A window lowered under the cap already in force: the held value cannot be carried, so the
+      // field drops and the read path takes over. Same shape as the mirror case below.
+      const seed = gpt6Seed({ maxOutputTokens: 200_000 });
+      const result = plan({
+        base: asBase([], [seed]),
+        resolveDispatch: dispatchable,
+        contributions: [
+          {
+            name: 'openai',
+            kind: 'provider',
+            records: [{ modelId: 'gpt-6', patch: { contextWindow: 100_000, maxOutputTokens: 100_000 } }],
+          },
+        ],
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ contextWindow: 100_000 });
+      expect(result.rows[0].patch).not.toHaveProperty('maxOutputTokens');
+      expect(result.dropped.map(drop => drop.reason)).toContain(
+        'maxOutputTokens 100000 leaves no input budget in a contextWindow of 100000 (safety buffer 1000); maxOutputTokens dropped'
       );
     });
 

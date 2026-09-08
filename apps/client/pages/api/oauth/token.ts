@@ -12,6 +12,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { oauthAuthorizationCodeRepository, userRepository } from '@bike4mind/database';
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
 import { issueSessionForRequest } from '@server/auth/issueSession';
+import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -101,7 +102,7 @@ const handler = baseApi({ auth: false })
         id_token: idToken,
         refresh_token: refreshToken,
         token_type: 'Bearer',
-        expires_in: 3600,
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
       });
     }
 

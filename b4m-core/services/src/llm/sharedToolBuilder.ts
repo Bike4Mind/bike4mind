@@ -23,6 +23,7 @@ import type { ToolDefinition } from './tools/base/types';
 import { createDelegateToAgentTool, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 import { createCoordinateTaskTool } from './tools/implementation/coordinateTask';
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
+import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 
@@ -42,6 +43,16 @@ export interface ToolBuilderDeps {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
   kbScope?: ToolContext['kbScope'];
+  /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
+  inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
+  fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
+  suppressLakeArms?: ToolContext['suppressLakeArms'];
+  /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
+  sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
+  sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   /**
    * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
    * executor wires this to fold nested tool generation into iteration billing (#630);
@@ -114,6 +125,15 @@ export interface ToolBuilderDeps {
    * `dagDispatcher` is provided.
    */
   getCurrentExecutionId?: () => string;
+
+  /**
+   * Returns true when the calling user is at or over their organization's
+   * per-member credit cap. Forwarded to `delegate_to_agent` and
+   * `coordinate_task`'s in-process orchestrators. Omit for callers with no
+   * organization context, or that already gate the whole request upstream
+   * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
+   */
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -172,6 +192,10 @@ export interface ToolBuilderCallbacks {
   /** Session ID for entity extraction from tool results */
   sessionId?: string;
 
+  /** Quest (turn) id, for lake-access audit rows to join back to their turn - see
+   * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
+  questId?: string;
+
   /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
   onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
 
@@ -198,6 +222,13 @@ export interface BuildSharedToolsOptions {
   agentOnlyMcpServers?: string[];
   getAbortSignal?: () => AbortSignal | undefined;
   externalTools?: Record<string, ToolDefinition>;
+  /**
+   * Per-request key-gated tool availability (from `resolveToolAvailability`). Omitted ->
+   * every enabled tool is offered unfiltered (callers that haven't wired it yet keep today's
+   * behavior). Passed, a tool the caller enabled but that has no working key/config is dropped
+   * from the schema sent to the model instead of reaching it and then throwing or refusing.
+   */
+  toolAvailability?: ToolAvailability;
 }
 
 // Sentinel types for wrapping. A tool may emit one of these generic
@@ -244,6 +275,7 @@ export function buildSharedTools(
     agentOnlyMcpServers = [],
     getAbortSignal,
     externalTools,
+    toolAvailability,
   } = options;
 
   const {
@@ -259,6 +291,11 @@ export function buildSharedTools(
     entitlementKeys,
     retrievalFilter,
     kbScope,
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
+    suppressLakeArms,
+    sessionRetrievalTags,
+    sessionPreauthorizedLakeIds,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -268,7 +305,18 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter, kbScope },
+    {
+      db,
+      retrievalFilter,
+      kbScope,
+      inlinedAttachmentIds,
+      fullyInlinedAttachmentIds,
+      suppressLakeArms,
+      sessionRetrievalTags,
+      sessionPreauthorizedLakeIds,
+      questId: callbacks.questId,
+      getAbortSignal,
+    },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,
@@ -279,6 +327,7 @@ export function buildSharedTools(
       deep_research: config.deep_research,
       image_generation: config.image_generation,
       edit_image: config.image_generation,
+      audio_generation: config.audio_generation,
     },
     model,
     imageProcessorLambdaName,
@@ -294,11 +343,20 @@ export function buildSharedTools(
   // Filter to enabled tools only
   let tools: ICompletionOptionTools[] | undefined = undefined;
   if (enabledTools.length > 0) {
-    const mappedTools = enabledTools.filter(tool => tool in llmToolDefinitions).map(tool => llmToolDefinitions[tool]);
+    const mappedTools = enabledTools
+      .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
+      .map(tool => llmToolDefinitions[tool]);
 
     const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool]);
     if (undefinedTools.length > 0) {
       logger.warn(`Undefined tools requested (will be skipped): ${undefinedTools.join(', ')}`);
+    }
+
+    const unavailableTools = enabledTools.filter(
+      tool => tool in llmToolDefinitions && !isToolOfferable(tool, toolAvailability)
+    );
+    if (unavailableTools.length > 0) {
+      logger.info(`Enabled tools dropped as unavailable (no working key/config): ${unavailableTools.join(', ')}`);
     }
 
     tools = mappedTools.filter((tool): tool is ICompletionOptionTools => tool !== undefined);
@@ -390,6 +448,7 @@ export function buildSharedTools(
     handoffSignal: deps.handoffSignal,
     depth: deps.depth,
     optInTools: deps.optInTools,
+    checkMemberCreditCap: deps.checkMemberCreditCap,
   });
   tools.push(delegateTool);
 
@@ -417,6 +476,7 @@ export function buildSharedTools(
       getParentExecutionId: deps.getCurrentExecutionId,
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
+      checkMemberCreditCap: deps.checkMemberCreditCap,
     });
     tools.push(coordinateTool);
   }

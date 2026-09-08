@@ -6,6 +6,7 @@ import {
   isAppWrapperHost,
   isUsercontentHost,
   usercontentHostFor,
+  VIEWER_SANDBOX,
 } from './viewerSecurity';
 import { BLESSED_SCRIPT_PATHS, PUBLISH_HOST } from './validateBundle';
 
@@ -286,5 +287,13 @@ describe('buildBundleScriptSrc hosted regression (byte-identical, B4M_SELF_HOST 
     const expected =
       'https://app.pr5.preview.bike4mind.com/static/lib/chart.js@4.x.js https://app.pr5.preview.bike4mind.com/static/b4m-client.js@1.x.js https://app.pr5.preview.bike4mind.com/static/lib/react@18.x.js https://app.pr5.preview.bike4mind.com/static/lib/react-dom@18.x.js https://app.pr5.preview.bike4mind.com/static/lib/prop-types@15.x.js https://app.pr5.preview.bike4mind.com/static/lib/recharts@2.x.js https://app.pr5.preview.bike4mind.com/static/lib/lucide@1.x.js https://app.pr5.preview.bike4mind.com/static/lib/d3@7.x.js https://app.pr5.preview.bike4mind.com/static/lib/lodash@4.x.js https://app.pr5.preview.bike4mind.com/static/lib/mathjs@11.x.js https://app.pr5.preview.bike4mind.com/static/lib/papaparse@5.x.js https://app.pr5.preview.bike4mind.com/static/lib/xlsx@0.18.x.js https://app.bike4mind.com/static/lib/chart.js@4.x.js https://app.bike4mind.com/static/b4m-client.js@1.x.js https://app.bike4mind.com/static/lib/react@18.x.js https://app.bike4mind.com/static/lib/react-dom@18.x.js https://app.bike4mind.com/static/lib/prop-types@15.x.js https://app.bike4mind.com/static/lib/recharts@2.x.js https://app.bike4mind.com/static/lib/lucide@1.x.js https://app.bike4mind.com/static/lib/d3@7.x.js https://app.bike4mind.com/static/lib/lodash@4.x.js https://app.bike4mind.com/static/lib/mathjs@11.x.js https://app.bike4mind.com/static/lib/papaparse@5.x.js https://app.bike4mind.com/static/lib/xlsx@0.18.x.js';
     expect(buildBundleScriptSrc('app.pr5.preview.bike4mind.com', 'https')).toBe(expected);
+  });
+});
+
+describe('VIEWER_SANDBOX', () => {
+  it('grants scripts + escaping popups and never allow-same-origin', () => {
+    expect(VIEWER_SANDBOX).toBe('allow-scripts allow-popups allow-popups-to-escape-sandbox');
+    // The opaque-origin invariant: reclaiming the app origin here is an ATO.
+    expect(VIEWER_SANDBOX.split(' ')).not.toContain('allow-same-origin');
   });
 });

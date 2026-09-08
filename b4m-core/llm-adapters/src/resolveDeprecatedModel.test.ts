@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ModelInfo } from '@bike4mind/common';
+import { isModelDeprecated, type ModelInfo } from '@bike4mind/common';
 import {
   DEPRECATED_MODEL_MAP,
   buildSupersededIndex,
@@ -9,6 +9,7 @@ import {
   updateReplacedByOverlay,
 } from './resolveDeprecatedModel';
 import { XAIBackend } from './xaiBackend';
+import { GeminiBackend } from './geminiBackend';
 import { recordDeprecatedModelRequest } from './modelSunsetMetrics';
 
 vi.mock('./modelSunsetMetrics', () => ({
@@ -158,6 +159,27 @@ describe('DEPRECATED_MODEL_MAP invariants (xAI catalog)', () => {
       .map(([from, target]) => `${from} -> ${target}`);
 
     expect(dangling, `xAI mappings whose target is not in the catalog: ${dangling.join(', ')}`).toEqual([]);
+  });
+});
+
+describe('Gemini 2.5 Flash retirement', () => {
+  // getModelInfo() returns a static array, so this key is never used for a network call.
+  const geminiModels = () => new GeminiBackend('test-key-not-used').getModelInfo();
+
+  it('keeps gemini-2.5-flash out of the picker', async () => {
+    const model = (await geminiModels()).find(m => m.id === 'gemini-2.5-flash');
+
+    expect(model).toBeDefined();
+    expect(isModelDeprecated(model as ModelInfo)).toBe(true);
+  });
+
+  it('resolves a pinned gemini-2.5-flash to a model the picker still offers', async () => {
+    const resolved = resolveDeprecatedModelId('gemini-2.5-flash');
+    const replacement = (await geminiModels()).find(m => m.id === resolved);
+
+    expect(resolved).not.toBe('gemini-2.5-flash');
+    expect(replacement).toBeDefined();
+    expect(isModelDeprecated(replacement as ModelInfo)).toBe(false);
   });
 });
 
