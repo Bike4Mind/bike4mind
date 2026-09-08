@@ -147,9 +147,11 @@ export const ABSTENTION_PROMPT = `When a request is underspecified or your sourc
  * Default text for the web-search freshness nudge, and the `WebSearchFreshnessPrompt` admin
  * setting's default.
  *
- * Unlike ABSTENTION_PROMPT / ARTIFACT_EMISSION_PROMPT / HELP_CENTER_PROMPT, this is NOT a runtime
- * fallback: ChatCompletionProcess reads the setting 2-arg, so a cleared value stays '' and drops
- * the section instead of reverting here. That divergence is deliberate - this section has no
+ * Unlike ABSTENTION_PROMPT / ARTIFACT_EMISSION_PROMPT / HELP_CENTER_PROMPT, this setting
+ * distinguishes an absent row from a cleared one. ChatCompletionProcess reads it 2-arg, so an
+ * absent row still falls back to this constant as the setting's registered default, but a cleared
+ * '' is returned verbatim and drops the section rather than reverting. The siblings are read 3-arg
+ * and collapse both cases to the constant. That divergence is deliberate - this section has no
  * companion boolean, so clearing the field is the only off switch it has. Keep the setting's
  * description in sync with that if either changes.
  *
