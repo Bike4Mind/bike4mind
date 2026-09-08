@@ -50,7 +50,12 @@ const handler = baseApi().delete(async (req, res) => {
       console.error('[Notion Disconnect] Failed to delete Notion MCP server:', mcpError);
     }
 
-    res.status(200).json({ success: true });
+    res.status(200).json({
+      success: true,
+      message:
+        'Notion disconnected from Bike4Mind. Note: the token may still be valid in Notion until you revoke it ' +
+        'at notion.so > Settings > My connections.',
+    });
   } catch (error) {
     console.error('[Notion Disconnect] Fatal error during disconnect:', error);
     const detail = error instanceof Error ? error.message : 'Unknown error';
