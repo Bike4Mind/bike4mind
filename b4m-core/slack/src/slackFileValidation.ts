@@ -83,7 +83,13 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
   // "did path.extname find a dot") is what keeps those genuinely extension-less names on the
   // same plain-text fallback as LICENSE/Dockerfile, instead of being judged against an extension
   // that was never really there.
-  const looksLikeExtension = /^[a-z][a-z0-9]{0,7}$/.test(ext);
+  // Not a length/character-class check - a real extension can be longer than 8 chars
+  // (`properties`) or contain digits anywhere but the front (`7z` doesn't apply here since
+  // it's not on the allow-list, but a longer one like `properties` is a real, if unsupported,
+  // extension and must still be REFUSED, not silently coerced to plain text). Excluding only
+  // a digit-led tail is what keeps a date/version fragment ("07", "2") extension-less without
+  // also exempting a merely-long unsupported extension.
+  const looksLikeExtension = ext !== '' && !/^[0-9]/.test(ext);
   // A trailing dot ("payload.") also fails `looksLikeExtension`, but it's malformed rather than
   // extension-less, so it stays refused below instead of being coerced to plain text.
   const hasNoExtension = !looksLikeExtension && !file.name.endsWith('.');
