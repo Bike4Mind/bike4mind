@@ -98,8 +98,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
         // Records the CreditTransaction (idempotent on stripePaymentIntentId),
         // then atomically $inc's the balance and stamps the pack lot. Replaces a
-        // former read-modify-$set of the whole user doc, which both reverted any
-        // concurrent balance write and double-credited on Stripe's webhook retries.
+        // former read-modify-$set of the whole user doc, which reverted any concurrent
+        // balance write. (The unique stripePaymentIntentId index already blocked
+        // double-crediting on Stripe retries: createTransaction rethrew the E11000 before
+        // the increment. The $inc additionally makes the balance update itself atomic.)
         await creditService.addCredits(
           {
             type: 'purchase',

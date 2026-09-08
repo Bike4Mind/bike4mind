@@ -116,10 +116,6 @@ export async function adminUpdateUser(
   if (!user) {
     throw new Error('User not found');
   }
-  let lastCreditsPurchasedAt = user.lastCreditsPurchasedAt;
-  if ((params.currentCredits ?? 0) > 0 && params.currentCredits !== user.currentCredits) {
-    lastCreditsPurchasedAt = new Date();
-  }
 
   // Route a `currentCredits` change through the audited ledger when the adapter
   // is wired. The ledger runs before every write below, so a failure aborts with
@@ -131,16 +127,20 @@ export async function adminUpdateUser(
   const previousBalance = user.currentCredits ?? 0;
   const { moderationStatus, creditReason, creditDelta: signedDelta, ...baseParams } = params;
   // A signed `creditDelta` is applied verbatim (no interim-spend refund). Absolute
-  // `currentCredits` falls back to delta-from-fresh-balance.
+  // `currentCredits` falls back to delta-from-snapshot.
   const rawDelta =
     signedDelta !== undefined
       ? signedDelta
       : params.currentCredits !== undefined && params.currentCredits !== previousBalance
         ? params.currentCredits - previousBalance
         : 0;
-  // Never drive the balance below zero (mirrors the old client-side Math.max(0, ...)
-  // clamp, but against the fresh server balance instead of a stale snapshot).
-  const creditDelta = Math.max(rawDelta, -previousBalance);
+  // Floor a deduction so a non-negative balance is never driven below zero (mirrors the
+  // old client-side Math.max(0, ...) clamp). Only when the balance is non-negative: when
+  // it is already negative, `-previousBalance` is a positive floor that would invert a
+  // deduction into a credit, so apply the delta verbatim in that case.
+  const creditDelta = previousBalance >= 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
+  // Stamp a purchase timestamp only for a net grant; a deduction must not count as a purchase.
+  const lastCreditsPurchasedAt = creditDelta > 0 ? new Date() : user.lastCreditsPurchasedAt;
   const auditCreditChange = creditDelta !== 0 && !!db.creditTransactions;
 
   const builtParams = { ...baseParams, lastCreditsPurchasedAt };
@@ -152,6 +152,12 @@ export async function adminUpdateUser(
   const writeData = toUserUpdatePartial(builtUser, builtParams);
   if (auditCreditChange) {
     delete (writeData as { currentCredits?: number }).currentCredits;
+  } else if (signedDelta !== undefined && creditDelta !== 0) {
+    // Signed-delta path with no ledger adapter wired: apply the delta to the doc write
+    // directly (like the legacy absolute-`currentCredits` fallback) instead of dropping
+    // it silently. `currentCredits` is not in `baseParams` on this path, so nothing else
+    // would persist the change.
+    (writeData as { currentCredits?: number }).currentCredits = previousBalance + creditDelta;
   }
 
   // Audited credit adjustment: runs BEFORE any persistence (org membership, the
@@ -160,6 +166,9 @@ export async function adminUpdateUser(
   // generic_add / generic_deduct CreditTransaction.
   if (auditCreditChange && db.creditTransactions) {
     const note = creditReason?.trim() || undefined;
+    // Best-effort resulting balance predicted from the read snapshot. The atomic $inc
+    // inside addCredits/subtractCredits is the source of truth, so concurrent spend
+    // between the read and the increment can make this differ from the committed balance.
     const resultingBalance = previousBalance + creditDelta;
     const metadata: Record<string, unknown> = { actorId: userId, previousBalance, resultingBalance };
     if (note) {
