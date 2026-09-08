@@ -448,8 +448,14 @@ export const RetrievalSummarySchema = z.object({
    * `chunks: 0` is a RECORDED STARVE - the library was searched and nothing was injected, which is
    * the case this field exists to make visible: without it, a forced-retrieval turn that injected
    * nothing is byte-identical to one that injected its whole character budget (both `outcome:
-   * 'ok'`). Absence means the volume is UNKNOWN, covering a turn that never attempted retrieval,
-   * 'no_lakes' (nothing was searched), and 'failed' (it broke mid-flight, so zero would be a lie).
+   * 'ok'`). Absence means the volume is UNKNOWN, which is what a turn carries when no surface
+   * completed a search: retrieval was never attempted, nothing was in scope to search
+   * ('no_lakes'), or the one surface that ran broke mid-flight, where a zero would be a lie.
+   *
+   * Per SURFACE, not per turn: a surface that breaks contributes nothing while a surface that
+   * completed alongside it still reports its own volume, so a turn CAN read 'failed' next to a
+   * recorded zero. That pairing means "one surface broke, and everything that did finish injected
+   * nothing" - which is exactly what a reader needs, and strictly more than the outcome alone.
    *
    * SUMMED across surfaces, so this field and `outcome` can legitimately disagree in tone on a
    * multi-surface turn: forced retrieval grounding on 12 passages while knowledgeBaseSearch throws
