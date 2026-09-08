@@ -43,8 +43,16 @@ const handler = baseApi().post(
     // Handle DB operations in transaction
     const { fileId } = await withTransaction(async session => {
       if (user.photoUrl) {
-        await storage.delete(user.photoUrl);
-        await AppFile.findOneAndDelete({ path: user.photoUrl }).session(session);
+        // Defense-in-depth: only delete the underlying S3 object + AppFile when the AppFile
+        // at this key belongs to the caller. photoUrl is no longer settable via the
+        // self-service profile update, but a value poisoned before that fix (or by any other
+        // writer) must never delete a file the caller does not own. AppFiles for profile
+        // photos are created below with userId: req.user.id, so a legit re-upload always matches.
+        const existing = await AppFile.findOne({ path: user.photoUrl }).session(session);
+        if (existing && existing.userId?.toString() === req.user.id) {
+          await storage.delete(user.photoUrl);
+          await AppFile.findOneAndDelete({ path: user.photoUrl }).session(session);
+        }
         await User.updateOne({ _id: userId }, { $unset: { photoUrl: 1 } }).session(session);
       }
 
