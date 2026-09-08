@@ -36,7 +36,7 @@ export const assertLakeWriteAccess = async (
     db,
   }: {
     db: {
-      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
       // 'listByPrincipal' (#2425) flows straight through to assertLakeAccess's own adapter type
       // below, which uses it to resolve a foreign-org owner/curator grant by slug.
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
@@ -78,7 +78,7 @@ export const assertLakeRebuildAccess = async (
     db,
   }: {
     db: {
-      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
       // 'listByPrincipal' (#2425) flows straight through to assertLakeAccess's own adapter type
       // below, which uses it to resolve a foreign-org owner/curator grant by slug.
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
@@ -115,7 +115,7 @@ export const assertFallbackLakeSettingsWriteAccess = async (
     logger,
   }: {
     db: {
-      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
       // 'listByPrincipal' (#2425) flows straight through to assertLakeAccess's own adapter type
       // below, which uses it to resolve a foreign-org owner/curator grant by slug.
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
