@@ -5,6 +5,7 @@ import { secretRotationRepository } from '@bike4mind/database/infra';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { decryptAtRest } from '@bike4mind/utils/security';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 
 // Per-user cap (req.user is set here, so rateLimit keys by user id, not IP). No legitimate
@@ -41,8 +42,10 @@ const handler = baseApi()
         const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
         let previousSecret = undefined;
         // Accept the previous key only within the shared rotation grace window.
-        if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
-          previousSecret = secretRotation?.previousKey;
+        // `previousKey` is stored encrypted at rest (see secret-rotations/renewed.ts);
+        // decrypt before verifying. Legacy plaintext rows pass through unchanged.
+        if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
+          previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;
         }
         const decoded = authTokenGenerator.verifyToken(accessToken, previousSecret);
         if (decoded.exp && decoded.exp < Date.now() / 1000) {
