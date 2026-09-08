@@ -65,6 +65,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   confirmChunkClaim: vi.fn().mockResolvedValue(true),
   findByIdAndUserId: vi.fn(),
   findAllInIds: vi.fn(),
+  findAccessibleInIds: vi.fn(),
   findMetadataByIds: vi.fn(),
   findMetadataBySessionId: vi.fn(),
   deleteManyInIds: vi.fn(),

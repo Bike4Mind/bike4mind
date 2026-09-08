@@ -112,22 +112,35 @@ describe('ImageGenerationService.selectInputImage', () => {
   });
 
   const makeService = (opts: { fabFilesById?: Record<string, FakeFile>; recentMessages?: unknown[] }) => {
-    const findAllInIds = vi.fn(async (ids: string[]) => (ids || []).map(id => opts.fabFilesById?.[id]).filter(Boolean));
+    // Access-scoped lookup: the mock returns only the ids configured as accessible in
+    // fabFilesById, mirroring the repo dropping ids the caller cannot access.
+    const findAccessibleInIds = vi.fn(async (ids: string[]) =>
+      (ids || []).map(id => opts.fabFilesById?.[id]).filter(Boolean)
+    );
     const getMostRecentChatHistory = vi.fn(async () => opts.recentMessages ?? []);
     const service = new ImageGenerationService({
-      db: { fabFiles: { findAllInIds }, quests: { getMostRecentChatHistory } },
+      db: { fabFiles: { findAccessibleInIds }, quests: { getMostRecentChatHistory } },
     } as any);
-    return { service, findAllInIds, getMostRecentChatHistory };
+    return { service, findAccessibleInIds, getMostRecentChatHistory };
   };
 
   const select = (
     service: ImageGenerationService,
-    args: { model: string; supportsImageVariation: boolean; intent?: 'fresh' | 'continuation'; fabFileIds?: string[] }
+    args: {
+      model: string;
+      supportsImageVariation: boolean;
+      intent?: 'fresh' | 'continuation';
+      fabFileIds?: string[];
+      userId?: string;
+      userGroups?: string[];
+    }
   ) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (service as any).selectInputImage({
       sessionId: 's1',
       fabFileIds: args.fabFileIds ?? [],
+      userId: args.userId ?? 'u1',
+      userGroups: args.userGroups,
       model: args.model,
       modelInfo: { supportsImageVariation: args.supportsImageVariation } as ModelInfo,
       intent: args.intent ?? 'fresh',
@@ -194,6 +207,24 @@ describe('ImageGenerationService.selectInputImage', () => {
       intent: 'fresh',
     });
     expect(result.fileImage).toBeUndefined();
+  });
+
+  it("denies another user's fabFileId - the scoped lookup drops it, so no image is selected", async () => {
+    // The caller passes a workbench fabFileId that findAccessibleInIds does not return (not
+    // owned by / shared with the caller). It must never be presigned or fed to the provider.
+    const { service, findAccessibleInIds } = makeService({ fabFilesById: {} });
+    const result = await select(service, {
+      model: ImageModels.FLUX_KONTEXT_PRO,
+      supportsImageVariation: true,
+      fabFileIds: ['someone-elses-file'],
+      userId: 'attacker',
+      userGroups: ['g1'],
+    });
+    expect(result.fileImage).toBeUndefined();
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['someone-elses-file'], {
+      userId: 'attacker',
+      userGroups: ['g1'],
+    });
   });
 
   it('prefers the workbench upload over any notebook-context image', async () => {
@@ -323,13 +354,13 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
     const findById = vi.fn(async () => quest as any);
     const update = vi.fn(async () => undefined);
     const updateMany = vi.fn(async () => undefined);
-    const findAllInIds = vi.fn(async () => []);
+    const findAccessibleInIds = vi.fn(async () => []);
     const service = new ImageGenerationService({
       db: {
         quests: { findById, update, updateMany },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
-        fabFiles: { findAllInIds },
+        fabFiles: { findAccessibleInIds },
       },
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
@@ -469,7 +500,7 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
         quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
-        fabFiles: { findAllInIds: vi.fn(async () => []) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
       },
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),

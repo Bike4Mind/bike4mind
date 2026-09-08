@@ -68,7 +68,14 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
     );
   }
 
-  const fabFile = await context.db.fabfiles?.findById(fileId);
+  // Access-scoped so the edit_image tool cannot sign and hand back a file the caller
+  // cannot access. Same NotFoundError shape for missing vs. not-yours so a probe can't
+  // tell them apart (owner/share/group/global-read only).
+  const accessible = await context.db.fabfiles?.findAccessibleInIds([fileId], {
+    userId: context.userId,
+    userGroups: context.user?.groups ?? undefined,
+  });
+  const fabFile = accessible?.[0];
   if (!fabFile) {
     throw new NotFoundError(`File with ID ${fileId} not found`);
   }

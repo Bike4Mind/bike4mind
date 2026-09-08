@@ -5,7 +5,10 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { IAgent, IAgentDocument, redactSessionForClient, isImageServeable } from '@bike4mind/common';
 
-const refreshAgentAvatarUrls = async (agents: IAgent[]): Promise<IAgent[]> => {
+// `viewerId` is the requesting user: the signed-URL write-back below mutates the FabFile
+// record, so it is gated to the file's owner - a viewer of a *shared* agent still gets a
+// freshly minted display URL but never rewrites another user's FabFile record.
+const refreshAgentAvatarUrls = async (agents: IAgent[], viewerId: string): Promise<IAgent[]> => {
   const refreshedAgents = await Promise.all(
     agents.map(async agent => {
       if (!agent.visual?.portraitUrl) {
@@ -36,12 +39,16 @@ const refreshAgentAvatarUrls = async (agents: IAgent[]): Promise<IAgent[]> => {
             const newSignedUrl = await getFilesStorage().getSignedUrl(fabFile.filePath);
 
             if (newSignedUrl) {
-              const newExpireAt = new Date(now.getTime() + 3600 * 1000);
-              await fabFileRepository.update({
-                ...fabFile,
-                fileUrl: newSignedUrl,
-                fileUrlExpireAt: newExpireAt,
-              });
+              // Persist the fresh URL only on the owner's own record - a shared-agent viewer
+              // must not mutate a FabFile owned by someone else.
+              if (fabFile.userId === viewerId) {
+                const newExpireAt = new Date(now.getTime() + 3600 * 1000);
+                await fabFileRepository.update({
+                  ...fabFile,
+                  fileUrl: newSignedUrl,
+                  fileUrlExpireAt: newExpireAt,
+                });
+              }
 
               return {
                 ...agent,
@@ -88,7 +95,7 @@ const handler = baseApi()
       // Filter out any null/undefined results (deleted agents)
       const validAgents = agents.filter((agent): agent is IAgentDocument => agent != null);
 
-      const agentsWithRefreshedAvatars = await refreshAgentAvatarUrls(validAgents);
+      const agentsWithRefreshedAvatars = await refreshAgentAvatarUrls(validAgents, req.user!.id);
 
       res.json({ agents: agentsWithRefreshedAvatars });
     })

@@ -798,6 +798,18 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findAllInIds(ids: string[]): Promise<IFabFileDocument[]>;
 
   /**
+   * Like findAllInIds, but returns only the files the given user may access - owner,
+   * user-share, group-share, or global-read. For engine callers (@bike4mind/services)
+   * that hold only a userId and have no req.ability, so a caller-supplied FabFile id
+   * for a file they cannot see is never presigned or fed to a provider. The predicate
+   * must stay in sync with the CASL FabFile read rule (packages/database/src/utils/
+   * ability.ts) and buildOwnershipConditions.
+   * @param ids - The IDs of the files.
+   * @param access - The caller's userId and (optional) group ids.
+   */
+  findAccessibleInIds(ids: string[], access: { userId: string; userGroups?: string[] }): Promise<IFabFileDocument[]>;
+
+  /**
    * Find files by ID with the heavy and URL-bearing fields projected out, for
    * callers that need to know what a file IS without loading or linking to it.
    * Includes soft-deleted files, so a still-referenced deleted attachment stays

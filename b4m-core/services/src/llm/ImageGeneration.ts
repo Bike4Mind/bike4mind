@@ -497,6 +497,8 @@ export class ImageGenerationService {
   private async selectInputImage({
     sessionId,
     fabFileIds,
+    userId,
+    userGroups,
     model,
     modelInfo,
     intent,
@@ -504,6 +506,8 @@ export class ImageGenerationService {
   }: {
     sessionId: string;
     fabFileIds?: string[];
+    userId: string;
+    userGroups?: string[];
     model: string;
     modelInfo: ModelInfo;
     intent: z.infer<typeof PromptIntentSchema>;
@@ -512,7 +516,9 @@ export class ImageGenerationService {
     fileImage?: SelectedImage;
     imageSource: 'workbench' | 'message_history' | 'notebook_attachment';
   }> {
-    const fabFiles = await this.db.fabFiles.findAllInIds(fabFileIds || []);
+    // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
+    // never presigned or fed to a provider (owner/share/group/global-read only).
+    const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups });
     const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
 
     // An explicit workbench upload must not be fed into generation while it's held (pending
@@ -550,7 +556,7 @@ export class ImageGenerationService {
         const attachedIds = [...new Set(recentMessages.flatMap(msg => msg.fabFileIds ?? []))];
         const attachedById = new Map<string, IFabFileDocument>();
         if (attachedIds.length) {
-          for (const file of await this.db.fabFiles.findAllInIds(attachedIds)) {
+          for (const file of await this.db.fabFiles.findAccessibleInIds(attachedIds, { userId, userGroups })) {
             if (file.id) attachedById.set(file.id, file);
           }
         }
@@ -771,6 +777,8 @@ export class ImageGenerationService {
       const { fileImage, imageSource } = await this.selectInputImage({
         sessionId,
         fabFileIds,
+        userId,
+        userGroups: user.groups ?? undefined,
         model,
         modelInfo,
         intent,

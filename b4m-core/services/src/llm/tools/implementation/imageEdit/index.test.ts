@@ -57,12 +57,13 @@ function createFakeContext(): ToolContext {
   };
 }
 
-// Builds a context whose `db.fabfiles.findById` resolves to the given fabFile stub, and
-// whose `storage.getSignedUrl` is mockable - everything `getImageFromFileId` touches.
+// Builds a context whose `db.fabfiles.findAccessibleInIds` resolves to the given fabFile stub
+// (null -> [], the shape the repo returns when the caller cannot access the id), and whose
+// `storage.getSignedUrl` is mockable - everything `getImageFromFileId` touches.
 function createFakeContextWithFabFile(fabFile: Record<string, unknown> | null): ToolContext {
   const context = createFakeContext();
-  (context.db as unknown as { fabfiles: { findById: ReturnType<typeof vi.fn> } }).fabfiles = {
-    findById: vi.fn().mockResolvedValue(fabFile),
+  (context.db as unknown as { fabfiles: { findAccessibleInIds: ReturnType<typeof vi.fn> } }).fabfiles = {
+    findAccessibleInIds: vi.fn().mockResolvedValue(fabFile ? [fabFile] : []),
   };
   context.storage = {
     upload: vi.fn(),
@@ -95,6 +96,15 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
     });
 
     await expect(getImageFromFileId(VALID_FILE_ID, context)).rejects.toThrow('This image is not available.');
+    expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('denies a file the caller cannot access - NotFoundError, no signed URL minted', async () => {
+    // Repo returns [] when the id is not owned by / shared with the caller (the IDOR fix): the
+    // tool must not distinguish "not found" from "not yours", and must never sign the file.
+    const context = createFakeContextWithFabFile(null);
+
+    await expect(getImageFromFileId(VALID_FILE_ID, context)).rejects.toThrow(`File with ID ${VALID_FILE_ID} not found`);
     expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
   });
 

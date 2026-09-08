@@ -667,6 +667,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toObject());
   }
 
+  async findAccessibleInIds(ids: string[], access: { userId: string; userGroups?: string[] }) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const result = await this.fabFileModel.find({
+      _id: { $in: convertIds(validIds) },
+      // owner + user-share + group-share (buildOwnershipConditions) + global-read - the
+      // shares-aware equivalent of the CASL FabFile read rule for callers with no req.ability.
+      $or: [...buildOwnershipConditions(access.userId, { userGroups: access.userGroups }), { isGlobalRead: true }],
+    });
+    return result.map(d => d.toObject());
+  }
+
   /**
    * Metadata-only fetch for a set of ids. The heavy fields AND the URL-bearing
    * ones are projected out (see METADATA_ONLY_PROJECTION), so a caller that only
