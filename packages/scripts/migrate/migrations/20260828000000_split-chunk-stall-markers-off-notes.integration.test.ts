@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
+import { LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
@@ -205,6 +206,11 @@ describe('split-chunk-stall-markers-off-notes migration (real DB)', () => {
     // The `rechunkPaused` wording, deliberately: it mislabels the file but keeps it visible as
     // stalled, and it is prose the transitional read arms already honor. See `down()`.
     expect(row?.notes).toBe(RECHUNK_PAUSED_NOTE);
+    // Restoring prose no transitional reader honors would make this arm cosmetic - the file would
+    // still read as healthy, which is the bug it exists to prevent. NOT covered by the reword guard
+    // in `chunking.test.ts`: that pins this file's literals against a reword of `CHUNK_STALL_NOTICES`
+    // and stays green if someone "fixes" the mislabelling by giving this arm a wording of its own.
+    expect(LEGACY_CHUNK_STALL_NOTES).toContain(row?.notes);
     expect('chunkStallReason' in (row ?? {})).toBe(false);
   });
 
