@@ -122,6 +122,15 @@ interface ListDataLakesAdapters {
    * set" - see resolveFallbackSettings for why silence there is not harmless.
    */
   logger?: LakeAccessLogger;
+  /**
+   * Optional pre-resolved grant-id set (#2425 P3): skips this function's own `grantedLakeIdsFor`
+   * call when the caller already ran the identical query. Only safe to pass when the caller never
+   * threads `db.settings` above, so `resolveEnforceReadGrants` (and thus the `includeReaders` this
+   * function would otherwise resolve to) is always `false` - `handleList`
+   * (apps/client/server/slack/handleDataLakeCommand.ts) is the one caller today, and it satisfies
+   * that precondition by construction. Absent -> recomputes exactly as before.
+   */
+  grantedLakeIds?: string[];
 }
 
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
@@ -339,15 +348,12 @@ const toFallbackConfig = (
  */
 export const listDataLakes = async (
   ctx: AccessContext,
-  { db }: ListDataLakesAdapters
+  { db, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds =
+    precomputedGrantedLakeIds ??
+    (await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders));
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
