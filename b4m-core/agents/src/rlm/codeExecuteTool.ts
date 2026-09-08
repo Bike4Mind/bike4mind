@@ -211,9 +211,14 @@ function formatObservation(o: ObservationFields): string {
         'Do not call code_execute again. Continue with your other tools, or answer from what you already have.'
     );
     // Output captured before the sandbox died is still the agent's best
-    // material for the answer it now has to give without the REPL.
+    // material for the answer it now has to give without the REPL - and this
+    // is the branch most likely to be short of it, so the truncation flag has
+    // to be rendered HERE too. It used to be plumbed all the way from the
+    // backend and then dropped one line above the `| stdout truncated` on the
+    // ordinary path, so an agent answering from a partial buffer had no way
+    // to know it was partial.
     if (o.stdout) {
-      lines.push('--- stdout (captured before shutdown) ---');
+      lines.push(`--- stdout (captured before shutdown${o.truncated ? ', truncated' : ''}) ---`);
       lines.push(o.stdout);
     }
     return lines.join('\n');

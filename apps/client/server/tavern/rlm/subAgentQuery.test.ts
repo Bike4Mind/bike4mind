@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ReplSession, BudgetExceededError } from '@bike4mind/agents';
 import { buildDataLakeTools } from './tools';
+import { SUB_LLM_HTTP_TIMEOUT_MS } from './timeouts';
 
 /**
  * subAgentQuery is the only tool in the REPL that spends money directly, and
@@ -244,5 +245,139 @@ describe('subAgentQuery provider-call bounds', () => {
     await subAgentQuery({ prompt: 'hi', max_tokens: 256 });
 
     expect(createSpy.mock.calls[0][0].max_tokens).toBe(256);
+  });
+});
+
+describe('subAgentQuery abort accounting', () => {
+  beforeEach(() => {
+    createSpy.mockReset();
+    // Hangs until the tool's OWN deadline aborts the signal it passed, which
+    // is the only way to exercise the mid-generation case: the SDK's
+    // `APIUserAbortError` never assigns `name`, so a hand-made error with an
+    // abort-sounding name would test a classification the code does not do.
+    createSpy.mockImplementation(
+      (_payload: unknown, options: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(new Error('Request was aborted.')));
+        })
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Run a call and let only its deadline elapse. */
+  async function expireDeadline(call: Promise<unknown>): Promise<unknown> {
+    const settled = call.then(
+      v => v,
+      (e: unknown) => e
+    );
+    await vi.advanceTimersByTimeAsync(SUB_LLM_HTTP_TIMEOUT_MS + 1);
+    return settled;
+  }
+
+  /**
+   * An abort is the one failure that still costs money: the deadline fires
+   * mid-generation, so the provider has already billed the tokens it
+   * produced. `release()` books $0 and hands the slot back - which is how a
+   * session walks past its own cap one timeout at a time. A failed DISPATCH
+   * is the case that should still release, and the test above pins that.
+   */
+  it('books the estimate when its own deadline aborts a call mid-generation', async () => {
+    vi.useFakeTimers();
+    const session = new ReplSession({
+      sessionId: 'abort-books',
+      executor: 'in-process-unsafe',
+      budget: { maxSubLlmCalls: 4, maxCostUsd: 1000 },
+    });
+    const { subAgentQuery } = toolsFor(session);
+
+    const err = await expireDeadline(subAgentQuery({ prompt: 'hi' }));
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/aborted/i);
+    const usage = session.getUsage();
+    expect(usage.subLlmCalls).toBe(1);
+    expect(usage.totalCostUsd).toBeGreaterThan(0);
+  });
+
+  it('counts aborted spend against the cost cap', async () => {
+    vi.useFakeTimers();
+    // One call's estimate is ~$0.0075 at the default 1500-token ceiling, so
+    // this cap admits the first and has to refuse the second.
+    const session = new ReplSession({
+      sessionId: 'abort-cap',
+      executor: 'in-process-unsafe',
+      budget: { maxSubLlmCalls: 10, maxCostUsd: 0.01 },
+    });
+    const { subAgentQuery } = toolsFor(session);
+
+    await expireDeadline(subAgentQuery({ prompt: 'hi' }));
+
+    // Booking $0 for the first abort left the cap exactly where it started,
+    // so a caller could keep paying for aborted generations indefinitely.
+    // Run through `expireDeadline` rather than asserting `rejects` directly:
+    // the refusal is synchronous at reservation, so a regression DISPATCHES
+    // instead - and a dispatched call hangs on the mocked signal until the
+    // test times out. This way the regression reports the wrong error type
+    // immediately instead of a 30s timeout.
+    const second = await expireDeadline(subAgentQuery({ prompt: 'hi' }));
+    expect(second).toBeInstanceOf(BudgetExceededError);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('still releases the slot when the dispatch itself fails before the provider', async () => {
+    // The contrast that makes the settle-on-abort correct rather than a
+    // blanket "book everything": nothing was billed here, so the slot and
+    // the money both have to come back.
+    createSpy.mockReset();
+    createSpy.mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND'));
+
+    const session = new ReplSession({
+      sessionId: 'abort-contrast',
+      executor: 'in-process-unsafe',
+      budget: { maxSubLlmCalls: 1, maxCostUsd: 1000 },
+    });
+    const { subAgentQuery } = toolsFor(session);
+
+    await expect(subAgentQuery({ prompt: 'hi' })).rejects.toThrow(/ENOTFOUND/);
+    expect(session.getUsage().subLlmCalls).toBe(0);
+    expect(session.getUsage().totalCostUsd).toBe(0);
+  });
+});
+
+describe('subAgentQuery output-ceiling reporting', () => {
+  beforeEach(() => {
+    createSpy.mockReset();
+  });
+
+  it('surfaces an answer the output ceiling cut off instead of returning it as complete', async () => {
+    createSpy.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'partial answer' }],
+      usage: { input_tokens: 10, output_tokens: 2000 },
+      stop_reason: 'max_tokens',
+    });
+
+    const session = new ReplSession({ sessionId: 'stop-reason', executor: 'in-process-unsafe' });
+    const { subAgentQuery } = toolsFor(session);
+
+    const out = await subAgentQuery({ prompt: 'hi', max_tokens: 2000 });
+
+    expect(out).toContain('partial answer');
+    expect(out).toMatch(/hit the 2000-token output ceiling/);
+  });
+
+  it('leaves an answer that stopped on its own untouched', async () => {
+    createSpy.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'complete answer' }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+      stop_reason: 'end_turn',
+    });
+
+    const session = new ReplSession({ sessionId: 'end-turn', executor: 'in-process-unsafe' });
+    const { subAgentQuery } = toolsFor(session);
+
+    expect(await subAgentQuery({ prompt: 'hi' })).toBe('complete answer');
   });
 });

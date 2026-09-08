@@ -45,6 +45,16 @@ const MAIN_THREAD_DEADLINE_GRACE_MS = 500;
 const STDOUT_HEAD_BYTES = 5000;
 const STDOUT_TAIL_BYTES = 2000;
 const HARD_PER_LINE_BYTES = 50_000;
+/**
+ * How often the worker may post its rolling stdout tail once the head budget
+ * is spent. Decouples the mirror's message rate from the guest's line rate:
+ * past the head, a chatty loop costs at most 10 messages a second no matter
+ * how much it prints. The window it gives up is only the output produced in
+ * the last flush interval, and a HANG - the case the mirror exists for -
+ * gives that back for free, because output has stopped and the next tick
+ * carries the final line.
+ */
+const MIRROR_TAIL_FLUSH_MS = 100;
 
 export interface WorkerReplExecutorOptions {
   /** Per-call wall-clock cap. Default 30s. Mirrored by an inner vm.runInContext timeout. */
@@ -109,22 +119,34 @@ interface MsgToolCall {
   args: unknown[];
 }
 /**
- * Stdout mirrored to the main thread AS IT IS PRODUCED, so a run that is
- * later preempted can still report what it printed. `runResult` is the
- * authoritative stdout for a run that completes; this exists only because a
- * terminated worker never gets to send one.
+ * One head line, mirrored to the main thread AS IT IS PRODUCED, so a run that
+ * is later preempted can still report what it printed. `runResult` is the
+ * authoritative stdout for a run that completes; the mirror exists only
+ * because a terminated worker never gets to send one.
  */
 interface MsgStdout {
   type: 'stdout';
   id: number;
   chunk: string;
-  /**
-   * Set on the final chunk the worker will mirror for this run. The mirror is
-   * byte-capped, so output after this point is lost if the sandbox is killed.
-   */
-  elided?: boolean;
 }
-type WorkerToMain = MsgReady | MsgRunResult | MsgStdout | MsgToolCall;
+/**
+ * The rolling tail of a run whose mirrored head is full, plus how much fell
+ * between the two. Replaces (does not append to) whatever tail the main
+ * thread is holding for this run.
+ *
+ * The mirror carries a tail at all because the last line before a hang is the
+ * most diagnostic thing a killed run printed, and it is exactly what a
+ * head-only mirror drops. Keeping the same head + marker + tail shape as
+ * `collectStdout()` also means a retired run and a completed one report
+ * truncation by the same rule rather than by two that quietly disagree.
+ */
+interface MsgStdoutTail {
+  type: 'stdoutTail';
+  id: number;
+  tail: string;
+  elidedBytes: number;
+}
+type WorkerToMain = MsgReady | MsgRunResult | MsgStdout | MsgStdoutTail | MsgToolCall;
 
 // --- Worker script (inlined as a string) ---------------------------------
 // IMPORTANT: lives entirely on built-in Node modules. Do NOT add imports
@@ -137,34 +159,84 @@ const vm = require('node:vm');
 const STDOUT_HEAD_BYTES = ${STDOUT_HEAD_BYTES};
 const STDOUT_TAIL_BYTES = ${STDOUT_TAIL_BYTES};
 const HARD_PER_LINE_BYTES = ${HARD_PER_LINE_BYTES};
+const MIRROR_TAIL_FLUSH_MS = ${MIRROR_TAIL_FLUSH_MS};
 
 let stdoutChunks = [];
 let stdoutBytes = 0;
 let truncated = false;
-// Mirror state. The mirror costs one postMessage per captured line, which is
-// why it is capped at the head budget: a chatty loop stops paying for it once
-// the main thread already holds as much as the retired-run observation shows.
+// --- Mirror state --------------------------------------------------------
+// Mirrors this run's stdout to the main thread as it is produced, in the same
+// head + marker + tail shape collectStdout() produces, so a retired run and a
+// completed one report the same thing by the same rule.
+//
+// The two halves are cost-bounded differently. The head is mirrored line by
+// line, so a chatty loop stops paying per line once the head is full. Past
+// that the tail is kept locally in a rolling window and posted on a timer, so
+// the message rate stops tracking the line rate entirely.
 let currentRunId = null;
-let mirroredBytes = 0;
-let mirrorStopped = false;
+let mirroredHeadBytes = 0;
+let headMirrorFull = false;
+let tailChunks = [];
+let tailBytes = 0;
+let tailFlushTimer = null;
+
+function postToMain(msg) {
+  try { parentPort.postMessage(msg); } catch { /* worker being torn down; nothing to preserve */ }
+}
+function cancelTailFlush() {
+  if (tailFlushTimer === null) return;
+  clearTimeout(tailFlushTimer);
+  tailFlushTimer = null;
+}
+function flushTail() {
+  if (currentRunId === null || !headMirrorFull) return;
+  const joined = tailChunks.join('\n');
+  // The rolling window is trimmed line by line, so it can only exceed the
+  // budget by holding ONE line longer than the whole budget. Slice to the
+  // same last-N-chars rule collectStdout() uses, which both matches that
+  // path and keeps the flush payload bounded - a guest printing 50KB lines
+  // would otherwise re-send 50KB on every tick.
+  const overflow = Math.max(0, joined.length - STDOUT_TAIL_BYTES);
+  postToMain({
+    type: 'stdoutTail',
+    id: currentRunId,
+    tail: overflow > 0 ? joined.slice(overflow) : joined,
+    // What fell BETWEEN the mirrored head and the mirrored tail. Counted in
+    // the same line + newline units as stdoutBytes and mirroredHeadBytes, so
+    // an exact round trip reports zero rather than one byte per line.
+    elidedBytes: Math.max(0, stdoutBytes - mirroredHeadBytes - tailBytes + overflow),
+  });
+}
+function scheduleTailFlush() {
+  if (tailFlushTimer !== null) return;
+  tailFlushTimer = setTimeout(() => {
+    tailFlushTimer = null;
+    flushTail();
+  }, MIRROR_TAIL_FLUSH_MS);
+}
 function mirrorLine(capped) {
-  if (currentRunId === null || mirrorStopped) return;
-  if (mirroredBytes >= STDOUT_HEAD_BYTES) {
-    mirrorStopped = true;
-    try {
-      parentPort.postMessage({
-        type: 'stdout',
-        id: currentRunId,
-        chunk: '[...further output not mirrored before shutdown...]',
-        elided: true,
-      });
-    } catch { /* worker being torn down; nothing to preserve */ }
+  if (currentRunId === null) return;
+  if (!headMirrorFull) {
+    mirroredHeadBytes += capped.length + 1;
+    postToMain({ type: 'stdout', id: currentRunId, chunk: capped });
+    // Checked AFTER the add. Checking before it let one line of up to
+    // HARD_PER_LINE_BYTES cross a STDOUT_HEAD_BYTES budget without the
+    // mirror ever being marked short - so no truncation was reported on
+    // precisely the runs that overshot.
+    if (mirroredHeadBytes >= STDOUT_HEAD_BYTES) {
+      headMirrorFull = true;
+      // Post once immediately: a run killed before the first timed flush
+      // would otherwise report a short mirror as if it were complete.
+      flushTail();
+    }
     return;
   }
-  mirroredBytes += capped.length + 1;
-  try {
-    parentPort.postMessage({ type: 'stdout', id: currentRunId, chunk: capped });
-  } catch { /* worker being torn down; nothing to preserve */ }
+  tailChunks.push(capped);
+  tailBytes += capped.length + 1;
+  while (tailBytes > STDOUT_TAIL_BYTES && tailChunks.length > 1) {
+    tailBytes -= tailChunks.shift().length + 1;
+  }
+  scheduleTailFlush();
 }
 function captureLine(args) {
   const line = args.map(a => {
@@ -280,7 +352,10 @@ parentPort.on('message', async (msg) => {
   if (msg.type === 'runCode') {
     const t0 = Date.now();
     stdoutChunks = []; stdoutBytes = 0; truncated = false;
-    currentRunId = msg.id; mirroredBytes = 0; mirrorStopped = false;
+    cancelTailFlush();
+    currentRunId = msg.id;
+    mirroredHeadBytes = 0; headMirrorFull = false;
+    tailChunks = []; tailBytes = 0;
     let error = null;
     const wrapped = '(async () => {\n' + msg.code + '\n})()';
     try {
@@ -293,8 +368,10 @@ parentPort.on('message', async (msg) => {
       error = serializeError(e);
     }
     // Stop mirroring before the authoritative result goes out, so a late
-    // console.log from an abandoned continuation cannot attach to this run.
+    // console.log from an abandoned continuation cannot attach to this run,
+    // and a pending tail flush cannot land after it.
     currentRunId = null;
+    cancelTailFlush();
     parentPort.postMessage({
       type: 'runResult',
       id: msg.id,
@@ -314,12 +391,30 @@ interface PendingRun {
   resolve: (r: ReplRunResult) => void;
   /** Main-thread deadline for this run. Cleared whenever the run settles. */
   timer?: ReturnType<typeof setTimeout>;
-  /** Stdout mirrored from the worker so far - the only copy that survives a
+  /** Head lines mirrored from the worker - the only copy that survives a
    *  terminate(), since the worker's own buffer dies with the thread. */
   stdoutChunks: string[];
-  /** The mirror hit its byte cap, so `stdoutChunks` is not the whole story. */
-  stdoutElided: boolean;
+  /** Latest rolling tail the worker mirrored after its head budget filled. */
+  stdoutTail: string;
+  /** Bytes the worker dropped between the mirrored head and the tail. */
+  stdoutElidedBytes: number;
   startedAt: number;
+}
+
+/**
+ * Reassemble a mirrored run's stdout in the same shape the worker's own
+ * `collectStdout()` produces - head, an in-band elision marker, then the
+ * tail - and report `truncated` by the same rule (only when bytes were
+ * actually dropped). The two buffers used to disagree in both directions: the
+ * mirror kept head only while `collectStdout` kept head + marker + tail, and
+ * the two decided "truncated" on different tests.
+ */
+function assembleMirroredStdout(pending: PendingRun): { stdout: string; truncated: boolean } {
+  const parts = [pending.stdoutChunks.join('\n')];
+  const truncated = pending.stdoutElidedBytes > 0;
+  if (truncated) parts.push(`[...${pending.stdoutElidedBytes} bytes truncated...]`);
+  if (pending.stdoutTail) parts.push(pending.stdoutTail);
+  return { stdout: parts.join('\n'), truncated };
 }
 
 export class WorkerReplExecutor implements ReplExecutor {
@@ -418,13 +513,20 @@ export class WorkerReplExecutor implements ReplExecutor {
         resolve,
         timer,
         stdoutChunks: [],
-        stdoutElided: false,
+        stdoutTail: '',
+        stdoutElidedBytes: 0,
         startedAt: Date.now(),
       });
       const msg: MsgRunCode = { type: 'runCode', id, code, timeoutMs: this.timeoutMs };
-      // Synchronous postMessage failures (e.g., ERR_WORKER_NOT_RUNNING if
-      // the worker exited between our checks and now) must clean up the
-      // pendingRuns entry - otherwise the promise never resolves.
+      // Defensive only, and deliberately kept: `Worker.postMessage` is a
+      // silent no-op once the thread is gone (`kPublicPort === null`), so the
+      // "worker exited between our checks and now" case this used to name
+      // never throws here - `ERR_WORKER_NOT_RUNNING` comes from the
+      // heap-snapshot APIs, not from postMessage. That path is covered by the
+      // main-thread deadline instead. What CAN throw is a payload that is not
+      // structured-cloneable, and this one is all strings and numbers - so if
+      // it ever does throw, the pendingRuns entry still has to go, or the
+      // promise never resolves.
       try {
         this.worker.postMessage(msg);
       } catch (e) {
@@ -445,10 +547,11 @@ export class WorkerReplExecutor implements ReplExecutor {
    */
   private settleRetired(pending: PendingRun, error: string): void {
     if (pending.timer) clearTimeout(pending.timer);
+    const { stdout, truncated } = assembleMirroredStdout(pending);
     pending.resolve({
-      stdout: pending.stdoutChunks.join('\n'),
+      stdout,
       error,
-      truncated: pending.stdoutElided,
+      truncated,
       durationMs: Date.now() - pending.startedAt,
       sandboxRetired: true,
     });
@@ -487,8 +590,16 @@ export class WorkerReplExecutor implements ReplExecutor {
     if (msg.type === 'stdout') {
       const pending = this.pendingRuns.get(msg.id);
       if (!pending) return;
-      if (msg.elided) pending.stdoutElided = true;
-      else pending.stdoutChunks.push(msg.chunk);
+      pending.stdoutChunks.push(msg.chunk);
+      return;
+    }
+    if (msg.type === 'stdoutTail') {
+      const pending = this.pendingRuns.get(msg.id);
+      if (!pending) return;
+      // A replacement, not an append: the worker keeps the tail as a rolling
+      // window and re-sends the whole window each flush.
+      pending.stdoutTail = msg.tail;
+      pending.stdoutElidedBytes = msg.elidedBytes;
       return;
     }
     if (msg.type === 'toolCall') {
@@ -524,14 +635,33 @@ export class WorkerReplExecutor implements ReplExecutor {
 
   // handleToolCall runs as a fire-and-forget `void this.handleToolCall(msg)`
   // from handleMessage, so any throw here surfaces as `unhandledRejection`.
-  // If dispose() terminates the worker mid tool-call, postMessage throws
-  // ERR_WORKER_NOT_RUNNING - swallow it. The pending run was already rejected
-  // by dispose / handleWorkerExit / handleWorkerError, so the caller won't hang.
+  //
+  // Terminating the worker mid tool-call is NOT the case to guard: postMessage
+  // is a silent no-op once the thread is gone, and those pending runs are
+  // already retired by dispose / handleWorkerExit / handleWorkerError. The
+  // reachable throw is a `DataCloneError` on a tool result structured cloning
+  // cannot carry - a function, a class instance holding one, a Proxy. That was
+  // swallowed, which left the guest's awaiting promise unsettled: the run
+  // stalled to the main-thread deadline and cost the entire sandbox for one
+  // bad return value. The isolate backend reports the same condition as an
+  // ordinary tool error (see `dispatchTool`'s serialize-in-its-own-try), so
+  // this backend does too.
   private safePostMessage(reply: MsgToolResult): void {
     try {
       this.worker.postMessage(reply);
-    } catch {
-      // worker terminated; pending run already rejected elsewhere
+    } catch (e) {
+      // An `ok: false` envelope is strings and numbers only, so it cannot be
+      // the clone failure - and re-posting it would recurse.
+      if (!reply.ok) return;
+      const detail = e instanceof Error ? e.message : String(e);
+      this.safePostMessage({
+        type: 'toolResult',
+        id: reply.id,
+        ok: false,
+        error:
+          `tool returned a value that is not structured-cloneable across the worker boundary ` +
+          `(e.g. a function, class instance, or Proxy): ${detail}`,
+      });
     }
   }
 

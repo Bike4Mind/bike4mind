@@ -290,3 +290,71 @@ describe('WorkerReplExecutor - the main thread enforces its own deadline', () =>
     await ex.dispose();
   }, 20_000);
 });
+
+describe('WorkerReplExecutor - the mirrored stdout a retired run reports', () => {
+  /**
+   * The mirror is the ONLY stdout a terminated worker can report, so it has
+   * to carry the same head + marker + tail shape `collectStdout()` produces.
+   * A head-only mirror dropped precisely the last line before the hang, which
+   * is the most diagnostic thing a killed run prints - and it decided
+   * "truncated" by a different test than the completed path, so the two
+   * buffers disagreed in both directions.
+   */
+  it('keeps the LAST line before the hang, not just the first 5000 bytes', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 1200 });
+    const r = await ex.runCode(
+      `for (let i = 0; i < 400; i++) console.log('filler-' + i + '-'.repeat(20));
+       console.log('LAST-LINE-BEFORE-HANG');
+       await new Promise(() => {});`
+    );
+    expect(r.sandboxRetired).toBe(true);
+    expect(r.stdout).toContain('filler-0-');
+    expect(r.stdout).toContain('LAST-LINE-BEFORE-HANG');
+    // Reported the same way a completed run reports it, and in band, so the
+    // agent can see where the gap is rather than only that there is one.
+    expect(r.truncated).toBe(true);
+    expect(r.stdout).toMatch(/\[\.\.\.\d+ bytes truncated\.\.\.\]/);
+    await ex.dispose();
+  }, 20_000);
+
+  /**
+   * The other direction. Crossing the head budget is not by itself a loss:
+   * if the overshoot fits in the mirrored tail, everything printed is still
+   * there and claiming truncation would be a false positive.
+   */
+  it('does not claim truncation when the overshoot still fits in the tail', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 1200 });
+    const r = await ex.runCode(
+      `console.log('B'.repeat(6000));
+       console.log('AFTER-THE-HEAD-FILLED');
+       await new Promise(() => {});`
+    );
+    expect(r.sandboxRetired).toBe(true);
+    expect(r.stdout).toContain('AFTER-THE-HEAD-FILLED');
+    expect(r.truncated).toBe(false);
+    expect(r.stdout).not.toMatch(/bytes truncated/);
+    await ex.dispose();
+  }, 20_000);
+
+  /**
+   * A tool result structured cloning cannot carry is the one reachable
+   * `postMessage` throw on this backend (the terminated-worker case is a
+   * silent no-op). Swallowing it left the guest's awaiting promise unsettled,
+   * so one bad return value stalled the run to the main-thread deadline and
+   * cost the whole sandbox. The isolate backend reports the same condition as
+   * an ordinary tool error; this asserts parity.
+   */
+  it('reports a non-cloneable tool result as a tool error rather than stalling the run', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 2000 });
+    ex.setTools({ badTool: async () => () => 1 });
+    const r = await ex.runCode(
+      `try { await badTool(); } catch (e) { console.log('caught: ' + e.message); }
+       console.log('run still finished');`
+    );
+    expect(r.sandboxRetired).toBeUndefined();
+    expect(r.error).toBeNull();
+    expect(r.stdout).toContain('not structured-cloneable');
+    expect(r.stdout).toContain('run still finished');
+    await ex.dispose();
+  }, 20_000);
+});

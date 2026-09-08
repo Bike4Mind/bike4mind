@@ -54,6 +54,24 @@ export const SUB_LLM_HTTP_TIMEOUT_MS = 18_000;
 export const SUB_LLM_MAX_OUTPUT_TOKENS = 2_000;
 
 /**
+ * The output rate the pair above is sized against, in tokens per second.
+ *
+ * It exists so "the ceiling fits the deadline" is a checkable claim rather
+ * than a magic number in a test. Deliberately a FLOOR and deliberately
+ * pessimistic: the one model `subAgentQuery` may dispatch to (Claude Haiku
+ * 4.5, the sole entry in that tool's pricing/allowlist table) sustains well
+ * above this in practice, and the margin is what absorbs a slow first token
+ * and a loaded provider. At 18s it admits a ceiling of ~2160 tokens, so the
+ * 2000 above has roughly 8% of headroom and cannot drift far before the
+ * ladder test objects.
+ *
+ * Add a slower model to that allowlist and this number has to come DOWN with
+ * it, or the ceiling stops being deliverable for the slowest thing that can
+ * be called.
+ */
+export const SUB_LLM_MIN_OUTPUT_TOKENS_PER_SECOND = 120;
+
+/**
  * Per `code_execute` step, not per request. Deliberately far enough below
  * `HARD_TIMEOUT_MS` that a stalled step is reported to the agent as a
  * timed-out observation with budget left to answer.

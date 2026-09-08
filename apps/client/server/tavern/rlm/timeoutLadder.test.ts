@@ -4,14 +4,16 @@ import {
   PER_CALL_REPL_TIMEOUT_MS,
   SUB_LLM_HTTP_TIMEOUT_MS,
   SUB_LLM_MAX_OUTPUT_TOKENS,
+  SUB_LLM_MIN_OUTPUT_TOKENS_PER_SECOND,
   TOOL_HTTP_TIMEOUT_MS,
   hostDeadlineMs,
   toolDispatchTimeoutMs,
 } from './timeouts';
 
 /**
- * The ladder is six constants across two packages, related by nothing the type
- * system can see. Any single edit can invert the ordering, and the symptom is
+ * The ladder spans two packages, related by nothing the type system can see -
+ * and it gains a constant whenever a rung does, so the count is not worth
+ * writing down. Any single edit can invert the ordering, and the symptom is
  * not a failure but a WORSE failure: a step that should have timed out as one
  * observation instead takes the isolate - and every later `code_execute` in
  * the session - or takes the whole request and returns no answer at all.
@@ -42,10 +44,24 @@ describe('the REPL timeout ladder', () => {
    * because that is the relationship that was violated - an 8000-token
    * ceiling against a 15s bound needs ~533 tok/s, which no model here does,
    * so every request near the ceiling was billed and then discarded.
+   *
+   * The rate compared against is the exported floor, not a literal, so the
+   * number the assertion rests on is sourced where it is defined instead of
+   * sitting unexplained in a test.
    */
   it('keeps the sub-LLM output ceiling deliverable inside its own rung', () => {
     const requiredTokensPerSecond = SUB_LLM_MAX_OUTPUT_TOKENS / (SUB_LLM_HTTP_TIMEOUT_MS / 1000);
-    expect(requiredTokensPerSecond).toBeLessThanOrEqual(150);
+    expect(requiredTokensPerSecond).toBeLessThanOrEqual(SUB_LLM_MIN_OUTPUT_TOKENS_PER_SECOND);
+  });
+
+  /**
+   * The floor itself is the load-bearing half of that assertion: raise it and
+   * any ceiling passes. Pinned as a range so a well-meaning edit that makes
+   * the previous test green by loosening the rate has to argue with this one.
+   */
+  it('holds the output-rate floor to something a provider actually delivers', () => {
+    expect(SUB_LLM_MIN_OUTPUT_TOKENS_PER_SECOND).toBeGreaterThanOrEqual(60);
+    expect(SUB_LLM_MIN_OUTPUT_TOKENS_PER_SECOND).toBeLessThanOrEqual(150);
   });
 
   /**

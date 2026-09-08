@@ -72,8 +72,32 @@ const ESTIMATE_CHARS_PER_TOKEN = 4;
 /** One shared abort signal per tool call - see `timeouts.ts` for the ladder. */
 const toolHttpDeadline = () => AbortSignal.timeout(TOOL_HTTP_TIMEOUT_MS);
 
-/** The sub-LLM call waits on token generation, not a lookup - its own rung. */
-const subLlmHttpDeadline = () => AbortSignal.timeout(SUB_LLM_HTTP_TIMEOUT_MS);
+/**
+ * The sub-LLM call waits on token generation, not a lookup - its own rung.
+ *
+ * A controller rather than `AbortSignal.timeout`, because the caller has to
+ * be able to tell that OUR deadline is what ended the call: that decides
+ * whether the budget reservation is settled (the provider was mid-generation
+ * and has billed) or released (the request never got that far). It cannot be
+ * recovered from the error afterwards - the SDK's `APIUserAbortError` never
+ * assigns `name`, so it arrives reporting `"Error"` like anything else, and
+ * classifying it would mean sniffing a constructor name.
+ */
+function subLlmDeadline() {
+  const controller = new AbortController();
+  let expired = false;
+  const timer = setTimeout(() => {
+    expired = true;
+    controller.abort();
+  }, SUB_LLM_HTTP_TIMEOUT_MS);
+  return {
+    signal: controller.signal,
+    /** True only when this deadline is what ended the call. */
+    expired: () => expired,
+    /** Must run on every path, or a fast call holds the timer for 18s. */
+    clear: () => clearTimeout(timer),
+  };
+}
 
 interface SemanticSearchArgs {
   query: string;
@@ -297,12 +321,12 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     // every check pass while all N are in flight, and the cap would only fire
     // once the provider had already billed all N. Worst-case pricing, since a
     // reservation that under-estimates is a cap that under-enforces.
-    const reservation = deps.session.reserveSubLlm({
-      estimatedCostUsd:
-        Math.ceil(a.prompt.length / ESTIMATE_CHARS_PER_TOKEN) * pricing.inputPerToken +
-        maxTokens * pricing.outputPerToken,
-    });
+    const estimatedCostUsd =
+      Math.ceil(a.prompt.length / ESTIMATE_CHARS_PER_TOKEN) * pricing.inputPerToken +
+      maxTokens * pricing.outputPerToken;
+    const reservation = deps.session.reserveSubLlm({ estimatedCostUsd });
 
+    const deadline = subLlmDeadline();
     try {
       // Without a deadline this call was the one tool that could outlive its
       // own tool-dispatch bound: the dispatcher abandons the await at that
@@ -316,7 +340,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
           max_tokens: maxTokens,
           messages: [{ role: 'user', content: a.prompt }],
         },
-        { signal: subLlmHttpDeadline() }
+        { signal: deadline.signal }
       );
       // settle() throws BudgetExceededError when the real cost tips the
       // ceiling. Let it propagate: that throw is how the agent finds out.
@@ -325,8 +349,34 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
         promptTokens: msg.usage.input_tokens,
         completionTokens: msg.usage.output_tokens,
       });
-      return msg.content.map(block => ('text' in block ? block.text : '')).join('');
+      const text = msg.content.map(block => ('text' in block ? block.text : '')).join('');
+      // The ceiling is low enough that reaching it is an ordinary outcome
+      // rather than an error - but a silently cut-off answer is one the agent
+      // reads as complete and then reasons from. Say so in-band, the way the
+      // REPL's own stdout truncation does.
+      return msg.stop_reason === 'max_tokens'
+        ? `${text}\n[subAgentQuery: hit the ${maxTokens}-token output ceiling; this answer is cut off]`
+        : text;
+    } catch (e) {
+      // An abort is the one failure that still costs money. The deadline
+      // fires mid-generation, so the provider has already billed the tokens
+      // it produced - but `release()` books $0 and hands the slot back, which
+      // is how a session walks past its own cap one timeout at a time. Book
+      // the estimate: it is the only number available, and it is the same one
+      // admitted at reservation. A dispatch that never reached the provider
+      // still releases, which is what the `finally` below is for.
+      if (deadline.expired()) {
+        try {
+          reservation.settle({ costUsd: estimatedCostUsd });
+        } catch {
+          // settle() throws once the booked total tips the cap. The spend is
+          // recorded either way, and this caller needs to see its abort - the
+          // next reserveSubLlm() is what refuses on the breach.
+        }
+      }
+      throw e;
     } finally {
+      deadline.clear();
       // No-op once settled. This is the backstop for a throw anywhere between
       // the claim and the settle - a failed dispatch, a malformed usage
       // payload - so a claim can never leak and permanently shrink the

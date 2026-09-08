@@ -104,6 +104,52 @@ describe('makeCodeExecuteTool', () => {
     expect(out).not.toContain('[unexpected]');
   });
 
+  it('tells the agent the surviving stdout is partial when the mirror was cut short', async () => {
+    // The retired branch is the one MOST likely to be short of output - the
+    // run was killed mid-flight - and it used to return one line above the
+    // `| stdout truncated` the ordinary path renders. So the flag travelled
+    // all the way from the backend and was then dropped, leaving an agent to
+    // answer from a partial buffer with no way to know it was partial.
+    const cut = {
+      sessionId: 'cut',
+      getUsage: () => ({ executions: 0 }),
+      runCode: async () => ({
+        stdout: 'first\n[...900 bytes truncated...]\nlast',
+        error: 'REPL run exceeded the 400ms cap; worker was terminated',
+        truncated: true,
+        durationMs: 900,
+        sandboxRetired: true,
+      }),
+    } as unknown as ReplSession;
+    const tool = makeCodeExecuteTool({ session: cut });
+
+    const out = await tool.toolFn({ code: 'console.log(1);' });
+
+    expect(out).toContain('SANDBOX UNAVAILABLE');
+    expect(out).toContain('captured before shutdown, truncated');
+    expect(out).toContain('last');
+  });
+
+  it('does not claim truncation on a retired run that kept all of its stdout', async () => {
+    const whole = {
+      sessionId: 'whole',
+      getUsage: () => ({ executions: 0 }),
+      runCode: async () => ({
+        stdout: 'everything it printed',
+        error: 'disposed before runCode #0 returned',
+        truncated: false,
+        durationMs: 12,
+        sandboxRetired: true,
+      }),
+    } as unknown as ReplSession;
+    const tool = makeCodeExecuteTool({ session: whole });
+
+    const out = await tool.toolFn({ code: 'console.log(1);' });
+
+    expect(out).toContain('captured before shutdown)');
+    expect(out).not.toContain('truncated');
+  });
+
   it('still reports a genuinely unexpected error as unexpected', async () => {
     const broken = {
       sessionId: 'broken',
