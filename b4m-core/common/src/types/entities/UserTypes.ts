@@ -468,6 +468,9 @@ export interface IUser extends ICreditHolder {
     excludedPageIds?: string[];
   };
 
+  /** Single-use nonce for Notion OAuth; set at connect, consumed at callback. */
+  pendingNotionOAuthNonce?: string | null;
+
   /**
    * This field is used to track the last time the user was active.
    * This is set using websockets upon connection and disconnection.

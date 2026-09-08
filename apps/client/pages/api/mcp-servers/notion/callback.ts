@@ -174,13 +174,27 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     );
   }
 
-  // Idempotency check: avoid re-running token exchange if the callback fires more than once
+  // Single-use nonce: the csrfToken stored at connect time must match, and is
+  // consumed atomically so a replayed callback URL is rejected.
   const existingUser = await userRepository.findById(userId);
+
   if (existingUser?.notionConnect?.status === 'connected') {
     console.log('[Notion Callback] User already has valid Notion connection, skipping token exchange');
     auditLogger.success({ isDuplicate: true });
     return res.redirect('/profile?tab=integrations&notion=connected');
   }
+
+  if (!existingUser || existingUser.pendingNotionOAuthNonce !== csrfToken) {
+    console.error('[Notion Callback] OAuth nonce mismatch or missing (replay?)');
+    auditLogger.failure('nonce_mismatch');
+    return redirectWithError(
+      res,
+      'Notion authorization failed: this link has already been used. Please try connecting again.'
+    );
+  }
+
+  // Consume the nonce so it cannot be reused
+  await userRepository.update({ id: userId, pendingNotionOAuthNonce: null });
 
   const { clientId, clientSecret, redirectUri } = await getNotionOAuthConfig();
 
