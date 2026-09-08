@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { menuItemClasses } from '@mui/joy/MenuItem';
+import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeLakePicker from './DataLakeLakePicker';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
@@ -206,7 +206,7 @@ describe('DataLakeLakePicker', () => {
       screen.getByTestId('datalake-lake-picker-search').closest('li'),
       screen.getByTestId('datalake-lake-picker-lake-count').closest('li'),
     ];
-    chrome.forEach(el => expect(el).not.toHaveAttribute('role', 'menuitem'));
+    chrome.forEach(el => expect(el).toHaveAttribute('role', 'none'));
   });
 
   it('lets the trigger label inherit the button color, which the themed body-sm default does not', () => {

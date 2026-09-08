@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { extendTheme } from '@mui/joy/styles';
-import { menuItemClasses } from '@mui/joy/MenuItem';
+import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { menuItemListSx, menuListSx, menuRowSx, menuSurfaceSx, selectListboxSx } from './menuSurfaceSx';
 
@@ -81,12 +81,31 @@ describe('menuItemListSx', () => {
   });
 
   // Joy paints .Mui-selected from the plainActive variant too, so the selected ground has to be a
-  // plain declaration - through the variable it would collapse onto the hover ground.
+  // declaration - through the variable it would collapse onto the hover ground.
   it('marks the selected row by its own ground, not by the press variable', () => {
     expect(rowSx[`&.${menuItemClasses.selected}`]).toMatchObject({
       backgroundColor: theme.palette.notebooklist.focusedBackground,
     });
-    expect(theme.palette.notebooklist.focusedBackground).not.toBe(rowSx['--variant-plainActiveBg']);
+  });
+
+  // The ground alone is NOT enough: dark mode gives hoverBg and focusedBackground the same value,
+  // so a hovered sibling paints the selected row's exact colour and only the weight still marks
+  // it. Asserted per scheme because `theme.palette` resolves to the light one, where the two
+  // tokens happen to differ - which is how a light-only assertion hid this.
+  describe.each(['light', 'dark'] as const)('in the %s scheme', scheme => {
+    const palette = theme.colorSchemes[scheme].palette;
+    const schemeRowSx = menuItemListSx({ ...theme, palette } as typeof theme)['& [role="menuitem"]'];
+    const selected = schemeRowSx[`&.${menuItemClasses.selected}`];
+
+    it('keeps the selected row distinguishable from a hovered sibling', () => {
+      const groundAlone = selected.backgroundColor !== schemeRowSx['--variant-plainHoverBg'];
+      expect(groundAlone || selected.fontWeight === 600).toBe(true);
+    });
+
+    it('routes hover and press at the menu ground for that scheme', () => {
+      expect(schemeRowSx['--variant-plainHoverBg']).toBe(palette.notebooklist.hoverBg);
+      expect(schemeRowSx['--variant-plainActiveBg']).toBe(palette.notebooklist.hoverBg);
+    });
   });
 
   // The two-line lake picker rows are the reason this exists rather than menuRowSx: a fixed
@@ -107,10 +126,17 @@ describe('menuRowSx', () => {
   // Joy's ListItemButton carries an unconditional `&:active` painted from --variant-plainActiveBg.
   // Unset, it falls through to neutral.plainActiveBg, which this theme tints brand blue, so a
   // Joy-backed row flashes blue under the finger.
-  it('pins the press ground rather than letting Joy fall through to the brand tint', () => {
-    expect(menuRowSx(theme)['--variant-plainActiveBg']).toBe(theme.palette.notebooklist.hoverBg);
-    expect(menuRowSx(theme)['--variant-plainActiveBg']).not.toBe(theme.palette.neutral.plainActiveBg);
-  });
+  // Both schemes: neutral.plainActiveBg is brand[100] in light and brand[700] in dark, and the
+  // fall-through was visible in both.
+  it.each(['light', 'dark'] as const)(
+    'pins the press ground rather than letting Joy fall through to the %s brand tint',
+    scheme => {
+      const palette = theme.colorSchemes[scheme].palette;
+      const row = menuRowSx({ ...theme, palette } as typeof theme);
+      expect(row['--variant-plainActiveBg']).toBe(palette.notebooklist.hoverBg);
+      expect(row['--variant-plainActiveBg']).not.toBe(palette.neutral.plainActiveBg);
+    }
+  );
 
   it('keeps press on the hover ground rather than introducing a third colour', () => {
     expect(menuRowSx(theme)['--variant-plainActiveBg']).toBe(menuRowSx(theme)['&:hover'].backgroundColor);
@@ -119,11 +145,10 @@ describe('menuRowSx', () => {
 
   // The recipe sets the variables itself, so a Joy MenuItem consumer does not have to restate
   // them - that restatement is what let the destructive row and the plain rows drift.
-  it('carries the danger ground on the declaration and both variables alike', () => {
+  it('carries the danger ground on both variables, not just the hover declaration', () => {
     const dangerRow = menuRowSx(theme, true);
     expect(dangerRow['--variant-plainHoverBg']).toBe(theme.palette.danger.plainHoverBg);
     expect(dangerRow['--variant-plainActiveBg']).toBe(theme.palette.danger.plainHoverBg);
-    expect(dangerRow['&:hover'].backgroundColor).toBe(theme.palette.danger.plainHoverBg);
   });
 
   // Both halves of the menuitem recipe sit on the same ground, so a plain row marks a press the

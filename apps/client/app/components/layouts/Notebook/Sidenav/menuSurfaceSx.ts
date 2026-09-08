@@ -1,5 +1,5 @@
 import type { Theme } from '@mui/joy/styles';
-import { menuItemClasses } from '@mui/joy/MenuItem';
+import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 
 /**
@@ -106,13 +106,19 @@ export const selectListboxSx = (theme: Theme, opts?: { gap?: string }) => ({
  *
  * Hover and press go through Joy's variables because Joy's own ListItemButton rules outrank a
  * bare `&:hover` here. The selected row cannot: Joy paints `.Mui-selected` from the plainActive
- * variant as well, so pointing that variable at the hover ground alone would erase the selected
- * marker. It is a plain declaration, which outweighs Joy's variant rule on specificity.
+ * variant as well, so pointing that variable at the hover ground would erase the selected marker.
+ * It is a declaration instead, and it lands because the descendant selector - not the fact that it
+ * is a declaration - outranks Joy's own rule on the row's class.
  *
- * A per-item sx CANNOT override what this sets - `.menu [role="menuitem"]` outranks the row's
- * own class - so a menu with per-row grounds (rowActionsMenu's destructive row) stays on
- * menuRowSx per item instead. Joy gives a ListItem inside a Menu role="none", so a menu's
- * non-row content (the lake picker's filter box, skeletons and count chip) is untouched.
+ * That same descendant selector means a per-item sx will NOT override what this sets short of
+ * escalating its own specificity (`&&`, `!important`), so a menu with per-row grounds
+ * (rowActionsMenu's destructive row) stays on menuRowSx per item instead. Joy gives a ListItem
+ * inside a Menu role="none", so a menu's non-row content (the lake picker's filter box, skeletons
+ * and count chip) is untouched.
+ *
+ * These are custom properties: they inherit into the row's whole subtree, so a plain-variant Joy
+ * child dropped into a row (an IconButton, a Chip) would pick the row's ground up as its own.
+ * rowActionsMenu.tsx zeroes both variables on its trigger for exactly that reason.
  */
 export const menuItemListSx = (theme: Theme, opts?: { gap?: string }) => ({
   ...menuListSx(opts),
@@ -120,10 +126,15 @@ export const menuItemListSx = (theme: Theme, opts?: { gap?: string }) => ({
     transition: 'background 0.15s',
     '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
     '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
-    // The ground is the whole marker here. selectListboxSx can add a bold weight because a Select
-    // Option's label is bare text; these rows label themselves with a Joy Typography, whose own
-    // fontWeight declaration beats anything inherited from the row.
-    [`&.${menuItemClasses.selected}`]: { backgroundColor: theme.palette.notebooklist.focusedBackground },
+    // The weight is load-bearing, not decoration: in dark mode notebooklist.hoverBg and
+    // focusedBackground are the SAME value, so a hovered sibling paints the selected row's exact
+    // ground and the ground alone stops marking anything. Joy's `body-sm` level declares no
+    // fontWeight, so this inherits into a row's label Typography; `body-xs` declares one, which is
+    // why a secondary line and a trailing count stay unbolded.
+    [`&.${menuItemClasses.selected}`]: {
+      backgroundColor: theme.palette.notebooklist.focusedBackground,
+      fontWeight: 600,
+    },
     '&:focus-visible': {
       outline: `2px solid ${theme.palette.primary[500]}`,
       outlineOffset: '-2px',
