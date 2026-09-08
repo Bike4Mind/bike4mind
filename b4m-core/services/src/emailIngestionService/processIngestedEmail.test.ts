@@ -179,6 +179,13 @@ describe('emailIngestionService - processIngestedEmail', () => {
       expect(mockAdapters.db.ingestedEmails.create).not.toHaveBeenCalled();
     });
 
+    it('scopes the idempotency lookup to the owner so a forged Message-ID cannot suppress another user email', async () => {
+      await processIngestedEmail(mockParsedEmail, 's3://bucket/email.eml', mockAdapters);
+
+      // Message-ID is sender-controlled; the lookup must be per-tenant (validated.userId).
+      expect(mockAdapters.db.ingestedEmails.findByMessageId).toHaveBeenCalledWith(expect.any(String), 'user123');
+    });
+
     it('should collapse a null fabFileId to undefined when returning stored attachments', async () => {
       const existingEmail = {
         id: 'existing123',

@@ -49,7 +49,7 @@ async function storeEmail(
   const messageId = parsedEmail.messageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   // Check if email already exists (idempotency for retries)
-  const existingEmail = await adapters.db.ingestedEmails.findByMessageId(messageId);
+  const existingEmail = await adapters.db.ingestedEmails.findByMessageId(messageId, validated.userId);
   if (existingEmail) {
     Logger.info('Email already exists, returning existing ID:', existingEmail.id);
     return existingEmail.id;

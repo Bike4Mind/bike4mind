@@ -152,8 +152,8 @@ class IngestedEmailRepository extends BaseRepository<IIngestedEmailDocument> imp
     super(ingestedEmailModel);
   }
 
-  async findByMessageId(messageId: string): Promise<IIngestedEmailDocument | null> {
-    const result = await this.ingestedEmailModel.findOne({ messageId });
+  async findByMessageId(messageId: string, userId: string): Promise<IIngestedEmailDocument | null> {
+    const result = await this.ingestedEmailModel.findOne({ messageId, userId });
     return result?.toJSON() ?? null;
   }
 
