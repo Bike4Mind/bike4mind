@@ -193,9 +193,6 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     );
   }
 
-  // Consume the nonce so it cannot be reused
-  await userRepository.update({ id: userId, pendingNotionOAuthNonce: null });
-
   const { clientId, clientSecret, redirectUri } = await getNotionOAuthConfig();
 
   if (!clientId || !clientSecret || !redirectUri) {
@@ -316,9 +313,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     ...(rootPageId && { rootPageId }),
   };
 
+  // Consume the nonce and store connection in a single update so that a
+  // failed token exchange leaves the nonce intact for a legitimate retry.
   await userRepository.update({
     id: userId,
     notionConnect,
+    pendingNotionOAuthNonce: null,
   });
 
   console.log(`[Notion Callback] Tokens stored for user ${userId}, status: connected`);

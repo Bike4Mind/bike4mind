@@ -60,6 +60,8 @@ function cacheSet(normalizedId: string, parentId: string | null): void {
  * Returns the normalized parent ID, or null if there is no parent.
  */
 export async function resolveParentId(pageId: string): Promise<string | null> {
+  // Cache key is normalized; the raw pageId goes to the API since Notion
+  // accepts both dashed and undashed UUIDs.
   const nid = normalizeId(pageId);
   const cached = cacheGet(nid);
   if (cached !== undefined) return cached;

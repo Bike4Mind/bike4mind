@@ -54,7 +54,7 @@ const handler = baseApi().delete(async (req, res) => {
       success: true,
       message:
         'Notion disconnected from Bike4Mind. Note: the token may still be valid in Notion until you revoke it ' +
-        'at notion.so > Settings > My connections.',
+        'at notion.so > Settings & members > My connections.',
     });
   } catch (error) {
     console.error('[Notion Disconnect] Fatal error during disconnect:', error);
