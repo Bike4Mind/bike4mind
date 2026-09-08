@@ -78,10 +78,10 @@ export async function handleDataLakeCommand(params: HandleDataLakeCommandParams)
 }
 
 /** The lake fields the `list` scoping rules and the rendered rows need. */
-type ListableLake = Pick<ManageableDataLakeConfig, 'id' | 'slug' | 'name' | 'organizationId' | 'canManage'>;
+export type ListableLake = Pick<ManageableDataLakeConfig, 'id' | 'slug' | 'name' | 'organizationId' | 'canManage'>;
 
 /** The caller facts both scoping rules key off. */
-type ListScope = Pick<AccessContext, 'isAdmin' | 'organizationIds'>;
+export type ListScope = Pick<AccessContext, 'isAdmin' | 'organizationIds'>;
 
 /** An org-scoped lake's org id, with a blank string read as org-less (both forms are stored). */
 const lakeOrgId = (lake: ListableLake): string | undefined => lake.organizationId?.trim() || undefined;
@@ -96,68 +96,68 @@ const lakeOrgId = (lake: ListableLake): string | undefined => lake.organizationI
 const isWritable = (lake: ListableLake, scope: ListScope): boolean =>
   lake.canManage || (scope.isAdmin && !STATIC_LAKE_IDS.has(lake.id));
 
-/**
- * Whether `@datalake add to <slug>` can RESOLVE this lake for this caller: an org-less lake, one
- * scoped to an org the caller belongs to, or - last resort - a foreign-org lake the caller holds a
- * real owner/curator grant on (#2425). Mirrors `findBySlug`'s three arms in order
- * (packages/database/src/models/ai/DataLakeModel.ts) and must stay in sync with it - a row that
- * fails there is a slug this reply promised and `add` then refuses as "No Data Lake found".
- */
-const isSlugAddressable = (lake: ListableLake, scope: ListScope, grantedLakeIds: ReadonlySet<string>): boolean => {
-  const orgId = lakeOrgId(lake);
-  return !orgId || (scope.organizationIds ?? []).includes(orgId) || grantedLakeIds.has(lake.id);
-};
+/** Tier 1 (org-less) ordering key: null/undefined (BSON Null) sorts before any string, mirroring
+ * DataLakeModel.findBySlug's `.sort({ organizationId: 1 })` on its own org-less arm. */
+const orgSortKey = (organizationId: string | null | undefined): readonly [0 | 1, string] =>
+  organizationId == null ? [0, ''] : [1, organizationId];
 
 /**
- * findBySlug's three arms, in the order it tries them - own-org, then org-less, then grant-held.
- * Only ever called on lakes `isSlugAddressable` already passed, so a foreign-org lake reaching
- * here is expected to be grant-held - asserted directly (rather than assumed by elimination) so a
- * future caller that skips that filter fails loudly instead of silently misranking an ungranted
- * lake as tier 2.
+ * findBySlug's three arms, in the order it tries them - own-org, then org-less, then grant-held
+ * (#2425) - as ONE total function rather than a boolean check plus a separately-derived rank:
+ * `null` means "not resolvable by this caller at all" and doubles as the addressability check
+ * (`slugTier(...) !== null`), so there is no separate predicate that can drift out of sync with
+ * the ranking, and no precondition to assert at runtime - a foreign-org lake with no grant simply
+ * ranks `null` instead of being assumed away by elimination. Must stay in sync with `findBySlug`
+ * (packages/database/src/models/ai/DataLakeModel.ts) - a row that fails there is a slug this reply
+ * promised and `add` then refuses as "No Data Lake found".
  */
-const slugPriorityTier = (lake: ListableLake, scope: ListScope, grantedLakeIds: ReadonlySet<string>): 0 | 1 | 2 => {
+export const slugTier = (
+  lake: ListableLake,
+  scope: ListScope,
+  grantedLakeIds: ReadonlySet<string>
+): 0 | 1 | 2 | null => {
   const orgId = lakeOrgId(lake);
   if (orgId && (scope.organizationIds ?? []).includes(orgId)) return 0;
   if (!orgId) return 1;
-  if (!grantedLakeIds.has(lake.id)) {
-    throw new Error(
-      `slugPriorityTier: foreign-org lake ${lake.id} has no grant - caller must filter via isSlugAddressable first`
-    );
-  }
-  return 2;
+  return grantedLakeIds.has(lake.id) ? 2 : null;
 };
+
+/** A lake paired with the (already non-null) tier it resolved to - computed once per lake, in the
+ * filter pass, and carried through dedupe rather than re-derived. */
+interface AddressableRow {
+  lake: ListableLake;
+  tier: 0 | 1 | 2;
+}
 
 /**
  * Of two lakes sharing a slug, the one `findBySlug` would resolve: own-org beats org-less beats
- * grant-held, matching the arm order above. Within own-org the lowest org id wins, and within
- * grant-held the lowest lake id wins (both mirror the model's own `.sort()` tie-breaks) - org-less
- * needs no tie-break since at most one org-less lake can share a slug.
+ * grant-held, matching the arm order above. Within own-org the lowest org id wins, within
+ * org-less the lower `orgSortKey` wins (see its doc comment - `null` and `''` are distinct index
+ * keys and CAN collide on one slug), and within grant-held the lowest lake id wins (all three
+ * mirror the model's own `.sort()` tie-breaks).
  */
-const preferredBySlug = (
-  a: ListableLake,
-  b: ListableLake,
-  scope: ListScope,
-  grantedLakeIds: ReadonlySet<string>
-): ListableLake => {
-  const tierA = slugPriorityTier(a, scope, grantedLakeIds);
-  const tierB = slugPriorityTier(b, scope, grantedLakeIds);
-  if (tierA !== tierB) return tierA < tierB ? a : b;
-  if (tierA === 0) return (lakeOrgId(b) as string) < (lakeOrgId(a) as string) ? b : a;
-  if (tierA === 2) return b.id < a.id ? b : a;
-  return a;
+const preferredRow = (a: AddressableRow, b: AddressableRow): AddressableRow => {
+  if (a.tier !== b.tier) return a.tier < b.tier ? a : b;
+  if (a.tier === 0) return (lakeOrgId(b.lake) as string) < (lakeOrgId(a.lake) as string) ? b : a;
+  if (a.tier === 1) {
+    const [aType, aOrg] = orgSortKey(a.lake.organizationId);
+    const [bType, bOrg] = orgSortKey(b.lake.organizationId);
+    return bType !== aType ? (bType < aType ? b : a) : bOrg < aOrg ? b : a;
+  }
+  return b.lake.id < a.lake.id ? b : a;
 };
 
 /**
  * One row per slug. A slug is unique per org, so a collision means two lakes the caller can reach
  * under one name - keep the one `add` would resolve, or the reply names a lake the command does not
- * target. Runs over every ADDRESSABLE lake, before the write gate, because `findBySlug` resolves by
+ * target. Runs over every ADDRESSABLE row, before the write gate, because `findBySlug` resolves by
  * org priority without consulting write access (see the note in `handleList`).
  */
-const dedupeBySlug = (lakes: ListableLake[], scope: ListScope, grantedLakeIds: ReadonlySet<string>): ListableLake[] => {
-  const bySlug = new Map<string, ListableLake>();
-  for (const lake of lakes) {
-    const existing = bySlug.get(lake.slug);
-    bySlug.set(lake.slug, existing ? preferredBySlug(existing, lake, scope, grantedLakeIds) : lake);
+const dedupeBySlug = (rows: AddressableRow[]): AddressableRow[] => {
+  const bySlug = new Map<string, AddressableRow>();
+  for (const row of rows) {
+    const existing = bySlug.get(row.lake.slug);
+    bySlug.set(row.lake.slug, existing ? preferredRow(existing, row) : row);
   }
   return Array.from(bySlug.values());
 };
@@ -185,7 +185,7 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
   const ctx = await buildSlackAccessContext(params.actor, params.deps, { resolveEntitlementsForAdmin: true });
   // The same last-resort grant lookup findBySlug's #2425 fallback arm runs, so a foreign-org
   // owner/curator grant holder sees the lake here too - otherwise `list` would omit exactly the
-  // lake `add` now accepts (isSlugAddressable would filter it out before dedupe/write-gate ever run).
+  // lake `add` now accepts (slugTier would rank it null before dedupe/write-gate ever run).
   // Resolved ONCE and handed to listDataLakes below as its precomputed set, rather than each
   // independently running the identical listByPrincipal query - listDataLakes' own includeReaders
   // is always false here too, since we deliberately never thread a settings adapter (see below).
@@ -216,8 +216,14 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
   // it picked turns out to be unwritable, so gating before the dedupe would hide a higher-priority
   // lake and print a slug `add` resolves elsewhere and refuses. `isWritable` also restores the
   // manage LABEL that suppressing isAdmin silenced in canManageLake; it only ever removes rows.
-  const addressable = lakes.filter(lake => isSlugAddressable(lake, ctx, grantedLakeIds));
-  const writable = dedupeBySlug(addressable, ctx, grantedLakeIds).filter(lake => isWritable(lake, ctx));
+  const addressable: AddressableRow[] = [];
+  for (const lake of lakes) {
+    const tier = slugTier(lake, ctx, grantedLakeIds);
+    if (tier !== null) addressable.push({ lake, tier });
+  }
+  const writable = dedupeBySlug(addressable)
+    .map(row => row.lake)
+    .filter(lake => isWritable(lake, ctx));
 
   if (writable.length === 0) {
     return 'You cannot add to any data lakes yet. You can add to lakes you created, or ask an admin.';
