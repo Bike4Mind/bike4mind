@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
 
 vi.mock('@server/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
@@ -391,23 +392,28 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
     await expect(verifyApiKey({})).resolves.toMatchObject({ keyId: 'k1' });
   });
 
-  it('refuses a banned owner', async () => {
+  // The thrown error class + message must stay in sync with apiKeyAuth.ts: a bare
+  // Error would flatten to a 500 (or the wrong status) on the surfaces this path backs.
+  it('refuses a banned owner with an UnauthorizedError', async () => {
     vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: true });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(UnauthorizedError);
     await expect(verifyApiKey({})).rejects.toThrow(/banned/i);
   });
 
-  it('refuses an owner with a pending payment dispute', async () => {
+  it('refuses an owner with a pending payment dispute with a ForbiddenError', async () => {
     vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false, disputePending: true });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
     await expect(verifyApiKey({})).rejects.toThrow(/dispute/i);
   });
 
-  it('refuses a moderation-suspended owner', async () => {
+  it('refuses a moderation-suspended owner with a ForbiddenError and the full appeal message', async () => {
     vi.mocked(User.findById).mockResolvedValue({
       id: 'u1',
       isBanned: false,
       moderation: { status: 'suspended' },
     });
-    await expect(verifyApiKey({})).rejects.toThrow(/suspended/i);
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(verifyApiKey({})).rejects.toThrow(/contact support to appeal/i);
   });
 
   it('refuses a key whose owner no longer exists', async () => {

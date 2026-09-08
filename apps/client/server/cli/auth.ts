@@ -12,6 +12,7 @@ import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
+import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
 
 export interface VerifiedUser {
@@ -189,13 +190,15 @@ async function assertOwnerAccountUsable(userId: string): Promise<void> {
   const user = await User.findById(userId);
 
   if (!user || user.isBanned) {
-    throw new Error('User not found or banned');
+    throw new UnauthorizedError('User not found or banned');
   }
   if (user.disputePending) {
-    throw new Error('Account suspended pending dispute resolution. Please contact support.');
+    throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
   }
   if (user.moderation?.status === 'suspended') {
-    throw new Error('Your account is suspended for repeated content-policy violations.');
+    throw new ForbiddenError(
+      'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
+    );
   }
 }
 
