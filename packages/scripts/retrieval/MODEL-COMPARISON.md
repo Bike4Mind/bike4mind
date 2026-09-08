@@ -112,6 +112,16 @@ and runs no collapse pass, so claiming it checked and found none would be untrue
 it is structurally 1.0 for every arm. `negTop` is the number that can actually move, and it is what a
 later re-derivation of the ada-002-era cosine literals needs.
 
+### Two warnings the report raises for you
+
+- **`ARMS COVER DIFFERENT CHUNK SETS`** - the `--reuse-stored-vectors` baseline keeps only chunks whose
+  stamp names its model, while an embedded arm covers the whole lake. When the counts differ, the bands
+  describe different corpora and band width is not directly comparable across them. Check `skipped`
+  before drawing a model conclusion.
+- **`GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS`** - `corpus.ts` names help slugs, so a capture of any
+  other lake matches nothing and the quality columns render `n/a`. The geometry columns need no labels
+  and stay valid. This is the expected state for a production-lake arm.
+
 ### The go signal
 
 From the issue: the band widening from ~0.058 to real separation, and the rank-1 to rank-10 spread

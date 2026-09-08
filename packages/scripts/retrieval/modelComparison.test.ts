@@ -131,3 +131,17 @@ describe('ground-truth applicability in the report', () => {
     expect(formatComparison(compareArms([fixture], [16]))).not.toContain('GROUND TRUTH DOES NOT');
   });
 });
+
+describe('differing chunk sets across arms', () => {
+  it('warns when one arm scored a different number of chunks than another', () => {
+    // The shape a --reuse-stored-vectors baseline produces: it keeps only stamped chunks, while an
+    // embedded arm covers the whole lake. The two bands then describe different corpora.
+    const baseline = other({ model: 'baseline', chunks: fixture.chunks.slice(0, 12) });
+    const report = formatComparison(compareArms([baseline, fixture], [16]));
+    expect(report).toContain('ARMS COVER DIFFERENT CHUNK SETS (12 vs 21 chunks)');
+  });
+
+  it('stays quiet when every arm covered the same chunks', () => {
+    expect(formatComparison(compareArms([fixture, other({ model: 'b' })], [16]))).not.toContain('ARMS COVER DIFFERENT');
+  });
+});

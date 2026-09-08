@@ -107,6 +107,19 @@ export function formatComparison(rows: readonly ArmRow[]): string {
     'Band width and spread are the geometry; recall/prec/hit/mrr are whether it bought better retrieval.',
     'Scores are exact cosine over the captured chunks, NOT the ANN path prod measured through.',
   ];
+  // The baseline arm reuses only the chunks whose stamp names its model, while an embed arm covers
+  // every chunk in the lake. When those differ, the bands are measured over different corpora and
+  // the comparison is not apples to apples - `chunks` is in the table, but nobody reads a column
+  // they were not told to.
+  const sizes = [...new Set(rows.map(r => r.chunksScored))];
+  if (sizes.length > 1) {
+    notes.push(
+      `ARMS COVER DIFFERENT CHUNK SETS (${sizes.join(' vs ')} chunks). The bands below are measured ` +
+        'over different corpora, so band width is not directly comparable across them. This is the ' +
+        'expected shape when a --reuse-stored-vectors baseline excludes unlabeled chunks that the ' +
+        'embedded arms re-embed; check the skipped column before drawing a model conclusion.'
+    );
+  }
   // corpus.ts names help slugs, so a capture of any other lake has no ground truth to score against.
   // Saying so beats printing quality columns of n/a and leaving the reader to work out why.
   if (rows.some(r => !r.groundTruthApplies)) {
