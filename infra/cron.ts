@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
@@ -800,9 +801,21 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
  * generated-but-committed `help-index.json` - so it is present regardless of whether
  * `help:bundle-content` ran during the build. MUST STAY IN SYNC with CORPUS_DIR in the handler.
  *
+ * HELP_CORPUS_VERSION exists only to make a docs-only edit redeploy the function: SST does not
+ * notice copyFiles CONTENT changes, so without it the bundle keeps the corpus from whenever the
+ * handler last changed and this cron converges the lake onto stale docs on a 6-hour loop, silently.
+ * Same workaround, same shape as MCP_VERSION in infra/mcp.ts.
+ *
  * Schedule: every 6 hours, so a docs change lands in the lake the same day it deploys.
  * Enabled: production + dev
  */
+const HELP_CORPUS_HASH = execSync(
+  "git ls-tree -r HEAD docs-site/docs apps/client/app/generated/help-index.json | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
+)
+  .toString()
+  .trim()
+  .slice(0, 8);
+
 const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   schedule: 'rate(6 hours)',
   function: {
@@ -816,6 +829,7 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      HELP_CORPUS_VERSION: HELP_CORPUS_HASH,
     },
     copyFiles: [
       { from: 'docs-site/docs', to: 'help-corpus/docs' },

@@ -43,6 +43,9 @@ function makeHarness(lake: { id: string; status?: string } | null = { id: 'lake-
   const lakeUpdates: Record<string, unknown>[] = [];
   const lakeCreates: Record<string, unknown>[] = [];
   const deletedFileIds: string[] = [];
+  // How many members existed at each delete. Replacements are created first, so on a run that
+  // re-embeds the whole corpus this is old + new - never just the survivors.
+  const memberCountAtDelete: number[] = [];
   const embed = vi.fn(async () => [0.1, 0.2]);
   let nextId = 1;
 
@@ -53,6 +56,7 @@ function makeHarness(lake: { id: string; status?: string } | null = { id: 'lake-
         findAllInIds: vi.fn(async (ids: string[]) => files.filter(f => ids.includes(f.id)) as never),
         deleteManyInIds: vi.fn(async (ids: string[]) => {
           deletedFileIds.push(...ids);
+          memberCountAtDelete.push(files.length);
           for (const id of ids) {
             const i = files.findIndex(f => f.id === id);
             if (i >= 0) files.splice(i, 1);
@@ -89,7 +93,7 @@ function makeHarness(lake: { id: string; status?: string } | null = { id: 'lake-
     logger: { info: () => {}, warn: () => {} },
   };
 
-  return { deps, files, chunks, lakeUpdates, lakeCreates, deletedFileIds, embed };
+  return { deps, files, chunks, lakeUpdates, lakeCreates, deletedFileIds, memberCountAtDelete, embed };
 }
 
 describe('ingestHelpDatalake', () => {
@@ -209,14 +213,71 @@ describe('ingestHelpDatalake', () => {
     expect(h.files.filter(f => f.tags.some(t => t.name === 'help:features/a'))).toHaveLength(1);
   });
 
-  it('reports an indexed article whose markdown is absent rather than deleting its member', async () => {
-    writeCorpus([makeEntry('features/a'), makeEntry('features/ghost')], { 'features/a': '## One\n\nalpha\n' });
+  it('reports an indexed article whose markdown is absent, and drops the member it can no longer verify', async () => {
+    // Both articles mirror first, so the ghost has a live member to lose on the second run.
+    writeCorpus([makeEntry('features/a'), makeEntry('features/ghost')], {
+      'features/a': '## One\n\nalpha\n',
+      'features/ghost': '## G\n\nghost\n',
+    });
     const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+
+    // The bundle loses the ghost's markdown - a build glitch, not a withdrawal from the index.
+    fs.rmSync(path.join(root, 'docs', 'features/ghost.md'));
 
     const result = await ingestHelpDatalake(h.deps, opts());
 
     expect(result.missingContent).toEqual(['features/ghost']);
-    expect(result.created).toBe(1);
+    // An unresolvable article is treated as withdrawn: convergence is total in both directions,
+    // so the member goes. The report is what tells an operator the difference.
+    expect(result.removed).toBe(1);
+    expect(h.files.some(f => f.tags.some(t => t.name === 'help:features/ghost'))).toBe(false);
+    expect(h.files.some(f => f.tags.some(t => t.name === 'help:features/a'))).toBe(true);
+  });
+
+  it('creates the replacement before deleting the member it replaces', async () => {
+    const bodies = { 'features/a': '## One\n\nalpha\n', 'features/b': '## Two\n\nbeta\n' };
+    writeCorpus([makeEntry('features/a'), makeEntry('features/b')], bodies);
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+
+    // Every body changes, so the reuse gate invalidates the whole corpus at once - the shape of
+    // the first tick after a contentHash or embedding-model change.
+    writeCorpus([makeEntry('features/a'), makeEntry('features/b')], {
+      'features/a': '## One\n\nalpha revised\n',
+      'features/b': '## Two\n\nbeta revised\n',
+    });
+
+    const result = await ingestHelpDatalake(h.deps, opts());
+
+    expect(result).toMatchObject({ created: 2, removed: 2, unchanged: 0 });
+    // Both replacements are in the lake when the deletes fire. The other order empties the lake
+    // and refills it one embed at a time, with no help retrievable for the whole window.
+    expect(h.memberCountAtDelete).toEqual([4]);
+  });
+
+  it('keeps a stale member whose replacement was deferred past the per-run cap', async () => {
+    const slugs = ['features/a', 'features/b'];
+    writeCorpus(
+      slugs.map(s => makeEntry(s)),
+      Object.fromEntries(slugs.map(s => [s, `## H\n\n${s}\n`]))
+    );
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+    writeCorpus(
+      slugs.map(s => makeEntry(s)),
+      Object.fromEntries(slugs.map(s => [s, `## H\n\n${s} revised\n`]))
+    );
+
+    const result = await ingestHelpDatalake(h.deps, { ...opts(), maxCreatesPerRun: 1 });
+
+    // Only the slug that actually got its replacement loses its old member. Deleting the deferred
+    // one too would leave that article unanswerable until the next run.
+    expect(result).toMatchObject({ created: 1, deferred: 1, removed: 1 });
+    expect(h.files).toHaveLength(2);
+    for (const slug of slugs) {
+      expect(h.files.some(f => f.tags.some(t => t.name === `help:${slug}`))).toBe(true);
+    }
   });
 
   it('bounds embedding work per run and defers the remainder', async () => {

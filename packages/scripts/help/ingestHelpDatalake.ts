@@ -235,7 +235,9 @@ export async function ingestHelpDatalake(
   // a second member for a slug, a member with no `help:` tag at all - is removed.
   const desiredBySlug = new Map(desired.map(d => [d.entry.slug, d]));
   const keepBySlug = new Map<string, IFabFileDocument>();
-  const removeIds: string[] = [];
+  // Carries the slug, not just the id: what makes a member safe to delete is whether the revision
+  // that replaces it is actually in the lake, and the slug is the only link back to that.
+  const removable: { id: string; slug: string | null }[] = [];
   for (const file of existing) {
     const slug = memberSlug(file);
     const want = slug ? desiredBySlug.get(slug) : undefined;
@@ -247,7 +249,7 @@ export async function ingestHelpDatalake(
       file.embeddingModel === deps.embeddingModel &&
       !!file.vectorized;
     if (reusable) keepBySlug.set(slug, file);
-    else removeIds.push(file.id);
+    else removable.push({ id: file.id, slug });
   }
 
   const toCreate = desired.filter(d => !keepBySlug.has(d.entry.slug));
@@ -261,22 +263,18 @@ export async function ingestHelpDatalake(
     publicEntries: entries.length,
     unchanged: keepBySlug.size,
     created: 0,
-    removed: removeIds.length,
+    removed: 0,
     chunksCreated: 0,
     deferred,
     missingContent,
   };
 
-  if (removeIds.length > 0) {
-    logger.info(`Removing ${removeIds.length} stale/withdrawn help fabfile(s) + their chunks`);
-    if (!opts.dryRun) {
-      // No self-host OpenSearch mirror needed here: both drivers run against an SST-deployed
-      // stage, which never sets B4M_SELF_HOST - so selfHostOpenSearchEnabled() can never be
-      // true on a path that reaches this line.
-      for (const id of removeIds) await deps.db.fabFileChunks.deleteManyByFabFileId(id);
-      await deps.db.fabFiles.deleteManyInIds(removeIds);
-    }
-  }
+  // Creates run FIRST, deletes after. A member is stale, not absent: replacing it before removing
+  // it costs a few seconds of duplicate chunks for one slug, which a cosine-ranked, meta-tag-scoped
+  // query absorbs, while the other order empties the lake and refills it one embed at a time. On
+  // the first tick after this ships, and on any defaultEmbeddingModel change, the reuse gate
+  // invalidates EVERY member at once - so that window is the whole corpus, not an edge case.
+  const createdSlugs = new Set<string>();
 
   for (const article of creating) {
     const { entry, markdown, body, contentHash } = article;
@@ -285,6 +283,7 @@ export async function ingestHelpDatalake(
 
     if (opts.dryRun) {
       logger.info(`  (dry-run) ${entry.slug}: ${sections.length} chunks`);
+      createdSlugs.add(entry.slug);
       result.created++;
       result.chunksCreated += sections.length;
       continue;
@@ -349,9 +348,30 @@ export async function ingestHelpDatalake(
 
     await deps.db.fabFileChunks.bulkInsert(chunkPayloads.map(c => ({ ...c, fabFileId: fabFile.id })));
 
+    createdSlugs.add(entry.slug);
     result.created++;
     result.chunksCreated += chunkPayloads.length;
     logger.info(`  ok ${entry.slug}: ${chunkPayloads.length} chunks`);
+  }
+
+  // Delete only what the lake no longer needs: a member with no slug, a slug that left the index,
+  // or a slug whose current revision is now present (kept or just created). A member whose
+  // replacement was deferred by maxCreatesPerRun - or skipped because it chunked to nothing -
+  // survives to the next run. Stale help still answers; a hole in the corpus does not.
+  const removeIds = removable
+    .filter(({ slug }) => !slug || !desiredBySlug.has(slug) || keepBySlug.has(slug) || createdSlugs.has(slug))
+    .map(({ id }) => id);
+  result.removed = removeIds.length;
+
+  if (removeIds.length > 0) {
+    logger.info(`Removing ${removeIds.length} stale/withdrawn help fabfile(s) + their chunks`);
+    if (!opts.dryRun) {
+      // No self-host OpenSearch mirror needed here: both drivers run against an SST-deployed
+      // stage, which never sets B4M_SELF_HOST - so selfHostOpenSearchEnabled() can never be
+      // true on a path that reaches this line.
+      for (const id of removeIds) await deps.db.fabFileChunks.deleteManyByFabFileId(id);
+      await deps.db.fabFiles.deleteManyInIds(removeIds);
+    }
   }
 
   // Heartbeat, not a change marker: stamped on every completed run so an operator reading the lake
