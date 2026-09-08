@@ -37,6 +37,15 @@ export const searchFilterTypeSchema = z
   .describe('Result type filter. Use "page" for regular pages or "database" for databases.');
 
 /**
+ * Cursor for paginated list endpoints.
+ */
+export const startCursorSchema = z
+  .string()
+  .min(1)
+  .optional()
+  .describe('Pagination cursor from a previous Notion response');
+
+/**
  * Pagination parameters for search.
  */
 export const paginationParams = {
@@ -47,13 +56,5 @@ export const paginationParams = {
     .max(100)
     .optional()
     .describe('Maximum number of results to return (1-100, default 10)'),
+  start_cursor: startCursorSchema,
 };
-
-/**
- * Cursor for paginated list endpoints.
- */
-export const startCursorSchema = z
-  .string()
-  .min(1)
-  .optional()
-  .describe('Pagination cursor from a previous Notion response');

@@ -139,9 +139,9 @@ export function registerSearchTools(server: McpServer): void {
       ...paginationParams,
       filterType: searchFilterTypeSchema.optional(),
     },
-    async ({ query, page_size, filterType }) => {
+    async ({ query, page_size, start_cursor, filterType }) => {
       try {
-        debug('search invoked', { query, page_size, filterType });
+        debug('search invoked', { query, page_size, start_cursor, filterType });
         const config = getConfig();
         const requestedSize = page_size ?? 10;
 
@@ -152,6 +152,10 @@ export function registerSearchTools(server: McpServer): void {
           query,
           page_size: fetchSize,
         };
+
+        if (start_cursor) {
+          body.start_cursor = start_cursor;
+        }
 
         if (filterType) {
           body.filter = {
@@ -227,6 +231,8 @@ export function registerSearchTools(server: McpServer): void {
         return createSuccessResponse({
           query,
           count: items.length,
+          has_more: result.has_more ?? false,
+          next_cursor: result.next_cursor ?? null,
           results: items,
         });
       } catch (error) {
