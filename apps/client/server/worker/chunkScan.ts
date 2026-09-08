@@ -204,8 +204,30 @@ export const buildFabFileChunkScanFilter = (
     // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key
     // wins), which here would drop either the media exclusion or the in-flight exclusion entirely.
     $and: [
-      // Media exclusion, with the stamped-file exception - see the doc comment above.
-      { $or: [{ mimeType: { $not: /^(audio|image|video)\// } }, { chunkRebuildRequestedAt: { $ne: null } }] },
+      // Media exclusion, with two exceptions - see the doc comment above.
+      //
+      // The second arm is the halt-survivor. `markConvergencePaused` nulls `chunkRebuildRequestedAt`
+      // in the same statement that records the stall reason, and that clear is correct: a file must
+      // never read as both "paused, needs an administrator" and "rebuilding, returns on its own".
+      // But for MEDIA that stamp is the only door into this sweep (0 chunks by design), so the halt
+      // used to strand the file permanently - clearing the switch did not bring it back and only a
+      // second manual reprocess did. `rechunkPaused` is the durable record of the same fact the
+      // stamp carried: that write chooses it precisely WHEN `chunkRebuildRequestedAt` was set, so a
+      // rebuild really was requested. Reading the reason instead of the stamp recovers the file
+      // without reintroducing the ambiguous double state.
+      //
+      // It terminates: while the switch is on, the pause exclusion above drops the file anyway
+      // (`rechunkPaused` is in CHUNK_STALL_REASONS); once it clears, one run commits and clears
+      // `chunkStallReason` unconditionally (fabFileService/chunk.ts), and a zero-chunk commit also
+      // stamps `noExtractableTextAt`, which this filter requires to be null. So the file leaves by
+      // two independent doors rather than being re-swept every pass.
+      {
+        $or: [
+          { mimeType: { $not: /^(audio|image|video)\// } },
+          { chunkRebuildRequestedAt: { $ne: null } },
+          { chunkStallReason: 'rechunkPaused' },
+        ],
+      },
       // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
       // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
       // so without this the file stays claimed and invisible forever. The `chunkClaimedAt:null` arm is

@@ -135,11 +135,34 @@ describe('buildFabFileChunkScanFilter', () => {
     expect(matches(doc, filter)).toBe(true);
   });
 
-  it('KNOWN STRAND: does NOT re-select a paused MEDIA file - the halt write destroyed its only selection door', () => {
-    // Known one-way door, documented on buildChunkRescueMessage: a media file reaches this filter
-    // only through chunkRebuildRequestedAt, and the halt write nulls it in the same statement that
-    // records the stall reason. Asserted rather than left implicit so the strand is visible to
-    // whoever closes it - the switch-OFF block below covers the non-media file, which does come back.
+  it('re-selects a paused MEDIA file once the switch clears, via the stall reason the halt left behind', () => {
+    // This was a permanent strand. A media file reaches this filter only through
+    // `chunkRebuildRequestedAt`, and the halt write nulls it in the same statement that records the
+    // stall reason - so clearing the switch did not bring the file back and only a second manual
+    // reprocess did. `rechunkPaused` is the durable record of the same fact: that write picks it
+    // precisely when the stamp was set.
+    const pausedMedia = (mimeType: string) => ({
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      error: null,
+      noExtractableTextAt: null,
+      mimeType,
+      chunkStallReason: 'rechunkPaused',
+      chunkRebuildRequestedAt: null,
+    });
+
+    for (const mimeType of ['audio/mpeg', 'image/png', 'video/mp4']) {
+      expect(matches(pausedMedia(mimeType), filter)).toBe(true);
+    }
+  });
+
+  it('does NOT re-select a paused media file that was never rebuilding', () => {
+    // `unchunkedPaused` means the file reached the handler already empty - no producer removed its
+    // passages, so there is no rebuild to resume. Media with 0 chunks is its steady state, and
+    // admitting it here would sweep every paused image in the install forever.
     const doc = {
       status: 'complete',
       chunkCount: 0,
@@ -147,11 +170,30 @@ describe('buildFabFileChunkScanFilter', () => {
       createdAt: old,
       deletedAt: null,
       error: null,
+      noExtractableTextAt: null,
       mimeType: 'audio/mpeg',
-      chunkStallReason: 'rechunkPaused',
+      chunkStallReason: 'unchunkedPaused',
       chunkRebuildRequestedAt: null,
     };
     expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('stops re-selecting a recovered media file once its run clears the reason', () => {
+    // The termination half of the arm above: a successful run clears `chunkStallReason`
+    // unconditionally and a zero-chunk commit stamps `noExtractableTextAt`. Either alone drops the
+    // file back out, so it cannot be swept every pass forever.
+    const recovered = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      error: null,
+      mimeType: 'audio/mpeg',
+      chunkRebuildRequestedAt: null,
+    };
+    expect(matches({ ...recovered, chunkStallReason: null, noExtractableTextAt: null }, filter)).toBe(false);
+    expect(matches({ ...recovered, chunkStallReason: 'rechunkPaused', noExtractableTextAt: old }, filter)).toBe(false);
   });
 
   it('skips a file whose chunking already failed (error persisted by the chunk handler)', () => {
