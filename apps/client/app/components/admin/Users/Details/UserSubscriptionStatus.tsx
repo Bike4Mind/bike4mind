@@ -1,5 +1,5 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useGetUserSubscriptions, useRemoveSubscription } from '@client/app/hooks/data/subscriptions';
-import { IUserDocument } from '@bike4mind/common';
 import {
   Box,
   Card,
@@ -26,7 +26,7 @@ import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import EditCreditsModal from './EditCreditsModal';
 
 interface UserSubscriptionStatusProps {
-  user: IUserDocument;
+  user: AdminUserListItem;
 }
 
 const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user }) => {

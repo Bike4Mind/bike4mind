@@ -174,6 +174,42 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it('tracks usage even when the member is over their per-member cap (#1536)', async () => {
+      // Regression: the settlement write must NOT re-enforce maxCreditsPerMember. It used to
+      // throw here before updateUserDetails ran, so an over-cap member's usedCredits stayed 0
+      // forever - which kept the cap read at 0 and meant the cap never actually tripped.
+      // Enforcement now lives at reservation; this write only tracks and deducts.
+      const cappedOrg = {
+        id: 'org1',
+        currentCredits: 500,
+        maxCreditsPerMember: 10,
+        userDetails: [{ id: 'user1', name: 'Test User', usedCredits: 9, lastCreditUsedAt: null }],
+      } as unknown as IOrganizationDocument;
+
+      const params: DeductCreditsParams = {
+        type: 'text_generation_usage',
+        user: mockUser,
+        organization: cappedOrg,
+        credits: 57, // well over the cap of 10
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'claude-3-sonnet',
+        inputTokens: 100,
+        outputTokens: 50,
+      };
+
+      await expect(deductCreditsWithOrgSupport(params, mockAdapters)).resolves.toBeUndefined();
+
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith('org1', 'user1', {
+        creditsDelta: 57,
+        lastCreditUsedAt: expect.any(Date),
+      });
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, credits: 57 }),
+        expect.any(Object)
+      );
+    });
+
     it('self-heals a missing userDetails row before incrementing, so the positional $inc lands (#1460)', async () => {
       const orgWithoutUser = {
         id: 'org1',

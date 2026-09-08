@@ -10,6 +10,7 @@ const TOOL_DISPLAY_NAMES: Partial<Record<B4MLLMTools, string>> = {
   current_datetime: 'Date/Time',
   image_generation: 'Image Gen',
   music_generation: 'Music Gen',
+  audio_generation: 'Audio Gen',
   mermaid_chart: 'Diagram',
   recharts: 'Chart',
   dice_roll: 'Dice',
@@ -113,6 +114,16 @@ const TOOL_PATTERNS: ToolPattern[] = [
       // (too broad); a music noun must be present.
       /\b(generate|create|make|compose|write|produce)\s+(?:\w+\s+){0,4}?(music|song|track|melody|soundtrack|tune|jingle|beat)\b/i,
       /\b(background\s+music|instrumental\s+track|theme\s+(?:song|music))\b/i,
+    ],
+  },
+  {
+    tool: 'audio_generation',
+    patterns: [
+      // Speech (TTS): reading text aloud / narration / voicing.
+      /\b(read\s+(?:this|it|that|aloud|out\s+loud)|say\s+(?:this|it|that)\s+(?:out\s+loud|aloud)|text[-\s]?to[-\s]?speech|narrat(?:e|ion)|voice[-\s]?over|speak\s+this)\b/i,
+      // Sound effects: an explicit sound-effect noun, or "sound of X".
+      /\b(sound\s+effects?|sfx)\b/i,
+      /\b(generate|create|make|produce)\s+(?:a\s+)?sound\s+of\b/i,
     ],
   },
   {

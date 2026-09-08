@@ -1,28 +1,222 @@
 import type {
   AccessContext,
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSetting,
+  IFallbackLakeSettingsRepository,
+  IOrganizationRepository,
   DataLakeConfig,
   ManageableDataLakeConfig,
+  TransitionalDataLakeSummary,
 } from '@bike4mind/common';
-import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  DATA_LAKE_TRANSITIONAL_STATUSES,
+  strandedCutoffMsFor,
+  resolveRetryAction,
+  toDataLakeConfig,
+  lakeMatchesAccess,
+  normalizeEntitlementKey,
+} from '@bike4mind/common';
+import { canManageLake, canShredLakeMemory, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
+import { grantedLakeIdsFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
+
+/** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
+type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
+
+/** Settings slice for the read-time grant cutover flag - governs reader-grant inclusion in the list. */
+type SettingsLookup = Pick<IAdminSettingsRepository, 'getSettingsValue'>;
+
+/** Org-admin lookup for the `canPreauthorize` rung. Optional for the same reason as the grant repo. */
+type OrgAdminLookup = Pick<IOrganizationRepository, 'findIdsWithAdminRights'>;
+
+/**
+ * The org-admin set to resolve `canPreauthorize` against.
+ *
+ * `toAccessContext` ZEROES `administeredOrgIds` for an admin caller (org resolution is pure
+ * overhead for the ordinary read gates, which grant an admin outright), so reading it off `ctx`
+ * would report `canPreauthorize: false` for a platform admin whose real rung on the lake is
+ * org-admin - the same trap `pages/api/sessions/create.ts` documents and avoids by re-resolving.
+ * Re-resolve here too, and ONLY for an admin: a non-admin's `ctx` value is already correct.
+ *
+ * Degrades to `[]` when no org repo is wired, which under-reports that one rung rather than
+ * over-reporting it: the affordance goes dark, the route stays authoritative.
+ */
+const preauthorizeOrgIdsFor = async (ctx: AccessContext, organizations?: OrgAdminLookup): Promise<string[]> => {
+  if (!ctx.isAdmin) return ctx.administeredOrgIds ?? [];
+  return organizations ? organizations.findIdsWithAdminRights(ctx.userId) : [];
+};
+
+/**
+ * The active grants for a set of lakes, grouped by lake id, so per-lake `canManage`/`isOwn` labels
+ * are grant-aware in ONE query. Empty when no grant repo is wired - labels then fall back to the
+ * org-admin rung (from `ctx.administeredOrgIds`) plus the createdByUserId owner fallback, which is
+ * the pre-grant behavior.
+ */
+const grantsByLakeIdFor = async (
+  lakes: Pick<IDataLakeDocument, 'id'>[],
+  grants?: GrantLookup
+): Promise<Map<string, LakeGrant[]>> => {
+  const byLake = new Map<string, LakeGrant[]>();
+  if (!grants || lakes.length === 0) return byLake;
+  const rows = await grants.listActiveByLakes(
+    lakes.map(l => l.id),
+    { activeAsOf: new Date() }
+  );
+  for (const row of rows) {
+    const list = byLake.get(row.dataLakeId) ?? [];
+    list.push({ principalType: row.principalType, principalId: row.principalId, role: row.role });
+    byLake.set(row.dataLakeId, list);
+  }
+  return byLake;
+};
+
+/**
+ * Owner fields this service reads to label non-own lakes. Narrows what the code may touch, not
+ * what the query fetches - the shared `findByIds` still projects `email` for other callers, but
+ * this service never reads it (owner display is name-or-username only, never an address).
+ */
+type OwnerLookup = { id: string; name?: string; username?: string }[];
 
 interface ListDataLakesAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findAccessible' | 'find'>;
+    /**
+     * Optional org-admin lookup, needed only to resolve the org-admin rung of `canPreauthorize`
+     * for an ADMIN caller (see preauthorizeOrgIdsFor). Unwired callers lose that one rung.
+     */
+    organizations?: OrgAdminLookup;
+    /**
+     * Optional owner-name lookup. When present (the manager list route), the projection labels
+     * lakes the caller does NOT own with the creator's display name, so a global admin (who sees
+     * every tenant's lakes) or an org member can't mistake someone else's lake for their own.
+     * Omitted by the content-scope resolver and Slack, which never render the owner and must not
+     * pay for the extra query - `isOwn` is still computed for them (it is free), just unlabeled.
+     */
+    users?: { findByIds: (ids: string[]) => Promise<OwnerLookup> };
+    /**
+     * Optional access-grant repo. When present, `canManage`/`isOwn` labels honor curator and
+     * transferred-owner grants, and a lake the caller holds a grant on (but is neither creator nor
+     * org-admin of) still appears via findAccessible's grant arm. Absent -> labels use the org-admin
+     * rung + createdByUserId fallback only.
+     */
+    dataLakeAccessGrants?: GrantLookup;
+    /**
+     * Optional settings repo for the read-time grant cutover flag (#1673). When present and
+     * EnforceLakeReadGrants is on, reader-granted lakes list too (in lockstep with the single gate).
+     * Absent OR a failed read -> report-only, so reader-granted lakes are NOT listed (legacy behavior).
+     */
+    settings?: SettingsLookup;
+    /**
+     * Optional overlay lookup for a static (registry) lake's admin-settable session defaults
+     * (`groundingMode`, `preferredSystemPromptId`, `systemPrompt` - see IFallbackLakeSetting).
+     * Absent -> a fallback lake lists with no overlay merge, matching resolveFallbackLake's own
+     * graceful degrade.
+     */
+    fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
+    /**
+     * Optional proposal repo. When present, each MANAGEABLE lake carries `pendingProposalCount` - the
+     * feature's only discovery surface, since nothing else tells a reviewer that work is waiting.
+     * One extra aggregate for the whole page, never per lake. Omitted by the content-scope resolver
+     * and Slack, which render no queue and must not pay for the read.
+     */
+    dataLakeProposals?: { countPendingByLakes: (ids: string[]) => Promise<Record<string, number>> };
   };
+  /**
+   * Optional, and only `listAllDataLakes` reads it: the fallback-overlay batch degrades silently on
+   * a transient failure, and without a logger that degrade is indistinguishable from "no overlay
+   * set" - see resolveFallbackSettings for why silence there is not harmless.
+   */
+  logger?: LakeAccessLogger;
 }
 
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
 
 /**
- * Per-lake write/manage flag for the caller. Mirrors canManageLake (admin or creator)
- * so the client's management affordances agree with what the write paths enforce. Kept
- * local rather than importing authorizeLakeWrite to avoid a cycle - it is a one-liner.
+ * Batch-resolve creator display names (name || username, never email - the same PII rule as the
+ * discover catalog) for the lakes the caller does not own, in one round-trip. Returns an empty
+ * map when no user lookup was supplied, so a caller that never renders owners pays nothing. Own
+ * lakes are excluded from the id set: they render as "you", never by name.
  */
-const canManage = (dl: Pick<IDataLakeDocument, 'createdByUserId'>, ctx: AccessContext): boolean =>
-  ctx.isAdmin || dl.createdByUserId === ctx.userId;
+const resolveOwnerNames = async (
+  lakes: IDataLakeDocument[],
+  callerUserId: string,
+  users?: { findByIds: (ids: string[]) => Promise<OwnerLookup> }
+): Promise<Map<string, string>> => {
+  if (!users) return new Map();
+  const ownerIds = Array.from(
+    new Set(lakes.filter(l => l.createdByUserId && l.createdByUserId !== callerUserId).map(l => l.createdByUserId))
+  );
+  if (ownerIds.length === 0) return new Map();
+  const owners = await users.findByIds(ownerIds);
+  const nameById = new Map<string, string>();
+  for (const u of owners) {
+    const name = u.name || u.username;
+    if (name) nameById.set(String(u.id), name);
+  }
+  return nameById;
+};
+
+type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>;
+
+/**
+ * Batch-resolve the overlay (`groundingMode`, `preferredSystemPromptId`, `systemPrompt`) for a set
+ * of fallback lake ids, in one round-trip. Empty map when no overlay repo was supplied (the
+ * content-scope resolver / Slack never render these fields) - mirrors `resolveOwnerNames`'s "pay
+ * nothing when nobody reads it" shape.
+ */
+const resolveFallbackSettings = async (
+  lakeIds: string[],
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>,
+  logger?: LakeAccessLogger
+): Promise<Map<string, FallbackOverlay>> => {
+  const byLakeId = new Map<string, FallbackOverlay>();
+  if (!fallbackLakeSettings || lakeIds.length === 0) return byLakeId;
+  // Guarded like the dynamic-lake read above: these are editor SEED values, so a transient overlay
+  // failure must degrade the fallback lakes' settings display, never 500 the whole admin lake list
+  // (DB lakes included) - which is what an unguarded await here did.
+  //
+  // But it degrades to values indistinguishable from "nothing set", and the editor SAVES what it was
+  // seeded with (FallbackLakeSettingsModal sends groundingMode and systemPrompt unconditionally), so
+  // a failure here that nobody logged can be clobbered into the store by the next admin save. Hence
+  // the logger: this branch must never be silent.
+  let rows: Awaited<ReturnType<typeof fallbackLakeSettings.findByLakeIds>>;
+  try {
+    rows = await fallbackLakeSettings.findByLakeIds(lakeIds);
+  } catch (err) {
+    logger?.warn?.('[dataLakes] fallback settings overlay read failed; listing without overrides', err);
+    return byLakeId;
+  }
+  for (const row of rows) {
+    byLakeId.set(row.lakeId, {
+      groundingMode: row.groundingMode,
+      preferredSystemPromptId: row.preferredSystemPromptId,
+      systemPrompt: row.systemPrompt,
+    });
+  }
+  return byLakeId;
+};
+
+/**
+ * Pending review counts for the lakes on this page, or an empty map when no proposal repo is wired.
+ * One aggregate for the whole list - see the adapter's doc for why this is not per-lake.
+ */
+const pendingCountsFor = async (
+  lakes: Pick<IDataLakeDocument, 'id'>[],
+  proposals?: { countPendingByLakes: (ids: string[]) => Promise<Record<string, number>> }
+): Promise<Record<string, number>> => {
+  if (!proposals || lakes.length === 0) return {};
+  // Never let a queue-count read break the lake list: the count is a discovery hint, the list is the
+  // page. Same tolerance the surrounding reads already apply to a missing collection.
+  try {
+    return await proposals.countPendingByLakes(lakes.map(l => l.id));
+  } catch {
+    return {};
+  }
+};
 
 /**
  * The one place a list response may carry an editor-only field: the shared config, the caller's
@@ -32,22 +226,112 @@ const canManage = (dl: Pick<IDataLakeDocument, 'createdByUserId'>, ctx: AccessCo
  * doesn't have to distinguish '' from absent, and the value is sent TRIMMED so seeding the editor
  * from this response and saving it back cannot rewrite stored padding the user never touched.
  */
-const toManageableConfig = (dl: IDataLakeDocument, manageable: boolean): ManageableDataLakeConfig => ({
+const toManageableConfig = (
+  dl: IDataLakeDocument,
+  manageable: boolean,
+  canManageMemory: boolean,
+  isOwn: boolean,
+  canPreauthorize: boolean,
+  ownerDisplayName?: string,
+  pendingProposalCount?: number
+): ManageableDataLakeConfig => ({
   ...toConfig(dl),
   canManage: manageable,
+  // Deliberately NOT `manageable`: resolved without the platform-admin rung, mirroring the
+  // session-create route. See the field's doc comment for why the two must differ. The status test
+  // mirrors that route too - it 404s a non-active lake, so a draft offered here would advertise an
+  // admission the server is guaranteed to refuse.
+  canPreauthorize: canPreauthorize && dl.status === 'active',
+  // A DB lake HAS a document, so rebuild and manage are the same decision - only a fallback
+  // (built-in) lake needs the narrower `canRebuild`; see toFallbackConfig and the field's comment.
+  canRebuild: manageable,
+  // Same reasoning as canRebuild: a DB lake's settings live on its document, so this is identical
+  // to canManage here - only a fallback lake needs the narrower ctx.isAdmin gate.
+  canManageSettings: manageable,
+  // NOT `manageable`: erasing a memory profile is creator-or-platform-admin only, so this is the one
+  // manage-flavoured flag on a DB lake that does not track canManage. See canShredLakeMemory.
+  canManageMemory,
+  isOwn,
+  // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
+  // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
+  ...(!isOwn && ownerDisplayName ? { ownerDisplayName } : {}),
   ...(manageable && dl.systemPrompt?.trim() ? { systemPrompt: dl.systemPrompt.trim() } : {}),
+  // Editor-only, same gate as systemPrompt. An empty stored value means "no preferred prompt",
+  // so it is reported as absent (never '') - the picker then shows "None".
+  ...(manageable && dl.preferredSystemPromptId ? { preferredSystemPromptId: dl.preferredSystemPromptId } : {}),
+  // Editor-only, same gate as the fields above, and omitted at zero so the client can treat presence
+  // as "there is work here" without a count comparison.
+  ...(manageable && pendingProposalCount ? { pendingProposalCount } : {}),
+  // Editor-only, same gate as the prompt fields. Surfaced so the settings picker can seed the
+  // current selection; absent for a non-editor OR a lake predating the field (the picker then
+  // falls back to the default mode, matching how the resolver treats an absent value).
+  ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
+  // Editor-only, same gate. Absent when the lake declares no target, which is exactly the state the
+  // settings field renders as blank - and the state in which the lake never converges (#1681).
+  ...(manageable && typeof dl.requiredPassageTokenTarget === 'number'
+    ? { requiredPassageTokenTarget: dl.requiredPassageTokenTarget }
+    : {}),
+  // Editor-only, but ALWAYS present (defaulted to 0) when manageable, unlike the fields above -
+  // its presence is the client's spend-tab visibility signal, so a zero-spend manageable lake
+  // must not look identical to a non-manageable one.
+  ...(manageable ? { embeddingSpendMicroUsd: dl.embeddingSpendMicroUsd ?? 0 } : {}),
 });
 
 /**
  * Fallback (built-in) registry entries as list results. Routed through `toDataLakeConfig` rather
  * than spread, so the "an actor-less projection cannot carry an editor-only field" invariant holds
- * on this arm too: `PREMIUM_DATA_LAKES` is `JSON.parse`d from env and keeps unknown keys, so an
- * overlay entry carrying a `systemPrompt` would otherwise be served to every caller. Fallbacks have
- * no owner and are read-only for everyone, so `canManage` is always false.
+ * on this arm too: `PREMIUM_DATA_LAKES` is `JSON.parse`d from env and keeps unknown keys, so a
+ * REGISTRY entry (`dl`) carrying a `systemPrompt` field would otherwise be served to every caller.
+ * This is why `systemPrompt` below is read ONLY from `overlay` (the admin-write-gated table), never
+ * from `dl` - the leak guard is about the untrusted source, not the field name. Fallbacks have no
+ * owner and are read-only for everyone, so `canManage` is always false.
+ *
+ * `canRebuild` and `canManageSettings` DO take an actor, unlike every other field here: both are
+ * `ctx.isAdmin` directly, not `resolveCanManageLake` - see `assertLakeRebuildAccess`'s comment for
+ * why an org-scoped overlay lake must not let a customer-side org admin pass. This is a
+ * deliberate, narrow exception to "actor-less projection"; any field added here under this pattern
+ * must repeat the same reasoning.
+ *
+ * NOT identical to the server-side gate, and deliberately so rather than by oversight: the write
+ * path resolves through `resolveFallbackLake`, which applies the lake's ORG PREREQUISITE before its
+ * `ctx.isAdmin` bypass, while this flag is `ctx.isAdmin` alone and `listAllDataLakes` applies no org
+ * filter to fallbacks. So for an ORG-SCOPED registry lake, a platform admin outside that org sees
+ * the affordance and gets a not-found on save. Fail-CLOSED (a lit button that 404s, never an
+ * escalation), and unreachable today - no registry entry carries an organizationId and
+ * NEXT_PUBLIC_PREMIUM_DATA_LAKES is unset in every stage - but narrow the flag here, not widen the
+ * gate, if one is ever added.
+ *
+ * `groundingMode`, `preferredSystemPromptId` and `systemPrompt` are the exceptions to "no
+ * editor-only field for a fallback lake": all three are merged in from the overlay
+ * (`fallbackSettingsByLakeId`) and gated on `canManageSettings`, mirroring how `toManageableConfig`
+ * gates the same fields on `manageable` - they need to round-trip into the settings modal the same
+ * way a DB lake's do. None of the three is the effective value a session/turn actually resolves
+ * (that is `resolveFallbackLake`'s job for the first two, and `getDataLakePrompts`'s
+ * `isTrustedForInjection` for the third - which independently decides whether THIS stored value is
+ * ever injected, org-scoped registry lakes only); this is purely what the editor UI seeds its
+ * picker/textarea from. `systemPrompt` is trimmed and blank-as-absent, matching `toManageableConfig`.
  */
-const toFallbackConfig = (dl: DataLakeConfig): ManageableDataLakeConfig => ({
+const toFallbackConfig = (
+  dl: DataLakeConfig,
+  ctx: Pick<AccessContext, 'isAdmin'>,
+  overlay?: FallbackOverlay
+): ManageableDataLakeConfig => ({
   ...toDataLakeConfig(dl),
   canManage: false,
+  canRebuild: ctx.isAdmin,
+  canManageSettings: ctx.isAdmin,
+  // A registry lake has no document and no memory profile, so there is nothing to erase.
+  canManageMemory: false,
+  // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
+  isOwn: false,
+  // A registry lake has no document, and session-create resolves every pre-authorized id through
+  // findById - so naming one could only ever 404. Never offer the affordance.
+  canPreauthorize: false,
+  ...(ctx.isAdmin && overlay?.groundingMode ? { groundingMode: overlay.groundingMode } : {}),
+  ...(ctx.isAdmin && overlay?.preferredSystemPromptId
+    ? { preferredSystemPromptId: overlay.preferredSystemPromptId }
+    : {}),
+  ...(ctx.isAdmin && overlay?.systemPrompt?.trim() ? { systemPrompt: overlay.systemPrompt.trim() } : {}),
 });
 
 /**
@@ -57,19 +341,63 @@ const toFallbackConfig = (dl: DataLakeConfig): ManageableDataLakeConfig => ({
  * required entitlement they both lack. Each result carries `canManage` (admin or creator)
  * so the UI can gate management affordances - the list surfaces other users' public lakes,
  * which are read-only. Fallback (built-in) lakes are read-only for everyone.
+ *
+ * Each result also carries `isOwn` (did the caller create it) and, when a `users` lookup is
+ * supplied (the manager route), `ownerDisplayName` for lakes the caller does NOT own - so the
+ * UI can flag someone else's lake and not let it be managed by mistake.
  */
 export const listDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
-    dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'] });
+    dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
   } catch {
     // DB may not have the collection yet - fall through to hardcoded
   }
 
-  const dynamicConfigs = dynamicLakes.map(dl => toManageableConfig(dl, canManage(dl, ctx)));
+  // Label lakes the caller does not own with the creator's name (manager route only; the
+  // content-scope resolver passes no `users` adapter and this resolves to an empty map).
+  const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
+  const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
+  // Manage flags resolved BEFORE the queue-count aggregate so it spans only the lakes this caller may
+  // manage. `toManageableConfig` drops the count for the rest anyway, so narrowing the aggregate both
+  // saves the discarded work and keeps a count the caller must not see out of this function entirely.
+  const manageableById = new Map(dynamicLakes.map(dl => [dl.id, canManageLake(dl, ctx, grantsByLake.get(dl.id))]));
+  // The admission rung, resolved WITHOUT platform-admin - see canPreauthorize's doc comment. On this
+  // (non-admin) branch it can only ever equal canManage; it is computed separately anyway so the two
+  // branches share one rule and a future rung change cannot drift them apart.
+  const preauthorizeActor = {
+    userId: ctx.userId,
+    isAdmin: false,
+    administeredOrgIds: await preauthorizeOrgIdsFor(ctx, db.organizations),
+  };
+  const canPreauthorizeById = new Map(
+    dynamicLakes.map(dl => [dl.id, canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id))])
+  );
+  const pendingCounts = await pendingCountsFor(
+    dynamicLakes.filter(dl => manageableById.get(dl.id)),
+    db.dataLakeProposals
+  );
+  const dynamicConfigs = dynamicLakes.map(dl =>
+    toManageableConfig(
+      dl,
+      manageableById.get(dl.id) ?? false,
+      canShredLakeMemory(dl, ctx),
+      isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      canPreauthorizeById.get(dl.id) ?? false,
+      ownerNames.get(dl.createdByUserId),
+      pendingCounts[dl.id]
+    )
+  );
 
   // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
@@ -79,7 +407,7 @@ export const listDataLakes = async (
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
   const accessibleFallbacks = fallbacks
     .filter(dl => lakeMatchesAccess(dl, normalizedUserTags, normalizedKeys))
-    .map(toFallbackConfig);
+    .map(dl => toFallbackConfig(dl, ctx));
 
   return [...dynamicConfigs, ...accessibleFallbacks];
 };
@@ -87,9 +415,18 @@ export const listDataLakes = async (
 /**
  * Lists ALL data lakes (for admin views). No user-tag filtering. Admins may manage every
  * DB lake, so `canManage` is true for those; fallback (built-in) lakes stay read-only for
- * everyone (assertLakeWritable refuses them even for admins), so they are false.
+ * everyone (assertLakeWritable refuses document writes even for admins), so `canManage` is
+ * false. `canRebuild` is a separate, narrower flag - see ManageableDataLakeConfig.
+ *
+ * Takes `ctx` (not just `db`) so it can mark which of those cross-tenant lakes the admin
+ * actually owns (`isOwn`) and, when a `users` lookup is supplied, label the rest with the
+ * creator's name - an admin sees every org's private lakes here, so the owner label is what
+ * keeps them from mistaking someone else's for their own.
  */
-export const listAllDataLakes = async ({ db }: ListDataLakesAdapters): Promise<ManageableDataLakeConfig[]> => {
+export const listAllDataLakes = async (
+  ctx: AccessContext,
+  { db, logger }: ListDataLakesAdapters
+): Promise<ManageableDataLakeConfig[]> => {
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.find({ status: { $in: ['draft', 'active'] } });
@@ -97,9 +434,42 @@ export const listAllDataLakes = async ({ db }: ListDataLakesAdapters): Promise<M
     // Fall through to hardcoded
   }
 
-  const dynamicConfigs = dynamicLakes.map(dl => toManageableConfig(dl, true));
+  const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
+  const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
+  const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
+  // This is the branch where canManage and canPreauthorize genuinely diverge: the admin manages every
+  // DB lake, but may only ADMIT the ones they hold a real rung on (owner/curator/org-admin/org-grant).
+  const preauthorizeActor = {
+    userId: ctx.userId,
+    isAdmin: false,
+    administeredOrgIds: await preauthorizeOrgIdsFor(ctx, db.organizations),
+  };
+  // Admin manages every DB lake (canManage: true), but isOwn stays the true effective-owner test so
+  // the "you" label still means ownership, not the admin's blanket manage power.
+  const dynamicConfigs = dynamicLakes.map(dl =>
+    toManageableConfig(
+      dl,
+      true,
+      // Admin, so the shred gate passes on every DB lake - but it is resolved through the same
+      // predicate rather than hardcoded, so a change to the rule reaches this surface too.
+      canShredLakeMemory(dl, ctx),
+      isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id)),
+      ownerNames.get(dl.createdByUserId),
+      pendingCounts[dl.id]
+    )
+  );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
-  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(toFallbackConfig);
+  const hardcodedFallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id));
+  // This is the only list an admin (the only actor toFallbackConfig ever surfaces groundingMode
+  // to) ever sees, so the overlay batch is fetched only here - listDataLakes' non-admin callers
+  // would never use it.
+  const fallbackSettingsByLakeId = await resolveFallbackSettings(
+    hardcodedFallbacks.map(dl => dl.id),
+    db.fallbackLakeSettings,
+    logger
+  );
+  const fallbacks = hardcodedFallbacks.map(dl => toFallbackConfig(dl, ctx, fallbackSettingsByLakeId.get(dl.id)));
 
   return [...dynamicConfigs, ...fallbacks];
 };
@@ -116,8 +486,20 @@ export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['archived'], includePublic: false });
-  return redactLakesForActor(lakes, ctx);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: ['archived'],
+    includePublic: false,
+    grantedLakeIds,
+  });
+  const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
+  return redactLakesForActor(lakes, ctx, grantsByLake);
 };
 
 /**
@@ -129,6 +511,73 @@ export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false });
-  return redactLakesForActor(lakes, ctx);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
+  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
+  const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
+  return redactLakesForActor(lakes, ctx, grantsByLake);
+};
+
+/**
+ * Lakes stranded in a transitional status (see DATA_LAKE_TRANSITIONAL_STATUSES) - the one list
+ * that surfaces a lake a crashed or timed-out lifecycle call left mid-operation. Every other list
+ * path asks for a disjoint set of STABLE statuses, so without this view such a lake renders
+ * nowhere and can only be found by reading its id out of the datastore.
+ *
+ * Narrowed three ways against the archived/deleted views it otherwise mirrors:
+ * - MANAGE-scoped, not read-scoped. The only action offered is a retry, which each lifecycle
+ *   service restricts to owner/admin/org-manager, so a caller who cannot manage the lake could do
+ *   nothing with the row. Filtering on `canManageLake` here also means nothing needs redacting.
+ * - includePublic:false, for the same reason the archived view passes it: a stranger holds no
+ *   management role on someone else's public lake.
+ * - Cutoff-filtered, per status (see strandedCutoffMsFor). A lake that entered 'archiving'
+ *   seconds ago is working, not stranded, so a list that showed it would mean "is busy" rather
+ *   than "needs attention".
+ */
+export const listTransitionalDataLakes = async (
+  ctx: AccessContext,
+  { db }: ListDataLakesAdapters
+): Promise<TransitionalDataLakeSummary[]> => {
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: [...DATA_LAKE_TRANSITIONAL_STATUSES],
+    includePublic: false,
+    grantedLakeIds,
+  });
+  const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
+  const now = Date.now();
+  return lakes
+    .filter(lake => canManageLake(lake, ctx, grantsByLake.get(lake.id)))
+    .filter(lake => {
+      // `new Date(...)`, not `.getTime()` on the field: it is a Date in-process but an ISO
+      // string once it has crossed a wire, and both shapes reach this function.
+      const movedAt = new Date(lake.updatedAt).getTime();
+      // NaN - a lake with no or an unparseable timestamp - is SHOWN, not hidden: the cutoff is
+      // there to withhold a lake we can prove is still busy, and an absent timestamp proves
+      // nothing. Failing closed would hide exactly the lake this list exists to surface.
+      return Number.isNaN(movedAt) || movedAt <= now - strandedCutoffMsFor(lake.status);
+    })
+    .map(lake => ({
+      id: lake.id,
+      name: lake.name,
+      slug: lake.slug,
+      fileTagPrefix: lake.fileTagPrefix,
+      status: lake.status,
+      updatedAt: lake.updatedAt,
+      // Resolved here rather than by the consumer: for 'restoring' the answer depends on the
+      // lake's sweep marks, which this narrow DTO deliberately does not carry, and a client that
+      // guessed could run the wrong axis's recovery - see resolveRetryAction.
+      retryAction: resolveRetryAction(lake),
+    }));
 };

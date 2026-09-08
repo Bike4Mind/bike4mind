@@ -629,6 +629,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByIds: (
     ids: string[]
   ) => Promise<Pick<IUserDocument, 'id' | 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
+  /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
+  findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;
   searchCollections: (
     userId: string,
     options: {

@@ -35,6 +35,10 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
 
     res.status(statusCode).json({
       ...additionalInfo,
+      // Deprecated, remove on 2026-12-01 along with `name` in ApiErrorSchema /
+      // ErrorResponse. It leaks the thrower's class name onto a public wire and it
+      // shadows any `name` an endpoint put in additionalInfo. Documented in the
+      // envelope only for the deprecation window; see CONVENTIONS.md section 1.
       name: errorObj.name,
       error: errorObj.message || 'Server Error',
       request_id: req.requestId,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { dataLakeService } from '@bike4mind/services';
 
 const h = vi.hoisted(() => ({ recomputeStatsForLakeTags: vi.fn() }));
 vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
@@ -16,6 +17,19 @@ describe('recomputeStatsForUploadedFile', () => {
     await recomputeStatsForUploadedFile({ tags: [{ name: 'datalake:acme' }, { name: 'acme:legal' }] }, { logger });
 
     expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(['datalake:acme', 'acme:legal'], { logger });
+  });
+
+  it('forwards the acting principal so a draft -> active flip names the uploader, not `system`', async () => {
+    // toEqual ignores undefined-valued keys, so the tag-name assertions above pass with no actor.
+    const actor: dataLakeService.ManageActor = {
+      userId: 'u1',
+      isAdmin: false,
+      auditPrincipal: { principalKind: 'apiKey', principalId: 'k1', onBehalfOfUserId: 'u1' },
+    };
+
+    await recomputeStatsForUploadedFile({ tags: [{ name: 'datalake:acme' }] }, { logger, actor });
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(['datalake:acme'], { logger, actor });
   });
 
   it('skips a batch file, which the batch finalizer recomputes once for the whole batch', async () => {

@@ -152,6 +152,8 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/createFabFileURL.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts), which skips minting fileUrl for images at creation time (root-cause fix, commit 63cc8f9d3e)',
+  'apps/client/server/dataLakes/proposalAdmissionDeps.ts':
+    'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts:175 withholds fileUrl for image/* at creation time); the adapter only forwards the mode createFabFile asks for, and never reads an existing FabFile',
   'apps/client/pages/api/notebooks/export.ts':
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
   'apps/client/server/queueHandlers/researchEngineQueue.ts':
@@ -175,6 +177,8 @@ const ALLOWLIST: Record<string, string> = {
 
   // --- Upload-only / delete-only: no read path. ---
   'apps/client/pages/api/files/createFabFile.ts': 'upload-only presigned PUT (getSignedUrl mode "put"), no read',
+  'apps/client/server/slack/dataLakeIngestDeps.ts':
+    'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Audio-only generation, never an image. ---
   'apps/client/server/utils/persistGeneratedAudio.ts':

@@ -1,3 +1,4 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import React from 'react';
 import { Alert, Button, Chip, CircularProgress, Stack, Tooltip, Typography } from '@mui/joy';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -6,7 +7,7 @@ import { EntitlementSourceType, useGetUserProductAccess } from '@client/app/hook
 
 interface ProductAccessProps {
   /** The live-edited user (FullUsersView's formState) - tag grants are staged into it. */
-  user: IUserDocument;
+  user: AdminUserListItem;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
 }
 

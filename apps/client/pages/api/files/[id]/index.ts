@@ -2,24 +2,34 @@ import { FileEvents, IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   changeStorageSize,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
   adminSettingsRepository,
+  scopedSettingsRepository,
   sessionRepository,
   userRepository,
   withTransaction,
   User,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { findLakeAccessibleFabFile } from '@server/dataLakes';
+import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { getFilesStorage } from '@server/utils/storage';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -53,9 +63,37 @@ const handler = baseApi()
       // so getFabFile 404s for entitled non-owner users. Re-authorize via the SAME lake gate the
       // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
       // the shared file viewer (KnowledgeModal) can render it. (#836)
-      const lakeFile = await findLakeAccessibleFabFile(req, req.query.id);
-      if (!lakeFile) throw error; // not lake-accessible either - preserve the original 404
-      const fabFile = await fabFilesService.generateSignedUrl(lakeFile, adapter);
+      const lakes = await resolveAccessibleLakes(req);
+      // Fetched directly and checked against the already-resolved `lakes` rather than a per-id
+      // helper that would re-run resolveAccessibleLakes's own DB read - the same one-resolve,
+      // reuse-everywhere shape as files/byIds.ts's lake fallback.
+      const candidate = lakes.length > 0 ? await fabFileRepository.findById(req.query.id) : null;
+      // The SAME computation grants access and names the grantor, so an open-prefix match (no
+      // tag to reverse) attributes to the specific lake whose prefix matched rather than falling
+      // back to every accessible lake - a false row in an immutable, 450-day-floor audit trail is
+      // worse than a missing one.
+      const grantors =
+        candidate && !candidate.deletedAt ? grantingLakes(lakes, candidate.tags?.map(t => t.name) ?? []) : [];
+      // No accessible lake serves this id either - never an audit-worthy read, so nothing is
+      // recorded; preserve the original 404 exactly as getFabFile raised it.
+      if (!candidate || grantors.length === 0) throw error;
+      const fabFile = await fabFilesService.generateSignedUrl(candidate, adapter);
+      // Best-effort audit write - this is the same single-file metadata + URL read as the
+      // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
+      // Awaited (never rethrows): a per-request serverless route must not race a post-response
+      // freeze of the execution environment.
+      await dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+          organizationId: normalizeId(req.user.organizationId),
+          resolvedLakeIds: grantors.map(lake => lake.id),
+          fileIds: [candidate.id],
+          surface: 'data-lake-file-fallback',
+        },
+        req.logger,
+        adminSettingsRepository
+      );
       return res.json(fabFile);
     }
   })
@@ -68,21 +106,40 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
-    // Same guard the DELETE branch below carries. The round trip matters on top of isValid():
-    // isValid() also accepts any 12-character string, which then coerces to an unrelated id.
-    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+    // Same guard the DELETE branch below carries.
+    if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
 
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    //
+    // A `fileTagPrefix` content tag is membership too, but this route-level gate is NOT extended
+    // to cover it: it has no resolved file, so it cannot know the owner a prefix-arm join is
+    // anchored to. `reconcileLakeTags` (inside `updateFabFile` below) gates that join - a whole-
+    // array write can only ever join or preserve membership through either mechanism, never
+    // leave one; see that function's docstring.
     const candidateTagNames = [
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
-    await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
-      db: { dataLakes: dataLakeRepository },
+    // No `members` here: this is a whole-array write, so the payload cannot distinguish a join
+    // from a resend, and `reconcileLakeTags` (inside `updateFabFile` below) runs the admission
+    // contract over every lake this write actually JOINS - meta-tag and prefix-arm alike - with the
+    // file already in hand. Naming members here would re-read the file to check a strict subset.
+    // Full actor, not a `{ userId, isAdmin }` literal: `canManageLake`'s org-admin rung reads
+    // `administeredOrgIds`, which cannot be derived from the user document, so a literal here
+    // makes this gate strictly narrower than every other lake-management gate in the app.
+    const ctx = await toAccessContext(req);
+    await dataLakeService.assertCanWriteDataLakeTags(ctx, candidateTagNames, {
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
+        scopedSettings: scopedSettingsRepository,
+      },
+      logger: req.logger,
     });
 
     const updatedFabFile = await withTransaction(async () => {
@@ -106,7 +163,19 @@ const handler = baseApi()
             error: req.body.error,
           },
           {
-            db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository },
+            db: {
+              fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              // `lakeConfigAuditDb` carries `adminSettings`, which is also what the admission
+              // contract's lever resolves from; only `scopedSettings` is additional here.
+              ...lakeConfigAuditDb,
+              scopedSettings: scopedSettingsRepository,
+            },
+            // `reconcileLakeTags` re-gates every lake this write JOINS, so its actor has to stay as
+            // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived
+            // from the user document this service is handed.
+            administeredOrgIds: ctx.administeredOrgIds,
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {
@@ -143,7 +212,7 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
-    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+    if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
 
@@ -179,6 +248,7 @@ const handler = baseApi()
           onDeleteComplete: async (_fabFile, size) => {
             sizeToDeduct = size;
           },
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
       );
 
@@ -224,7 +294,14 @@ const handler = baseApi()
     if (deleteAction === 'deleted') {
       await recomputeStatsForLakeTags(
         (fabFile?.tags ?? []).map(tag => tag?.name),
-        { logger: req.logger }
+        {
+          logger: req.logger,
+          actor: {
+            userId: req.user.id,
+            isAdmin: !!req.user.isAdmin,
+            auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+          },
+        }
       );
     }
 

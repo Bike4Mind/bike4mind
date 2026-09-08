@@ -3,15 +3,10 @@ import {
   Box,
   Button,
   Chip,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   IconButton,
   ListItem,
   ListItemButton,
   ListItemContent,
-  Modal,
-  ModalDialog,
   Skeleton,
   Tooltip,
   Typography,
@@ -27,14 +22,14 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
+import { useDataLakeFiles, useReprocessFabFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
-import DataLakeTreeView, {
-  UNCATEGORIZED_KEY,
-  type DataLakeTreeChrome,
-} from '@client/app/components/datalake/DataLakeTreeView';
+import type { DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
+import { describePipelineStall, satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
+import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
+import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 
 // Utilities
 
@@ -50,6 +45,9 @@ function getMeaningfulTags(file: IFabFileDocument): string[] {
   if (!file.tags) return [];
   return file.tags.map(t => t.name).filter(name => !name.startsWith('datalake:'));
 }
+
+/** Stable identity so a Set-typed prop doesn't churn every render when nothing is selected. */
+const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
 
 // DataLakeViewer
 
@@ -76,14 +74,21 @@ export default function DataLakeViewer({
   onAskAbout,
 }: DataLakeViewerProps) {
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
-  const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
+  const [selectedFile, setSelectedFile] = useState<DataLakeMemberFile | null>(null);
+  const selectedFileIds = useMemo(
+    () => (selectedFile ? new Set([selectedFile.id]) : EMPTY_SELECTED_IDS),
+    [selectedFile]
+  );
 
   const { data: filesResult, isLoading, isError } = useDataLakeFiles(dataLakeId);
-  const articles = filesResult?.data ?? [];
+  const articles = useMemo(() => filesResult?.data ?? [], [filesResult?.data]);
 
   // Build tag tree from articles, filtering to only data lake-specific tags
   const tree = useMemo(() => {
-    const prefix = tagPrefix.endsWith(':') ? tagPrefix : tagPrefix + ':';
+    // Same helper the wizard's request-rule mirror uses, so trimming and colon-appending cannot
+    // drift between the two surfaces. `|| ':'` keeps an empty prefix matching nothing - every tag
+    // startsWith(''), which would pull unrelated tags into this lake's tree.
+    const prefix = submittedTagPrefix(tagPrefix) || ':';
     const tagCountMap = new Map<string, number>();
     for (const file of articles) {
       for (const tag of file.tags ?? []) {
@@ -101,7 +106,7 @@ export default function DataLakeViewer({
     setSelectedFile(null);
   }, []);
 
-  const handleSelectFile = useCallback((file: IFabFileDocument) => {
+  const handleSelectFile = useCallback((file: DataLakeMemberFile) => {
     setSelectedFile(file);
   }, []);
 
@@ -138,7 +143,7 @@ export default function DataLakeViewer({
           tagPrefix={tagPrefix}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
-          selectedFileId={selectedFile?.id ?? null}
+          selectedFileIds={selectedFileIds}
           onSelectFile={handleSelectFile}
           isLoading={isLoading}
           isError={isError}
@@ -147,6 +152,7 @@ export default function DataLakeViewer({
           file={selectedFile}
           onAskAbout={onAskAbout}
           dataLakeId={dataLakeId}
+          lakeName={dataLakeName}
           canManage={canManage}
           onRemoved={() => setSelectedFile(null)}
         />
@@ -159,12 +165,12 @@ export default function DataLakeViewer({
 
 interface TreeSidebarProps {
   tree: ReturnType<typeof buildTagTree>;
-  articles: IFabFileDocument[];
+  articles: DataLakeMemberFile[];
   tagPrefix: string;
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
-  selectedFileId: string | null;
-  onSelectFile: (file: IFabFileDocument) => void;
+  selectedFileIds: ReadonlySet<string>;
+  onSelectFile: (file: DataLakeMemberFile) => void;
   isLoading: boolean;
   isError?: boolean;
 }
@@ -175,7 +181,7 @@ function TreeSidebar({
   tagPrefix,
   breadcrumb,
   onNavigate,
-  selectedFileId,
+  selectedFileIds,
   onSelectFile,
   isLoading,
   isError,
@@ -183,7 +189,7 @@ function TreeSidebar({
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
   // Shares the server's predicate so this bucket holds exactly the files the write doors and the
   // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
-  const prefixNorm = tagPrefix.endsWith(':') ? tagPrefix : `${tagPrefix}:`;
+  const prefixNorm = submittedTagPrefix(tagPrefix) || ':';
   const uncategorizedFiles = useMemo(
     () =>
       [...articles]
@@ -234,11 +240,12 @@ function TreeSidebar({
         </Typography>
       </ListItemButton>
     ),
+    backRowPlacement: 'above',
     scrollSx: { flex: 1, overflow: 'auto' },
     nodeListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '4px' },
     fileListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '6px' },
     renderNodeRow: (node, _depth, onOpen) => (
-      <ListItem key={node.segment}>
+      <ListItem>
         <ListItemButton
           onClick={onOpen}
           sx={{ borderRadius: 'sm', gap: 1 }}
@@ -261,7 +268,7 @@ function TreeSidebar({
       </ListItem>
     ),
     renderFileRow: (file, selected, onSelect) => (
-      <ListItem key={file.id}>
+      <ListItem>
         <ListItemButton
           selected={selected}
           onClick={onSelect}
@@ -289,7 +296,7 @@ function TreeSidebar({
       articles={articles}
       breadcrumb={breadcrumb}
       onNavigate={onNavigate}
-      selectedFileId={selectedFileId}
+      selectedFileIds={selectedFileIds}
       onSelectFile={onSelectFile}
       isLoading={isLoading}
       isError={isError}
@@ -297,7 +304,7 @@ function TreeSidebar({
       uncategorized={{
         files: uncategorizedFiles,
         renderRow: (count, onOpen) => (
-          <ListItem key={UNCATEGORIZED_KEY}>
+          <ListItem>
             <ListItemButton
               onClick={onOpen}
               sx={{ borderRadius: 'sm', gap: 1 }}
@@ -326,19 +333,21 @@ function ArticlePanel({
   file,
   onAskAbout,
   dataLakeId,
+  lakeName,
   canManage,
   onRemoved,
 }: {
-  file: IFabFileDocument | null;
+  file: DataLakeMemberFile | null;
   onAskAbout?: (prompt: string) => void;
   dataLakeId: string;
+  lakeName: string;
   canManage?: boolean;
   onRemoved?: () => void;
 }) {
   const { data: content, isLoading } = useGetFabFileContent(file);
   const reprocess = useReprocessFabFile(dataLakeId);
-  const removeFile = useRemoveFileFromDataLake(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const stallNotice = file ? describePipelineStall(file) : null;
 
   if (!file) {
     return (
@@ -404,7 +413,6 @@ function ArticlePanel({
                   color="danger"
                   data-testid={`datalake-removefile-btn-${file.id}`}
                   startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
-                  loading={removeFile.isPending}
                   onClick={() => setConfirmRemove(true)}
                   sx={{ flexShrink: 0, fontSize: '13px' }}
                 >
@@ -414,14 +422,21 @@ function ArticlePanel({
             </>
           )}
         </Box>
-        {/* Surfaced from the chunk-pipeline hardening: files that extracted no text are flagged. */}
-        {file.notes && (
+        {/* Pipeline state (no extractable text, a halted rebuild) is derived from its own fields;
+            `notes` is the owner's own text and is shown alongside, not in place of it. */}
+        {stallNotice && (
           <Typography level="body-xs" sx={{ color: 'warning.500', mb: 1 }}>
-            ⚠️ {file.notes}
+            {'\u26a0\ufe0f'} {stallNotice}
           </Typography>
         )}
-        {tags.length > 0 && (
+        {file.notes && (
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1 }}>
+            {file.notes}
+          </Typography>
+        )}
+        {(tags.length > 0 || file.membershipArm) && (
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+            <MembershipArmBadge arm={file.membershipArm} />
             {tags.map(tag => (
               <Chip key={tag} size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
                 {tag}
@@ -463,37 +478,14 @@ function ArticlePanel({
         </Box>
       )}
 
-      <Modal open={confirmRemove} onClose={() => setConfirmRemove(false)}>
-        <ModalDialog data-testid="datalake-removefile-confirm" role="alertdialog">
-          <DialogTitle>Remove file from data lake?</DialogTitle>
-          <DialogContent>
-            &ldquo;{title}&rdquo; will be removed from this data lake and stops appearing here right away. The file
-            stays in your Files list and in any chats that use it, and you can still find it in your own file search.
-            Its tags under this lake&apos;s prefix go with it, so it also leaves this lake&apos;s folder groupings.
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="solid"
-              color="danger"
-              data-testid="datalake-removefile-confirm-btn"
-              loading={removeFile.isPending}
-              onClick={() =>
-                removeFile.mutate(file.id, {
-                  onSuccess: () => {
-                    setConfirmRemove(false);
-                    onRemoved?.();
-                  },
-                })
-              }
-            >
-              Remove
-            </Button>
-            <Button variant="plain" color="neutral" onClick={() => setConfirmRemove(false)}>
-              Cancel
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+      <RemoveFileFromLakeDialog
+        open={confirmRemove}
+        onClose={() => setConfirmRemove(false)}
+        file={file}
+        lakeName={lakeName}
+        dataLakeId={dataLakeId}
+        onRemoved={onRemoved}
+      />
     </Box>
   );
 }

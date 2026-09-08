@@ -329,7 +329,8 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                   />
                 </FormControl>
                 <Typography level="body-xs" color="neutral">
-                  Keep original IDs for same-platform imports (useful for developers)
+                  Keep original IDs for chat messages and artifacts on same-platform imports (useful for developers);
+                  other items always get new IDs
                 </Typography>
               </Stack>
 

@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import type { CustomCommand } from './types.js';
 import { parseCommandFile, extractCommandName } from '../utils/commandParser.js';
+import { findMarkdownFiles } from '../utils/findMarkdownFiles.js';
 import { RemoteSkillSource } from './RemoteSkillSource.js';
 
 /**
@@ -137,7 +138,7 @@ export class CustomCommandStore {
         return;
       }
 
-      const commandFiles = await this.findCommandFiles(directory);
+      const commandFiles = await findMarkdownFiles(directory);
 
       for (const filePath of commandFiles) {
         try {
@@ -158,35 +159,6 @@ export class CustomCommandStore {
         );
       }
     }
-  }
-
-  /**
-   * Recursively finds all .md files in a directory
-   *
-   * @param directory - Directory to search
-   * @returns Array of full file paths to .md files
-   */
-  private async findCommandFiles(directory: string): Promise<string[]> {
-    const files: string[] = [];
-
-    try {
-      const entries = await fs.readdir(directory, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(directory, entry.name);
-
-        if (entry.isDirectory()) {
-          const subFiles = await this.findCommandFiles(fullPath);
-          files.push(...subFiles);
-        } else if (entry.isFile() && entry.name.endsWith('.md')) {
-          files.push(fullPath);
-        }
-      }
-    } catch (error) {
-      console.warn(`Error reading directory ${directory}:`, error instanceof Error ? error.message : String(error));
-    }
-
-    return files;
   }
 
   /**

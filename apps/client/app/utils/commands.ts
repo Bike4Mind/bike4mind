@@ -1,6 +1,7 @@
 import {
   B4MLLMTools,
   GenerateImageToolCall,
+  AudioGenerationToolCall,
   IChatHistoryItemDocument,
   IFabFileDocument,
   IMAGE_MODELS,
@@ -44,6 +45,7 @@ export type CommandArgExtra = {
     duration?: number;
   };
   imageConfig?: GenerateImageToolCall;
+  audioConfig?: AudioGenerationToolCall;
   modelConfigurations?: LLMModelConfig[];
   setChatCompletion?: (updater: (prev: any) => any) => void;
   userTags?: string[];
@@ -57,14 +59,7 @@ export type CommandArgExtra = {
 };
 
 export type CommandKey =
-  | '/llm'
-  | '/roll'
-  | '/key'
-  | '/models'
-  | '/gen_image'
-  | '/gen_video'
-  | '/edit_image'
-  | '/create_agent';
+  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;

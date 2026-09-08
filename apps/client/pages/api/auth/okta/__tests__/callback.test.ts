@@ -52,7 +52,18 @@ vi.mock('@server/auth/issueSession', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
-vi.mock('@server/utils/validators', () => ({ validateAppUrl: () => 'http://localhost:3000' }));
+vi.mock('@server/utils/validators', () => ({
+  validateAppUrl: () => 'http://localhost:3000',
+  // The route now shares one localhost predicate with csrfProtection; the real
+  // implementation is pure, so mirror it rather than stubbing a boolean.
+  isLocalAppUrl: (u?: string) => {
+    try {
+      return ['localhost', '127.0.0.1', '0.0.0.0'].includes(new URL(u ?? process.env.APP_URL ?? '').hostname);
+    } catch {
+      return false;
+    }
+  },
+}));
 vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 vi.mock('@bike4mind/observability', () => ({

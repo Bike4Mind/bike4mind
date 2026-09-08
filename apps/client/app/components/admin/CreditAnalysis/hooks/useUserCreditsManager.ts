@@ -48,14 +48,16 @@ export function useUserCreditsManager(onRefresh?: () => void) {
     onRefresh?.();
   };
 
-  const users = (allUsers.data?.users ?? []) as any[];
+  const users = allUsers.data?.users ?? [];
 
-  const handleCreditAdjustment = async (userId: string, currentCredits: number, adjustment: number, note?: string) => {
-    const newCredits = Math.max(0, currentCredits + adjustment);
+  const handleCreditAdjustment = async (userId: string, adjustment: number, note?: string) => {
     try {
       await updateUserCreditsMutation.mutateAsync({
         userId,
-        credits: newCredits,
+        // Send the signed adjustment, not a client-computed absolute. The server
+        // applies it atomically against the live balance, so interim spend is not
+        // refunded and the balance never goes negative.
+        creditDelta: adjustment,
         // The admin's typed "Reason for adjustment" - persisted on the audit
         // record. Server supplies a default description when this is empty.
         note: note?.trim() || undefined,

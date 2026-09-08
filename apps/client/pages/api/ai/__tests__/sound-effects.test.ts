@@ -28,15 +28,20 @@ const {
   persistGeneratedAudio: vi.fn(),
 }));
 
-// baseApi mock: routes by req.method; a thrown ZodError maps to 422 (mirroring
+// Contract-adapter mock: stands in for the nextRouteForContract prelude, running
+// the contract's own request schema into `req.validated` (so body validation stays
+// under test), then routes by req.method. A thrown ZodError maps to 422 (mirroring
 // the real errorHandler), any other thrown error to its statusCode or 500.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/defineNextRoute', () => ({
+  nextRouteForContract: (contract: { request: { parse: (body: unknown) => unknown } }) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       async (req: unknown, res: unknown) => {
         try {
-          return await h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+          const route = h[(req as { method?: string }).method ?? 'GET'];
+          if (!route) return;
+          (req as { validated?: unknown }).validated = contract.request.parse((req as { body?: unknown }).body);
+          return await route(req, res);
         } catch (err) {
           const status = isZodError(err)
             ? 422
@@ -76,11 +81,21 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: (...a: unknown[]) => userIncrement(...a),
   },
 }));
-vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
-  creditService: { deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a) },
-  estimateSoundCredits: (...a: unknown[]) => estimateSoundCredits(...a),
-}));
+// Keep the real pure cap helper so org-billed tests exercise the actual cap decision
+// the handler depends on; only the write (deductCreditsWithOrgSupport) is stubbed.
+vi.mock('@bike4mind/services', async () => {
+  const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
+    '@bike4mind/services/creditService'
+  );
+  return {
+    apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
+    creditService: {
+      ...creditService,
+      deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
+    },
+    estimateSoundCredits: (...a: unknown[]) => estimateSoundCredits(...a),
+  };
+});
 vi.mock('@bike4mind/utils', () => ({
   aiSoundService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
   getSettingsMap: vi.fn(async () => ({})),

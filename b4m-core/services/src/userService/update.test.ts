@@ -470,8 +470,12 @@ describe('updateUser', () => {
     // The benign field is applied; the injected tags are stripped (untouched).
     expect(result.name).toBe('Renamed');
     expect(result.tags).toEqual(['Customer']);
+    // Targeted write: an unchanged field is not written at all. `tags` is left untouched
+    // in the DB rather than round-tripped, which is also what stops a concurrent admin
+    // tag change from being reverted by a self-service profile save.
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.tags).toEqual(['Customer']);
+    expect(persisted).not.toHaveProperty('tags');
+    expect(persisted.name).toBe('Renamed');
   });
 
   it('coerces an ISO-string contextTelemetryConsentedAt on write (telemetry level is not write-once)', async () => {

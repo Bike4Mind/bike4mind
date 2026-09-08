@@ -129,6 +129,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Repo not configured' });
     }
 
+    // The callback token authenticates a repo, not a document. trackingId is
+    // caller-supplied, so confirm the doc belongs to the authenticated repo before
+    // any state transition, pattern write or notification. The repo-bound filters in
+    // atomicTransition/claimCiRetry below are the backstop; this check exists because
+    // a bare null return from those is indistinguishable from an idempotent duplicate,
+    // and the claimCiRetry null branch would otherwise still write state and notify.
+    // 404 rather than 403: do not confirm the existence of another repo's document.
+    const owned = await sreErrorTrackingRepository.findFullById(body.trackingId);
+    if (!owned || owned.repoSlug !== callbackRepoSlug) {
+      logger.warn('[SRE-CALLBACK] Tracking document does not belong to the authenticated repo', {
+        trackingId: body.trackingId,
+        authenticatedRepoSlug: callbackRepoSlug,
+      });
+      return res.status(404).json({ error: 'Not found' });
+    }
+
     logger.info('[SRE-CALLBACK] Processing workflow callback', {
       trackingId: body.trackingId,
       status: body.status,
@@ -148,10 +164,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Idempotent: atomicTransition only succeeds if status is still 'fixing'.
       // Duplicate callbacks (GitHub retry) get null and return 200 to stop retry chain.
-      const transitioned = await sreErrorTrackingRepository.atomicTransition(body.trackingId, 'fixing', 'fixed', {
-        fixPrNumber: body.prNumber,
-        workflowRunUrl: body.workflowRunUrl,
-      });
+      const transitioned = await sreErrorTrackingRepository.atomicTransition(
+        body.trackingId,
+        callbackRepoSlug,
+        'fixing',
+        'fixed',
+        {
+          fixPrNumber: body.prNumber,
+          workflowRunUrl: body.workflowRunUrl,
+        }
+      );
       if (!transitioned) {
         logger.info('[SRE-CALLBACK] Already processed (idempotent skip)', { trackingId: body.trackingId });
         return res.status(200).json({ ok: true, duplicate: true });
@@ -163,7 +185,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try {
         if (transitioned.diagnosisResult && transitioned.diagnosisResult.confidence >= 70) {
           const errorType = transitioned.errorMessage?.split(':')[0]?.trim() || 'Unknown';
-          await sreErrorPatternRepository.upsertFromFix(body.fingerprint, transitioned.repoSlug, {
+          await sreErrorPatternRepository.upsertFromFix(body.fingerprint, callbackRepoSlug, {
             name: `${errorType} in ${transitioned.diagnosisResult.affectedFiles[0]?.filePath || 'unknown'}`,
             errorMessage: transitioned.errorMessage || '',
             diagnosis: transitioned.diagnosisResult,
@@ -202,6 +224,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } else if (body.status === 'already_fixed') {
       const transitioned = await sreErrorTrackingRepository.atomicTransition(
         body.trackingId,
+        callbackRepoSlug,
         'fixing',
         'already_fixed',
         {
@@ -262,7 +285,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } else {
       // Recoverable CI failures (typecheck/apply-fix) - route to revision queue for re-diagnosis
       if (body.recoverable) {
-        const claimed = await sreErrorTrackingRepository.claimCiRetry(body.trackingId, repoConfig.maxCiRetries);
+        const claimed = await sreErrorTrackingRepository.claimCiRetry(
+          body.trackingId,
+          callbackRepoSlug,
+          repoConfig.maxCiRetries
+        );
 
         if (!claimed) {
           // Distinguish cap exhaustion from true duplicate:
@@ -275,7 +302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               trackingId: body.trackingId,
               maxCiRetries: repoConfig.maxCiRetries,
             });
-            await sreErrorTrackingRepository.atomicTransition(body.trackingId, 'fixing', 'failed', {
+            await sreErrorTrackingRepository.atomicTransition(body.trackingId, callbackRepoSlug, 'fixing', 'failed', {
               workflowRunUrl: body.workflowRunUrl,
               errorMessage: `CI retry cap reached (${repoConfig.maxCiRetries} retries)`,
             });
@@ -345,10 +372,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             trackingId: body.trackingId,
           });
           // Transition back to failed since we cannot retry without a diagnosis
-          await sreErrorTrackingRepository.atomicTransition(body.trackingId, 'revision_requested', 'failed', {
-            workflowRunUrl: body.workflowRunUrl,
-            errorMessage: body.failureReason || 'Workflow failed (no diagnosis to retry)',
-          });
+          await sreErrorTrackingRepository.atomicTransition(
+            body.trackingId,
+            callbackRepoSlug,
+            'revision_requested',
+            'failed',
+            {
+              workflowRunUrl: body.workflowRunUrl,
+              errorMessage: body.failureReason || 'Workflow failed (no diagnosis to retry)',
+            }
+          );
           return res.status(200).json({ ok: true });
         } else {
           const revisionRequest: SreRevisionRequest = {
@@ -390,10 +423,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      const transitioned = await sreErrorTrackingRepository.atomicTransition(body.trackingId, 'fixing', 'failed', {
-        workflowRunUrl: body.workflowRunUrl,
-        errorMessage: body.failureReason || 'Workflow failed',
-      });
+      const transitioned = await sreErrorTrackingRepository.atomicTransition(
+        body.trackingId,
+        callbackRepoSlug,
+        'fixing',
+        'failed',
+        {
+          workflowRunUrl: body.workflowRunUrl,
+          errorMessage: body.failureReason || 'Workflow failed',
+        }
+      );
       if (!transitioned) {
         logger.info('[SRE-CALLBACK] Already processed (idempotent skip)', { trackingId: body.trackingId });
         return res.status(200).json({ ok: true, duplicate: true });

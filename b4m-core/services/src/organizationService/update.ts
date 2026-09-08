@@ -45,29 +45,32 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   const isManager = plain.managerId === user.id;
   const isOwner = plain.userId === user.id;
 
-  organization = {
-    ...plain,
-    name: rest.name ?? plain.name,
-    description: rest.description ?? plain.description,
-    // Only allow billing contact changes for owners and admins, not managers
-    billingContact:
-      isManager && !isOwner && !user.isAdmin ? plain.billingContact : (rest.billingContact ?? plain.billingContact),
-    // Managers can update systemPrompt intentionally - they customize org-wide AI
-    // behavior. Authorization is already checked via findUpdateAccessById.
-    systemPrompt: rest.systemPrompt ?? plain.systemPrompt,
-    updatedAt: new Date(),
-  };
+  // Persist ONLY the caller-editable fields this request changed, never a spread of
+  // the read snapshot. A whole-document write reverted concurrent credit, seat and
+  // membership writes; currentCredits/seats/users[]/userDetails[] are never round-tripped.
+  const update: Partial<typeof plain> & { id: string } = { id };
+  if (rest.name !== undefined) update.name = rest.name;
+  if (rest.description !== undefined) update.description = rest.description;
+  // Only allow billing contact changes for owners and admins, not managers.
+  if (rest.billingContact !== undefined && !(isManager && !isOwner && !user.isAdmin)) {
+    update.billingContact = rest.billingContact;
+  }
+  // Managers can update systemPrompt intentionally - they customize org-wide AI
+  // behavior. Authorization is already checked via findUpdateAccessById.
+  if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;
 
   if (user.isAdmin && rest.currentCredits !== undefined) {
-    organization.currentCredits = rest.currentCredits;
+    update.currentCredits = rest.currentCredits;
   }
 
-  // Only admins can set per-member credit caps
+  // Only admins can set per-member credit caps. Coalesce a cleared cap to null, NOT undefined:
+  // $set persists null (read as "no cap" by isMemberCreditCapExceeded), and BSON drops
+  // undefined, so `?? undefined` would leave the previous cap in place (a null PUT no-ops).
   if (user.isAdmin && rest.maxCreditsPerMember !== undefined) {
-    organization.maxCreditsPerMember = rest.maxCreditsPerMember ?? undefined;
+    update.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
   }
 
-  await adapters.db.organizations.update(organization);
+  const updated = await adapters.db.organizations.update(update);
 
-  return organization;
+  return updated ?? ({ ...plain, ...update } as typeof plain);
 };

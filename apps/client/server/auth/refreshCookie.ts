@@ -42,6 +42,9 @@ const COOKIE_PATH = '/api';
  * transport helper - reached from nearly every auth route - does not drag the services barrel in
  * behind it. A cookie that outlives the session just yields one rejected refresh; one that dies
  * early logs the user out, which is the failure this whole change exists to prevent, so err long.
+ * Since sliding expiry landed, every rotated Set-Cookie re-stamps this Max-Age, so the cookie
+ * slides with the session's idle window; the 90d absolute cap (ABSOLUTE_SESSION_MAX_MS) is
+ * enforced server-side only.
  */
 const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 

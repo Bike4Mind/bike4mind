@@ -24,6 +24,7 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import BoltIcon from '@mui/icons-material/Bolt';
 import AccessTimeOutlinedIcon from '@mui/icons-material/AccessTimeOutlined';
 import { brand, purple, brandAlpha, orangeAlpha, greenAlpha, grayAlpha } from '../../../utils/themes/colors';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 interface ResearchTaskDetailInfoProps {
   task: IResearchTask;
@@ -182,7 +183,7 @@ const ResearchTaskDetailInfo: FC<ResearchTaskDetailInfoProps> = ({ task }) => {
                           <IconButton
                             size="sm"
                             variant="soft"
-                            onClick={() => window.open(url, '_blank')}
+                            onClick={() => openInNewTab(url)}
                             sx={{
                               transition: 'all 0.2s ease',
                               '&:hover': { transform: 'scale(1.1)' },

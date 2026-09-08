@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
+import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { InsufficientCreditsError } from './ChatCompletionProcess';
 
 describe('buildInsufficientCreditsMessage', () => {
@@ -26,6 +26,22 @@ describe('buildInsufficientCreditsMessage', () => {
     expect(msg).not.toMatch(/shorter prompt|reduce.*history|more concise/i);
     // Steers the user to the real remedy instead.
     expect(msg).toMatch(/add credits/i);
+  });
+});
+
+describe('buildMemberCreditCapMessage', () => {
+  it('reports the member cap and usage and points the member at their admin', () => {
+    const msg = buildMemberCreditCapMessage({ used: 9, cap: 10, organizationName: 'Acme' });
+    expect(msg).toContain('per-member credit limit');
+    expect(msg).toContain('for "Acme"');
+    expect(msg).toContain('(9 of 10 credits used)');
+    expect(msg).toContain('Contact your organization administrator to raise your limit.');
+  });
+
+  it('falls back to a generic org label when the name is unknown', () => {
+    const msg = buildMemberCreditCapMessage({ used: 5, cap: 5 });
+    expect(msg).toContain('for your organization');
+    expect(msg).not.toContain('""');
   });
 });
 

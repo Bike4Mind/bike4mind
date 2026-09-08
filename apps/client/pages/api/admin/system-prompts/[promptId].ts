@@ -36,6 +36,7 @@ const handler = baseApi()
 
       // Check DB first
       const dbPrompt = await systemPromptRepository.findByPromptId(promptId);
+      const defaultPrompts = getDefaultSystemPrompts();
 
       if (dbPrompt) {
         return res.status(200).json({
@@ -43,13 +44,12 @@ const handler = baseApi()
           data: {
             ...dbPrompt,
             hasOverride: true,
+            hasCodeDefault: defaultPrompts.some(p => p.promptId === promptId),
             source: 'db' as const,
           },
         });
       }
 
-      // Check defaults
-      const defaultPrompts = getDefaultSystemPrompts();
       const defaultPrompt = defaultPrompts.find(p => p.promptId === promptId);
 
       if (defaultPrompt) {
@@ -58,6 +58,7 @@ const handler = baseApi()
           data: {
             ...defaultPrompt,
             hasOverride: false,
+            hasCodeDefault: true,
             source: 'code' as const,
           },
         });
@@ -149,6 +150,72 @@ const handler = baseApi()
           message: `System prompt "${newPrompt.name}" created successfully (v${newPrompt.version})`,
         });
       }
+    }
+  )
+  .delete(
+    /**
+     * DELETE /api/admin/system-prompts/[promptId]
+     * Remove a DB-only prompt (one with no code default). Prompts that DO have a code
+     * default are removed via POST [promptId]/reset instead, which restores the default;
+     * deleting them here would be ambiguous, since the row would reappear as a code entry.
+     */
+    async (req, res) => {
+      if (!req.user?.isAdmin) {
+        throw new ForbiddenError('Unauthorized. Admin access required.');
+      }
+
+      const { promptId } = req.query as { promptId: string };
+
+      if (typeof promptId !== 'string') {
+        return res.status(400).json({
+          error: 'Invalid promptId',
+          message: 'promptId must be a string',
+        });
+      }
+
+      const defaultPrompts = getDefaultSystemPrompts();
+      const hasCodeDefault = defaultPrompts.some(p => p.promptId === promptId);
+
+      if (hasCodeDefault) {
+        return res.status(400).json({
+          error: 'Cannot delete',
+          message:
+            'This prompt has a code default and cannot be deleted. Reset it instead to remove the database override.',
+        });
+      }
+
+      const dbPrompt = await systemPromptRepository.findByPromptId(promptId);
+
+      if (!dbPrompt) {
+        return res.status(404).json({
+          error: 'Prompt not found',
+          message: `System prompt with ID "${promptId}" not found`,
+        });
+      }
+
+      const result = await systemPromptRepository.deletePrompt(
+        promptId,
+        req.user?.id || 'system',
+        req.user?.name || 'Admin'
+      );
+
+      // Lost a race with a concurrent delete - the row is gone either way
+      if (!result.deleted) {
+        return res.status(404).json({
+          error: 'Prompt not found',
+          message: `System prompt with ID "${promptId}" not found`,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `System prompt "${dbPrompt.name}" deleted. Version v${dbPrompt.version} preserved in history.`,
+        data: {
+          promptId,
+          deletedVersion: dbPrompt.version,
+          historyPreserved: result.historyPreserved,
+        },
+      });
     }
   );
 

@@ -30,10 +30,11 @@ const handler = baseApi()
 
     // Restrict the Stripe success/cancel redirect to the deployed app origin. An
     // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
-    // checkout page, and this route's schema types callbackUrl as a bare string, so
-    // this is the only guard. The individual path and pages/api/stripe/portal.ts
-    // already do this; the omission here matters more now that the success redirect
-    // carries the completed checkout session id.
+    // checkout page. The schema only guarantees a parseable URL, so this origin check
+    // is what actually confines the redirect - and it matters more now that the
+    // success redirect carries the completed checkout session id. Same pairing in
+    // pages/api/subscriptions/subscribe.ts, pages/api/stripe/portal.ts and
+    // pages/api/admin/organizations/[id]/convert-to-paid.ts - keep them in sync.
     if (!isAllowedCallbackOrigin(callbackUrl)) {
       throw new BadRequestError('callbackUrl must point to the deployed application origin');
     }

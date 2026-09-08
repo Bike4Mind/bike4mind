@@ -69,6 +69,20 @@ jobs:
           fi
           echo "Changed files considered:"; sed 's/^/  /' /tmp/files.txt || true
 
+          # Tests under the gated paths have no deploy surface: sst.config.ts and the infra
+          # modules never import them (only comments reference them), and they already run in
+          # `Run Tests`. Left in the glob they make a test-only change demand a throwaway
+          # preview deploy that cannot tell anyone anything, which is what happened to the WAF
+          # shadow-rule test. Filtered out of the path-glob input ONLY, so the package.json
+          # sst-pin patch inspection below still sees every file. Kept to test dirs and
+          # *.test/*.spec files so all 51 real files under these paths still redden the gate.
+          # An empty result is correct, not a failure: a tests-only PR is not applicable.
+          grep -vE '(^|/)__tests__/|\.(test|spec)\.[cm]?[jt]sx?$' /tmp/files.txt > /tmp/files_glob.txt || true
+          if ! cmp -s /tmp/files.txt /tmp/files_glob.txt; then
+            echo "Excluded from the path glob as non-deploy-surface tests:"
+            comm -23 <(sort /tmp/files.txt) <(sort /tmp/files_glob.txt) | sed 's/^/  /'
+          fi
+
           applicable=0
           reason=""
 
@@ -77,7 +91,7 @@ jobs:
           # by the deploy layer), and sst.config.ts.
           # Anchored so it does NOT match data-model dirs like
           # packages/database/src/models/infra/.
-          if grep -qE '^(infra/|b4m-core/infra/|sst\.config\.ts$)' /tmp/files.txt; then
+          if grep -qE '^(infra/|b4m-core/infra/|sst\.config\.ts$)' /tmp/files_glob.txt; then
             applicable=1
             reason="infra/, b4m-core/infra/, or sst.config.ts changed"
           fi

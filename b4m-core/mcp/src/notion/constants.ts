@@ -29,3 +29,16 @@ export const TOOL_CATEGORIES = {
 export const ALL_TOOL_NAMES = Object.values(TOOL_CATEGORIES).flat();
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
+
+// Tool descriptions - single source of truth referenced by both the MCP server
+// registrations and the MCP_PROVIDER_METADATA fallback in @bike4mind/common.
+export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
+  [TOOL_NOTION_SEARCH]:
+    'Search for pages and databases in the connected Notion workspace by text query. Returns matching page titles, IDs, and URLs.',
+  [TOOL_NOTION_CREATE_PAGE]:
+    'Create a new page in the connected Notion workspace. Requires write access to be enabled. The page is created under the configured root page or a specified parent.',
+  [TOOL_NOTION_READ_PAGE]:
+    'Read the content of a Notion page by its ID. Returns the child blocks (text, headings, lists, etc.) and a plain-text summary. Results are paginated; pass start_cursor with the returned next_cursor when has_more is true.',
+  [TOOL_NOTION_APPEND_BLOCKS]:
+    'Append content blocks (paragraphs, headings, lists, code, etc.) to an existing Notion page or block. Requires write access.',
+};

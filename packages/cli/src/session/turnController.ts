@@ -12,6 +12,7 @@
 import { randomBytes } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { ReActAgent } from '@bike4mind/agents';
+import { isEarlyStop } from '@bike4mind/common';
 import type { ModelInfo } from '@bike4mind/common';
 import type { SessionStore, ConfigStore, CommandHistoryStore, Session, Message, CliConfig } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
@@ -340,6 +341,10 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         creditsUsed: result.completionInfo.totalCredits,
         steps: result.steps.map(formatStep), // Complete history: thoughts, actions, observations
         permissionDenied,
+        // Recorded only for an early stop so the renderer can key off presence alone.
+        ...(isEarlyStop(result.completionInfo.finishReason)
+          ? { earlyStopReason: result.completionInfo.finishReason }
+          : {}),
       },
     };
 

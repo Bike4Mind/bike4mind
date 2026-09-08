@@ -172,7 +172,7 @@ describe('FileTagRepository after the fileCount removal', () => {
   it('still echoes a legacy stored fileCount until the migration unsets it', async () => {
     await seed('legacy', userId, { fileCount: 999 });
 
-    const read = await fileTagRepository.findByNameAndUserId('legacy', userId);
+    const read = await fileTagRepository.findByFoldedNameAndUserId('legacy', userId);
 
     expect((read as unknown as { fileCount?: number }).fileCount).toBe(999);
   });

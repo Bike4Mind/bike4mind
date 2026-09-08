@@ -20,8 +20,11 @@ jobs:
     steps:
       - name: Check repository
         id: check
+        env:
+          REPOSITORY: ${{ github.repository }}
+          CANONICAL_REPO: ${{ vars.CANONICAL_REPO || 'MillionOnMars/lumina5' }}
         run: |
-          if [ "${{ github.repository }}" = "${{ vars.CANONICAL_REPO || 'MillionOnMars/lumina5' }}" ]; then
+          if [ "$REPOSITORY" = "$CANONICAL_REPO" ]; then
             echo "should-run=true" >> $GITHUB_OUTPUT
           else
             echo "should-run=false" >> $GITHUB_OUTPUT
@@ -52,7 +55,9 @@ jobs:
           cache-dependency-path: '**/pnpm-lock.yaml'
 
       - name: Authenticate with private NPM package
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
 
       - name: Install Dependencies
         run: pnpm i --frozen-lockfile

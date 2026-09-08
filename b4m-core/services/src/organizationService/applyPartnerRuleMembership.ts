@@ -138,9 +138,10 @@ export async function applyPartnerRuleMembership(
   await seedUserDetails(user, organizationId, db);
 
   const previousSeats = pre.seats;
-  // Mirror the model's `$max($seats, $size(users) + 1)`: the pre-image `users` is the pre-add array,
-  // so `users.length + 1` is the post-add member count the pipeline raised `seats` to.
-  const newSeats = Math.max(pre.seats, pre.users.length + 1);
+  // Mirror the model's `$max($seats, $size(users) + 2)`: the pre-image `users` is the pre-add array,
+  // so `users.length + 2` (owner + members after the add) is the owner-inclusive team size the
+  // pipeline raised `seats` to (#1423). Must stay in lockstep with addMemberRaisingSeats.
+  const newSeats = Math.max(pre.seats, pre.users.length + 2);
   const seatCeilingRaised = newSeats > previousSeats;
   // Logged here for the CloudWatch trail; the human ALERT + audit record fire at the signup caller
   // off the 'added-seat-raised' reason, so this core service stays free of Slack/audit ports.

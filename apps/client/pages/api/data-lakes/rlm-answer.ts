@@ -10,6 +10,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
+import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
 import { resolveAccessibleLakes } from '@server/dataLakes';
 
 /**
@@ -143,13 +144,15 @@ const handler = baseApi()
       });
     }
 
-    // We need the local B4M API key for the in-REPL data-lake tools to call
-    // /api/data-lakes/* on this same server. Use the request's incoming key (the
-    // caller already authenticated with it) - falls back to env if missing.
-    const localApiKey = (req.headers['x-api-key'] as string | undefined) || process.env.B4M_LOCAL_API_KEY || '';
-    if (!localApiKey) {
-      return res.status(500).json({
-        error: 'No B4M local API key available for in-REPL data-lake tool calls',
+    // The in-REPL data-lake tools call /api/data-lakes/* and /api/files/* on this
+    // same server, so they need a credential. It MUST be the caller's own: those
+    // routes derive their lake scope from the authenticated principal, so any
+    // shared/service key would let the REPL read lakes the caller cannot. Replay
+    // the request's own credential headers - never a fallback identity.
+    const authHeaders = resolvePrincipalAuthHeaders(req.headers);
+    if (!authHeaders) {
+      return res.status(401).json({
+        error: 'No forwardable caller credential on this request for in-REPL data-lake tool calls',
       });
     }
 
@@ -192,7 +195,7 @@ const handler = baseApi()
     session.setTools(
       buildDataLakeTools({
         baseUrl,
-        apiKey: localApiKey,
+        authHeaders,
         anthropicApiKey: subLlmAnthropicKey,
         session,
       })

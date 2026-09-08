@@ -39,8 +39,12 @@ import {
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
   dataLakeTaxonomyQueueDLQ,
+  dataLakeResearchQueue,
+  dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
+  driveLakeIngestQueue,
+  driveLakeIngestQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -83,7 +87,7 @@ import {
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
-import { router, routerDistributionId, whatsNewDistributionId, cdnUrlForLambdaEnv } from './router';
+import { router, routerDistributionId, whatsNewDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
@@ -125,7 +129,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'bob-run': bobRunQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
+    'data-lake-research': dataLakeResearchQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
+    'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
   },
 });
 
@@ -179,7 +185,9 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
+    dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
+    driveLakeIngestQueue: driveLakeIngestQueue.url,
   },
 });
 
@@ -232,6 +240,13 @@ export const web = new sst.aws.Nextjs(
       // without a web.ts <-> cron.ts circular import (web.ts already imports cron.ts
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
+      driveLakeIngestQueue,
+      // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
+      // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
+      // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy
+      // THROWS on an unlinked key rather than returning undefined - so the route's optional-chained
+      // guard would never run and every start would 500.
+      dataLakeResearchQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
@@ -371,7 +386,14 @@ export const web = new sst.aws.Nextjs(
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.
       DISABLE_RESPONSE_GZIP: process.env.DISABLE_RESPONSE_GZIP || '',
-      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+      // Comma-separated API-key scopes whose route gates are still rolling out
+      // (apps/client/server/middlewares/apiKeyScopeGate.ts). While a scope is listed,
+      // a route requiring it logs a missing-scope key instead of 403ing it, so
+      // production keys can be re-minted before enforcement starts. Empty (the
+      // default) enforces every declared gate. Declared here so the lever is
+      // greppable from infra; see docs/architecture/api-key-scope-rollout.md.
+      API_KEY_SCOPE_STAGING: process.env.API_KEY_SCOPE_STAGING || '',
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the
       // ChatCompletion service, so point at its local port (see infra/chatCompletion.ts dev
@@ -414,6 +436,21 @@ export const web = new sst.aws.Nextjs(
       ...($app.stage === 'production' && process.env.REDDIT_PIXEL_ID
         ? { NEXT_PUBLIC_REDDIT_PIXEL_ID: process.env.REDDIT_PIXEL_ID }
         : {}),
+      // Apex the GA cookie is pinned to, so the marketing site and this app resolve
+      // to ONE visitor across the subdomain hop. Env-only with no brand fallback
+      // (the account-tied-id policy). Not production-gated - it only shapes a cookie
+      // and is inert wherever GA is not injected.
+      //
+      // SET THIS CAREFULLY: the failure is asymmetric, not "unset vs slightly
+      // better". `cookie_domain: 'auto'` self-heals - gtag walks up from the current
+      // host and picks the broadest domain the browser will accept. An explicit pin
+      // does not. Any value that is not a registrable suffix of the host serving the
+      // app makes the browser reject the Set-Cookie outright: `_ga` never persists,
+      // every hit becomes a new user, and measurement degrades FURTHER than the
+      // 'auto' behaviour this replaces - silently, and in the direction nobody
+      // checks. A typo or a stale value after a domain change costs more than
+      // leaving it unset. Verify `_ga` is present on the serving host after setting.
+      ...(process.env.GA_COOKIE_DOMAIN ? { NEXT_PUBLIC_GA_COOKIE_DOMAIN: process.env.GA_COOKIE_DOMAIN } : {}),
     },
     // warm pings invoke the handler, keeping the lazy OpenNext bundle resident — the lever for
     // the #8985 cold-open tail (provisioned concurrency only pre-runs the ~165ms init, not the

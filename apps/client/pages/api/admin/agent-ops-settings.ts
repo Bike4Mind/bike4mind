@@ -1,7 +1,11 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { agentOpsSettingsRepository } from '@bike4mind/database';
-import { ForbiddenError, BadRequestError } from '@bike4mind/utils';
+import { agentOpsSettingsRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { apiKeyService } from '@bike4mind/services';
+import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
+import { ForbiddenError, BadRequestError, InternalServerError, getSettingsByNames } from '@bike4mind/utils';
+import { agentOpsModelRejection } from '@client/app/utils/agentOpsModels';
+import { modelCatalogListingOptions } from '@client/server/utils/modelCatalogOptions';
 
 interface CreateUpdateSettingsRequest {
   generationLlmModel?: string;
@@ -15,33 +19,26 @@ interface AddVersionRequest {
 }
 
 /**
- * Models an admin may select for agent-ops generation. Curated (not the whole catalog), so it
- * stays a hand-maintained list -- but it MUST stay in sync with the `LLM_MODELS` picker in
- * AgentOpsTab.tsx, or the UI offers a choice this endpoint then rejects with a 400. A test in
- * __tests__/agent-ops-settings.test.ts pins the two lists together, because they had already
- * drifted: the picker offered claude-opus-5 as its recommended default while this list omitted
- * it, so choosing it 400'd.
+ * The models an admin may pin, read from the live catalog rather than a hand-maintained list --
+ * the picker in AgentOpsTab reads the same catalog through /api/models, so a label cannot go
+ * stale and a newly added model is selectable the day it ships. The listing options come from
+ * the shared helper so both sides land in the same getAvailableModels cache slot.
  *
- * Deprecated IDs must NOT appear here -- selecting one is a new write, and there is no reason to
- * let an admin newly pin a retired model. Existing documents pinned to one keep working via
- * resolveDeprecatedModelId, and AgentOpsLlmModel retains the value for Mongoose validation.
+ * Keys are resolved with no user id, i.e. admin/demo keys only. AgentOpsSettings is a single
+ * global document consumed under other users' identities, so its validity must not depend on
+ * which admin happened to save it or on a personal key only that admin holds. The picker stays
+ * user-scoped, so an admin can see a model backed solely by their own key; refusing to pin it
+ * is the intended answer for a global setting.
+ *
+ * Deprecated ids are absent because getAvailableModels drops them, and pinning a retired model
+ * is a new write nobody needs. A document already pinned to one misses the catalog lookup in
+ * generate-system-prompt / create-from-context and falls back to the default model there.
  */
-export const AGENT_OPS_VALID_MODELS: string[] = [
-  'claude-opus-5',
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-opus-4-6',
-  'claude-sonnet-5',
-  'claude-sonnet-4-6',
-  'claude-opus-4-20250514',
-  'claude-sonnet-4-5-20250929',
-  'claude-haiku-4-5-20251001',
-  'o3-2025-04-16',
-  'gpt-4.1-2025-04-14',
-  'grok-4.5',
-  'gpt-4o',
-  'gpt-4o-mini',
-];
+async function fetchSelectableModels() {
+  const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
+  const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(null, dbAdapters);
+  return getAvailableModels(buildApiKeyTable(coreKeys), modelCatalogListingOptions());
+}
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -76,9 +73,20 @@ const handler = baseApi()
 
     const { generationLlmModel, rateLimitSeconds, isEnabled } = req.body;
 
-    if (generationLlmModel) {
-      if (!AGENT_OPS_VALID_MODELS.includes(generationLlmModel)) {
-        throw new BadRequestError('Invalid LLM model specified');
+    // Only a change of pin is worth a live catalog fan-out: validating on every save would let a
+    // slow backend fail an isEnabled- or rateLimitSeconds-only edit, blaming a field the admin
+    // never touched. A model already stored stays valid until someone tries to change it.
+    const current = await agentOpsSettingsRepository.getSettings();
+    if (generationLlmModel && generationLlmModel !== current?.generationLlmModel) {
+      const models = await fetchSelectableModels();
+      // An empty catalog means every backend listing failed; rejecting the save would read as
+      // "bad model" when the model is fine, so fail loudly instead of blaming the input.
+      if (models.length === 0) {
+        throw new InternalServerError('Model catalog is unavailable; try again shortly');
+      }
+      const rejection = agentOpsModelRejection(models, generationLlmModel);
+      if (rejection) {
+        throw new BadRequestError(rejection);
       }
     }
 

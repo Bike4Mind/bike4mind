@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import type { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ListResourcesResult, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import { AGENT_QUEST_MANIFEST } from '@bike4mind/common';
 import type { B4mApiClient } from './b4mApiClient';
 import { registerResources } from './resources';
 import { logger } from '../utils/Logger';
@@ -9,10 +10,19 @@ import { logger } from '../utils/Logger';
 type ReadCallback = (uri: URL, variables: Record<string, string | string[]>) => Promise<ReadResourceResult>;
 
 interface Registered {
-  template: ResourceTemplate;
+  /** A string for the fixed-URI `agent-quest` resource, a template for the rest. */
+  uriOrTemplate: ResourceTemplate | string;
   metadata: Record<string, unknown>;
   read: ReadCallback;
 }
+
+/** Narrow to the URI-template form; the fixed-URI resource has no template to inspect. */
+const templateOf = (entry: Registered): ResourceTemplate => {
+  if (typeof entry.uriOrTemplate === 'string') {
+    throw new Error(`resource registered with the fixed uri ${entry.uriOrTemplate}, not a template`);
+  }
+  return entry.uriOrTemplate;
+};
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
@@ -32,11 +42,11 @@ const collectResources = (client: B4mApiClient) => {
   const server = {
     registerResource: (
       name: string,
-      template: ResourceTemplate,
+      uriOrTemplate: ResourceTemplate | string,
       metadata: Record<string, unknown>,
       read: ReadCallback
     ) => {
-      registered.set(name, { template, metadata, read });
+      registered.set(name, { uriOrTemplate, metadata, read });
     },
   } as unknown as McpServer;
   registerResources(server, client);
@@ -44,21 +54,62 @@ const collectResources = (client: B4mApiClient) => {
 };
 
 const listOf = (entry: Registered): Promise<ListResourcesResult> => {
-  const list = entry.template.listCallback;
+  const list = templateOf(entry).listCallback;
   if (!list) throw new Error('template registered without a list callback');
   return Promise.resolve(list({} as Parameters<typeof list>[0]));
 };
 
 describe('registerResources', () => {
-  it('registers exactly the four resource templates', () => {
-    expect([...collectResources(mockClient({})).keys()]).toEqual(['notebook', 'file', 'project', 'artifact']);
+  it('registers the quest manifest plus exactly the four resource templates', () => {
+    expect([...collectResources(mockClient({})).keys()]).toEqual([
+      'agent-quest',
+      'notebook',
+      'file',
+      'project',
+      'artifact',
+    ]);
+  });
+
+  describe('agent-quest', () => {
+    it('registers at a fixed uri, since there is only one manifest to address', () => {
+      const entry = collectResources(mockClient({})).get('agent-quest')!;
+
+      expect(entry.uriOrTemplate).toBe('b4m://agent-quest');
+      expect(entry.metadata).toMatchObject({ mimeType: 'application/json', title: AGENT_QUEST_MANIFEST.title });
+    });
+
+    it('reads the manifest as pretty-printed JSON', async () => {
+      const entry = collectResources(mockClient({})).get('agent-quest')!;
+
+      const result = await entry.read(new URL('b4m://agent-quest'), {});
+
+      expect(result.contents).toEqual([
+        {
+          uri: 'b4m://agent-quest',
+          mimeType: 'application/json',
+          text: JSON.stringify(AGENT_QUEST_MANIFEST, null, 2),
+        },
+      ]);
+    });
+
+    // The quest is how an agent earns a key, so reading the invitation must not
+    // require one. A client with no credentials at all still gets the manifest.
+    it('reads without touching the API client', async () => {
+      const client = mockClient({});
+      const entry = collectResources(client).get('agent-quest')!;
+
+      const result = await entry.read(new URL('b4m://agent-quest'), {});
+
+      const manifest = JSON.parse((result.contents[0] as { text: string }).text) as { id: string };
+      expect(manifest.id).toBe('agent-quest');
+    });
   });
 
   it('registers the notebook template as application/json', () => {
     const entry = collectResources(mockClient({})).get('notebook')!;
 
     expect(entry).toBeDefined();
-    expect(entry.template.uriTemplate.toString()).toBe('b4m://notebook/{id}');
+    expect(templateOf(entry).uriTemplate.toString()).toBe('b4m://notebook/{id}');
     expect(entry.metadata).toMatchObject({ mimeType: 'application/json' });
   });
 
@@ -137,7 +188,7 @@ describe('registerResources', () => {
     const entry = collectResources(mockClient({})).get('file')!;
 
     expect(entry).toBeDefined();
-    expect(entry.template.uriTemplate.toString()).toBe('b4m://file/{id}');
+    expect(templateOf(entry).uriTemplate.toString()).toBe('b4m://file/{id}');
     expect(entry.metadata).toMatchObject({ mimeType: 'application/json' });
   });
 
@@ -187,7 +238,7 @@ describe('registerResources', () => {
     const entry = collectResources(mockClient({})).get('project')!;
 
     expect(entry).toBeDefined();
-    expect(entry.template.uriTemplate.toString()).toBe('b4m://project/{id}');
+    expect(templateOf(entry).uriTemplate.toString()).toBe('b4m://project/{id}');
     expect(entry.metadata).toMatchObject({ mimeType: 'application/json' });
   });
 
@@ -239,7 +290,7 @@ describe('registerResources', () => {
     const entry = collectResources(mockClient({})).get('artifact')!;
 
     expect(entry).toBeDefined();
-    expect(entry.template.uriTemplate.toString()).toBe('b4m://artifact/{id}');
+    expect(templateOf(entry).uriTemplate.toString()).toBe('b4m://artifact/{id}');
     expect(entry.metadata).toMatchObject({ mimeType: 'application/json' });
   });
 
@@ -310,9 +361,12 @@ describe('registerResources', () => {
     );
 
     // Mirrors the SDK's resources/list loop, which awaits every template in
-    // registration order with no try/catch of its own.
+    // registration order with no try/catch of its own. Fixed-URI resources
+    // (agent-quest) are excluded because the SDK emits those directly and never
+    // calls a list callback for them.
     const all: ListResourcesResult['resources'] = [];
     for (const entry of registered.values()) {
+      if (typeof entry.uriOrTemplate === 'string') continue;
       all.push(...(await listOf(entry)).resources);
     }
 
@@ -339,7 +393,7 @@ describe('registerResources', () => {
       // an invalid URI; the read path then safeDecodes it back to the original id.
       expect(listed.uri).toBe(`b4m://artifact/${encodeURIComponent(id)}`);
       // Exactly what the SDK does on resources/read: normalize, then template-match.
-      const variables = entry.template.uriTemplate.match(new URL(listed.uri).toString());
+      const variables = templateOf(entry).uriTemplate.match(new URL(listed.uri).toString());
 
       expect(variables).not.toBeNull();
       await entry.read(new URL(listed.uri), variables!);

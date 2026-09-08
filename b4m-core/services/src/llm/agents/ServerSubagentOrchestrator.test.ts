@@ -169,6 +169,67 @@ describe('ServerSubagentOrchestrator', () => {
     });
   });
 
+  describe('delegateToAgent \u2014 per-member credit cap gate', () => {
+    it('throws before any tracker/LLM work when checkMemberCreditCap returns true', async () => {
+      const llm = makeLlm();
+      const tracker = makeTracker();
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm,
+        logger: makeLogger(),
+        parentTools: [],
+        tracker,
+        checkMemberCreditCap: () => true,
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef(),
+        })
+      ).rejects.toThrow(/credit limit reached/);
+
+      // The refusal must cost nothing: no LLM call and no tracker lifecycle event.
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(tracker.onStart).not.toHaveBeenCalled();
+    });
+
+    it('proceeds through Lambda dispatch as normal when checkMemberCreditCap returns false', async () => {
+      vi.useFakeTimers();
+      const remainingTimeMs = 2 * 60 * 1000; // forces dispatch-and-poll, same as the test below
+      const tracker = makeTracker({
+        onStart: vi.fn().mockResolvedValue('child-not-capped-id'),
+        pollChildStatus: vi.fn().mockResolvedValue({
+          status: 'completed',
+          result: { answer: 'Done', iterations: 1, totalCredits: 5 },
+        } satisfies ChildExecutionStatus),
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(),
+        logger: makeLogger(),
+        parentTools: [],
+        tracker,
+        getRemainingTimeMs: () => remainingTimeMs,
+        checkMemberCreditCap: () => false,
+      });
+
+      const result = await runWithFakeTimers(
+        orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef(),
+          thoroughness: 'medium',
+        }),
+        { advanceByMs: 35_000 }
+      );
+
+      expect(result.finalAnswer).toBe('Done');
+      expect(tracker.onStart).toHaveBeenCalled();
+    }, 30_000);
+  });
+
   describe('delegateToAgent — Lambda dispatch when parent time is short', () => {
     // Poll loop uses real setTimeout (POLL_INITIAL_MS=2000, exp backoff to 30s).
     // Fake timers + helper let us skip those waits without changing the orchestrator.
@@ -506,6 +567,190 @@ describe('ServerSubagentOrchestrator', () => {
       });
 
       expect(result.completionInfo.totalCredits).toBe(99);
+    });
+  });
+
+  /**
+   * Regression coverage for the delegation that 404'd in production: agents
+   * default to Bedrock inference-profile ids (`global.anthropic.*`) that a
+   * catalog carrying only direct-vendor rows cannot serve. The old code kept
+   * the parent's backend but the agent's model, so Anthropic's Messages API
+   * received a Bedrock id and returned `not_found_error` before step one.
+   */
+  describe('model/backend resolution', () => {
+    const BEDROCK_ID = 'global.anthropic.claude-sonnet-4-6';
+    const DIRECT_ID = 'claude-sonnet-4-6';
+    const PARENT_ID = 'claude-opus-5';
+
+    /** Resolver that only knows the ids in `serviceable`, like the real catalog lookup. */
+    function makeResolver(serviceable: string[]) {
+      return vi.fn((modelId: string) => (serviceable.includes(modelId) ? makeLlm(modelId) : null));
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function stubAgentRun(): void {
+      vi.spyOn(ReActAgent.prototype, 'run').mockResolvedValue({
+        finalAnswer: 'done',
+        steps: [],
+        completionInfo: {
+          totalTokens: 100,
+          totalInputTokens: 80,
+          totalOutputTokens: 20,
+          totalCredits: 1,
+          iterations: 1,
+          toolCalls: 0,
+          reachedMaxIterations: false,
+        },
+      } satisfies AgentResult);
+    }
+
+    it('falls back to the first serviceable model when the agent default is not in the catalog', async () => {
+      stubAgentRun();
+      const resolveBackend = makeResolver([DIRECT_ID]);
+      const logger = makeLogger();
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger,
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: [DIRECT_ID, 'gpt-4.1'] }),
+        thoroughness: 'medium',
+      });
+
+      // Candidates are tried in order and resolution stops at the first hit.
+      expect(resolveBackend).toHaveBeenNthCalledWith(1, BEDROCK_ID);
+      expect(resolveBackend).toHaveBeenNthCalledWith(2, DIRECT_ID);
+      expect(resolveBackend).toHaveBeenCalledTimes(2);
+      expect(result.model).toBe(DIRECT_ID);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(BEDROCK_ID));
+    });
+
+    it("degrades to the parent's model when no candidate is serviceable", async () => {
+      stubAgentRun();
+      const resolveBackend = makeResolver([]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: ['gpt-4.1'] }),
+        thoroughness: 'medium',
+      });
+
+      // The invariant that broke production: never hand the parent's backend a
+      // model id the parent's provider does not serve.
+      expect(result.model).toBe(PARENT_ID);
+    });
+
+    it('uses the agent default untouched when the catalog serves it', async () => {
+      stubAgentRun();
+      const resolveBackend = makeResolver([BEDROCK_ID, DIRECT_ID]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: [DIRECT_ID] }),
+        thoroughness: 'medium',
+      });
+
+      expect(result.model).toBe(BEDROCK_ID);
+      expect(resolveBackend).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps walking the ladder when a candidate throws instead of returning null', async () => {
+      stubAgentRun();
+      // getLlmByModel throws (rather than returning null) on an unknown adapter
+      // family and on an expired provider key. Letting that escape would discard
+      // every remaining candidate, including the degrade-to-parent rung.
+      const resolveBackend = vi.fn((modelId: string) => {
+        if (modelId === BEDROCK_ID) throw new Error('Unsupported adapter family');
+        return modelId === DIRECT_ID ? makeLlm(modelId) : null;
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: [DIRECT_ID] }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).toHaveBeenNthCalledWith(2, DIRECT_ID);
+      expect(result.model).toBe(DIRECT_ID);
+    });
+
+    it("degrades to the parent's model when every candidate throws", async () => {
+      stubAgentRun();
+      const resolveBackend = vi.fn(() => {
+        throw new Error('OpenAI API key is expired');
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: ['gpt-4.1'] }),
+        thoroughness: 'medium',
+      });
+
+      // The parent is already running on this model, so the delegation survives.
+      expect(result.model).toBe(PARENT_ID);
+    });
+
+    it('persists a serviceable model on a background child, not the unserviceable default', async () => {
+      const tracker = makeTracker();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        tracker,
+        resolveBackend: makeResolver([DIRECT_ID]),
+      });
+
+      await orchestrator.dispatchBackgroundAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: [DIRECT_ID] }),
+        thoroughness: 'medium',
+      });
+
+      // The child Lambda rebuilds its backend from this id alone, so an
+      // unserviceable one would kill it with "Failed to create LLM backend".
+      expect(tracker.onStart).toHaveBeenCalledWith(expect.objectContaining({ model: DIRECT_ID }));
     });
   });
 });

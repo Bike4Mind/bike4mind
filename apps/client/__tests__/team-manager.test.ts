@@ -218,7 +218,9 @@ describe('organizationService.update - Manager Permissions', () => {
       shareable: {
         findUpdateAccessById: vi.fn().mockResolvedValue(mockOrganization),
       },
-      update: vi.fn().mockImplementation(org => Promise.resolve(org)),
+      // Mirror findOneAndUpdate({ new: true }): the real repo returns the full merged
+      // document, not just the $set partial the service now passes.
+      update: vi.fn().mockImplementation(org => Promise.resolve({ ...mockOrganization, ...org })),
       findById: vi.fn().mockResolvedValue(mockOrganization),
     };
   });

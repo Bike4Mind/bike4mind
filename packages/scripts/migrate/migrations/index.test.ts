@@ -1,4 +1,6 @@
+import { readdirSync } from 'fs';
 import { describe, it, expect, vi } from 'vitest';
+import type { MigrationFile } from './index';
 
 // At least one real core migration imports ../utils/config, which evaluates SST Resource
 // bindings at module load time and throws outside an SST-linked process (same constraint
@@ -43,5 +45,31 @@ describe('AvailableMigrations (real, unmocked)', () => {
       expect(typeof migration.up).toBe('function');
       expect(typeof migration.down).toBe('function');
     }
+  });
+});
+
+/**
+ * Directory-completeness guard: a migration file can exist on disk and still never run if
+ * nobody adds it to `coreMigrations` in index.ts - index.test.ts above only ever inspects the
+ * built AvailableMigrations array, so an unregistered file is invisible to it. This scans the
+ * directory itself and cross-checks every migration file against the array.
+ */
+describe('every migration file on disk is registered', () => {
+  // Core ids are 13-14 digit timestamps followed by '-' or '_' (both separators appear in the
+  // directory, e.g. `2024052201905_demo_to_paid.ts` vs `20250704005300-add-filename-lowercase.ts`).
+  const MIGRATION_FILE = /^\d{11,14}[-_].+\.ts$/;
+
+  const migrationFiles = readdirSync(new URL('.', import.meta.url)).filter(
+    f => MIGRATION_FILE.test(f) && !f.endsWith('.test.ts')
+  );
+
+  it('found at least one migration file to check (sanity check the scan itself)', () => {
+    expect(migrationFiles.length).toBeGreaterThan(0);
+  });
+
+  it.each(migrationFiles)('%s is present in AvailableMigrations', async filename => {
+    const modulePath = `./${filename.replace(/\.ts$/, '')}`;
+    const { default: migration } = (await import(modulePath)) as { default: MigrationFile };
+    expect(AvailableMigrations.map(m => m.id)).toContain(migration.id);
   });
 });

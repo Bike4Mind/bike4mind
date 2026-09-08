@@ -1,7 +1,7 @@
-// jsdom (this package's default test environment) runs in a separate vm realm whose
-// Buffer isn't `instanceof` that realm's Uint8Array - `file-type`'s `fileTypeFromBuffer`
-// relies on that check, so this suite needs the real node environment (same
-// convention as other apps/client/server/**/*.test.ts files that touch Buffer/fs).
+// Redundant since server/** defaults to node (see apps/client/vitest.config.mts), but kept as
+// the record of WHY this suite cannot run under jsdom: jsdom runs in a separate vm realm whose
+// Buffer isn't `instanceof` that realm's Uint8Array, and `file-type`'s `fileTypeFromBuffer`
+// relies on that check.
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
 import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils/imageModeration';

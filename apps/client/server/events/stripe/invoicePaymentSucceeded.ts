@@ -9,6 +9,7 @@ import { stripe } from '@server/integrations/stripe/stripe';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { withEventContext } from '../utils';
+import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);
@@ -67,4 +68,25 @@ export const handler = withEventContext(async (event, logger) => {
     subscriptionId,
     ownerType: metadata.ownerType || 'User (legacy)',
   });
+
+  // Announce first charges only. `subscription_create` is Stripe's own marker for
+  // the invoice that opens a subscription; `subscription_cycle` is a renewal and
+  // would post monthly per customer. Placed after the work above so the message
+  // means the subscription and credits actually landed.
+  //
+  // Awaited but non-throwing by construction (postNewSubscriptionToSlack swallows
+  // its own errors): this handler retrying would re-run credit granting, so a
+  // Slack outage must not be able to cause that.
+  if (invoice.billing_reason === 'subscription_create') {
+    const lineItem = invoice.lines?.data?.[0];
+    await postNewSubscriptionToSlack({
+      planName: lineItem?.description ?? 'Subscription',
+      // Stripe reports minor units; en-US currency formatting expects major.
+      amount: (invoice.amount_paid ?? 0) / 100,
+      currency: invoice.currency ?? 'usd',
+      invoiceId,
+      email: invoice.customer_email ?? undefined,
+      ownerType: metadata.ownerType,
+    });
+  }
 });

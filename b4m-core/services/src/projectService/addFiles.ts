@@ -5,11 +5,12 @@ import {
   IProjectRepository,
   IUserDocument,
   Permission,
+  secureParameters,
+  BadRequestError,
 } from '@bike4mind/common';
-import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';
+import { distinctIdCount, mergeIds } from '../utils/objectIds';
 
 const addFilesProjectSchema = z.object({
   projectId: z.string().nonempty(),
@@ -37,9 +38,20 @@ export const addFiles = async (
 
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
-  if (files.length !== fileIds.length) throw new Error('Some files are not accessible');
+  // BadRequestError, not a bare Error: an id the caller cannot reach is a client mistake, and a
+  // bare Error is a 500 that pages LiveOps. Reachable now that the repository skips uncastable
+  // ids instead of throwing a CastError the handler turned into a 404. Compared against the
+  // DEDUPED list, since the reader returns distinct rows and a file sent twice is not one that
+  // could not be reached.
+  if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
 
-  project.fileIds = uniq([...project.fileIds, ...fileIds]);
+  // The ids that RESOLVED, like addSessions: pushing the request list would store `ABC` alongside
+  // an existing `abc` as if they were two different files. mergeIds, not uniq, because a row
+  // written before ids were canonicalised can ALREADY hold the uppercase form.
+  project.fileIds = mergeIds(
+    project.fileIds,
+    files.map(f => f.id)
+  );
   project.updatedAt = new Date();
 
   await updateShareableFiles(user.id, { project, files }, adapters);

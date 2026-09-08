@@ -19,7 +19,7 @@ export const userIsCustomer = (user: IUserDocument | null): boolean => {
   return (user?.tags ?? []).some(tag => ['Customer', 'customer', 'Customers', 'customers'].includes(tag));
 };
 
-export function getLastLoginDate(user: IUserDocument | undefined): Date | null {
+export function getLastLoginDate(user: Pick<IUserDocument, 'loginRecords'> | undefined): Date | null {
   if (!user) return null;
   const lastLogin = user.loginRecords?.reduce(
     (acc, curr) => (acc.loginTime > curr.loginTime ? acc : curr),

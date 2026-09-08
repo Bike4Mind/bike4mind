@@ -24,7 +24,12 @@ import { notionRequest } from '../client.js';
 import { getConfig, type AllowedPageEntry } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { notionPageIdSchema, notionDatabaseIdSchema, startCursorSchema } from '../helpers/schemas.js';
-import { TOOL_NOTION_CREATE_PAGE, TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_READ_PAGE } from '../constants.js';
+import {
+  TOOL_NOTION_CREATE_PAGE,
+  TOOL_NOTION_APPEND_BLOCKS,
+  TOOL_NOTION_READ_PAGE,
+  TOOL_DESCRIPTIONS,
+} from '../constants.js';
 import { debug, debugWarn } from '../logger.js';
 
 /**
@@ -403,6 +408,7 @@ export function registerPageTools(server: McpServer): void {
   // --- Create Page ---
   server.tool(
     TOOL_NOTION_CREATE_PAGE,
+    TOOL_DESCRIPTIONS[TOOL_NOTION_CREATE_PAGE],
     {
       title: z.string().min(1).max(200).describe('Title of the Notion page to create'),
       content: z
@@ -506,6 +512,7 @@ export function registerPageTools(server: McpServer): void {
   // --- Append Blocks ---
   server.tool(
     TOOL_NOTION_APPEND_BLOCKS,
+    TOOL_DESCRIPTIONS[TOOL_NOTION_APPEND_BLOCKS],
     {
       blockId: notionPageIdSchema.describe('The ID of the page or block to append children to (UUID format).'),
       blocks: z
@@ -563,6 +570,7 @@ export function registerPageTools(server: McpServer): void {
   // --- Read Page ---
   server.tool(
     TOOL_NOTION_READ_PAGE,
+    TOOL_DESCRIPTIONS[TOOL_NOTION_READ_PAGE],
     {
       pageId: notionPageIdSchema.describe('Notion page ID to read content from'),
       page_size: z

@@ -1,10 +1,12 @@
-import type { IDataLakeBatchRepository, IDataLakeRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeBatchRepository, IDataLakeRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/common';
-import { canManageLake } from './authorizeLakeWrite';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 
 interface DismissTaxonomySuggestionAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findById' | 'setTaxonomyStatusIfActive'>;
   };
 }
@@ -24,7 +26,7 @@ interface DismissTaxonomySuggestionAdapters {
  * item 13), which is an accidental gap rather than a deliberate one.
  */
 export const dismissTaxonomySuggestion = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   batchId: string,
   { db }: DismissTaxonomySuggestionAdapters
 ): Promise<{ success: true }> => {
@@ -33,8 +35,8 @@ export const dismissTaxonomySuggestion = async (
 
   const lake = await db.dataLakes.findById(batch.dataLakeId);
   if (!lake) throw new NotFoundError('Data lake not found');
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can dismiss tag suggestions for this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to dismiss tag suggestions for this data lake');
   }
 
   const claimed = await db.batches.setTaxonomyStatusIfActive(batchId, ['ready', 'failed'], 'dismissed');

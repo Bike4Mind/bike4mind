@@ -137,6 +137,29 @@ describe('GET /api/admin/model-deprecation-status', () => {
     ]);
   });
 
+  // Rates for every priced model, not just the queue's: the accept modal prices
+  // whatever successor the operator types over the suggestion.
+  it('publishes the rates in force per MTok so the queue can price a successor', async () => {
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().perMTokRates).toEqual({
+      'gpt-sunset': { input: 2, output: 8 },
+      'gpt-live': { input: 1, output: 4 },
+    });
+  });
+
+  it('omits a model whose only price row is not per-token, rather than mispricing it', async () => {
+    mockPriceRowsInForce.mockResolvedValue([
+      priceRow('gpt-live', 1e-6, 4e-6),
+      { ...priceRow('gpt-sunset', 2e-6, 8e-6), unit: 'per_image' },
+    ]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().perMTokRates).toEqual({ 'gpt-live': { input: 1, output: 4 } });
+  });
+
   it('reports a fallback chain pointing at a deprecated model', async () => {
     const { res, run } = call({ method: 'GET' });
     await run();
