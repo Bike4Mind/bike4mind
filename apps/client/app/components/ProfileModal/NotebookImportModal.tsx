@@ -28,6 +28,7 @@ import { CloudUpload, Upload, DataObject, History } from '@mui/icons-material';
 import { toast } from 'sonner';
 import { ContextHelpButton } from '@client/app/components/help';
 import { api } from '@client/app/contexts/ApiContext';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 
 interface NotebookImportModalProps {
   open: boolean;
@@ -131,33 +132,14 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
         content = encoder.encode(jsonData).buffer;
       }
 
-      // Upload directly to S3 using XMLHttpRequest for progress tracking
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-
-        xhr.upload.addEventListener('progress', event => {
-          if (event.lengthComputable) {
-            const percentComplete = Math.round((event.loaded / event.total) * 100);
-            setUploadProgress(percentComplete);
+      await uploadFileToUrl(uploadUrl, new Blob([content], { type: contentType }), contentType, {
+        onUploadProgress: event => {
+          if (event.total) {
+            setUploadProgress(Math.round((event.loaded / event.total) * 100));
           }
-        });
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setUploadProgress(100);
-            resolve();
-          } else {
-            reject(new Error('Failed to upload file to storage'));
-          }
-        });
-
-        xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
-        xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
-
-        xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', contentType);
-        xhr.send(content);
+        },
       });
+      setUploadProgress(100);
 
       toast.success('🚀 Import started! You will receive a notification when it is complete.', {
         description: `Import ID: ${importId}`,
