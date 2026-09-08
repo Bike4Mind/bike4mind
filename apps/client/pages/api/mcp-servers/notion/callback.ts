@@ -298,7 +298,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       : undefined,
     connectedAt: new Date(),
     status: 'connected' as const,
-    writeEnabled: true,
+    writeEnabled: false,
     ...(rootPageId && { rootPageId }),
   };
 
