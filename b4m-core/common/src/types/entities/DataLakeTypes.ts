@@ -393,7 +393,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * `grantedLakeIds` is the explicit-grant arm, mirroring `findAccessible`'s: a lake the caller
    * holds an active grant on is reachable by that grant alone, so retrieval agrees with browse for
    * a transferred/delegated lake. Pre-resolved by the caller (`grantedLakeIdsFor`); an empty or
-   * absent list adds no arm and cannot widen anything.
+   * absent list adds no arm and cannot widen anything. Not every retrieval caller supplies it:
+   * getDataLakePrompts.ts deliberately omits it, since folding grants into the injection-trust
+   * decision is a separate piece of work (#1673) - an org-less transferred lake is denied by that
+   * trust gate regardless, so wiring the arm there today would be dead code.
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],

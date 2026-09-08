@@ -256,12 +256,13 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
     // Resolved BEFORE the lake read: a grant-held lake matches none of that query's tag/org/public
     // arms, so its ids have to go IN as the query's grant arm rather than be filtered out of the
-    // result. `includeReaders` is left at its default false, so this adds ONLY the owner/curator
-    // grants that browse already honors - reader and org-principal grants stay behind the
-    // READ_GRANT_ENFORCEMENT_READY interlock, on both sides, in lockstep.
+    // result. Owner/curator only until the reader arm lands. Browse resolves `includeReaders` from
+    // db.settings (listDataLakes.ts:304); this site has no settings adapter, so it is pinned to
+    // false here and MUST be updated in the same PR that flips READ_GRANT_ENFORCEMENT_READY -
+    // otherwise browse widens to readers and retrieval does not.
     if (context.db.dataLakeAccessGrants && userId) {
       try {
-        const ids = await grantedLakeIdsFor(userId, organizationIds, context.db.dataLakeAccessGrants);
+        const ids = await grantedLakeIdsFor(userId, organizationIds, context.db.dataLakeAccessGrants, false);
         for (const id of ids) grantedDynamicIds.add(id);
       } catch (err) {
         // Same fail-closed contract as the dataLakes read below: a failed grants read narrows the
