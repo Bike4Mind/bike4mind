@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import OpenAI from 'openai';
 import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '../EmbeddingService';
 import { EmbeddingAuthError } from '../EmbeddingErrors';
+import { recordEmbeddingRateLimitHeaders } from '../embeddingRateLimitReporter';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 
 export const OPENAI_EMBEDDING_MODEL_MAP: Record<OpenAIEmbeddingModel, EmbeddingModelInfo<OpenAIEmbeddingModel>> = {
@@ -46,6 +47,14 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.model = model;
   }
 
+  /**
+   * Report the provider ceiling carried on a response we already received. Covers ingest and
+   * query alike: both reach OpenAI through this class, so neither needs its own sampling point.
+   */
+  private recordRateLimit(httpResponse: Response): void {
+    recordEmbeddingRateLimitHeaders(EmbeddingModelProvider.OPENAI, this.model, httpResponse.headers);
+  }
+
   private validateModel(model: OpenAIEmbeddingModel): void {
     if (!OPENAI_EMBEDDING_MODEL_MAP[model]) {
       throw new Error(`Invalid OpenAI embedding model: ${model}`);
@@ -53,14 +62,17 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
-    const response = await this.client.embeddings
+    const { data: response, response: httpResponse } = await this.client.embeddings
       .create({
         model: this.model,
         input: text,
       })
+      .withResponse()
       .catch((error: unknown) => {
         throw this.toActionableAuthError(error);
       });
+
+    this.recordRateLimit(httpResponse);
 
     if (response.data && response.data.length > 0) {
       return response.data[0].embedding;
@@ -307,10 +319,17 @@ export class OpenAIEmbeddingService implements EmbeddingService {
 
     // Normal batch processing
     try {
-      const response = await this.client.embeddings.create({
-        model: this.model,
-        input: texts,
-      });
+      const { data: response, response: httpResponse } = await this.client.embeddings
+        .create({
+          model: this.model,
+          input: texts,
+        })
+        .withResponse();
+
+      // Must not throw: this catch classifies failures into split-and-retry or per-text fallback,
+      // so a reporting fault here would be misread as a provider error and re-issue the batch.
+      // recordEmbeddingRateLimitHeaders swallows its own faults to hold that up.
+      this.recordRateLimit(httpResponse);
 
       if (response.data && response.data.length > 0) {
         // Sort by index to ensure correct order (API may return out of order)

@@ -51,13 +51,23 @@ is pressed. It never runs on its own -- opening this page reads nothing.
 
 :::warning Re-check after a provider key rotation
 A rate limit belongs to the provider organization behind the key, so rotating that key can change
-the ceiling -- to a different tier, or to a different organization entirely. Nothing detects this on
-its own today: a value read once and typed into a lever stays there, silently describing an account
-that may no longer be the one doing the work.
+the ceiling -- to a different tier, or to a different organization entirely.
 
-Press **Check provider limits** again after any embedding key rotation and reconcile the levers with
-what it reports. This matters most on environments where the key is set by an operator and not held
-by anyone day to day, which is precisely where a stale number can sit unnoticed for a long time.
+You do not have to remember to look. Where the provider reports limits at all -- OpenAI does, and
+the exceptions are listed under [When it says the limits are
+unavailable](#when-it-says-the-limits-are-unavailable) -- every embedding call already carries the
+ceiling in its response headers, from ingest and from query alike. Workers report what they measure
+without being asked and without spending anything extra:
+
+- A worker that was already running when the key changed logs an `[embedding-limits] ... ceiling
+  CHANGED` warning naming the old figure and the new one.
+- A worker that starts up after the rotation has no earlier reading to compare against, so it logs
+  the ceiling it measures at info level instead. The current figure reaches the log either way.
+
+That reporting tells you a reconciliation is due; it does not perform one. Press **Check provider
+limits** and bring the levers back in line with what it reports. This matters most on environments
+where the key is set by an operator and not held by anyone day to day, which is precisely where a
+stale number could otherwise sit unnoticed for a long time.
 :::
 
 ### When it says the limits are unavailable
@@ -77,8 +87,9 @@ job. The message names which one: a budget, the master switch, or a throughput l
 named lever, then re-index the file with **Re-process** on the file itself.
 
 **The measured ceiling changed since last time.** Expected after a provider key rotation - the new
-key may belong to a different tier or organization. Re-read the levers against the new figure; there
-is no automatic reconciliation.
+key may belong to a different tier or organization. Search the ingest logs for `[embedding-limits]`
+to see what each worker measured and when. Re-read the levers against the new figure: the change
+reports itself, but reconciling it is still a deliberate operator action.
 
 **A lever change did not take effect.** Settings are cached in-process for up to five minutes, so a
 running worker can keep using the previous value for a few minutes after a save. Wait it out before
