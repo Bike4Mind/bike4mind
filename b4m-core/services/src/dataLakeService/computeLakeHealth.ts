@@ -1,6 +1,8 @@
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
+  deriveLakeMemoryState,
   findDuplicateMembers,
+  isLeaseHeld,
   resolveLakeHealthPolicy,
   selectLakeHealthMembers,
   summarizeLakeHealth,
@@ -8,10 +10,17 @@ import {
   type IDataLakeDocument,
   type IFabFileRepository,
   type IScopedSettingsRepository,
+  type LakeMemoryHealth,
+  summarizeLakeMembership,
+  toWireMembershipReport,
+  effectiveTagPrefixArm,
+  type DataLakeMembershipScope,
   type LakeHealthApiResponse,
+  type LakeMembershipReport,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { lakeMembershipScope } from './lakeMembershipScope';
+import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
+import { isFallbackLake } from './assertLakeAccess';
 import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSetting';
 
 /**
@@ -19,7 +28,7 @@ import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSet
  * handful of numbers, so this is generous; it exists so a pathological lake degrades LOUDLY (a logged,
  * flagged partial report) instead of trying to load unbounded rows. Real lakes are far below it.
  */
-const MEMBER_SCAN_LIMIT = 25_000;
+export const MEMBER_SCAN_LIMIT = 25_000;
 /** How many failing members the report carries for the drill-down. The count is always exact. */
 const AFFECTED_MEMBERS_RETURNED = 200;
 /**
@@ -32,12 +41,43 @@ const AFFECTED_MEMBERS_RETURNED = 200;
  */
 const DUPLICATE_GROUPS_RETURNED = 50;
 const DUPLICATE_MEMBERS_PER_GROUP = 20;
+/**
+ * The same two bounds for the MEMBERSHIP dimension, which reports duplicates over its own (wider)
+ * population - see the note on LakeHealthApiResponse.membership about the two overlapping. Prefixed
+ * because the unprefixed names above belong to `duplicateMembers`; if that redundancy is resolved,
+ * one of these two pairs goes with it.
+ *
+ * Groups are sorted worst-first before the cap (see summarizeLakeMembership), so a truncated list
+ * holds the groups needing a human rather than an arbitrary slice.
+ */
+const MEMBERSHIP_GROUPS_RETURNED = 100;
+/**
+ * How many MEMBERS each of those groups carries. Capping groups alone left the payload bounded only
+ * by MEMBER_SCAN_LIMIT, since one file name shared by N members is a single group holding N member
+ * objects. Mirrors AFFECTED_MEMBERS_RETURNED, and like it every group keeps an exact `memberCount`
+ * beside the capped array so no reader can be told there are fewer.
+ */
+export const MEMBERSHIP_GROUP_MEMBERS_RETURNED = 200;
+
+/**
+ * Structural, not imported from `@bike4mind/database` (services cannot depend on it - see
+ * `ledgerMemoryStore.ts`'s `LedgerRepo`, the template this copies). `principalKind` is a literal
+ * `'lake'` rather than the database package's `MemoryPrincipalKind` union for the same reason.
+ */
+export interface LakeMemoryLedgerRepo {
+  aggregateLakeMemoryCoverage(
+    principalKind: 'lake',
+    principalId: string,
+    ownerUserId: string
+  ): Promise<{ lastBuiltAt: string | null; factCount: number; sourceDocumentCount: number }>;
+}
 
 export interface ComputeLakeHealthAdapters {
   db: {
-    fabFiles: Pick<IFabFileRepository, 'findDataLakeHealthMembers'>;
-    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
+    fabFiles: Pick<IFabFileRepository, 'findDataLakeHealthMembers' | 'findDataLakeMembershipMembers'>;
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll' | 'getSettingsValue'>;
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    memoryLedger: LakeMemoryLedgerRepo;
   };
   logger?: Logger;
 }
@@ -63,7 +103,18 @@ export interface ComputeLakeHealthAdapters {
 export async function computeLakeHealth(
   lake: Pick<
     IDataLakeDocument,
-    'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
+    | 'id'
+    | 'datalakeTag'
+    | 'fileTagPrefix'
+    | 'createdByUserId'
+    | 'organizationId'
+    | 'requiredPassageTokenTarget'
+    | 'inconsistencyReport'
+    | 'inconsistencyComputedAt'
+    | 'lakeMemoryEnabled'
+    | 'lakeMemoryExtractionAt'
+    | 'lakeMemoryCursor'
+    | 'lastSyncAt'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
@@ -80,6 +131,17 @@ export async function computeLakeHealth(
 
   const policy = resolveLakeHealthPolicy({ explicitTarget: lake.requiredPassageTokenTarget, inheritedTarget });
 
+  // Independent of the content-predicate scan below and of the empty-lake early return, so it is
+  // computed once and reused by both.
+  const lakeMemory = await computeLakeMemoryHealth(lake, db);
+
+  // ONE scope for both reads and for the disclosure. A registry lake has no backing document, so its
+  // `createdByUserId` is `''` (assertLakeAccess) and an `owned` scope would fail closed to
+  // meta-tag-only - silently dropping the very arm those lakes are mostly made of, while the
+  // disclosure still named a prefix. Branch here exactly as the sibling read paths do (see
+  // GET /api/data-lakes/:id/articles), and never re-derive the disclosure from the lake document.
+  const scope = isFallbackLake(lake) ? registryMembershipScope(lake) : lakeMembershipScope(lake);
+
   // Defense in depth: `datalakeTag` is `required: true` on the lake, but an absent one would serialize
   // to `null` in the membership `$match` and degrade the query to "files with no tags" across every
   // tenant - and this endpoint returns fileNames. Report an empty (well-formed) health instead of ever
@@ -91,11 +153,21 @@ export async function computeLakeHealth(
       affectedMembers: [],
       affectedMemberCount: 0,
       scanTruncated: false,
+      membership: toWireMembershipReport(summarizeLakeMembership([], { scope: membershipScopeDisclosure(scope) })),
       duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
+      inconsistency: storedInconsistency(lake),
+      lakeMemory,
     };
   }
 
-  const rows = await db.fabFiles.findDataLakeHealthMembers(lakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
+  // Independent reads over the same scope - membership deliberately admits a different population
+  // (see computeMembership), and neither depends on the other's rows - so they run concurrently. Two
+  // bounded aggregations overlap rather than queue, which is where the wall clock goes on a lake near
+  // MEMBER_SCAN_LIMIT; the cost is that their peak connection and memory use now coincides.
+  const [rows, membership] = await Promise.all([
+    db.fabFiles.findDataLakeHealthMembers(scope, MEMBER_SCAN_LIMIT),
+    computeMembership(scope, lake.id, db, logger),
+  ]);
   const scanTruncated = rows.length > MEMBER_SCAN_LIMIT;
   const members = scanTruncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows;
   if (scanTruncated) {
@@ -115,6 +187,7 @@ export async function computeLakeHealth(
     affectedMembers: report.affectedMembers.slice(0, AFFECTED_MEMBERS_RETURNED),
     affectedMemberCount: report.affectedMembers.length,
     scanTruncated,
+    membership: toWireMembershipReport(membership),
     duplicateMembers: {
       memberCount: duplicates.memberCount,
       groupCount: duplicates.groupCount,
@@ -123,5 +196,147 @@ export async function computeLakeHealth(
         members: g.members.slice(0, DUPLICATE_MEMBERS_PER_GROUP),
       })),
     },
+    // READ, never computed here: detection needs chunk text and this function may not touch the chunk
+    // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
+    inconsistency: storedInconsistency(lake),
+    lakeMemory: { ...lakeMemory, memberCount: members.length },
   };
+}
+
+export interface LakeMemoryHealthAdapters {
+  adminSettings: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
+  memoryLedger: LakeMemoryLedgerRepo;
+}
+
+/**
+ * Lake memory's state and headline counts. `everBuilt`/`lastBuiltAt`/`factCount`/
+ * `sourceDocumentCount` are ledger-derived - NEVER from `lakeMemoryExtractionAt`, which is a
+ * concurrency lease, not a completion stamp, and reads `null` in the steady state of a lake that has
+ * built successfully. `building` is the one signal the lake document itself carries: a held lease, or
+ * a non-null continuation cursor (a chain claims/releases its lease per slice, so the cursor is what
+ * survives across slices - see `isLeaseHeld`).
+ *
+ * Exported (not local to `computeLakeHealth`): the build door's own GET returns this same shape
+ * directly, without paying for the content-predicate member scan health also does - see
+ * `LakeMemoryHealth`'s doc comment on the one-type invariant between the two endpoints.
+ */
+export async function computeLakeMemoryHealth(
+  lake: Pick<
+    IDataLakeDocument,
+    | 'datalakeTag'
+    | 'createdByUserId'
+    | 'lakeMemoryEnabled'
+    | 'lakeMemoryExtractionAt'
+    | 'lakeMemoryCursor'
+    | 'lastSyncAt'
+  >,
+  db: LakeMemoryHealthAdapters
+): Promise<LakeMemoryHealth> {
+  const now = new Date();
+  const platformEnabled = (await db.adminSettings.getSettingsValue('EnableLakeMemory').catch(() => undefined)) === true;
+  const lakeEnabled = lake.lakeMemoryEnabled === true;
+  // Split deliberately: `running` is a live lease, `building` widens that to a parked continuation
+  // cursor. Only the first means someone should wait (see LakeMemoryHealth.running).
+  const running = isLeaseHeld(lake.lakeMemoryExtractionAt, now);
+  const building = running || lake.lakeMemoryCursor != null;
+
+  const coverage =
+    lake.datalakeTag && lake.createdByUserId
+      ? await db.memoryLedger.aggregateLakeMemoryCoverage('lake', lake.datalakeTag, lake.createdByUserId)
+      : { lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 };
+
+  const everBuilt = coverage.factCount > 0;
+  const stale =
+    everBuilt && !!lake.lastSyncAt && !!coverage.lastBuiltAt && lake.lastSyncAt.toISOString() > coverage.lastBuiltAt;
+
+  return {
+    state: deriveLakeMemoryState({ platformEnabled, lakeEnabled, building, everBuilt, stale }),
+    running,
+    lastBuiltAt: coverage.lastBuiltAt ? new Date(coverage.lastBuiltAt) : null,
+    factCount: coverage.factCount,
+    sourceDocumentCount: coverage.sourceDocumentCount,
+    // Overwritten by the caller with the actual scanned member count where one was computed (the
+    // empty-lake early return has none to give, so 0 stands).
+    memberCount: 0,
+  };
+}
+
+/**
+ * Project the stored report down to COUNTS for the health response. Null means "never run", which a
+ * surface must not render as "clean".
+ *
+ * Deliberately drops `findings` entirely - both the excerpts and the `subject`, which for a
+ * relationship conflict is an organization name lifted straight out of a member document. GET /health
+ * is read-gated and redacts nothing, so anything prose-shaped attached here reaches every reader of
+ * the lake, including public ones. Projecting rather than redacting means there is nothing for a
+ * future caller to forget to strip.
+ */
+function storedInconsistency(
+  lake: Pick<IDataLakeDocument, 'inconsistencyReport' | 'inconsistencyComputedAt'>
+): LakeHealthApiResponse['inconsistency'] {
+  const report = lake.inconsistencyReport;
+  if (!report) return null;
+  return {
+    computedAt: lake.inconsistencyComputedAt ?? null,
+    sampled: report.sampled,
+    memberSampled: report.memberSampled ?? false,
+    memberCount: report.memberCount ?? 0,
+    // Summed from the EXACT counts, never `findings.length`. The stored array is capped and the
+    // counts are not, so reading the array's length put a saturated number beside exact per-kind
+    // figures that summed higher - the surface's own arithmetic then contradicted itself, and a
+    // consumer trusting `findingCount` under-reported. `affectedMemberCount` next door exists for
+    // precisely this reason, "so the UI never implies fewer".
+    findingCount: Object.values(report.countsByKind).reduce((sum, count) => sum + count, 0),
+    truncated: report.truncated ?? false,
+    countsByKind: report.countsByKind,
+  };
+}
+
+/**
+ * The principal the prefix arm is anchored to, carried onto every membership number (#2243).
+ *
+ * Derived from the SCOPE that was queried, never from the lake document. `effectiveTagPrefixArm` is
+ * the same decision `buildDataLakeMembershipFilter` builds its arm from, so the disclosure cannot
+ * name an arm that did not run - which it did on every registry lake, and would again for any other
+ * reason the filter drops a prefix (a reserved namespace, say).
+ */
+export function membershipScopeDisclosure(scope: DataLakeMembershipScope): LakeMembershipReport['scope'] {
+  return {
+    // Empty string rather than null is how a registry lake's synthetic document spells "no creator",
+    // so `??` was not enough: it shipped `''`, which matches neither documented state. The polarity
+    // matches `effectiveTagPrefixArm`'s own test (`kind !== 'registry'`) rather than the
+    // complementary `=== 'owned'`: with two kinds either spelling agrees, but by coincidence of two
+    // conditions rather than by construction, and being unable to disagree is the whole point of
+    // deriving the filter and this disclosure from one decision.
+    creatorUserId: (scope.kind !== 'registry' && scope.creatorUserId) || null,
+    fileTagPrefix: effectiveTagPrefixArm(scope),
+  };
+}
+
+/**
+ * The membership dimension. A SECOND scan rather than a reuse of the health rows, because the two
+ * admit different populations on purpose: health excludes chunkless members, membership must keep
+ * them (see findDataLakeMembershipMembers).
+ */
+async function computeMembership(
+  scope: DataLakeMembershipScope,
+  lakeId: string,
+  db: ComputeLakeHealthAdapters['db'],
+  logger?: Logger
+): Promise<LakeMembershipReport> {
+  const rows = await db.fabFiles.findDataLakeMembershipMembers(scope, MEMBER_SCAN_LIMIT);
+  const truncated = rows.length > MEMBER_SCAN_LIMIT;
+  if (truncated) {
+    logger?.warn?.(
+      `[lakeHealth] lake ${lakeId} exceeds ${MEMBER_SCAN_LIMIT} members; membership computed over the ` +
+        `OLDEST ${MEMBER_SCAN_LIMIT} (the scan is _id-ascending). Duplicate counts are a lower bound, ` +
+        `and the members outside the window are the newest - see membership.scanTruncated.`
+    );
+  }
+  return summarizeLakeMembership(truncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows, {
+    scope: membershipScopeDisclosure(scope),
+    scanTruncated: truncated,
+    maxGroups: MEMBERSHIP_GROUPS_RETURNED,
+    maxGroupMembers: MEMBERSHIP_GROUP_MEMBERS_RETURNED,
+  });
 }

@@ -74,7 +74,7 @@ interface ManagerNavProps {
   lakesLoading: boolean;
   /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
-  /** Lake id -> its attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  /** Lake id -> its attention-worthy taxonomy batch, if any (see manager/taxonomySlot.ts). */
   taxonomyBatchByLakeId: Map<string, IDataLakeBatchSummary>;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */
@@ -436,9 +436,13 @@ export default function ManagerNav({
                                   />
                                 </Tooltip>
                               )}
-                              {/* Background AI-tag suggestion indicator - an independent clock
-                                  from ingest, so this can appear well after the lake's files
-                                  are already fully uploaded/searchable. */}
+                              {/* Background AI-tag suggestion gates (progress, review, failed) -
+                                  an independent clock from ingest, so these can appear well
+                                  after the lake's files are already fully uploaded/searchable.
+                                  Adding or removing a taxonomyStatus gate anywhere in this
+                                  block means revisiting SLOT_PRIORITY in
+                                  manager/taxonomySlot.ts, whose order is argued from which
+                                  statuses these gates render. */}
                               {(taxonomyBatch?.taxonomyStatus === 'queued' ||
                                 taxonomyBatch?.taxonomyStatus === 'analyzing') && (
                                 <Tooltip title="Suggesting tags with AI - usually ready in under a minute" size="sm">

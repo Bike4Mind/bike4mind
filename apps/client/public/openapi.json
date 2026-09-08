@@ -215,6 +215,11 @@
           },
           "includeSystemPrompt": {
             "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string",
+            "maxLength": 16000,
+            "description": "System-prompt text for this request only, never persisted. Rendered as a defended block appended after every other system-prompt source, with prose instructing the model to defer to organization, session and data-lake guidance. Over the cap is a 422, never truncated."
           }
         },
         "required": [
@@ -1805,7 +1810,7 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "Request body failed schema validation.",
             "content": {
               "application/json": {
                 "schema": {

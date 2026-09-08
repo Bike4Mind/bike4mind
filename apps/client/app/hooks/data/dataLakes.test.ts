@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
+import { RESEARCH_RUN_STALE_AFTER_MS } from '@bike4mind/common';
 // Mocked below (vi.mock is hoisted); imported so the refusal-toast assertion can read the spy.
 import { toast } from 'sonner';
 
@@ -54,13 +55,18 @@ import {
   __resetPurgingLakesForTests,
   INITIAL_REBUILD_POLL_STATE,
   nextRebuildPoll,
+  lakeMemoryPollInterval,
+  LAKE_MEMORY_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
+  useDataLakeResearchRuns,
   useDataLakeSpend,
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
   useAddFileToDataLake,
+  useRecordMembershipDecision,
   useRemoveFileFromDataLake,
+  useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
   useArchiveDataLake,
@@ -443,6 +449,93 @@ describe('useAddFileToDataLake', () => {
  * while afterwards. That is why these tests mock the endpoint to keep returning BOTH lakes - a
  * refetch on the purge path is guaranteed to see the pre-sweep truth and put the row back (#1487).
  */
+describe('useRecordMembershipDecision', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRecordMembershipDecision(), { wrapper });
+  };
+
+  const decided = (removedFabFileIds: string[]) => ({
+    data: {
+      success: true,
+      fileName: 'policy.md',
+      decision: removedFabFileIds.length > 0 ? 'keep-newest' : 'keep-both',
+      tier: 'fileName',
+      bucket: 'differing',
+      removedFabFileIds,
+    },
+  });
+
+  beforeEach(() => {
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+  });
+
+  it('offers Undo on a replacement and restores EVERY copy the ruling removed', async () => {
+    // The dialog's copy promises an Undo and the server already mints a restore record per removed
+    // member; this toast is the only affordance that can spend them (see UNDO_TOAST_DURATION_MS -
+    // there is no list route and no "recently removed" panel). A plain success toast here left a
+    // destructive action with no way back for a non-owner.
+    const successMock = toast.success as ReturnType<typeof vi.fn>;
+    successMock.mockReturnValue('decision-toast');
+    apiPost.mockResolvedValueOnce(decided(['old-1', 'old-2']));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-newest' });
+    });
+
+    const call = successMock.mock.calls.find(c => c[1]?.action?.label === 'Undo') as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    expect(call[0]).toBe('Replaced: 2 older copies of "policy.md" left this lake.');
+
+    apiPost.mockResolvedValue({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+    act(() => {
+      call[1].action.onClick();
+    });
+
+    // One restore per removed member - a single-file Undo would have stranded the rest.
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/old-1');
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/old-2');
+    });
+  });
+
+  it('counts one replaced copy in the singular', async () => {
+    apiPost.mockResolvedValueOnce(decided(['old-1']));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-newest' });
+    });
+
+    expect((toast.success as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      'Replaced: 1 older copy of "policy.md" left this lake.'
+    );
+  });
+
+  it('offers no Undo for keep-both, and does not call a group of three "both copies"', async () => {
+    // QA hit a 3-copy group, where "both" reads as a miscount of what the ruling covered. There is
+    // also nothing to undo: keep-both removes nothing, so no restore record exists to spend.
+    apiPost.mockResolvedValueOnce(decided([]));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-both' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(
+      'Kept every copy of "policy.md". You will not be asked again unless they change.'
+    );
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('useCleanupDataLake queued purge', () => {
   const deletedLake = (id: string) => ({ id, name: `Lake ${id}`, fileTagPrefix: `${id}:` });
   const listing = (...ids: string[]) => ({ data: { data: ids.map(deletedLake) } });
@@ -784,6 +877,28 @@ describe('nextRebuildPoll', () => {
  * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
  * still pass if that helper's shape drifted away from what the query is actually keyed under.
  */
+/**
+ * The build door's poll predicate. Same reason nextRebuildPoll is tested here: an inline
+ * `refetchInterval` lambda is executed by no test, so a wrong predicate ships green - and the wrong
+ * one here is a 5s poll that never terminates.
+ */
+describe('lakeMemoryPollInterval', () => {
+  it('polls while a lease is actually held', () => {
+    expect(lakeMemoryPollInterval({ running: true, state: 'building' })).toBe(LAKE_MEMORY_POLL_MS);
+  });
+
+  // The bug the `running` split exists to prevent. A parked continuation cursor also reports
+  // 'building', and nothing moves it, so keying off the state polled forever.
+  it('does NOT poll a stalled build - state building, no live lease', () => {
+    expect(lakeMemoryPollInterval({ running: false, state: 'building' })).toBe(false);
+  });
+
+  it('does not poll a settled or absent payload', () => {
+    expect(lakeMemoryPollInterval({ running: false, state: 'current' })).toBe(false);
+    expect(lakeMemoryPollInterval(undefined)).toBe(false);
+  });
+});
+
 describe('config-history invalidation on the non-update config writes', () => {
   const mountWith = () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -850,6 +965,93 @@ describe('config-history invalidation on the non-update config writes', () => {
   });
 });
 
+describe('useDataLakeResearchRuns settle -> proposals invalidation', () => {
+  // `startedAt` is not decoration: in-flight is age-bounded, and a `running` row without one reads as
+  // abandoned - deliberately, since the server's query cannot match a missing field either. The real
+  // API cannot produce that shape, because `claimForExecution` writes status and startedAt together.
+  const runs = (status: string, startedAt: string = new Date().toISOString()) => [
+    { id: 'run-1', status, startedAt, totals: { searchHits: 0, proposed: 0 } },
+  ];
+
+  const mount = (initialStatus: string, startedAt?: string) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiGet.mockResolvedValue({ data: { data: runs(initialStatus, startedAt) } });
+    return { queryClient, invalidate, wrapper };
+  };
+
+  const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
+    invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
+
+  // The proposal queue is a SEPARATE surface mirroring what a run produced, and its tab carries a
+  // count. Without this the reviewer sees "3 proposed" on the run and Proposals still reading (0).
+  it('refreshes the review queue when a run stops being in flight', async () => {
+    const { invalidate, wrapper } = mount('running');
+    const { result, rerender } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('running'));
+
+    apiGet.mockResolvedValue({ data: { data: runs('completed') } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+    rerender();
+
+    await waitFor(() => {
+      const keys = invalidatedKeys(invalidate);
+      expect(keys).toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
+      // The queue only. `lastRunAt` is the config row's one run-derived field and it is stamped at
+      // START, so refreshing the config list here would be a read that can never return anything new.
+      expect(keys).not.toContain(JSON.stringify(['dataLakeResearchConfigs', 'lake-1']));
+    });
+  });
+
+  // Edge-triggered, not level-triggered: the poll runs every few seconds while a run is in flight,
+  // and invalidating the queue on each unchanged tick would refetch the reviewer's list under them.
+  it('does not invalidate while the run is merely still running', async () => {
+    const { invalidate, wrapper } = mount('running');
+    const { result, rerender } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('running'));
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+    rerender();
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
+  });
+
+  // Opening the tab on an already-finished history is not a settle. Firing there would invalidate
+  // the queue on every mount, which is exactly the refetch loop the tab-gated `enabled` avoids.
+  it('does not invalidate when the history was already settled on arrival', async () => {
+    const { invalidate, wrapper } = mount('completed');
+    const { result } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('completed'));
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
+  });
+
+  // A hard-killed run keeps `running` forever, because its catch never executed. Past the stale bound
+  // it is not a run in progress, so there is no in-flight edge to fall off: this is the same
+  // transition as the first case in this block, and it must NOT invalidate. That difference is the
+  // whole point of the bound - otherwise the tab polls every 5s for the life of the session.
+  it('does not settle off a running row that was already past the stale bound', async () => {
+    const stale = new Date(Date.now() - (RESEARCH_RUN_STALE_AFTER_MS + 60_000)).toISOString();
+    const { invalidate, wrapper } = mount('running', stale);
+    const { result, rerender } = renderHook(() => useDataLakeResearchRuns('lake-1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.[0].status).toBe('running'));
+
+    apiGet.mockResolvedValue({ data: { data: runs('completed') } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+    rerender();
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
+  });
+});
+
 describe('useRechunkDataLake cache invalidation', () => {
   it('refreshes lake HEALTH too, not just the rebuild badge', async () => {
     // A rebuild mass-mutates the exact per-file rollups health is computed from. The health query has
@@ -872,6 +1074,51 @@ describe('useRechunkDataLake cache invalidation', () => {
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+  });
+});
+
+describe('useRechunkDataLake paused refusal (#2223)', () => {
+  // The toast spies are module-level and shared across this file, so both assertions below
+  // ("the other toast was NOT called") need a clean slate.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+  };
+
+  it('warns that nothing was rebuilt, instead of a green success claiming the opposite', async () => {
+    // The paused arm also returns enqueued: 0, so on the counts alone it is indistinguishable from
+    // "nothing to do" - and it fell through to toast.success('All files are already chunked into
+    // passages.'). That claim is not merely uninformative but FALSE: the server-side gate only runs
+    // when at least one file was detected, so `detected` is always >= 1 here.
+    apiPost.mockResolvedValueOnce({ data: { detected: 12, enqueued: 0, remaining: 12, outcome: 'paused' } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('paused'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('still reports a genuine nothing-to-do as a success', async () => {
+    // The arm the paused case used to be confused with must keep its own wording.
+    apiPost.mockResolvedValueOnce({ data: { detected: 0, enqueued: 0, remaining: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('All files are already chunked into passages.');
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 });
 
@@ -918,6 +1165,130 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
+  });
+});
+
+describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
+  // These branches produce the only sentence the user ever sees about an apply, and the batch is
+  // 'applied' afterwards - apply requires 'ready' and re-analyze requires 'ready'|'failed', so
+  // there is no in-product route back. A wrong message here is the user's last word on the batch.
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useApplyTaxonomySuggestions('b1'), { wrapper });
+  };
+
+  // toast.* are module-level spies shared across this file, so calls accumulate without this.
+  // apiPost is reset too, matching the sibling describes: every case here queues a
+  // mockResolvedValueOnce, and one left unconsumed would shift the queue into an unrelated test.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+    apiPost.mockReset();
+  });
+
+  it('does not claim "already up to date" when files silently lost their CAS check', async () => {
+    // The review defect: 7 files already carried the tags and 3 needed them, but a concurrent tag
+    // edit made all 3 miss. Reading only filesUpdated/unchanged renders a green "Tags already up to
+    // date on 7 files" - an affirmative claim of completeness on a batch where 3 files were never
+    // tagged, and the user cannot retry.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 7, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.warning).mock.calls[0][0]).toBe(
+      'Tags already up to date on 7 files. 3 files could not be updated - changed while applying.'
+    );
+  });
+
+  it('still reports a clean idempotent re-apply as a plain success', async () => {
+    // The guard on the fix above: suppressing the false completeness claim must not turn the
+    // genuine "nothing needed changing" case into a warning.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 3, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags already up to date on 3 files');
+  });
+
+  it('reports the split when some files were tagged and others already had them', async () => {
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 2, unchanged: 1, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 2 files, 1 file already up to date');
+  });
+
+  it('falls through to the plain success arm when the server omits skipped (rolling deploy)', async () => {
+    // A client on this build against a server that has not shipped these fields yet. BOTH are
+    // absent, because `unchanged` and `skipped` shipped in the same service commit - a fixture
+    // keeping `unchanged: 0` models a payload no server ever sends, which is what made this case
+    // pass for the wrong reason.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 4 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 4 files');
+  });
+
+  it('survives an old server that omits the fields and matched nothing', async () => {
+    // `filesUpdated: 0` is the one old-server shape where the `?? 0` defaulting is observable at
+    // all: without it, `unchanged === 0` is false against undefined, the first arm is skipped, and
+    // the next one formats undefined. The fixture above uses `filesUpdated: 4`, which takes the
+    // last arm and never touches either field.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
+  });
+
+  it('does not claim nothing matched when every emitted op lost its race', async () => {
+    // Files matched - all of them lost the CAS check. Gating only the first arm on `skipped` moves
+    // the false claim to the second one ("already up to date on 0 files"), so this pins the message
+    // rather than the arm.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith('3 files could not be updated - changed while applying.');
+  });
+
+  it('says nothing matched rather than "applied to 0 files" when the batch produced no ops', async () => {
+    // A batch where no file matches any accepted tag emits no ops and counts no `unchanged`, so the
+    // old plain arm claimed an application that did not happen.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 0, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('No files matched these tags');
   });
 });
 

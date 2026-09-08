@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box } from '@mui/joy';
 import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
-import { useActiveDataLakeBatches, useGetDataLakes, useGetDataLakeTagCounts } from '@client/app/hooks/data/dataLakes';
+import {
+  useActiveDataLakeBatches,
+  useGetDataLakes,
+  useGetDataLakeTagCounts,
+  type DataLakeMemberFile,
+} from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
@@ -14,9 +19,9 @@ import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
 import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import { DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
-import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
 import type { ManagerLake } from './manager/shared';
 import { prefixSegments } from './manager/shared';
+import { selectTaxonomyBatchByLakeId } from './manager/taxonomySlot';
 import ManagerNav from './manager/ManagerNav';
 import { LakeInfoPanel, ManagerOverview } from './manager/LakeInfoPanel';
 
@@ -39,17 +44,7 @@ export default function DataLakeManagerPanel() {
     () => activeBatches?.find(b => b.id === reviewingBatchId) ?? null,
     [activeBatches, reviewingBatchId]
   );
-  // One pass over the batch list, not a per-lake filter/find on every row render. Only batches
-  // whose taxonomy phase actually needs attention are kept - a lake with none just misses the
-  // map entry, which every consumer already treats the same as "nothing to show."
-  const taxonomyBatchByLakeId = useMemo(() => {
-    const map = new Map<string, IDataLakeBatchSummary>();
-    for (const batch of activeBatches ?? []) {
-      if (!batch.taxonomyStatus || batch.taxonomyStatus === 'none') continue;
-      if (!map.has(batch.dataLakeId)) map.set(batch.dataLakeId, batch);
-    }
-    return map;
-  }, [activeBatches]);
+  const taxonomyBatchByLakeId = useMemo(() => selectTaxonomyBatchByLakeId(activeBatches), [activeBatches]);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   // Store-driven so openManager('discover') deep-links land on the public catalog; the
   // sidebar footer's Discover button flips it the same way.
@@ -67,10 +62,17 @@ export default function DataLakeManagerPanel() {
     (lake: ManagerLake): number | undefined => tagCountsData?.lakeFileCounts?.[lake.datalakeTag],
     [tagCountsData]
   );
+  // The two DISJOINT membership arms: a file is a member via the lake's `datalake:*`
+  // meta-tag, or via a `fileTagPrefix` content tag on a file the lake's CREATOR owns - and the
+  // two arms are invisible from a single combined count. See buildDataLakeMembershipFilter.
+  const lakeArmCounts = useCallback(
+    (lake: ManagerLake) => tagCountsData?.lakeArmCounts?.[lake.datalakeTag],
+    [tagCountsData]
+  );
 
   const [lakeId, setLakeId] = useState<string | null>(null);
   const [path, setPath] = useState<string[]>([]);
-  const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
+  const [selectedFile, setSelectedFile] = useState<DataLakeMemberFile | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
   const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
   const [editingFallbackLakeId, setEditingFallbackLakeId] = useState<string | null>(null);
@@ -112,6 +114,8 @@ export default function DataLakeManagerPanel() {
           // Absent when withheld from a non-editor OR the lake predates the field; seed the default
           // so the picker always shows a concrete mode (matching how the resolver treats absence).
           groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          // Absent (predates the field) reads the same as an explicit false: never built.
+          lakeMemoryEnabled: l.lakeMemoryEnabled ?? false,
           // null/undefined both mean "no explicit policy" (the lake inherits), which is the state
           // the field renders as blank - and the state in which this lake never converges.
           requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,
@@ -221,6 +225,7 @@ export default function DataLakeManagerPanel() {
           <LakeInfoPanel
             lake={activeLake}
             fileCount={lakeCount(activeLake)}
+            armCounts={lakeArmCounts(activeLake)}
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
             onOpenAccess={() => setAccessLakeId(activeLake.id)}

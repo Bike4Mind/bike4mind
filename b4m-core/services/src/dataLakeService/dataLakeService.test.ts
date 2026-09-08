@@ -454,6 +454,95 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
   });
 });
 
+/**
+ * Both of this function's grant reads degrade to empty when no grant repo is wired - correct for a
+ * caller that has not threaded one, and invisible when a caller forgets to. The degradation had no
+ * coverage at all, so a caller could pass the repo, stop passing it, and every test still pass while
+ * grant-held lakes silently dropped out of its list (#2034).
+ */
+describe('listDataLakes - grant-reachable lakes (#2034)', () => {
+  const theirs = lake({ id: 'granted', slug: 'granted', createdByUserId: 'other', organizationId: 'orgA' });
+
+  const grantRepo = (role: 'owner' | 'curator' | 'reader') => ({
+    listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: 'granted', role }]),
+    listActiveByLakes: vi
+      .fn()
+      .mockResolvedValue([{ dataLakeId: 'granted', principalType: 'user', principalId: 'me', role }]),
+  });
+
+  // findAccessible's non-owner id arm is driven ENTIRELY by grantedLakeIds, so a fake that returns
+  // the lake unconditionally could not tell a threaded repo from a missing one.
+  const dbFor = (grants?: ReturnType<typeof grantRepo>) => ({
+    dataLakes: {
+      findAccessible: vi.fn().mockImplementation(async (_ctx, opts) => (opts?.grantedLakeIds?.length ? [theirs] : [])),
+      find: vi.fn(),
+    },
+    ...(grants ? { dataLakeAccessGrants: grants } : {}),
+  });
+
+  it('omits the lake entirely when no grant repo is wired', async () => {
+    const db = dbFor();
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'granted')).toBeUndefined();
+    expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
+      statuses: ['draft', 'active'],
+      grantedLakeIds: [],
+    });
+  });
+
+  it('returns a curator-granted lake the caller did not create, labelled manageable', async () => {
+    const db = dbFor(grantRepo('curator'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const row = result.find(l => l.id === 'granted');
+
+    expect(row).toBeDefined();
+    // Reaching the row set is only half of it: without the per-lake grant load the row would come
+    // back canManage:false, which a write-gated caller like the Slack `list` reply then drops.
+    expect(row?.canManage).toBe(true);
+    // A curator is not an owner, so the manage right must not be reported as ownership.
+    expect(row?.isOwn).toBe(false);
+  });
+
+  it('reports a transferred owner as both manageable and own', async () => {
+    const db = dbFor(grantRepo('owner'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const row = result.find(l => l.id === 'granted');
+
+    expect(row?.canManage).toBe(true);
+    // An owner grant supersedes createdByUserId, so this is the one grant role that is ownership.
+    expect(row?.isOwn).toBe(true);
+  });
+
+  it('excludes a reader-only granted lake while the read-grant cutover is off', async () => {
+    // No settings adapter, so resolveEnforceReadGrants is false and reader rows are not admitted.
+    // This is the guard on a caller that must not advertise what it cannot write: a reader grant
+    // never satisfies canManageLake, so listing it would promise a write that gets refused.
+    const db = dbFor(grantRepo('reader'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'granted')).toBeUndefined();
+  });
+
+  it('labels a reader-granted lake unmanageable even when another arm returns it', async () => {
+    // The org/public arms can surface the same lake independently of grantedLakeIds, so the reader
+    // exclusion above is not the only thing standing between a reader and a write-gated list.
+    const grants = grantRepo('reader');
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakeAccessGrants: grants,
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
+
+    expect(result.find(l => l.id === 'granted')?.canManage).toBe(false);
+  });
+});
+
 // systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
 // creator or an admin may read the wording. The list endpoint is where the editor UI gets the
 // value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
@@ -529,6 +618,28 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
 
     expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
     expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // #2005: the queue's reviewer of last resort is an org admin who did NOT create the lake - the
+  // succession role - and every existing case above describes a creator, so nothing pinned that the
+  // count reaches this one. Two gates have to agree for it to arrive: `findAccessible` must return
+  // the lake at all (pinned against a real Mongo in DataLakeModel.orgScopeAgreement.test.ts, which
+  // is where the bug was) and `canManageLake` must then rate the caller an editor, which is what
+  // admits the count. This covers the second half; `findAccessible` is mocked here, so it cannot
+  // and does not stand in for the first.
+  it('carries the count for an org admin who did not create the lake', async () => {
+    const orgLake = lake({ id: 'org-lake', slug: 'org-lake', createdByUserId: 'creator', organizationId: 'org-a' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() },
+      dataLakeProposals: counts({ 'org-lake': 2 }),
+    };
+
+    // administeredOrgIds ONLY, with an empty membership set - exactly the principal #2005 describes
+    // (a team manager or appointed admin who sits on no read/write users[] ACL row).
+    const result = await listDataLakes(ctx({ userId: 'manager', administeredOrgIds: ['org-a'] }), { db });
+
+    expect(result.find(l => l.id === 'org-lake')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'org-lake')?.pendingProposalCount).toBe(2);
   });
 });
 
@@ -912,6 +1023,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'fileTagPrefix',
         'id',
         'isPublic',
+        'lakeMemoryEnabled',
         'lastSyncAt',
         'name',
         'organizationId',
@@ -1351,6 +1463,85 @@ describe('updateDataLake — clearing an access gate', () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('updateDataLake - lake memory platform kill-switch is retain-but-inert', () => {
+  const makeDb = (l: IDataLakeDocument, platformEnabled: boolean) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const getSettingsValue = vi.fn().mockResolvedValue(platformEnabled);
+    return {
+      db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update }, adminSettings: { getSettingsValue } },
+      update,
+      getSettingsValue,
+    };
+  };
+
+  it('records lakeMemoryEnabled ON even while the platform flag is off, so the opt-in survives', async () => {
+    // The platform flag gates BEHAVIOUR, not the stored preference: recall, the build door, the
+    // extraction chain and the health state each check it independently, so a stored `true` under a
+    // disabled platform is inert on its own. Dropping the write instead would defeat the very contract
+    // the kill-switch's retain-but-inert design exists for - the platform coming back on would have no
+    // memory of who had opted in.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false, name: 'Old Name' });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'New Name', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    expect(update.mock.calls[0][0]).toMatchObject({ name: 'New Name', lakeMemoryEnabled: true });
+  });
+
+  it('does not consult the platform flag at all on this route', async () => {
+    // Not merely unused: the adapter no longer requires an adminSettings port, so a route wiring one
+    // would be wiring something this service does not read. Asserted so the check cannot creep back in
+    // without someone deciding to.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false });
+    const { db, getSettingsValue } = makeDb(l, false);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: true }, { db });
+
+    expect(getSettingsValue).not.toHaveBeenCalled();
+  });
+
+  it('never writes lakeMemoryEnabled false as a side effect of the platform flag being off', async () => {
+    // Retain-but-inert, from the destructive side: an unrelated edit while the kill-switch is off must
+    // not clear anyone's opt-in. Re-asserting the value the lake already holds is a harmless idempotent
+    // $set (the audit diff sees no movement, since nothing moved); writing `false` would not be.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'Renamed', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    expect(update.mock.calls[0][0]).not.toMatchObject({ lakeMemoryEnabled: false });
+    expect(l.lakeMemoryEnabled).toBe(true);
+  });
+
+  it('allows turning lakeMemoryEnabled OFF regardless of the platform flag', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: false }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: false }));
+  });
+
+  it('applies a request to turn lakeMemoryEnabled ON when the platform flag is on', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false });
+    const { db, update } = makeDb(l, true);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: true }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: true }));
   });
 });
 

@@ -1,3 +1,4 @@
+import type { LakeInconsistencyReport } from '../../constants/corpusInconsistency';
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
@@ -166,6 +167,17 @@ export interface IDataLake {
    * `null` is the explicit clear sentinel written by updateDataLake, undefined is never-set.
    */
   requiredPassageTokenTarget?: number | null;
+  /**
+   * Last computed cross-document inconsistency report (#2242), and when.
+   *
+   * STORED rather than computed on read, because detection needs chunk TEXT and lake health is
+   * forbidden from scanning the chunk collection (#1665 measured that as ruinous at connector scale).
+   * So an owner-triggered pass writes it here and health renders what it finds, the same separation
+   * `converge` uses between planning and executing. A null report means "never run", which the
+   * surface must distinguish from "run and found nothing".
+   */
+  inconsistencyReport?: LakeInconsistencyReport | null;
+  inconsistencyComputedAt?: Date | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -303,6 +315,14 @@ export interface IDataLake {
    */
   filesArchivedAt?: Date | null;
   /**
+   * Per-lake opt-in to lake memory: gates BOTH extraction-on-ingest and recall injection for
+   * this lake specifically. `EnableLakeMemory` (the platform setting) gates whether the option is
+   * available at all; this field is the per-lake choice underneath it. Default false, so a lake opts in
+   * only when both a platform admin and a lake manager agree. Disabling retains the built profile
+   * (recall simply stops); it does not purge - purge is a separate, explicit action.
+   */
+  lakeMemoryEnabled?: boolean;
+  /**
    * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
    *
    * A concurrency LEASE, not a status: a run stamps it to claim the lake and clears it when done, so a
@@ -319,6 +339,21 @@ export interface IDataLake {
    * re-asserts existing facts and keeps them hot). Absent/null = start from the beginning.
    */
   lakeMemoryCursor?: string | null;
+  /**
+   * Purge FENCE for the lake-memory producer - server-managed, never client input. Stamped by an
+   * explicit memory purge, and monotonic (a later purge always moves it forward).
+   *
+   * An extraction run snapshots this at claim time and re-reads it before each document; a value that
+   * has MOVED means a purge landed mid-run, so the run stops writing and does not persist a
+   * continuation cursor. Without the fence a purge is not durable: the in-flight run keeps appending
+   * facts under a fresh key after the shred (so "erased" facts reappear), and its end-of-slice
+   * bookkeeping rewrites the very cursor the purge cleared, leaving the next build to resume mid-lake
+   * and skip every document the purged scan had already passed.
+   *
+   * Absent/null = never purged. It is NOT a completion stamp and says nothing about what the lake
+   * currently knows - the ledger is the only source for that.
+   */
+  lakeMemoryPurgedAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -354,19 +389,35 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * `userId` is the owner bypass + the Private-by-default rule: a lake with NO org and NO
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
    * omit only for owner-agnostic lookups (then gateless org-less lakes match no one).
+   *
+   * `grantedLakeIds` is the explicit-grant arm, mirroring `findAccessible`'s: a lake the caller
+   * holds an active grant on is reachable by that grant alone, so retrieval agrees with browse for
+   * a transferred/delegated lake. Pre-resolved by the caller (`grantedLakeIdsFor`); an empty or
+   * absent list adds no arm and cannot widen anything. Not every retrieval caller supplies it:
+   * getDataLakePrompts.ts deliberately omits it, since folding grants into the injection-trust
+   * decision is a separate piece of work (#1673) - an org-less transferred lake is denied by that
+   * trust gate regardless, so wiring the arm there today would be dead code.
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
     organizationIds?: string[] | null,
-    userId?: string | null
+    userId?: string | null,
+    grantedLakeIds?: string[] | null
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
-   * Datastore-side accessibility filter - owner OR public OR (org-match AND requirement-match
-   * AND not-private). The org and requirement constraints are BOTH required for a non-owner: a
-   * tag/entitlement-holder in a different org is excluded, and a lake with no org and no gate
-   * stays owner-only. Defaults to the active+draft statuses.
+   * Datastore-side accessibility filter - owner OR org-admin OR public OR (org-match AND
+   * requirement-match AND not-private). The org and requirement constraints are BOTH required for
+   * a non-owner reaching a lake by membership: a tag/entitlement-holder in a different org is
+   * excluded, and a lake with no org and no gate stays owner-only. Defaults to the active+draft
+   * statuses.
+   *
+   * `ctx.administeredOrgIds` is the org-ADMIN arm and is not interchangeable with
+   * `ctx.organizationIds`: it grants no more than the single gate already grants (`canManageLake`
+   * rung 4 admits the same principal, and manage implies read), it exists so the succession roles -
+   * team manager, appointed admin - can DISCOVER the org lakes they may already manage. Absent or
+   * empty simply adds no arm.
    */
   findAccessible(
     ctx: AccessContext,
@@ -538,6 +589,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * whole lake.
    */
   setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
+  /** Advance the cursor only while the purge fence still matches `fenceAt`; false means it moved. */
+  setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────
@@ -567,6 +620,12 @@ export interface IDataLakeBatchFile {
   contentHash?: string;
   status: BatchFileStatus;
   error?: string;
+  /**
+   * Whether the failure counters (failedFiles/processingFailedFiles) were actually charged for
+   * THIS entry. Absent on an entry that predates the flag. Read by revertFileFailure, which must
+   * not hand back counters that belong to a different file's failure.
+   */
+  failureCounted?: boolean;
 }
 
 /**
@@ -684,6 +743,11 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Served by the `{ status: 1, updatedAt: 1 }` index.
    */
   findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
+  /**
+   * Set one manifest entry's status (and error text, when given). A 'failed' status also stamps
+   * failureCounted: false in the same write - see markFailureCounted for why the pessimistic
+   * default is the safe one.
+   */
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
@@ -697,6 +761,43 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * caller skips the counter increment.
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
+  /**
+   * Exact inverse of a per-file failure accounting: move ONE manifest entry out of 'failed' into
+   * `to`, drop its error text and give back the failedFiles/processingFailedFiles it took, in a
+   * single write. `alsoIncrement` carries what the new status itself owes (landing straight on
+   * 'complete' owes a vectorizedFiles). `errorPrefix` is the ownership guard - only the caller
+   * whose own failure text is on the entry may revoke it - and the entry's own `failureCounted`
+   * decides whether the counters are actually given back: `false` (written with the 'failed'
+   * status) hands nothing back, `true` does, and an absent flag pre-dates the flag entirely and is
+   * trusted as counted. Needed because claimFileStatus can never move an entry back OUT of
+   * 'failed', so a file that recovers stays counted failed forever without this. Refuses a
+   * 'cancelled'/'failed' batch. Returns the post-update batch, or null if nothing matched.
+   */
+  revertFileFailure(
+    batchId: string,
+    fabFileId: string,
+    to: Extract<BatchFileStatus, 'complete' | 'chunking'>,
+    opts: {
+      errorPrefix: string;
+      alsoIncrement?: Partial<Record<Exclude<BatchCounterField, 'failedFiles' | 'processingFailedFiles'>, number>>;
+    }
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Reopen a batch settled as 'completed_with_errors' back to 'processing', so a recovered file
+   * can still be counted (every counter write is guarded on a non-terminal batch). Narrow by
+   * design: 'cancelled'/'failed' are decisions rather than tallies and stay settled. `owner` is
+   * revertFileFailure's eligibility predicate, so the reopen never fires for a resume that has no
+   * failure of its own to revoke.
+   */
+  reopenFinalizedWithErrors(
+    batchId: string,
+    owner: { fabFileId: string; errorPrefix: string }
+  ): Promise<IDataLakeBatchDocument | null>;
+  /** Raise the manifest entry's failureCounted flag once the failure counters have actually been
+   * charged for it - the per-entry fact revertFileFailure needs to attribute a decrement.
+   * Advisory: updateFileStatus already stamped `false` with the status, so a lost write here only
+   * leaves the entry uncounted. Call after a guarded incrementCounters that returned a batch. */
+  markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
   /**
    * Drive-ingest-only: atomically record a skipped driveFileId (into `skippedDriveFileIds`) and
@@ -939,7 +1040,11 @@ export interface DataLakeDocumentPurgeReceipt {
   storageObjectDeleted: boolean;
   /** How many stored objects the document had (current revision plus every prior version). */
   storageObjectsTotal: number;
-  /** How many of them the object store refused. 0 whenever `storageObjectDeleted` is true. */
+  /**
+   * How many of them are still stored. 0 whenever `storageObjectDeleted` is true. Unreached rather
+   * than strictly refused: once any prior version's key fails, the sweep stops before the current
+   * `filePath` so the row it keeps stays addressable, and counts that un-attempted key here too.
+   */
   storageObjectsRemaining: number;
   /**
    * What happened to the separate retrieval index. NOT read back - the port has no read operation.

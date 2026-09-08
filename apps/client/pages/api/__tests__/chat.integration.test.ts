@@ -529,6 +529,50 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(invokedParams().max_tokens).toBeUndefined();
     });
   });
+
+  // The caller-supplied systemPrompt field (POST /api/chat). Asserted here specifically on the
+  // ASYNC (wait: false, default) dispatch path via mockInvoke - a test that only covered wait:true
+  // would pass even if the default path silently dropped the field.
+  describe('systemPrompt (caller-supplied)', () => {
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: { systemPrompt?: string } }).body;
+
+    it('forwards systemPrompt to ChatCompletionInvoke on the default (async) path', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', systemPrompt: 'Reply only in haiku.' },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().systemPrompt).toBe('Reply only in haiku.');
+    });
+
+    it('omits systemPrompt entirely from the invoked body when not supplied', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody()).not.toHaveProperty('systemPrompt');
+    });
+
+    it('rejects a systemPrompt over the 16,000-char cap with 422, not a silent truncation', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', systemPrompt: 'x'.repeat(16_001) },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('accepts a systemPrompt exactly at the 16,000-char cap', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', systemPrompt: 'x'.repeat(16_000) },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+    });
+  });
 });
 
 describe('POST /api/chat (integration - wait path promptDetails exposure)', () => {

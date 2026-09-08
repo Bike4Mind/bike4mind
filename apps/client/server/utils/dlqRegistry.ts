@@ -43,6 +43,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'imageEditQueue',
   },
   {
+    label: 'data-lake-research',
+    displayName: 'Data Lake Research Run',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeResearchQueue',
+  },
+  {
     label: 'research-engine',
     displayName: 'Research Engine',
     application: 'ResearchEngine',

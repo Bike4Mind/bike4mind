@@ -9,11 +9,13 @@
  *
  * Browse stays the wider of the two - see the difference list in ./index.ts (admin reach;
  * draft lakes). Retrieval is a subset in every case, never the reverse. Do not paper those
- * over here. An owner's own gated lake is no longer among them: the core resolver restores it.
+ * over here. An owner's own gated lake is no longer among them: the core resolver restores it, and
+ * so is a lake held by an owner/curator grant - the grant arm below is what keeps browse and
+ * retrieval agreeing on a transferred lake.
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
+import { dataLakeAccessGrantRepository, dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
 import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
@@ -150,6 +152,16 @@ export async function resolveRetrievalLakeScopeForUser(
     entitlementKeys?: string[];
     /** Pre-memoized membership lookup; falls back to the repository when absent. */
     findMembershipOrgIds?: (uid: string) => Promise<string[]>;
+    /**
+     * Default `true` - today's behaviour for every existing caller, none of which passes this
+     * flag. Pass `false` to opt a caller OUT of the privileged static-registry widening below.
+     * The attachment door does this: that widening escalates registry reach from passages
+     * (semantic-search) to whole inlined documents, and the chat attachment door structurally
+     * cannot follow it (`b4m-core/services` cannot import `@server/*`), so inheriting it here
+     * would ship the two attachment doors disagreeing for exactly the caller class most likely
+     * to notice.
+     */
+    staticRegistryBypass?: boolean;
   } = {}
 ): Promise<RetrievalLakeScope> {
   // Resolved for every caller, including admins. The static-registry bypass below covers only STATIC
@@ -163,6 +175,10 @@ export async function resolveRetrievalLakeScopeForUser(
   const scope = await dataLakeService.getDynamicDataLakeAccess({
     db: {
       dataLakes: dataLakeRepository,
+      // The grant arm browse already has (listDataLakes' `grantedLakeIdsFor`), so a lake reached
+      // only by an owner/curator grant retrieves as it browses instead of being visible but
+      // ungroundable.
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
       organizations: {
         findMembershipOrgIds: opts.findMembershipOrgIds ?? (uid => organizationRepository.findMembershipOrgIds(uid)),
       },
@@ -173,5 +189,5 @@ export async function resolveRetrievalLakeScopeForUser(
   });
 
   const isPrivileged = !!user.isAdmin || hasDeveloperUserTag(user.tags);
-  return isPrivileged ? withStaticRegistryBypass(scope) : scope;
+  return isPrivileged && (opts.staticRegistryBypass ?? true) ? withStaticRegistryBypass(scope) : scope;
 }
