@@ -199,3 +199,37 @@ describe('formatArmSummary', () => {
     expect(formatArmSummary(row)).not.toContain('...');
   });
 });
+
+describe('groundTruthApplies', () => {
+  const args = (docId: string, supporting: string[]) => ({
+    arm: 'a@16',
+    chunks: [chunk('c1', docId, AT(0))],
+    filesInScope: 1,
+    chunksExcluded: 0,
+    filesExcluded: 0,
+    queries: [{ id: 'q1', vector: QUERY, supporting }],
+    depth: 1,
+  });
+
+  it('is true when a captured document matches a supporting slug', () => {
+    expect(buildArmRow(args('features/mementos', ['features/mementos'])).groundTruthApplies).toBe(true);
+  });
+
+  it('is false when no captured document is named in the ground truth', () => {
+    // A production lake identifies documents by file id, so nothing matches a help slug and every
+    // quality metric scores 0 - which reads as a catastrophic model failure, not as "no ground truth".
+    expect(buildArmRow(args('67f0a1b2c3d4e5f600000001', ['features/mementos'])).groundTruthApplies).toBe(false);
+  });
+
+  it('is true for an all-negative question set, which names no documents at all', () => {
+    expect(buildArmRow(args('anything', [])).groundTruthApplies).toBe(true);
+  });
+
+  it('renders the quality columns as n/a rather than a zero nobody should act on', () => {
+    const table = formatComparisonTable([buildArmRow(args('unmatched-file-id', ['features/mementos']))]);
+    // Exactly the four quality columns (recall, prec, hit, mrr) go n/a.
+    expect(table.split('n/a').length - 1).toBe(4);
+    // The geometry needs no labels, so it is still a real number.
+    expect(table).toMatch(/1\.0000/);
+  });
+});

@@ -103,12 +103,18 @@ export function compareFromRaw(raws: readonly unknown[], widths: readonly number
  * is what compares the arms against each other. A reader needs the first to trust the second.
  */
 export function formatComparison(rows: readonly ArmRow[]): string {
-  return [
-    ...rows.map(r => formatArmSummary(r)),
-    '',
-    formatComparisonTable(rows),
-    '',
+  const notes = [
     'Band width and spread are the geometry; recall/prec/hit/mrr are whether it bought better retrieval.',
     'Scores are exact cosine over the captured chunks, NOT the ANN path prod measured through.',
-  ].join('\n\n');
+  ];
+  // corpus.ts names help slugs, so a capture of any other lake has no ground truth to score against.
+  // Saying so beats printing quality columns of n/a and leaving the reader to work out why.
+  if (rows.some(r => !r.groundTruthApplies)) {
+    notes.push(
+      'GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS: no captured document matches a supporting slug in ' +
+        'corpus.ts, so recall/prec/hit/mrr read n/a. The geometry columns need no labels and remain ' +
+        'valid - read the band, the spread and the posTop/negTop gap, and ignore the rest.'
+    );
+  }
+  return [...rows.map(r => formatArmSummary(r)), '', formatComparisonTable(rows), '', ...notes].join('\n\n');
 }

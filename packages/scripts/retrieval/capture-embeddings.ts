@@ -101,7 +101,12 @@ for (const fileId of fileIds) {
       docId,
       text,
       vector: (chunk.vector as number[]) ?? [],
-      parentEmbeddingModel: file.embeddingModel,
+      // The chunk's OWN stamp when it has one, falling back to the parent file's. The chunk stamp is
+      // the finer truth: a file whose re-embed stopped part way carries one file-level label over
+      // chunks that are genuinely in two different spaces, and a baseline built from the file label
+      // would pool both. The retrieval paths gate on the file label because they must decide per
+      // file; a measurement can afford to be exact.
+      parentEmbeddingModel: chunk.embeddingModel ?? file.embeddingModel,
     });
     tokenCounts.push(chunk.tokenCount ?? Math.ceil(text.length / 4));
   }

@@ -136,6 +136,16 @@ export type ArmRow = {
   spreads: number[];
   meanSpread: number;
   quality: Aggregate;
+  /**
+   * Whether the committed ground truth actually describes this corpus.
+   *
+   * `corpus.ts` names help slugs. A capture of any OTHER lake identifies documents by file id, so
+   * nothing can match and every quality metric scores 0 - which reads as a catastrophic model
+   * failure rather than as "this corpus has no ground truth". The geometry columns remain valid
+   * either way (they need no labels), so the row is still worth printing; the quality columns are
+   * rendered `n/a` instead of a number nobody should act on.
+   */
+  groundTruthApplies: boolean;
 };
 
 /** Score every probe query in one arm and roll it up into a row. */
@@ -148,6 +158,8 @@ export function buildArmRow(args: {
   queries: readonly { id: string; vector: number[]; supporting: readonly string[] }[];
   depth?: number;
 }): ArmRow {
+  const supporting = new Set(args.queries.flatMap(q => [...q.supporting]));
+  const groundTruthApplies = supporting.size === 0 || args.chunks.some(c => supporting.has(c.docId));
   const distributions = args.queries.map(q =>
     scoreQueryDistribution(q.id, q.vector, args.chunks, args.depth ?? RANK_DEPTH)
   );
@@ -169,6 +181,7 @@ export function buildArmRow(args: {
     spreads: distributions.map(d => d.spread),
     meanSpread: mean(distributions.map(d => d.spread)),
     quality: aggregate(distributions.map((d, i) => scoreQuestion(d.servedDocIds, new Set(args.queries[i].supporting)))),
+    groundTruthApplies,
   };
 }
 
@@ -204,6 +217,8 @@ export function formatArmSummary(row: ArmRow): string {
 
 const pad = (s: string, w: number) => s.padEnd(w);
 const num = (n: number, dp: number) => n.toFixed(dp);
+/** A quality cell, or `n/a` when the ground truth does not describe this corpus. See groundTruthApplies. */
+const quality = (row: ArmRow, value: number) => (row.groundTruthApplies ? value.toFixed(3) : 'n/a');
 
 /**
  * Render the arms as one fixed-width table.
@@ -242,10 +257,10 @@ export function formatComparisonTable(rows: readonly ArmRow[]): string {
       pad(num(r.meanSpread, 4), 8),
       pad(num(r.positiveTopScore, 4), 8),
       pad(num(r.negativeTopScore, 4), 8),
-      pad(num(r.quality.recall, 3), 8),
-      pad(num(r.quality.precision, 3), 8),
-      pad(num(r.quality.hitRate, 3), 8),
-      pad(num(r.quality.mrr, 3), 8),
+      pad(quality(r, r.quality.recall), 8),
+      pad(quality(r, r.quality.precision), 8),
+      pad(quality(r, r.quality.hitRate), 8),
+      pad(quality(r, r.quality.mrr), 8),
     ].join('')
   );
 

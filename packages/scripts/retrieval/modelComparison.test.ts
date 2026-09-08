@@ -113,3 +113,21 @@ describe('formatComparison', () => {
     expect(formatComparison(compareArms([fixture], [16, 8]))).toBe(report);
   });
 });
+
+describe('ground-truth applicability in the report', () => {
+  it('says so in the clear when the corpus has no ground truth', () => {
+    // Every docId replaced with a file-id-shaped value, as a production-lake capture would produce.
+    const byId = other({
+      chunks: fixture.chunks.map((c, i) => ({ ...c, docId: `67f0a1b2c3d4e5f60000000${i % 10}` })),
+    });
+    const report = formatComparison(compareArms([byId], [16]));
+    expect(report).toContain('GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS');
+    expect(report).toContain('The geometry columns need no labels');
+    // The band is still a real measurement on such a capture, so it must not be suppressed.
+    expect(report).toMatch(/overall band {9}: -?\d/);
+  });
+
+  it('stays quiet when the ground truth does describe the corpus', () => {
+    expect(formatComparison(compareArms([fixture], [16]))).not.toContain('GROUND TRUTH DOES NOT');
+  });
+});
