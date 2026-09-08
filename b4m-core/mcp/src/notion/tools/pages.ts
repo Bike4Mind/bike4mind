@@ -434,8 +434,18 @@ export function registerPageTools(server: McpServer): void {
         const pageAccessError = await checkPageAccess(targetParent, 'readwrite');
         if (pageAccessError) return pageAccessError;
 
-        // Validate explicit parentPageId is within root page tree (skip if database parent takes priority)
-        if (parentPageId && !parentDatabaseId) {
+        // Validate the explicit parent is within the root page tree
+        if (parentDatabaseId) {
+          const dbAllowed = await isDescendantOfRoot(parentDatabaseId, rootPageId);
+          if (!dbAllowed) {
+            return createErrorResponse(
+              new Error(
+                `Parent database ${parentDatabaseId} is not within the configured root page tree. ` +
+                  'Content can only be created under the designated Notion root page.'
+              )
+            );
+          }
+        } else if (parentPageId) {
           const allowed = await isDescendantOfRoot(parentPageId, rootPageId);
           if (!allowed) {
             return createErrorResponse(
