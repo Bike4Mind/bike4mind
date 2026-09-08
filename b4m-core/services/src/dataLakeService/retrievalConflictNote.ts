@@ -143,10 +143,16 @@ export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string
   // pair is one relationship to state, not six, which is what the dedup collapses.
   // Groups themselves in serve order too: the detector orders findings by kind and subject, which is
   // its own internal order and not one the model can see anything against.
+  //
+  // The witness PAIR only, not every document in the finding. `witnessOrder` puts two documents that
+  // provably hold different values at evidence[0] and evidence[1]; the rest of the group merely
+  // mentioned the same subject, and on the ordinary 3-agree-1-dissents shape naming all four asserts
+  // a mutual contradiction that does not exist. The model reads the passages either way - what the
+  // note owes it is a claim narrow enough to be true.
   const groups = [
     ...new Map(
       kept.map(finding => {
-        const group = [...new Set(finding.evidence.map(e => e.fabFileId))].sort(byRank);
+        const group = [...new Set(finding.evidence.slice(0, 2).map(e => e.fabFileId))].sort(byRank);
         return [group.join(','), group] as const;
       })
     ).values(),

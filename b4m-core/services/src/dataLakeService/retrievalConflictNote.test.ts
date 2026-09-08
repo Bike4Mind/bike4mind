@@ -247,13 +247,21 @@ describe('buildRetrievalConflictNote', () => {
     expect(note).toContain('1 cross-document conflict detected (metric-disagreement)');
   });
 
+  // Six unrelated conflicts, one witness pair each: twelve ids past a cap of ten. A single subject
+  // cannot get there any more - the note names the pair that witnesses a conflict, not every
+  // document that mentions its subject - so breadth now comes from separate conflicts.
+  const disjointConflicts = (count: number) =>
+    Array.from({ length: count }, (_, i) => [
+      passage(`file-${2 * i}`, `The metric${i} is 10%.`),
+      passage(`file-${2 * i + 1}`, `The metric${i} is 90%.`),
+    ]).flat();
+
   it('caps the id list and reports the overflow as a lower bound', () => {
-    const passages = Array.from({ length: 15 }, (_, i) => passage(`file-${i}`, `Uptime is ${i + 1}%.`));
-    const note = buildRetrievalConflictNote(passages);
+    const note = buildRetrievalConflictNote(disjointConflicts(6));
 
     // Literals, not the constant: an assertion computed from RETRIEVAL_CONFLICT_MAX_IDS moves with it
-    // and holds at any cap. Evidence comes out in insertion order, so file-9/file-10 is the boundary.
-    expect(note).toContain(', and at least 5 more');
+    // and holds at any cap. Ids come out in serve order, so file-9/file-10 is the boundary.
+    expect(note).toContain(', and at least 2 more');
     expect(note).toContain('file-9,');
     expect(note).not.toContain('file-10');
   });
@@ -278,28 +286,32 @@ describe('buildRetrievalConflictNote', () => {
     expect(note).toBe('');
   });
 
-  it('names every document a conflict spans, including two that agree with each other', () => {
-    // Three documents, one conflict: file-c contradicts the other two, which agree. Both agreeing
-    // documents are still party to a real disagreement and have to be named - and the pair that
-    // WITNESSES it leads the evidence, which is what puts file-c ahead of file-b in the raw order.
+  it('names the two documents that witness a conflict, not the ones that merely share its subject', () => {
+    // Three documents, one conflict: file-c contradicts the other two, which agree. Naming all
+    // three reads as three mutually contradicting figures - the ordinary shape in a real corpus,
+    // and the one the model has the least reason to doubt. file-b is left out of the claim, not
+    // out of the block: it is still there to read.
     const note = noteFor(
       passage('file-a', 'Uptime is 99.9%.'),
       passage('file-b', 'Uptime is 99.9%.'),
       passage('file-c', 'Uptime is 95%.')
     );
     expect(note).toContain('1 cross-document conflict detected');
-    expect(note).toContain('across documents file-a, file-b, file-c.');
+    expect(note).toContain('across documents file-a, file-c.');
+    expect(note).not.toContain('file-b');
   });
 
   it('names the documents in the order the channel serves them', () => {
     // Evidence comes out witness-pair-first, so without a re-sort the note names a lower-ranked
-    // passage before a higher-ranked one and the model reads the list against nothing.
+    // passage before a higher-ranked one and the model reads the list against nothing. file-c
+    // leads the raw evidence here because it is the dissenter that witnesses the conflict.
     const note = noteFor(
-      passage('file-a', 'Uptime is 99.9%.'),
+      passage('file-a', 'Uptime is 95%.'),
       passage('file-b', 'Uptime is 99.9%.'),
-      passage('file-c', 'Uptime is 95%.')
+      passage('file-c', 'Uptime is 99.9%.')
     );
-    expect(note).not.toContain('file-a, file-c, file-b');
+    expect(note).toContain('across documents file-a, file-b.');
+    expect(note).not.toContain('file-b, file-a');
   });
 
   it('groups the documents per conflict when two conflicts share no document', () => {
@@ -327,12 +339,11 @@ describe('buildRetrievalConflictNote', () => {
   });
 
   it('names exactly the cap without claiming an overflow', () => {
-    // The boundary the 15-document fixture cannot reach: at exactly the cap `overflow` is 0, and an
+    // The boundary the overflow fixture steps past: at exactly the cap `overflow` is 0, and an
     // `overflow >= 0` comparison would render "and at least 0 more" here.
-    const passages = Array.from({ length: 10 }, (_, i) => passage(`file-${i}`, `Uptime is ${i + 1}%.`));
-    const note = buildRetrievalConflictNote(passages);
+    const note = buildRetrievalConflictNote(disjointConflicts(5));
 
-    expect(note).toContain('file-9.');
+    expect(note).toContain('file-9)');
     expect(note).not.toContain('more');
   });
 
