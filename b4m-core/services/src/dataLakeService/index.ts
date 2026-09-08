@@ -49,6 +49,7 @@ export * from './chunkPolicyConflict';
 export * from './admissionContract';
 export * from './lakeAdmissionGate';
 export * from './recordMembershipDecision';
+export * from './executeLakeMembershipRepair';
 export * from './removeFileFromDataLake';
 export * from './addFileToDataLake';
 export * from './setDataLakeFileTags';
