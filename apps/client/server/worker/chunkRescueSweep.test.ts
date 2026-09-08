@@ -87,6 +87,22 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const SELF_HOST_LIMIT = 50;
 const runSweep = (limit = SELF_HOST_LIMIT) => runChunkRescueSweep({ limit, logger: logger as never });
 
+/**
+ * Makes each send hold open across a macrotask so overlapping ones are actually observable: an
+ * immediately-resolving stub would report a peak of 1 even for an unbounded fan-out.
+ */
+const trackSendConcurrency = () => {
+  let inFlight = 0;
+  let peak = 0;
+  h.sendToQueue.mockImplementation(async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    inFlight -= 1;
+  });
+  return () => peak;
+};
+
 const limitSpy = vi.fn();
 const withCandidates = (candidates: Candidate[]) => {
   h.fabFileFind.mockReturnValue({
@@ -239,6 +255,18 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
   });
+
+  it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+    // The bound is what keeps the per-file catch affordable (see the ENQUEUE_CONCURRENCY docblock),
+    // so it is worth pinning as a number: a sequential loop peaks at 1 and an unbounded
+    // Promise.all over the whole pass peaks at 25, and both leave every other assertion green.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+    const peak = trackSendConcurrency();
+
+    await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
+
+    expect(peak()).toBe(10);
+  });
 });
 
 describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () => {
@@ -321,6 +349,28 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
 
     expect(logger.info).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('attempts every candidate across concurrency waves, not just the first wave', async () => {
+    // The fan-out runs in fixed-size waves; an off-by-one in the slice window would silently drop
+    // the tail of a full pass, which is indistinguishable from "the backlog was small" in the logs.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+
+    await expect(runRescue()).resolves.toBe(25);
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+
+  it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+    // This pass shares the 60s non-reentrant tick with runChunkRescueSweep, so its sends are
+    // bounded for the same reason that sweep's are - and must stay bounded, since a sequential loop
+    // (peak 1) or an unbounded Promise.all (peak 25) both keep every other assertion here green.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+    const peak = trackSendConcurrency();
+
+    await expect(runRescue()).resolves.toBe(25);
+
+    expect(peak()).toBe(10);
   });
 });
 

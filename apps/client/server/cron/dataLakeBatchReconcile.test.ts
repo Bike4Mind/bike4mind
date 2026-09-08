@@ -282,6 +282,39 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(2);
     });
 
+    it('attempts every candidate across concurrency waves, not just the first wave', async () => {
+      // The fan-out runs in fixed-size waves; an off-by-one in the slice window would silently drop
+      // the tail of a full run, which is indistinguishable from "the backlog was small" in the log.
+      routeFind(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+
+      const res = await handler();
+
+      expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(25);
+    });
+
+    it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+      // This is the LAST of three sweeps in one 10-minute Lambda, so a sequential run against a
+      // degraded queue is what cuts the tail off - and the bound must stay pinned as a number,
+      // since a sequential loop (peak 1) and an unbounded Promise.all (peak 25) both keep every
+      // other assertion here green. Each send holds open across a macrotask so the overlap is
+      // observable at all; an immediately-resolving stub reports a peak of 1 either way.
+      routeFind(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+      let inFlight = 0;
+      let peak = 0;
+      h.sendToQueue.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        inFlight -= 1;
+      });
+
+      const res = await handler();
+
+      expect(peak).toBe(10);
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(25);
+    });
+
     it('sends a stranded file UNSTAMPED, so the kill switch cannot route it into the rebuild door', async () => {
       // The inverse of the un-chunked sweep's rule (#2309), and the asymmetry is the point. These
       // files are already chunked, and the handler's halt branch sits above the already-chunked
