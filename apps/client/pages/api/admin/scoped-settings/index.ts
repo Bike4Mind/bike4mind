@@ -31,14 +31,20 @@ const ScopeAddressSchema = z.object({
 const PutBodySchema = ScopeAddressSchema.extend({
   ownerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
   /**
-   * Required, and scalar only. Both guards are load-bearing rather than defensive:
-   * `makeNumberSetting`/`makeBooleanSetting` schemas end in `.prefault(...)`, so the write service's
-   * `safeParse(undefined)` SUCCEEDS and a missing value would sail past its validation to die on the
-   * Mongoose `required: true` as a 500. zod's `number` refuses NaN/Infinity, so `1e999` is rejected
-   * here instead of being stored as the string "Infinity".
+   * Required, and scalar only. The overlay stores whatever string this becomes, so the door has to
+   * refuse the values that stringify into something the setting's own schema would then wave
+   * through: an absent value becomes the literal "undefined", and `1e999` (JSON has no Infinity
+   * literal, but it parses to one) becomes "Infinity", which passes any setting with no `max`.
    */
   value: z.union([z.boolean(), z.number(), z.string()]),
-});
+})
+  // A number setting's schema is `z.coerce.number()`, so a blank string is a genuine 0 to it - and
+  // 0 is in range for the two `min: 0` settings. Without this the overlay would store "" at that
+  // address: a row that reads as nothing in the admin UI while resolving to 0 for every consumer.
+  .refine(({ value }) => typeof value !== 'string' || value.trim().length > 0, {
+    path: ['value'],
+    message: 'value must not be blank',
+  });
 
 export type ScopedOverridePutBody = z.infer<typeof PutBodySchema>;
 export type ScopedOverrideDeleteQuery = z.infer<typeof ScopeAddressSchema>;

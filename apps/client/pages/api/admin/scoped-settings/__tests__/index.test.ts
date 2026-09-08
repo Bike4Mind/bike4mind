@@ -95,8 +95,6 @@ describe('admin/scoped-settings request validation', () => {
     expect(writeScopedOverride).not.toHaveBeenCalled();
   });
 
-  // A missing value is the one that would otherwise reach the database: the setting schemas end in
-  // `.prefault(...)`, so the write service's own safeParse(undefined) succeeds.
   it('rejects a missing value before it can reach the write service', async () => {
     await expectStatus(
       'put',
@@ -114,6 +112,17 @@ describe('admin/scoped-settings request validation', () => {
     ['a non-finite number', Number.POSITIVE_INFINITY],
   ])('rejects %s as a value', async (_label, value) => {
     await expectStatus('put', { body: { ...lakePause, value } }, 400);
+    expect(writeScopedOverride).not.toHaveBeenCalled();
+  });
+
+  // Blank is not empty to a number setting: z.coerce.number('') is 0, in range for the two
+  // `min: 0` settings, so without the route guard the overlay stores "" and resolves it as 0.
+  it.each([
+    ['empty', ''],
+    ['whitespace', '   '],
+  ])('rejects a %s string value', async (_label, value) => {
+    const body = { settingName: 'kbSearchMinRelevancePct', scopeLevel: 'organization', scopeId: 'org-1', value };
+    await expectStatus('put', { body }, 400);
     expect(writeScopedOverride).not.toHaveBeenCalled();
   });
 
