@@ -5,6 +5,9 @@ import type {
   DataLakeMembershipArm,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
+  IDataLakeResearchConfigDocument,
+  IDataLakeResearchRunDocument,
+  ResearchRunTrigger,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeSpendResponse,
@@ -19,7 +22,7 @@ import type {
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
+import { DATA_LAKES, isResearchRunInFlight, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
   UpdateDataLakeRequestInputType,
@@ -27,7 +30,7 @@ import type {
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -1702,8 +1705,18 @@ export function useDataLakeProposals(
  * ("already been reviewed", "the source returned HTTP 404") never reached the reviewer.
  */
 export function reviewProposalFailureMessage(error: unknown): string {
-  const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
-  return refusal || 'Could not record that decision. Try again shortly.';
+  return serverRefusalMessage(error) || 'Could not record that decision. Try again shortly.';
+}
+
+/**
+ * The server's own refusal text, if it sent one. The body key is `error`, per
+ * server/middlewares/errorHandler.ts - every data-lake surface that shows a refusal to a human
+ * reads it through here so none of them can drift back onto `message` and silently show only
+ * their fallback.
+ */
+function serverRefusalMessage(error: unknown): string | undefined {
+  if (!isAxiosError(error)) return undefined;
+  return (error.response?.data as { error?: string } | undefined)?.error || undefined;
 }
 
 /**
@@ -1739,6 +1752,183 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
     },
     onError: (error: unknown) => {
       toast.error(reviewProposalFailureMessage(error));
+    },
+  });
+}
+
+// -- Research runs (#1682) ---------------------------------------------------
+
+/**
+ * The lever set a config form submits. Every field is optional so an edit can send a patch, and
+ * `recencyDays`/`model` are nullable because null is how the form CLEARS them - `undefined` means
+ * "unchanged" and would leave the stored value in place.
+ */
+export type ResearchConfigInput = {
+  name?: string;
+  trigger?: ResearchRunTrigger;
+  query?: string;
+  model?: string | null;
+  maxResults?: number;
+  maxProposals?: number;
+  recencyDays?: number | null;
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+  minRelevance?: number;
+  costCeilingMicroUsd?: number;
+  proposedTags?: string[];
+};
+
+/** How often the run list re-reads while a run is queued or running. */
+const RESEARCH_RUN_POLL_MS = 1000 * 5;
+
+/**
+ * One lake's saved research configurations. Manage-gated server-side, so a mere reader gets a 4xx -
+ * surfaced as `isForbidden` and never retried, matching `useDataLakeSpend` and `useDataLakeProposals`.
+ */
+export function useDataLakeResearchConfigs(dataLakeId: string | null, opts?: { enabled?: boolean }) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.researchConfigs(dataLakeId),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeResearchConfigDocument[] }>(
+        `/api/data-lakes/${dataLakeId}/research/configs`
+      );
+      return data.data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 1000 * 60,
+  });
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+export function useCreateDataLakeResearchConfig(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: ResearchConfigInput) => {
+      const { data } = await api.post<{ data: IDataLakeResearchConfigDocument }>(
+        `/api/data-lakes/${dataLakeId}/research/configs`,
+        input
+      );
+      return data.data;
+    },
+    onSuccess: config => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      toast.success(`Saved "${config.name}"`);
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not save that research configuration.');
+    },
+  });
+}
+
+export function useUpdateDataLakeResearchConfig(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ configId, ...input }: ResearchConfigInput & { configId: string }) => {
+      const { data } = await api.put<{ data: IDataLakeResearchConfigDocument }>(
+        `/api/data-lakes/${dataLakeId}/research/configs/${configId}`,
+        input
+      );
+      return data.data;
+    },
+    onSuccess: config => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      toast.success(`Updated "${config.name}"`);
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not update that research configuration.');
+    },
+  });
+}
+
+export function useDeleteDataLakeResearchConfig(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (configId: string) => {
+      await api.delete(`/api/data-lakes/${dataLakeId}/research/configs/${configId}`);
+      return configId;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      // Run history deliberately NOT invalidated: deleting a config leaves its past runs standing,
+      // because a proposal's provenance points at a run.
+      toast.success('Research configuration deleted');
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not delete that research configuration.');
+    },
+  });
+}
+
+/**
+ * One lake's research run history. Polls only while a run is unsettled: a run is executed by a
+ * worker off a queue, so the row a user just started changes underneath them with no client event
+ * to hang a refetch on. Once every run is settled the interval stops, so an idle panel is free.
+ *
+ * "Unsettled" is `isResearchRunInFlight`, which is age-bounded, so a run killed hard - whose row
+ * keeps `running` forever because its catch never ran - stops the poll at the stale bound instead
+ * of leaving the panel refetching every 5s for the life of the tab.
+ */
+export function useDataLakeResearchRuns(dataLakeId: string | null, opts?: { enabled?: boolean; limit?: number }) {
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: dataLakeKeys.researchRuns(dataLakeId, opts?.limit),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeResearchRunDocument[] }>(
+        `/api/data-lakes/${dataLakeId}/research/runs`,
+        { params: opts?.limit ? { limit: opts.limit } : undefined }
+      );
+      return data.data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 1000 * 10,
+    refetchInterval: query =>
+      query.state.data?.some(run => isResearchRunInFlight(run)) ? RESEARCH_RUN_POLL_MS : false,
+  });
+
+  // A run settling is the moment proposals appear, and the review queue is a SEPARATE surface
+  // mirroring that same fact - its tab count included. Without this the reviewer watches a run
+  // report "3 proposed" and then finds Proposals still reading (0) until the window loses and
+  // regains focus. Edge-triggered on the in-flight -> settled transition, so a poll that returns an
+  // unchanged history does not invalidate anything.
+  const anyInFlight = query.data?.some(run => isResearchRunInFlight(run)) ?? false;
+  const wasInFlight = useRef(anyInFlight);
+  useEffect(() => {
+    const settled = wasInFlight.current && !anyInFlight;
+    wasInFlight.current = anyInFlight;
+    if (!settled || !dataLakeId) return;
+    // Only the queue. `lastRunAt` is the config row's single run-derived field and it is stamped at
+    // START, not at settle, so the invalidation the start mutation already does covers it.
+    queryClient.invalidateQueries({ queryKey: dataLakeKeys.proposalsOf(dataLakeId) });
+  }, [anyInFlight, dataLakeId, queryClient]);
+
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+/**
+ * Start a run from a saved configuration. The route returns 202 with a `queued` row, so the
+ * history is invalidated (the new row appears and starts the poll) along with the config list,
+ * whose `lastRunAt` the start just stamped. Nothing is proposed yet - the worker does that, and a
+ * reviewer still has to approve each proposal before anything enters the lake.
+ */
+export function useStartDataLakeResearchRun(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (configId: string) => {
+      const { data } = await api.post<{ data: IDataLakeResearchRunDocument }>(
+        `/api/data-lakes/${dataLakeId}/research/runs`,
+        { configId }
+      );
+      return data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchRunsOf(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
+      toast.success('Research run started. Results land in the review queue.');
+    },
+    onError: (error: unknown) => {
+      toast.error(serverRefusalMessage(error) || 'Could not start that research run.');
     },
   });
 }
