@@ -186,6 +186,36 @@ describe('emailIngestionService - processIngestedEmail', () => {
       expect(mockAdapters.db.ingestedEmails.findByMessageId).toHaveBeenCalledWith(expect.any(String), 'user123');
     });
 
+    it('returns the winner of a concurrent insert rather than DLQing on the duplicate key', async () => {
+      // The lookup and the insert are not atomic, so two SQS deliveries of one message race. The
+      // loser gets E11000 on { messageId, userId }; rethrowing it would fail the batch item and
+      // eventually DLQ mail that is already ingested.
+      const duplicate = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+      vi.mocked(mockAdapters.db.ingestedEmails.create).mockRejectedValueOnce(duplicate);
+      vi.mocked(mockAdapters.db.ingestedEmails.findByMessageId)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'winner-id' } as any);
+      vi.mocked(mockAdapters.db.ingestedEmails.findById).mockResolvedValue({ id: 'winner-id' } as any);
+
+      const result = await processIngestedEmail(mockParsedEmail, 's3://bucket/email.eml', mockAdapters);
+
+      expect(result.emailId).toBe('winner-id');
+    });
+
+    it('rethrows a write failure that is not a duplicate key, even when a row is findable after it', async () => {
+      // The error code is what decides, not whether a row turns up on the re-read. A write that
+      // failed for any other reason has to reach the queue and be retried; treating a row that
+      // happened to be there as proof of success would report unwritten mail as ingested.
+      vi.mocked(mockAdapters.db.ingestedEmails.create).mockRejectedValueOnce(new Error('connection reset'));
+      vi.mocked(mockAdapters.db.ingestedEmails.findByMessageId)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'unrelated-row' } as any);
+
+      await expect(processIngestedEmail(mockParsedEmail, 's3://bucket/email.eml', mockAdapters)).rejects.toThrow(
+        'connection reset'
+      );
+    });
+
     it('should collapse a null fabFileId to undefined when returning stored attachments', async () => {
       const existingEmail = {
         id: 'existing123',
