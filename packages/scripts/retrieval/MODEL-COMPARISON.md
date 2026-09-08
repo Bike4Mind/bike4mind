@@ -176,6 +176,8 @@ that depend on this result.
 ```bash
 pnpm --filter @bike4mind/scripts test retrieval/
 pnpm --filter @bike4mind/scripts typecheck
+pnpm --filter @bike4mind/scripts retrieval:model-comparison \
+  --fixtures retrieval/fixtures/tiny-comparison.fixture.json --widths 16,8
 ```
 
 `fixtures/tiny-comparison.fixture.json` is a 16-dim **synthetic** capture with a planted topical
