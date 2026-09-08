@@ -68,10 +68,15 @@ const retrievableSlugs = async (userId: string) =>
 describe('data-lake grant scope: chat retrieval agrees with browse', () => {
   setupMongoTest();
 
-  /** Ownership transfer as `transferLakeOwnership` leaves it: new owner stamped, prior owner curator. */
+  /**
+   * Ownership transfer as `transferLakeOwnership` actually leaves it: `createdByUserId` is NOT
+   * moved (verified against the real service against a live Mongo), so BOTH parties hold the lake
+   * by grant alone - the new owner as `owner`, the demoted prior owner as `curator`. An earlier
+   * version of this helper stamped the new owner onto `createdByUserId`, which let the "new owner"
+   * case below pass through the creator arm rather than the grant arm it is here to exercise.
+   */
   const transferred = async (slug: string, fromUserId: string, toUserId: string) => {
     const lake = await dataLakeRepository.create(gatedLake(slug, fromUserId));
-    await dataLakeRepository.update({ ...lake, createdByUserId: toUserId });
     await dataLakeAccessGrantRepository.upsertGrant({
       dataLakeId: lake.id,
       principalType: 'user',
@@ -89,17 +94,22 @@ describe('data-lake grant scope: chat retrieval agrees with browse', () => {
     return lake;
   };
 
-  it('retrieves a transferred lake for the demoted curator, exactly as it browses', async () => {
-    // The load-bearing case: the curator is no longer the creator, holds none of the lake's gate,
-    // and shares no org with it - the grant is their only claim. Before the retrieval query grew a
-    // grant arm this listed but returned nothing to ground on.
+  it('keeps a transferred lake reachable for the demoted prior owner, exactly as it browses', async () => {
+    // The prior owner keeps `createdByUserId`, so the creator arm alone would satisfy this. What it
+    // pins is therefore the weaker but still useful property that a transfer does not COST the
+    // demoted owner access - not that the grant arm works. The new-owner case below is the one
+    // that isolates the grant.
     await transferred('handbook', 'old-owner', 'new-owner');
 
     expect(await browsableSlugs('old-owner')).toEqual(['handbook']);
     expect(await retrievableSlugs('old-owner')).toEqual(['handbook']);
   });
 
-  it('retrieves it for the new owner too, whose claim is the stamped creator plus the grant', async () => {
+  it('retrieves it for the new owner, whose ONLY claim is the owner grant', async () => {
+    // The load-bearing case: the new owner is not the creator (a transfer does not move
+    // `createdByUserId`), holds none of the lake's gate, and shares no org with it - the grant row
+    // is their only claim. Before the retrieval query grew a grant arm this listed but returned
+    // nothing to ground on.
     await transferred('handbook', 'old-owner', 'new-owner');
 
     expect(await browsableSlugs('new-owner')).toEqual(['handbook']);
@@ -147,10 +157,13 @@ describe('data-lake grant scope: chat retrieval agrees with browse', () => {
   it('resolves grant ids in the same string form the returned documents carry', async () => {
     const lake = await transferred('handbook', 'old-owner', 'new-owner');
 
-    const grantedIds = new Set(await grantedLakeIdsFor('old-owner'));
-    const [retrieved] = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], [], 'old-owner', [
-      ...grantedIds,
-    ]);
+    // Deliberately the NEW owner: they are not the creator, so the query's owner arm cannot return
+    // this lake and the grant arm is the only thing that can - which is what makes the id-form
+    // comparison below load-bearing rather than incidentally satisfied.
+    const grantedIds = new Set(await grantedUserLakeIdsFor('new-owner'));
+    const [retrieved] = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], [], 'new-owner', {
+      grantedLakeIds: [...grantedIds],
+    });
 
     expect(retrieved).toBeDefined();
     expect(retrieved.id).toBe(lake.id);
