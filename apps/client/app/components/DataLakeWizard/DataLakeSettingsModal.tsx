@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  Box,
   Button,
   DialogActions,
   DialogContent,
@@ -15,6 +16,7 @@ import {
   RadioGroup,
   Select,
   Stack,
+  Switch,
   Tab,
   TabList,
   TabPanel,
@@ -32,6 +34,7 @@ import {
   useUpdateDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
+import { useFeatureFlags } from '@client/app/hooks/useAdminSettingsCache';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import {
   DATA_LAKE_GROUNDING_MODES,
@@ -91,6 +94,13 @@ export interface EditableLake {
    * measured and reported by health but never repaired, and the Converge action never appears.
    */
   requiredPassageTokenTarget: number | null;
+  /**
+   * Per-lake opt-in to lake memory - whether extraction may build a fact profile for this
+   * lake. Editor-only, same as groundingMode: always a concrete boolean (defaulted false), never a
+   * clear sentinel. The platform kill-switch (`EnableLakeMemory`) can still make this inert even
+   * when true - the toggle itself never reflects the platform flag, only the per-lake choice.
+   */
+  lakeMemoryEnabled: boolean;
   /**
    * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
    * Gates the editor-only per-lake config fields (System prompt, Preferred prompt, Grounding mode,
@@ -195,6 +205,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [systemPrompt, setSystemPrompt] = useState('');
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
+  const [lakeMemoryEnabled, setLakeMemoryEnabled] = useState(false);
   // Held as a STRING, not a number: '' is the "inherit the platform default" state and is what the
   // save maps to the server's `null` clear sentinel. A numeric state would have to overload 0 or
   // NaN for that, and both are values the range check below has to reject anyway.
@@ -213,6 +224,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // the binding on the next save. Track whether the current value is represented so we can always
   // render an Option for it (see the fallback Option below).
   const boundPromptListed = activatable.some(prompt => prompt.promptId === preferredSystemPromptId);
+  // Platform kill-switch: read only to explain a disabled toggle, never to hide it -
+  // an owner who already opted in should still see and be able to see their own choice.
+  const { EnableLakeMemory: lakeMemoryPlatformEnabled } = useFeatureFlags(['EnableLakeMemory']);
 
   // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
   // from the live list, so it changes identity on every refetch - keying on id keeps a
@@ -229,6 +243,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setSystemPrompt(lake.systemPrompt ?? '');
       setPreferredSystemPromptId(lake.preferredSystemPromptId ?? '');
       setGroundingMode(lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE);
+      setLakeMemoryEnabled(lake.lakeMemoryEnabled);
       setRequiredPassageTokenTarget(
         typeof lake.requiredPassageTokenTarget === 'number' ? String(lake.requiredPassageTokenTarget) : ''
       );
@@ -293,6 +308,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // Editor-only, same manage gate. Always a concrete mode (no clear sentinel - a lake always
         // has a grounding mode), so it is sent as the chosen enum value.
         ...(lake.canManage ? { groundingMode } : {}),
+        // Editor-only. Sent only when changed, for the same reason as preferredSystemPromptId: never
+        // resubmit a value the editor didn't touch, since a PUT that changes nothing still moves
+        // `lastUpdatedByUserId`. The server STORES a `true` even while the platform flag is off
+        // (retain-but-inert); it is the consumers that make it inert, not the write.
+        ...(lake.canManage && lakeMemoryEnabled !== lake.lakeMemoryEnabled ? { lakeMemoryEnabled } : {}),
         // Editor-only, same manage gate. Sent even when null - null is the server's explicit CLEAR
         // sentinel (drop the requirement and go back to inheriting), which is a state an owner has
         // to be able to return to: it is what turns convergence back off for this lake.
@@ -302,14 +322,23 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     );
   };
 
-  const handleConfirmTestScope = async (retrievalTags: string[]) => {
+  const handleConfirmTestScope = async (scope: { retrievalTags: string[]; preauthorizedLakeIds: string[] }) => {
     if (!lake) return;
     setStartingTestChat(true);
     try {
-      await startChatWithLakes({ retrievalTags });
+      await startChatWithLakes({
+        retrievalTags: scope.retrievalTags,
+        groundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+        preauthorizedLakeIds: scope.preauthorizedLakeIds,
+      });
       setTestScopeOpen(false);
-    } catch {
-      toast.error('Could not start a test chat for this lake');
+    } catch (err) {
+      // The route's refusals (unmanaged lake, non-active lake, over the per-session cap) and any
+      // unexpected server exception both ride on response.data.error; axios's own `message` is just
+      // "Request failed with status code N", which renders those very different failures identical
+      // to whoever is testing the lake.
+      const detail = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(detail || 'Could not start a test chat for this lake');
     } finally {
       setStartingTestChat(false);
     }
@@ -351,7 +380,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you and to members of this lake's organization - not to users granted access by tag or entitlement - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to members of this lake's organization, and to a manager testing it in a scoped session - not to users granted access by tag or entitlement - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
@@ -419,6 +448,25 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             How a chat started with this lake uses its documents. Retrieve searches the lake on demand (same for owners
             and readers); Inline pastes the documents into the prompt; Auto decides by corpus size.
           </FormHelperText>
+        </FormControl>
+      )}
+      {lake?.canManage && (
+        <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <FormLabel>Lake memory</FormLabel>
+            <FormHelperText data-testid="datalake-memory-toggle-help" sx={{ mt: 0 }}>
+              {lakeMemoryPlatformEnabled
+                ? "Extract a reusable fact profile from this lake's documents, so chats grounded " +
+                  'in it can draw on more than the passages retrieved for a single question.'
+                : 'Lake memory is currently disabled platform-wide. Your choice is saved but stays ' +
+                  'inert until it is turned back on.'}
+            </FormHelperText>
+          </Box>
+          <Switch
+            checked={lakeMemoryEnabled}
+            onChange={e => setLakeMemoryEnabled(e.target.checked)}
+            slotProps={{ input: { 'data-testid': 'datalake-memory-toggle' } }}
+          />
         </FormControl>
       )}
       {lake?.canManage && (

@@ -30,6 +30,7 @@ import {
   projectRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fallbackLakeSettingsRepository,
   mongoose,
   agentExecutionRepository,
@@ -1503,6 +1504,9 @@ async function processExecution(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
+      // confirmed the session belongs to this run before this ToolBuilderDeps is built.
+      sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
       // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
       // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
       // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
@@ -3225,6 +3229,9 @@ async function processSubagentDispatch(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
+      // confirmed the session belongs to this run before this ToolBuilderDeps is built.
+      sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
       // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
       // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
       // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which

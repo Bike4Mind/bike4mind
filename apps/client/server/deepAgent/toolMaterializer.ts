@@ -10,6 +10,7 @@ import {
   apiKeyRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fallbackLakeSettingsRepository,

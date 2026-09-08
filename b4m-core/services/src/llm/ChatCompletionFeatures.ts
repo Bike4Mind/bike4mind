@@ -83,6 +83,7 @@ import {
   type SupersessionReport,
 } from '../dataLakeService/supersession';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
 import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
@@ -193,14 +194,19 @@ interface DatabaseAdapters {
   };
   dataLakes?: Pick<
     IDataLakeRepository,
-    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
   >;
   /**
-   * Access-grant lookup for the retrieval resolver's grant arm (getDynamicDataLakeAccess), so a
-   * lake reached only by an owner/curator grant grounds a turn as it browses. Optional - absent
-   * means forced retrieval and the knowledge tools resolve lake access with no grant arm.
+   * Access-grant lookup shared by two independent optional features:
+   * - the retrieval resolver's grant arm (getDynamicDataLakeAccess / `listByPrincipal`), so a
+   *   lake reached only by an owner/curator grant grounds a turn as it browses;
+   * - the per-turn manage re-check on a session's `preauthorizedLakeIds`
+   *   (filterStillManagedLakes / `listActiveByLakes`). REQUIRED in practice on any host that
+   *   creates pre-authorized sessions: without it the curator / org-grant / transferred-owner
+   *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+   * Optional here - absent means both features resolve lake access with no grant arm.
    */
-  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
@@ -1656,18 +1662,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private citationStyle: 'named' | 'indexed';
   /** Generic retrieval exclusion applied to the candidate file listing (see RetrievalExclusionOptions). */
   private retrievalFilter: RetrievalExclusionOptions;
+  /**
+   * Lake ids this session was pre-authorized for (manager-but-not-member admission), already
+   * vetted against the authenticated principal by the caller - see ToolContext.sessionPreauthorizedLakeIds
+   * for the full contract. Absent/empty = no widening.
+   */
+  private preauthorizedLakeIds: string[];
 
   constructor(
     chatCompletion: ChatCompletionContext,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    preauthorizedLakeIds?: string[]
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
     this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
     this.citationStyle = citationStyle === 'indexed' ? 'indexed' : 'named';
     this.retrievalFilter = retrievalFilter ?? {};
+    this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -1689,7 +1703,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-    return getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
+    // reaches this process after vetPreauthorizedLakeIds has established the two are the same
+    // principal, and an unvetted path leaves the field unset.
+    return unionPreauthorizedLakeAccess(resolved, this.preauthorizedLakeIds, String(user.id), db);
   }
 
   /**
@@ -1811,8 +1829,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
       const prompts = await getAccessibleDataLakePrompts(
         { db, user, entitlementKeys, logger: this.logger },
-        { restrictToDatalakeTags: datalakeTags }
+        { restrictToDatalakeTags: datalakeTags, preauthorizedLakeIds: this.preauthorizedLakeIds }
       );
+      const preauthorizedSet = new Set(this.preauthorizedLakeIds);
+      const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
       quest.promptMeta = quest.promptMeta ?? {};
@@ -1821,6 +1841,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         surfaces: [],
         dataLakeTags: [],
         injectedLakePromptIds: prompts.map(p => p.id),
+        ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;

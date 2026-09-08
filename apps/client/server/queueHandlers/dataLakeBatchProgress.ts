@@ -204,14 +204,18 @@ export async function enqueueTaxonomyAnalysisIfWanted(
  * taxonomy analysis) and is gated on:
  *   - the `EnableLakeMemory` admin flag, off by default - the producer stays dark until an operator
  *     opts a deployment in for the measurement rollout;
+ *   - the PER-LAKE `lakeMemoryEnabled` field - the platform flag only gates availability, this
+ *     is the lake owner's own opt-in;
  *   - a PER-LAKE daily cap, so a burst of batch finalizes triggers at most a few full-lake extractions.
+ *     This cap is now shared with the manual build/rebuild door (POST /lake-memory), so a manual build
+ *     spending the day's budget can make a real upload's extraction silently drop - hence the warn below.
  * Unlike taxonomy (which only needs file metadata), extraction reads chunk TEXT, so it must run after
  * the chunk/vectorize pipeline finishes - hence finalize, not upload-complete. The job itself is
  * idempotent (the ledger de-dups), so a dropped cap slot only delays a re-scan, never loses data.
  */
 export async function enqueueLakeMemoryExtractionIfWanted(
   batch: IDataLakeBatchSummary | null,
-  logger: { error: (msg: string) => void }
+  logger: { warn: (msg: string) => void; error: (msg: string) => void }
 ): Promise<void> {
   if (!batch) return;
 
@@ -219,13 +223,24 @@ export async function enqueueLakeMemoryExtractionIfWanted(
     const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
     if (!enabled) return;
 
+    const lake = await dataLakeRepository.findById(batch.dataLakeId);
+    if (!lake?.lakeMemoryEnabled) {
+      logger.warn(`Lake memory not enabled for lake ${batch.dataLakeId}; skipping extraction for batch ${batch.id}`);
+      return;
+    }
+
     // Per-lake cap: collapses a burst of finalizes into a bounded number of full-lake extractions.
     const { success: withinCap } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
       lakeMemoryRateLimitKey(batch.dataLakeId),
       LAKE_MEMORY_DAILY_CAP,
       LAKE_MEMORY_RATE_LIMIT_WINDOW_MS
     );
-    if (!withinCap) return;
+    if (!withinCap) {
+      logger.warn(
+        `Lake memory daily cap reached for lake ${batch.dataLakeId}; skipping extraction for batch ${batch.id}`
+      );
+      return;
+    }
 
     await sendToQueue(Resource.lakeMemoryQueue.url, {
       batchId: batch.id,

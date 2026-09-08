@@ -49,9 +49,9 @@ function outcomeSeverity(outcome: RetrievalSummary['outcome']): number {
  *   makes this first-writer-wins under the accumulator convention (`existing` is the earlier
  *   write), not last-writer-wins. Unlike the fields above it is NOT commutative when both sides
  *   carry a different reason.
- * - surfaces / dataLakeTags / injectedLakePromptIds: union, deduped. injectedLakePromptCount is
- *   derived from the merged ids, not merged independently, so a two-sided merge can never leave
- *   the two disagreeing.
+ * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
+ *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
+ *   independently, so a two-sided merge can never leave the two disagreeing.
  *
  * The one-sided returns below are a verbatim passthrough, and both injection sites emit a PARTIAL
  * summary (ids with no count; `attempted` with no `outcome`) meant only as a merge delta. So a
@@ -74,6 +74,10 @@ export function mergeRetrievalSummary(
     existing.injectedLakePromptIds || incoming.injectedLakePromptIds
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
       : undefined;
+  const preauthorizedLakeIdsUsed =
+    existing.preauthorizedLakeIdsUsed || incoming.preauthorizedLakeIdsUsed
+      ? [...new Set([...(existing.preauthorizedLakeIdsUsed ?? []), ...(incoming.preauthorizedLakeIdsUsed ?? [])])]
+      : undefined;
 
   // Keys are spread in only when defined: the shape is absent-or-fully-present on the Mongoose
   // side, and an explicit `undefined` would persist as a set-but-empty path.
@@ -85,5 +89,6 @@ export function mergeRetrievalSummary(
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),
+    ...(preauthorizedLakeIdsUsed ? { preauthorizedLakeIdsUsed } : {}),
   };
 }

@@ -30,6 +30,7 @@ import {
   userRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
 import {
