@@ -85,6 +85,13 @@ export const update = async (
     throw new UnauthorizedError('Write access denied');
   }
 
+  // Permissions and visibility are owner-only. A non-owner writer may edit
+  // content/title/description/tags, but must not be able to change sharing or
+  // visibility (which would let them self-escalate or lock out the owner).
+  if ((permissions !== undefined || visibility !== undefined) && artifact.userId !== userId) {
+    throw new UnauthorizedError('Only the owner can change permissions or visibility');
+  }
+
   // Prepare update data
   const updateData: any = {
     id: artifact.id,
