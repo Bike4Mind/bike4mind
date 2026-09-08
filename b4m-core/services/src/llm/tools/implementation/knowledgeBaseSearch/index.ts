@@ -1279,20 +1279,22 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // distinguishable from "never searched" (#1867).
           const keywordArmOutcome = semantic.retrievalOutcome ?? 'ok';
 
-          // Injected volume (RetrievalSummarySchema.injected). ZERO on both branches below, and
-          // deliberately NOT `rankedResults.length`: this arm matches file METADATA and emits
-          // names, types, tags and notes - no passage content reaches the model, which is why its
-          // output tells the model to call retrieve_knowledge_content for the text. `chunks`
-          // counts passages, so answering it with a document count would collapse the very
-          // distinction that keeps this field from restating `citables`. A keyword-only turn IS
-          // passage-starved, and recording that is the point.
+          // Injected volume (RetrievalSummarySchema.injected), written ONLY on the no-hits branch
+          // below. This arm matches file METADATA and emits names, types, tags and notes - no
+          // passage content reaches the model, which is why its output tells the model to call
+          // retrieve_knowledge_content for the text. So on a HIT the passage volume for the turn
+          // is decided by that follow-up tool, which records no volume of its own: writing a zero
+          // here would let it survive the merge (absent-beats-nothing, see mergeInjected) and make
+          // a turn grounded on a whole document assert a starve. Unknown is the honest answer, and
+          // `outcome` cannot recover it - it reads 'ok' either way.
           //
-          // Unconditional because this arm cannot reach either write without completing its own
-          // search: `keywordArmOutcome` is only ever 'ok' or the semantic arm's PROVEN
-          // 'not_indexed' (proveRetrievalOutcome never returns 'failed'), and a semantic arm that
-          // threw writes its own 'failed' with no volume, leaving the merge to disagree in tone -
-          // worst-of outcome beside sum-of-completions volume, which is the documented shape.
-          const keywordArmInjected = { chunks: 0, chars: 0 };
+          // The no-hits zero is safe and is the point: nothing was found, so nothing can follow.
+          // That write needs no outcome guard - `keywordArmOutcome` can be the semantic arm's
+          // 'failed' (proveRetrievalOutcome returns it on a query-embedding failure), but this
+          // keyword pass still completed its own search, and worst-of outcome beside
+          // sum-of-completions volume is the documented shape. A keyword pass that THREW never
+          // reaches here; the outer catch writes 'failed' with no volume.
+          const keywordArmNoHitsInjected = { chunks: 0, chars: 0 };
 
           // Emit citable source chips so search results appear as clickable citations
           if (rankedResults.length > 0) {
@@ -1354,7 +1356,6 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     outcome: keywordArmOutcome,
                     surfaces: ['knowledgeBaseSearch'],
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
-                    injected: keywordArmInjected,
                   },
                 },
               } as any,
@@ -1377,7 +1378,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     outcome: keywordArmOutcome,
                     surfaces: ['knowledgeBaseSearch'],
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
-                    injected: keywordArmInjected,
+                    injected: keywordArmNoHitsInjected,
                   },
                 },
               } as any,

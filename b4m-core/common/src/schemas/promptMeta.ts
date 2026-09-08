@@ -451,6 +451,10 @@ export const RetrievalSummarySchema = z.object({
    * 'ok'`). Absence means the volume is UNKNOWN, which is what a turn carries when no surface
    * completed a search: retrieval was never attempted, nothing was in scope to search
    * ('no_lakes'), or the one surface that ran broke mid-flight, where a zero would be a lie.
+   * A surface that completed but CANNOT know the turn's passage volume also stays silent rather
+   * than claiming a zero - knowledgeBaseSearch's keyword arm on a hit is the case: it injects
+   * file metadata and hands the model retrieve_knowledge_content, which injects the text and
+   * reports no volume, so its zero would survive the merge as a starve that did not happen.
    *
    * Per SURFACE, not per turn: a surface that breaks contributes nothing while a surface that
    * completed alongside it still reports its own volume, so a turn CAN read 'failed' next to a

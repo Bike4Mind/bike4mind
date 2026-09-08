@@ -1964,8 +1964,19 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
     const ctx = makeContext({
       db: {
         fabfiles: {
+          // `vectorized: true` matters: makeContext's default retrievalFilter is vectorizedOnly,
+          // so a file without it is dropped by filterRetrievalExcluded and this test silently
+          // exercises the NO-HITS branch instead of the one it names.
           search: vi.fn().mockResolvedValue({
-            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            data: [
+              {
+                id: 'f1',
+                fileName: 'Handbook retired notes.pdf',
+                tags: [{ name: 'datalake:x' }],
+                vectorized: true,
+                mimeType: 'application/pdf',
+              },
+            ],
             total: 1,
           }),
         },
@@ -1976,16 +1987,18 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
 
     const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
     const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    // Guards the branch this test is about: the hits write is the one carrying citables.
+    expect((retrievalCall?.[0] as { promptMeta: { citables?: unknown[] } }).promptMeta.citables).toHaveLength(1);
     expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
       attempted: true,
       outcome: 'ok',
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: ['datalake:x'],
-      // ZERO even though a document was found, and that is the point: this arm matches file
-      // METADATA and emits names, types and tags - the model gets no passage content, which is
-      // why the output tells it to call retrieve_knowledge_content. `chunks` counts passages, so
-      // answering it with the document count would restate `citables` in the wrong unit.
-      injected: { chunks: 0, chars: 0 },
+      // NO `injected` (the exact-match assertion is what pins its absence). This arm matches file
+      // METADATA and emits names, types and tags - the model gets no passage content, so the
+      // output tells it to call retrieve_knowledge_content, and THAT tool decides the turn's
+      // passage volume while recording none. A zero here would survive the merge and assert a
+      // starve on a turn grounded on the whole document; unknown is the honest answer.
     });
   });
 
@@ -2181,6 +2194,43 @@ describe('search_knowledge_base injected volume', () => {
         },
       })
     );
+  });
+
+  it('leaves the volume unknown when the semantic arm finds nothing and the keyword arm hits', async () => {
+    // The turn that inverts the ticket's failure mode: semantic scores nothing above the floor,
+    // the keyword arm finds files and tells the model to fetch their text, and
+    // retrieve_knowledge_content - which then injects whole documents - records no volume. Any
+    // zero written here becomes the turn's final value (mergeInjected keeps the one-sided value),
+    // so a fully grounded turn would persist an affirmative "recorded starve".
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [],
+      totalChunksSearched: 9,
+      filesInScope: 1,
+      chunksScored: 9,
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+          getAccessibleFiles: vi.fn(),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const writes = retrievalWrites(ctx);
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every(r => r?.injected === undefined)).toBe(true);
   });
 
   it('records no volume when the semantic arm throws, so a failure stays unknown rather than zero', async () => {
