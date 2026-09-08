@@ -86,7 +86,18 @@ export function compareArms(fixtures: readonly EmbeddingFixture[], widths: reado
     const queries = resolveQueries(fixture);
     if (queries.length === 0) throw new Error(`Fixture "${fixture.corpus}" (${fixture.model}) carries no queries.`);
 
-    for (const width of applicableWidths(fixture, widths)) {
+    // Some requested widths not applying is the intended reading (see applicableWidths); NONE
+    // applying is different - the fixture would be absent from the table while the report still
+    // looked complete, quietly comparing one fewer model than the command named.
+    const fixtureWidths = applicableWidths(fixture, widths);
+    if (fixtureWidths.length === 0) {
+      throw new Error(
+        `Fixture "${fixture.corpus}" (${fixture.model} at ${fixture.dims} dims) has no arm at any of the ` +
+          `requested widths (${widths.join(', ')}): every one exceeds the capture. Include ${fixture.dims} ` +
+          'or narrower, or drop the fixture.'
+      );
+    }
+    for (const width of fixtureWidths) {
       const arm = deriveArm(fixture, width);
       const byId = new Map(arm.queries.map(q => [q.id, q.vector]));
       rows.push(
@@ -103,9 +114,7 @@ export function compareArms(fixtures: readonly EmbeddingFixture[], widths: reado
     }
   }
 
-  if (rows.length === 0) {
-    throw new Error(`No arm matched widths ${widths.join(', ')}. Every requested width exceeds the capture width.`);
-  }
+  if (rows.length === 0) throw new Error('No fixtures to compare.');
   return rows;
 }
 
@@ -154,8 +163,8 @@ export function formatComparison(rows: readonly ArmRow[], fixtures: readonly Emb
   if (rows.some(r => !r.groundTruthApplies)) {
     notes.push(
       'GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS: no captured document matches a supporting slug in ' +
-        'corpus.ts, so recall/prec/hit/mrr read n/a. The geometry columns need no labels and remain ' +
-        'valid - read the band, the spread and the posTop/negTop gap, and ignore the rest.'
+        'corpus.ts, so recall/prec/hit/mrr read n/a - and so do posTop/negTop, which are partitioned ' +
+        'by the same labels. Read the band and the spread, which need no labels, and ignore the rest.'
     );
   }
   // The gate the ticket exists over, restated where the verdict is actually read. The capture warns

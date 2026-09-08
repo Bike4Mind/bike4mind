@@ -65,7 +65,14 @@ describe('compareArms', () => {
   });
 
   it('throws when no requested width applies at all', () => {
-    expect(() => compareArms([fixture], [3072, 1536])).toThrow(/exceeds the capture width/);
+    expect(() => compareArms([fixture], [3072, 1536])).toThrow(/every one exceeds the capture/);
+  });
+
+  it('throws rather than dropping one fixture of several from the table', () => {
+    // The hazard the per-fixture check exists for: the report renders, looks complete, and silently
+    // compares one fewer model than the command named.
+    const narrow = other({ model: 'text-embedding-3-small', dims: 8 });
+    expect(() => compareArms([fixture, narrow], [16])).toThrow(/has no arm at any of the requested widths/);
   });
 
   it('gives a non-Matryoshka capture exactly one arm, at its capture width', () => {
@@ -169,7 +176,7 @@ describe('ground-truth applicability in the report', () => {
     });
     const report = formatComparison(compareArms([byId], [16]));
     expect(report).toContain('GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS');
-    expect(report).toContain('The geometry columns need no labels');
+    expect(report).toContain('and so do posTop/negTop');
     // The band is still a real measurement on such a capture, so it must not be suppressed.
     expect(report).toMatch(/overall band {9}: -?\d/);
   });

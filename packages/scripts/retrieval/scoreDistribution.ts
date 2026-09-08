@@ -195,7 +195,7 @@ export function buildArmRow(args: {
   };
 }
 
-/** How many per-query spreads to print before eliding, so a 31-question run stays one line. */
+/** How many per-query spreads to print before eliding, so a 30-question run stays one line. */
 const SPREAD_SAMPLE = 6;
 
 /**
@@ -227,7 +227,12 @@ export function formatArmSummary(row: ArmRow): string {
 
 const pad = (s: string, w: number) => s.padEnd(w);
 const num = (n: number, dp: number) => n.toFixed(dp);
-/** A quality cell, or `n/a` when the ground truth does not describe this corpus. See groundTruthApplies. */
+/**
+ * A quality cell, or `n/a` when the ground truth does not describe this corpus. See groundTruthApplies.
+ *
+ * posTop/negTop are gated the same way inline rather than through here: they are partitioned by
+ * `supporting.length`, so they are as label-dependent as recall/mrr, but they keep 4dp.
+ */
 const quality = (row: ArmRow, value: number) => (row.groundTruthApplies ? value.toFixed(3) : 'n/a');
 
 /**
@@ -265,8 +270,8 @@ export function formatComparisonTable(rows: readonly ArmRow[]): string {
       pad(num(r.band.max, 4), 10),
       pad(num(r.band.width, 4), 8),
       pad(num(r.meanSpread, 4), 8),
-      pad(num(r.positiveTopScore, 4), 8),
-      pad(num(r.negativeTopScore, 4), 8),
+      pad(r.groundTruthApplies ? num(r.positiveTopScore, 4) : 'n/a', 8),
+      pad(r.groundTruthApplies ? num(r.negativeTopScore, 4) : 'n/a', 8),
       pad(quality(r, r.quality.recall), 8),
       pad(quality(r, r.quality.precision), 8),
       pad(quality(r, r.quality.hitRate), 8),

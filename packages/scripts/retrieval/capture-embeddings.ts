@@ -6,11 +6,16 @@
  * scores what it writes and needs neither. The split exists because the analysis must be verifiable in
  * CI and re-runnable at a new width without paying to embed twice - see MODEL-COMPARISON.md.
  *
- * READ-ONLY against Mongo, deliberately and structurally: it issues finds and never a write. No scratch
- * lake is created and no vector is persisted, which also disposes of the width hazard that a scratch-lake
- * approach carries - `FabFile.embeddingModel` records the model with no width, so two vectors both
- * honestly labelled `text-embedding-3-small` at 1536 and 512 would compare as noise. Nothing here is
- * stored, so nothing can be mislabelled.
+ * READ-ONLY against the CORPUS, deliberately and structurally: it issues finds against FabFile and
+ * FabFileChunk and persists no vector. No scratch lake is created, which also disposes of the width
+ * hazard that a scratch-lake approach carries - `FabFile.embeddingModel` records the model with no
+ * width, so two vectors both honestly labelled `text-embedding-3-small` at 1536 and 512 would compare
+ * as noise. Nothing here is stored, so nothing can be mislabelled.
+ *
+ * `connectDB` itself is NOT write-free, and "never a write" would be wrong: `@bike4mind/database`
+ * shadows db-core's export with the price-catalog bootstrap, which builds indexes and seeds
+ * catalog/price rows on first connect, and db-core connects with `autoIndex: true`. All idempotent and
+ * no different from what every deploy boot already does - but it is not nothing.
  *
  *   npx sst shell --stage <stage> -- tsx packages/scripts/retrieval/capture-embeddings.ts \
  *     --lake system-help --userId <id> --models text-embedding-3-small,text-embedding-3-large --dry-run
@@ -46,7 +51,7 @@ import {
   totalExcluded,
   type StoredChunk,
 } from './capturePlan';
-import { corpusRegime, formatCorpusRegime, isLongDocumentRegime } from './embeddingFixture';
+import { corpusRegime, formatCorpusRegime, isLongDocumentRegime, loadEmbeddingFixture } from './embeddingFixture';
 
 /** The ingest tags each help file `help:<slug>`; that slug is what corpus.ts's ground truth names. */
 const HELP_TAG_PREFIX = 'help:';
@@ -108,19 +113,22 @@ for (const fileId of fileIds) {
   const helpTag = file.tags?.find(t => t.name.startsWith(HELP_TAG_PREFIX));
   const docId = helpTag ? helpTag.name.slice(HELP_TAG_PREFIX.length) : fileId;
 
-  for (const chunk of await fabFileChunkRepository.findByFabFileId(fileId)) {
+  const fileChunks = await fabFileChunkRepository.findByFabFileId(fileId);
+  // The parent's label is a fallback for a WHOLE file, never for a single chunk. A file with no
+  // chunk-level stamps predates the field, and its parent label is the only truth there is. But once
+  // any chunk in the file is stamped, an unstamped sibling is genuinely unknown - and lending it the
+  // parent label would re-admit, one layer above `selectReusableChunks`, exactly the chunk that
+  // predicate excludes for being unlabeled. ada-002 and 3-small are both 1536, so the width guard
+  // would not catch the two spaces pooling.
+  const anyChunkStamped = fileChunks.some(c => Boolean(c.embeddingModel));
+  for (const chunk of fileChunks) {
     const text = chunk.text ?? '';
     stored.push({
       chunkId: String(chunk.id ?? chunk._id),
       docId,
       text,
       vector: (chunk.vector as number[]) ?? [],
-      // The chunk's OWN stamp when it has one, falling back to the parent file's. The chunk stamp is
-      // the finer truth: a file whose re-embed stopped part way carries one file-level label over
-      // chunks that are genuinely in two different spaces, and a baseline built from the file label
-      // would pool both. The retrieval paths gate on the file label because they must decide per
-      // file; a measurement can afford to be exact.
-      parentEmbeddingModel: chunk.embeddingModel ?? file.embeddingModel,
+      parentEmbeddingModel: anyChunkStamped ? chunk.embeddingModel : file.embeddingModel,
     });
     tokenCounts.push(chunk.tokenCount ?? Math.ceil(text.length / 4));
     capturedDocs.add(docId);
@@ -239,6 +247,10 @@ for (const model of models) {
     queries: PROBE_QUESTIONS.map((q, i) => ({ id: q.id, vector: queryVectors[i] })),
   };
 
+  // Validate before writing, not on the next read: `dims` is taken from chunks[0] alone, so a
+  // heterogeneous capture only surfaces in phase B - after the connection and the credentials are
+  // gone and re-capturing costs money again.
+  loadEmbeddingFixture(fixture);
   const outPath = path.join(argv['out-dir'], `${model}.${argv.lake}.fixture.json`);
   writeFileSync(outPath, `${JSON.stringify(fixture)}\n`);
   console.log(`Wrote ${outPath} (${chunks.length} chunks, ${dims} dims)`);

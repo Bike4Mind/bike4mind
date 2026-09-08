@@ -42,7 +42,7 @@ that is arithmetic:
 
 ### 1. Baseline (ada-002), ~free
 
-Reuses the corpus's existing vectors; only the 31 probe questions are embedded.
+Reuses the corpus's existing vectors; only the 30 probe questions are embedded.
 
 ```bash
 npx sst shell --stage <stage> -- tsx packages/scripts/retrieval/capture-embeddings.ts \
@@ -82,7 +82,8 @@ Paths are relative to `packages/scripts/`, which is the cwd `pnpm --filter` runs
 and step 2 wrote their fixtures (`--out-dir` defaults there). Steps 1 and 2 run from the repo root, so
 their paths are repo-root-relative; this one is not.
 
-A width wider than a capture is skipped, so one `--widths` list covers every arm. Only
+A width wider than a capture is skipped, so one `--widths` list covers every arm - but a fixture with
+no applicable width at all **aborts** rather than quietly dropping out of the table. Only
 `text-embedding-3-small` and `text-embedding-3-large` are Matryoshka, so only they yield width arms -
 the ada-002 baseline is scored at its capture width alone whatever `--widths` says, and the report
 notes it.
@@ -112,11 +113,19 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |
 | `recall`/`prec`/`hit`/`mrr` | did the wider band actually buy better retrieval, or just rescale the same ordering? |
 
+The last six columns all read `n/a` when no captured document matches a supporting slug in `corpus.ts`
+(the report says so in a note). `posTop`/`negTop` are partitioned by `supporting.length`, so on a lake
+the ground truth does not describe, the "positive" and "negative" halves are an arbitrary split and
+their gap is noise. `band` and `spread` need no labels and stay valid.
+
 `retrieval_unavailable` is a real number: the capture enumerates the lake with the lifecycle-sweep
 reader (which returns every id the lake has ever held) and then filters it to what the served path can
 actually reach - live, not archived, not retrieval-excluded, `vectorizedChunkCount >= chunkCount > 0`.
 That count is the files it dropped. The predicate mirrors the shipped `isFabFileCitable` minus its
-`embeddingModel` clause, which the arms deliberately vary.
+`embeddingModel` clause, which the arms deliberately vary - and that clause is the only one making
+`isFabFileCitable` stricter than the served path, so the three conditions left are the served path's
+own. On a mixed-stamp lake production drops the model-mismatched files too, so this counter is a lower
+bound on production's, never an inflation of it.
 
 `superseded` prints as `n/a`, not `0`: this instrument runs no collapse pass, so claiming it checked
 and found none would be untrue.

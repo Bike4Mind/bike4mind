@@ -110,7 +110,12 @@ export type StoredChunk = {
 
 export type ReuseSelection = {
   reusable: StoredChunk[];
-  /** Chunks excluded, and why, in the shipped `ChunkSkipReason` vocabulary. */
+  /**
+   * Chunks excluded, and why: the shipped `ChunkSkipReason` vocabulary
+   * (b4m-core/services/src/dataLakeService/embeddingMismatch.ts) plus `unlabeled`, which has no
+   * production counterpart - retrieval SCORES an unlabeled chunk rather than skipping it, so only a
+   * measurement needs the reason. `unknownFile` cannot arise here: chunks are read by parent file id.
+   */
   excluded: { unlabeled: number; modelMismatch: number; missingVector: number; dimensionMismatch: number };
   /** Distinct parent documents dropped entirely, for the `embedding_mismatch` line of the report. */
   excludedDocs: number;

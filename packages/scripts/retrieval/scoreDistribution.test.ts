@@ -202,7 +202,7 @@ describe('formatArmSummary', () => {
     expect(formatArmSummary({ ...row, filesUnreachable: 4 })).toContain('retrieval_unavailable: 4 files unreachable');
   });
 
-  it('elides the per-query spreads once a real 31-question run would overflow the line', () => {
+  it('elides the per-query spreads once a real 30-question run would overflow the line', () => {
     const many = { ...row, spreads: Array.from({ length: 31 }, (_, i) => i / 1000) };
     expect(formatArmSummary(many)).toContain('... (31 queries)');
     expect(formatArmSummary(row)).not.toContain('...');
@@ -237,8 +237,9 @@ describe('groundTruthApplies', () => {
 
   it('renders the quality columns as n/a rather than a zero nobody should act on', () => {
     const table = formatComparisonTable([buildArmRow(args('unmatched-file-id', ['features/mementos']))]);
-    // Exactly the four quality columns (recall, prec, hit, mrr) go n/a.
-    expect(table.split('n/a').length - 1).toBe(4);
+    // The four quality columns (recall, prec, hit, mrr) plus posTop/negTop, which are partitioned by
+    // the same labels and are therefore just as meaningless here.
+    expect(table.split('n/a').length - 1).toBe(6);
     // The geometry needs no labels, so it is still a real number.
     expect(table).toMatch(/1\.0000/);
   });
