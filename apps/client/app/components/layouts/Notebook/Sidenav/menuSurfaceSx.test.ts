@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { menuListSx, menuSurfaceSx, selectListboxSx } from './menuSurfaceSx';
+import { menuListSx, menuRowSx, menuSurfaceSx, selectListboxSx } from './menuSurfaceSx';
 
 const theme = extendTheme({ ...getThemeConfig() });
 
@@ -63,5 +63,29 @@ describe('selectListboxSx', () => {
   it('styles option rows only, so it is inert on a Joy Menu (rows are role="menuitem")', () => {
     const roleSelectors = Object.keys(selectListboxSx(theme)).filter(key => key.includes('role='));
     expect(roleSelectors).toEqual(['& [role="option"]']);
+  });
+});
+
+describe('menuRowSx', () => {
+  // Joy's ListItemButton carries an unconditional `&:active` painted from --variant-plainActiveBg.
+  // Unset, it falls through to neutral.plainActiveBg, which this theme tints brand blue, so a
+  // Joy-backed row flashes blue under the finger.
+  it('pins the press ground rather than letting Joy fall through to the brand tint', () => {
+    expect(menuRowSx(theme)['--variant-plainActiveBg']).toBe(theme.palette.notebooklist.hoverBg);
+    expect(menuRowSx(theme)['--variant-plainActiveBg']).not.toBe(theme.palette.neutral.plainActiveBg);
+  });
+
+  it('keeps press on the hover ground rather than introducing a third colour', () => {
+    expect(menuRowSx(theme)['--variant-plainActiveBg']).toBe(menuRowSx(theme)['&:hover'].backgroundColor);
+    expect(menuRowSx(theme, true)['--variant-plainActiveBg']).toBe(menuRowSx(theme, true)['&:hover'].backgroundColor);
+  });
+
+  // The recipe sets the variables itself, so a Joy MenuItem consumer does not have to restate
+  // them - that restatement is what let the destructive row and the plain rows drift.
+  it('carries the danger ground on the declaration and both variables alike', () => {
+    const dangerRow = menuRowSx(theme, true);
+    expect(dangerRow['--variant-plainHoverBg']).toBe(theme.palette.danger.plainHoverBg);
+    expect(dangerRow['--variant-plainActiveBg']).toBe(theme.palette.danger.plainHoverBg);
+    expect(dangerRow['&:hover'].backgroundColor).toBe(theme.palette.danger.plainHoverBg);
   });
 });

@@ -96,25 +96,36 @@ export const selectListboxSx = (theme: Theme, opts?: { gap?: string }) => ({
 
 /**
  * A single icon + label row inside a menuSurfaceSx panel. `danger` tints a destructive row.
- * Joy sets its own hover background from `--variant-plainHoverBg`, so consumers built on Joy
- * MenuItem must ALSO point that variable at the hover colour or Joy's rule wins.
+ *
+ * One ground covers hover and press, declared three ways because the consumers are not all the
+ * same kind of element. The `&:hover` declaration is what the profile menu's plain Boxes use;
+ * the two variables are what Joy reads on a MenuItem, whose own rules outrank that declaration.
+ * --variant-plainActiveBg in particular has to be set: Joy's ListItemButton carries an
+ * unconditional `&:active` painted from it, and left unset it falls through to
+ * neutral.plainActiveBg, which this theme tints brand blue (themePrimitives.ts) - so the row
+ * would flash blue under the finger instead of staying on its hover ground.
  */
-export const menuRowSx = (theme: Theme, danger = false) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: '12px',
-  px: '10px',
-  height: '40px',
-  borderRadius: '8px',
-  cursor: 'pointer',
-  color: danger ? theme.palette.danger[500] : theme.palette.sidenav?.navItemText,
-  // Joy icons - and the Credits Bike4MindIcon, which fills with var(--Icon-color) - read
-  // --Icon-color, not `color`. Tint them brand light-blue @50% (text.tertiary).
-  '--Icon-color': danger ? theme.palette.danger[500] : theme.palette.text.tertiary,
-  transition: 'background 0.15s',
-  '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-  '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
-});
+export const menuRowSx = (theme: Theme, danger = false) => {
+  const ground = danger ? theme.palette.danger.plainHoverBg : theme.palette.notebooklist.hoverBg;
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    px: '10px',
+    height: '40px',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    color: danger ? theme.palette.danger[500] : theme.palette.sidenav?.navItemText,
+    // Joy icons - and the Credits Bike4MindIcon, which fills with var(--Icon-color) - read
+    // --Icon-color, not `color`. Tint them brand light-blue @50% (text.tertiary).
+    '--Icon-color': danger ? theme.palette.danger[500] : theme.palette.text.tertiary,
+    transition: 'background 0.15s',
+    '&:hover': { backgroundColor: ground },
+    '--variant-plainHoverBg': ground,
+    '--variant-plainActiveBg': ground,
+    '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
+  };
+};
 
 /** Fixed box the row's icon sits in, so labels align regardless of glyph width. */
 export const MENU_ROW_ICON_SX = {
