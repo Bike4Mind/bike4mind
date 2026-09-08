@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DATA_LAKES, effectiveTagPrefixArm } from '@bike4mind/common';
+import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
 import {
   DEFAULT_CONVERGENCE_WAVE,
   planLakeConvergenceRun,
@@ -242,6 +244,62 @@ describe('planLakeConvergenceRun', () => {
     expect(wave).toHaveLength(20);
     expect(adapters.db.dataLakes.findByDatalakeTag).toHaveBeenCalledTimes(1);
     expect(adapters.db.dataLakes.find).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The owner-less synthetic document `assertLakeAccess` hands back for a hardcoded DATA_LAKES
+   * lake. A real registry id, so `isFallbackLake` decides by its own config-id rule rather than a
+   * flag; `requiredPassageTokenTarget` is inherited from the base fixture, which is what an overlay
+   * entry carrying one looks like by the time it reaches this function.
+   */
+  const registryConfig = DATA_LAKES.find(dl => dl.id === 'opti-knowledge')!;
+  const registryLake: ConvergenceLake = {
+    ...lake,
+    id: registryConfig.id,
+    datalakeTag: registryConfig.datalakeTag,
+    fileTagPrefix: registryConfig.fileTagPrefix,
+    createdByUserId: '',
+  };
+
+  // The invariant the `policyInherited` gate carries for registry lakes, which no test pinned: with
+  // no declared target they turn back here, so the creator-less scope below is never even built.
+  it('refuses a registry lake on the inherited default without reading a member', async () => {
+    const adapters = makeAdapters([member('a', 2100)]);
+
+    const { report, wave } = await planLakeConvergenceRun(
+      { ...registryLake, requiredPassageTokenTarget: undefined },
+      adapters
+    );
+
+    expect(report.refusal).toBe('policyInherited');
+    expect(wave).toEqual([]);
+    expect(adapters.db.fabFiles.findLakeConvergenceMembers).not.toHaveBeenCalled();
+  });
+
+  // ...and what happens when it does NOT turn back. `PREMIUM_DATA_LAKES` is an unvalidated
+  // `as DataLakeConfig[]` cast that `resolveFallbackLake` spreads verbatim, so an overlay lake
+  // declaring a target reaches the member read - where an `owned` scope would fail closed to
+  // meta-tag-only and silently skip the prefix-tagged members the lake is mostly made of.
+  it('scopes an explicit-policy registry lake through the registry arm, keeping the prefix arm live', async () => {
+    const adapters = makeAdapters([]);
+
+    await planLakeConvergenceRun(registryLake, adapters);
+
+    const [scope] = adapters.db.fabFiles.findLakeConvergenceMembers.mock.calls[0];
+    expect(scope).toEqual(registryMembershipScope(registryLake));
+    expect(effectiveTagPrefixArm(scope)).toBe(registryConfig.fileTagPrefix);
+    expect(effectiveTagPrefixArm(lakeMembershipScope(registryLake))).toBeNull();
+  });
+
+  it('keeps a persisted lake on the creator-anchored scope, so the two kinds are not collapsed', async () => {
+    const adapters = makeAdapters([]);
+
+    await planLakeConvergenceRun(lake, adapters);
+
+    expect(adapters.db.fabFiles.findLakeConvergenceMembers).toHaveBeenCalledWith(
+      lakeMembershipScope(lake),
+      expect.any(Number)
+    );
   });
 });
 
