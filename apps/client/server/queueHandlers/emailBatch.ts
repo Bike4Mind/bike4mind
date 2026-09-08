@@ -268,7 +268,7 @@ export function renderTemplate(
   // 3. Inject tracking pixel (1x1 transparent GIF) before </body>
   const trackingPixel = `<img src="${baseUrl}/api/email/track/open/${trackingToken}" width="1" height="1" style="display:none;" alt="" />`;
   if (html.includes('</body>')) {
-    html = html.replace('</body>', `${trackingPixel}</body>`);
+    html = html.replace('</body>', () => `${trackingPixel}</body>`);
   } else {
     html = html + trackingPixel;
   }
@@ -278,8 +278,8 @@ export function renderTemplate(
 
   // 5. Inject unsubscribe link variable
   const unsubscribeUrl = `${baseUrl}/email/unsubscribe?token=${trackingToken}`;
-  html = html.replace(/{{unsubscribeUrl}}/g, unsubscribeUrl);
-  subject = subject.replace(/{{unsubscribeUrl}}/g, unsubscribeUrl);
+  html = html.replace(/{{unsubscribeUrl}}/g, () => unsubscribeUrl);
+  subject = subject.replace(/{{unsubscribeUrl}}/g, () => unsubscribeUrl);
 
   return { subject, html };
 }
