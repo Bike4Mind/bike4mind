@@ -40,6 +40,30 @@ describe('describeDriveConnection', () => {
     });
   });
 
+  // 'syncing' is a real stored status the hand-listed client union used to omit, so the badge lookup
+  // came back undefined and both Drive surfaces threw `Cannot read properties of undefined` for the
+  // whole duration of a sync. The union is derived from the DB enum now, which is what stops it.
+  it('describes an in-flight sync instead of throwing on it', () => {
+    const { label, title, color } = describeDriveConnection(conn({ status: 'syncing' }));
+    expect(label).toBe('Syncing');
+    expect(title).toBe('Sync in progress for the Google Drive folder "Handbook"');
+    expect(color).toBe('success');
+  });
+
+  it('does not dress an in-flight sync as stopped-short using the PREVIOUS run error', () => {
+    const { label, title } = describeDriveConnection(conn({ status: 'syncing', lastError: 'a previous failure' }));
+    expect(label).toBe('Syncing');
+    expect(title).not.toContain('stopped short');
+  });
+
+  it('never throws on a status no longer in the badge table', () => {
+    // The endpoint hands back the raw stored status with no validation, so this is the boundary the
+    // fallback exists for - a crash here takes out the whole lake panel.
+    const rogue = conn({ status: 'a_status_from_the_future' as never });
+    expect(() => describeDriveConnection(rogue)).not.toThrow();
+    expect(describeDriveConnection(rogue).color).toBe('warning');
+  });
+
   it('falls back to the folder id when Drive gave us no folder name', () => {
     expect(describeDriveConnection(conn({ folderName: null })).title).toContain('"FOLDER"');
   });

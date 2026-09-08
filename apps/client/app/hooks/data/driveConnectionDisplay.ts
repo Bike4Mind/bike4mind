@@ -5,7 +5,16 @@
  * to stub it - three hand-copied wording tables is exactly the drift this consolidates.
  */
 
-export type DriveConnectionStatus = 'connected' | 'needs_reconnect' | 'credential_error';
+import type { GoogleDriveConnectionStatus } from '@bike4mind/common';
+
+/**
+ * Derived from the stored enum rather than re-listed. The drive-connection endpoint returns
+ * `c.status` verbatim with no contract validation, so a status this module does not know about
+ * reaches the badge lookup as `undefined` and every surface below throws a render-time TypeError.
+ * 'syncing' is exactly how that bit: it is a real stored status for the whole duration of a sync,
+ * was missing from the hand-listed union, and crashed both Drive surfaces while a sync ran.
+ */
+export type DriveConnectionStatus = GoogleDriveConnectionStatus;
 
 export type DriveConnectionSeverity = 'success' | 'warning' | 'danger';
 
@@ -16,9 +25,13 @@ export type DriveConnectionSeverity = 'success' | 'warning' | 'danger';
  */
 export const DRIVE_STATUS_BADGE: Record<DriveConnectionStatus, { label: string; color: DriveConnectionSeverity }> = {
   connected: { label: 'Connected', color: 'success' },
+  syncing: { label: 'Syncing', color: 'success' },
   needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
   credential_error: { label: 'Credential error', color: 'danger' },
 };
+
+/** Last resort if an unvalidated status still slips past the derived union (see DriveConnectionStatus). */
+const UNKNOWN_STATUS_BADGE = { label: 'Unknown', color: 'warning' } as const;
 
 /** The subset of a connection this wording is derived from. */
 export type DescribableDriveConnection = {
@@ -42,7 +55,17 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
   color: DriveConnectionSeverity;
 } {
   const folder = connection.folderName || connection.driveFolderId;
-  const badge = DRIVE_STATUS_BADGE[connection.status];
+  const badge = DRIVE_STATUS_BADGE[connection.status] ?? UNKNOWN_STATUS_BADGE;
+
+  // A run is in flight, so any lastError belongs to the PREVIOUS one - reporting this as a sync that
+  // stopped short would be wrong. DriveConnectAction still renders the old message on its own line.
+  if (connection.status === 'syncing') {
+    return {
+      label: badge.label,
+      title: `Sync in progress for the Google Drive folder "${folder}"`,
+      color: badge.color,
+    };
+  }
 
   if (connection.status === 'connected') {
     return connection.lastError
