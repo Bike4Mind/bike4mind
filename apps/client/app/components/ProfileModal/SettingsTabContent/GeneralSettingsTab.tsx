@@ -325,6 +325,7 @@ const GeneralSettingsTab = () => {
                 <StyledButton
                   color="primary"
                   variant="outlined"
+                  data-testid="notebook-import-open-btn"
                   onClick={() => toggleNotebookImportModal()}
                   sx={{ fontSize: '13px' }}
                 >
@@ -333,6 +334,7 @@ const GeneralSettingsTab = () => {
                 <StyledButton
                   color="primary"
                   variant="outlined"
+                  data-testid="notebook-export-open-btn"
                   onClick={() => toggleNotebookExportModal()}
                   sx={{ fontSize: '13px' }}
                 >

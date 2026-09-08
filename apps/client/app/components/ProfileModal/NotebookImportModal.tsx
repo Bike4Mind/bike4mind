@@ -192,7 +192,12 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
 
   return (
     <Modal open={open} onClose={onClose} className="notebook-import-modal-root">
-      <ModalDialog size="md" sx={{ maxWidth: 700 }} className="notebook-import-modal-dialog">
+      <ModalDialog
+        size="md"
+        sx={{ maxWidth: 700 }}
+        className="notebook-import-modal-dialog"
+        data-testid="notebook-import-modal"
+      >
         <DialogTitle className="notebook-import-modal-title">
           <Box display="flex" alignItems="center" gap={1}>
             <CloudUpload sx={{ mr: 1 }} />
@@ -248,6 +253,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                     >
                       <input
                         className="notebook-import-modal-file-input"
+                        data-testid="notebook-import-file-input"
                         ref={fileInputRef}
                         type="file"
                         accept=".json"
@@ -356,6 +362,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Knowledge Files</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-import-knowledge-switch' } }}
                     checked={options.importKnowledge}
                     onChange={e => updateOption('importKnowledge', e.target.checked)}
                   />
@@ -442,6 +449,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
               <Button
                 variant="solid"
                 color="primary"
+                data-testid="notebook-import-submit-btn"
                 onClick={handleImport}
                 loading={isImporting}
                 disabled={
