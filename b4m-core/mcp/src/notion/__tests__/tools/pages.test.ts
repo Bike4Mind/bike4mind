@@ -23,6 +23,7 @@ import { notionRequest } from '../../client.js';
 import { getConfig } from '../../config.js';
 import { TOOL_NOTION_CREATE_PAGE, TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_READ_PAGE } from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
+import { clearParentCache } from '../../helpers/ancestry.js';
 
 /**
  * Helper to set up ancestry mock: target page's parent is the root page.
@@ -56,6 +57,7 @@ describe('Page Tools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearParentCache();
     // Reset to defaults: write enabled, root page set, access mode 'all'
     vi.mocked(getConfig).mockReturnValue({
       accessToken: 'mock-token',
@@ -144,14 +146,20 @@ describe('Page Tools', () => {
     });
 
     it('should create a page in a database', async () => {
-      // Database parent bypasses page ancestry check
-      mockRootPageWrite({
-        id: 'db-page-id',
-        url: 'https://notion.so/db-page',
-        object: 'page',
-      });
-
       const dbId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      // Ancestry check: database parent is under the root page
+      vi.mocked(notionRequest)
+        .mockResolvedValueOnce({
+          id: dbId,
+          object: 'database',
+          parent: { type: 'page_id', page_id: ROOT_PAGE_ID },
+        })
+        .mockResolvedValueOnce({
+          id: 'db-page-id',
+          url: 'https://notion.so/db-page',
+          object: 'page',
+        });
+
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
       const result = await tool!.handler({ title: 'DB Entry', parentDatabaseId: dbId });
 
@@ -163,22 +171,30 @@ describe('Page Tools', () => {
     });
 
     it('should prefer database parent over page parent when both provided', async () => {
-      mockRootPageWrite({
-        id: 'page-id',
-        url: 'https://notion.so/page',
-        object: 'page',
-      });
-
       const dbId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      // Ancestry check for database parent
+      vi.mocked(notionRequest)
+        .mockResolvedValueOnce({
+          id: dbId,
+          object: 'database',
+          parent: { type: 'page_id', page_id: ROOT_PAGE_ID },
+        })
+        .mockResolvedValueOnce({
+          id: 'page-id',
+          url: 'https://notion.so/page',
+          object: 'page',
+        });
+
+      const dbId2 = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
       const pageId = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
-      await tool!.handler({ title: 'Test', parentDatabaseId: dbId, parentPageId: pageId });
+      await tool!.handler({ title: 'Test', parentDatabaseId: dbId2, parentPageId: pageId });
 
-      // Should not have made an ancestry check call (database takes priority)
-      expect(notionRequest).toHaveBeenCalledTimes(1);
+      // ancestry check (1) + write (1)
+      expect(notionRequest).toHaveBeenCalledTimes(2);
       expect(notionRequest).toHaveBeenCalledWith('/pages', {
         method: 'POST',
-        body: expect.stringContaining(`"database_id":"${dbId}"`),
+        body: expect.stringContaining(`"database_id":"${dbId2}"`),
       });
     });
 

@@ -20,6 +20,7 @@ import { notionRequest } from '../../client.js';
 import { getConfig } from '../../config.js';
 import { TOOL_NOTION_SEARCH } from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
+import { clearParentCache } from '../../helpers/ancestry.js';
 
 function makeSearchResult(id: string, title: string, parent?: Record<string, unknown>) {
   return {
@@ -38,6 +39,7 @@ describe('Search Tools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearParentCache();
     vi.mocked(getConfig).mockReturnValue({
       accessToken: 'mock-token',
       accessMode: 'all',

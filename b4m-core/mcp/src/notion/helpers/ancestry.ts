@@ -30,6 +30,11 @@ interface CacheEntry {
 
 const parentCache = new Map<string, CacheEntry>();
 
+/** Clears the parent cache. Exported for test use. */
+export function clearParentCache(): void {
+  parentCache.clear();
+}
+
 function cacheGet(normalizedId: string): string | null | undefined {
   const entry = parentCache.get(normalizedId);
   if (!entry) return undefined;
