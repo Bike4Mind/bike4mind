@@ -3455,10 +3455,12 @@ export const settingsMap = {
       'byte-identical to behavior before this setting existed. The cap never SHRINKS a result set - ' +
       'once the spread-out picks are in, any slots still open are backfilled with the highest-' +
       'scoring chunks the cap held back, so a lake whose only match is one document still returns ' +
-      'a full top-K. Enabling it costs some query work at any value: each retrieval stream widens ' +
-      'its candidate pool to a fixed multiple of the result count so the cap has a spread to ' +
-      'choose from. 2-3 is the useful range; 1 serves one passage per document, which suits a ' +
-      'corpus of many short documents and starves a question whose answer spans one long one.',
+      "a full top-K. Enabling it widens each retrieval stream's candidate pool to a fixed " +
+      'multiple of the result count, so the cap has a spread to choose from. The scanned corpus ' +
+      'itself does not grow (that is bounded separately), but the vector-search backends are ' +
+      'asked for that many more matches, and a larger in-memory ranking pool costs some CPU. 2-3 ' +
+      'is the useful range; 1 serves one passage per document, which suits a corpus of many short ' +
+      'documents and starves a question whose answer spans one long one.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 11,

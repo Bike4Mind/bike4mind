@@ -802,6 +802,34 @@ describe('semanticDataLakeSearch per-document cap', () => {
     // the default. Either way the operator's setting means the opposite of what it says.
     expect((await runCapped(0)).map(r => r.fileId)).toEqual(['dA', 'dA', 'dA', 'dA']);
   });
+
+  it('cannot promote a document whose chunks never survived the widened candidate pool', async () => {
+    // The documented residual limitation, made concrete: with topK 2 and a cap of 1, the widened
+    // pool is 2 * DIVERSITY_CANDIDATE_POOL_FACTOR (3) = 6. dA alone contributes 8 chunks, all
+    // scoring above dB's single chunk - so the pool fills entirely with dA before dB's chunk is
+    // ever offered to it, and the cap never gets a chance to see dB at all. Enforcement at the
+    // merge only chooses among whatever reached the merge; it cannot recover a document a stream
+    // upstream of it already discarded.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const twoDocs = [
+      { id: 'dA', fileName: 'A.pdf', tags: [] },
+      { id: 'dB', fileName: 'B.pdf', tags: [] },
+    ];
+    const corpus = [
+      ...chunkRows('dA', 8).map((row, i) => ({ ...row, vector: [1, (90 - i) / 100] })), // 0.90..0.83
+      ...chunkRows('dB', 1).map(row => ({ ...row, vector: [1, 0.01] })), // far below every dA chunk
+    ];
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 2, budgets: { maxChunksPerFile: 1 } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: twoDocs, hasMore: false, total: 2 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(corpus as never) },
+      },
+    } as never);
+
+    expect(result.results.map(r => r.fileId)).toEqual(['dA', 'dA']);
+    expect(result.results.some(r => r.fileId === 'dB')).toBe(false);
+  });
 });
 
 /**

@@ -412,10 +412,13 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
  * alone and no other document is ever present to be promoted. The pool has to be wider than topK
  * for the cap to have any spread, and how much wider is a property of the crowding, not of the cap.
  *
- * 3x fills topK from distinct documents for any sane cap while keeping the widened ANN limit and
- * scan top-K to a few dozen rows - the pool is bounded work per query, so this is the knob that
- * trades latency for diversity, and it is a constant rather than a setting until an operator has a
- * reason to want a different one.
+ * 3x fills topK from distinct documents for any sane cap while keeping the widened ANN request
+ * and the in-memory ranking pool to a few dozen rows. This only widens the ANN backends' own
+ * request size and the ranked pool's memory footprint - the SCAN path reads no more rows than it
+ * already would (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here
+ * only changes how many of the chunks it was scanning anyway survive into `ranked`). So this is a
+ * knob that trades ANN query size and a little CPU for diversity, not scan cost, and it is a
+ * constant rather than a setting until an operator has a reason to want a different one.
  */
 const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
 
