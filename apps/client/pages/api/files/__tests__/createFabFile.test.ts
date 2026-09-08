@@ -150,21 +150,23 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
   });
 });
 
-describe('POST /api/files/createFabFile - executable mime gate', () => {
+describe('POST /api/files/createFabFile - executable mime types', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
     h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
   });
 
-  it.each(['image/svg+xml', 'text/html', 'application/xhtml+xml'])(
-    'rejects executable upload type %s without creating a file',
-    async mimeType => {
-      const { res } = makeRes();
-      await expect(run(body({ fileName: 'x', mimeType }), res)).rejects.toThrow(/not allowed/i);
-      expect(h.fabFileCreate).not.toHaveBeenCalled();
-    }
-  );
+  // fabFileBucket is not app-origin-served (unlike the presign siblings on appFilesBucket), and
+  // html/svg are normal knowledge-ingestion inputs (text/html is what the session file picker
+  // posts for a .html file), so this route does NOT reject them for being "executable" - that gate
+  // lives only on the app-origin presigns. (Types the service's own supported-mime list rejects,
+  // e.g. application/xhtml+xml, are a separate concern and still refused there.)
+  it.each(['image/svg+xml', 'text/html'])('accepts %s and creates the file', async mimeType => {
+    const { res } = makeRes();
+    await run(body({ fileName: 'x', mimeType }), res);
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
 
   it('allows a normal image type', async () => {
     const { res } = makeRes();
