@@ -8,9 +8,10 @@ import { McpServer } from '@bike4mind/database/ai';
  *
  * DELETE /api/mcp-servers/notion/disconnect
  *
- * Unlike some OAuth providers, Notion doesn't have a token revocation endpoint.
- * The token will remain valid until the user removes the integration from
- * Notion's settings page, but we remove it from our system.
+ * Notion does expose a revocation endpoint (POST /v1/oauth/revoke), but this handler
+ * does not call it yet: it only removes our copy of the credentials. The token stays
+ * valid until the user removes the integration from Notion's settings page, which the
+ * response message tells them how to do.
  */
 const handler = baseApi().delete(async (req, res) => {
   try {
@@ -29,6 +30,7 @@ const handler = baseApi().delete(async (req, res) => {
     await userRepository.update({
       id: userId,
       notionConnect: null,
+      pendingNotionOAuthNonce: null,
     });
 
     console.log(`[Notion Disconnect] Removed notionConnect for user ${userId}`);

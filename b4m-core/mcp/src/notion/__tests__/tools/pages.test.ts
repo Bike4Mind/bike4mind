@@ -157,6 +157,25 @@ describe('Page Tools', () => {
       expect(parsed.error).toContain('not within the configured root page tree');
     });
 
+    it('should reject explicit parentDatabaseId outside root tree', async () => {
+      const outsideDbId = 'c3d4e5f6-a7b8-9012-cdef-123456789012';
+
+      // Ancestry check: the database sits under the workspace, not the root page
+      vi.mocked(notionRequest).mockResolvedValueOnce({
+        id: outsideDbId,
+        object: 'database',
+        parent: { type: 'workspace', workspace: true },
+      });
+
+      const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
+      const result = await tool!.handler({ title: 'Outside DB', parentDatabaseId: outsideDbId });
+
+      expect(result.isError).toBe(true);
+      const parsed = parseResponse(result);
+      expect(parsed.error).toContain('not within the configured root page tree');
+      expect(notionRequest).not.toHaveBeenCalledWith('/pages', expect.objectContaining({ method: 'POST' }));
+    });
+
     it('should create a page in a database', async () => {
       const dbId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
       // Ancestry check: database parent is under the root page
@@ -207,6 +226,27 @@ describe('Page Tools', () => {
         method: 'POST',
         body: expect.stringContaining(`"database_id":"${dbId}"`),
       });
+    });
+
+    it('should deny an excluded database parent in selected mode', async () => {
+      const dbId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      vi.mocked(getConfig).mockReturnValue({
+        accessToken: 'mock-token',
+        writeEnabled: true,
+        rootPageId: ROOT_PAGE_ID,
+        accessMode: 'selected',
+        allowedPages: [{ id: ROOT_PAGE_ID, access: 'readwrite' }],
+        excludedPageIds: [dbId],
+      });
+
+      const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
+      const result = await tool!.handler({ title: 'DB Entry', parentDatabaseId: dbId });
+
+      expect(result.isError).toBe(true);
+      const parsed = parseResponse(result);
+      expect(parsed.error).toContain('explicitly excluded');
+      // Denied before any Notion call, so nothing was created
+      expect(notionRequest).not.toHaveBeenCalled();
     });
 
     it('should include content block when content is provided', async () => {

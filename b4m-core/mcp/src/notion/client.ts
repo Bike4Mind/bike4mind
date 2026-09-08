@@ -11,12 +11,15 @@ import { debug, debugError, debugWarn } from './logger.js';
 
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 1000;
+const MAX_RETRY_AFTER_MS = 60_000;
 
 function backoffMs(attempt: number, retryAfterHeader: string | null): number {
   if (retryAfterHeader) {
     const seconds = Number(retryAfterHeader);
-    if (!Number.isNaN(seconds) && seconds > 0 && seconds <= 60) {
-      return seconds * 1000;
+    // Clamp rather than discard: a capped Retry-After still beats falling back to
+    // the 1s exponential delay that an out-of-range header used to trigger.
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
     }
   }
   return BASE_BACKOFF_MS * 2 ** attempt;
@@ -24,7 +27,7 @@ function backoffMs(attempt: number, retryAfterHeader: string | null): number {
 
 /**
  * Make an authenticated request to the Notion API.
- * Retries on 429 (rate-limited) and transient 5xx errors.
+ * Retries on 429 (rate-limited) for any method, and on transient 5xx for reads only.
  */
 export async function notionRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const { accessToken } = getConfig();
@@ -51,11 +54,16 @@ export async function notionRequest<T>(path: string, init?: RequestInit): Promis
       return (await response.json()) as T;
     }
 
-    // Retry on 429 or 5xx, but not on final attempt
-    const retryable = response.status === 429 || response.status >= 500;
+    // A 429 never reached the handler, so replaying it is safe for any method. A 5xx
+    // may have landed; Notion has no idempotency key, so replaying POST /pages or
+    // PATCH /blocks/{id}/children could double-create. Only reads replay a 5xx.
+    const idempotent = method === 'GET' || path === '/search';
+    const retryable = response.status === 429 || (idempotent && response.status >= 500);
     if (retryable && attempt < MAX_RETRIES) {
       const delay = backoffMs(attempt, response.headers.get('retry-after'));
       debugWarn(`${method} ${path} -> ${response.status}, retrying in ${delay}ms`);
+      // undici keeps the connection checked out until the body is read or cancelled.
+      await response.body?.cancel().catch(() => {});
       await new Promise(resolve => setTimeout(resolve, delay));
       continue;
     }

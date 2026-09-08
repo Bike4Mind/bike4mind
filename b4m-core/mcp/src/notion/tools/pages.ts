@@ -324,7 +324,9 @@ export function registerPageTools(server: McpServer): void {
         const rootPageId = config.rootPageId!;
 
         // Page-level access control - check write permission on the target parent
-        const targetParent = parentPageId || rootPageId;
+        // Mirrors the parent precedence used for the write below, so the allowed/excluded
+        // check runs against the database when one is given.
+        const targetParent = parentDatabaseId || parentPageId || rootPageId;
         const pageAccessError = await checkPageAccess(targetParent, 'readwrite');
         if (pageAccessError) return pageAccessError;
 

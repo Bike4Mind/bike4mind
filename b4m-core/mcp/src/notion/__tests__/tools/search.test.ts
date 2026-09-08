@@ -104,6 +104,26 @@ describe('Search Tools', () => {
       });
     });
 
+    it('should forward start_cursor and surface the pagination cursor', async () => {
+      vi.mocked(notionRequest).mockResolvedValueOnce({
+        results: [makeSearchResult('page-id-1', 'My Page')],
+        has_more: true,
+        next_cursor: 'cursor-def',
+      });
+
+      const tool = registeredTools.get(TOOL_NOTION_SEARCH);
+      const result = await tool!.handler({ query: 'test', start_cursor: 'cursor-abc' });
+
+      expect(notionRequest).toHaveBeenCalledWith('/search', {
+        method: 'POST',
+        body: JSON.stringify({ query: 'test', page_size: 10, start_cursor: 'cursor-abc' }),
+      });
+
+      const parsed = parseResponse(result);
+      expect(parsed.has_more).toBe(true);
+      expect(parsed.next_cursor).toBe('cursor-def');
+    });
+
     it('should handle "Untitled" for pages without title property', async () => {
       vi.mocked(notionRequest).mockResolvedValueOnce({
         results: [
@@ -158,6 +178,9 @@ describe('Search Tools', () => {
       expect(parsed.success).toBe(true);
       expect(parsed.count).toBe(0);
       expect(parsed.results).toEqual([]);
+      // Same shape as every other success path so clients can read it uniformly
+      expect(parsed.has_more).toBe(false);
+      expect(parsed.next_cursor).toBeNull();
     });
 
     it('should return directly allowed pages', async () => {

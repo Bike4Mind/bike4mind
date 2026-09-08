@@ -118,7 +118,7 @@ export function registerSearchTools(server: McpServer): void {
         // Filter results when access mode is 'selected'
         if (config.accessMode === 'selected') {
           if (config.allowedPages.length === 0) {
-            return createSuccessResponse({ query, count: 0, results: [] });
+            return createSuccessResponse({ query, count: 0, has_more: false, next_cursor: null, results: [] });
           }
 
           const allowedIdSet = buildAllowedIdSet(config.allowedPages);

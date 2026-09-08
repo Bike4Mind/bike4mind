@@ -2,13 +2,14 @@
  * Notion MCP Server - Ancestry helpers
  *
  * Shared parent-chain walking logic used by both the search and page tools.
- * Includes a short-lived LRU cache so repeated lookups for the same page
+ * Includes a short-lived, bounded cache so repeated lookups for the same page
  * (common during filtered searches) do not re-fetch from the Notion API.
  */
 
 import type { NotionRetrieveResponse } from '../types.js';
 import { notionRequest } from '../client.js';
 import type { AllowedPageEntry } from '../config.js';
+import { debugWarn } from '../logger.js';
 
 export const MAX_ANCESTRY_DEPTH = 10;
 export const MAX_ANCESTRY_CONCURRENCY = 3;
@@ -19,7 +20,8 @@ export function normalizeId(id: string): string {
 }
 
 // Short-lived cache: normalizedId -> normalizedParentId (or null if no parent).
-// Capped at 500 entries; entries expire after 60s.
+// Bounded at 500 entries and evicted in insertion order (FIFO, not LRU: cacheGet
+// does not refresh recency); entries expire after 60s.
 const CACHE_MAX = 500;
 const CACHE_TTL_MS = 60_000;
 
@@ -74,7 +76,8 @@ export async function resolveParentId(pageId: string): Promise<string | null> {
       item = await notionRequest<NotionRetrieveResponse>(`/blocks/${pageId}`);
     }
   } catch {
-    cacheSet(nid, null);
+    // Deliberately not cached: a transient transport error must not become a 60s
+    // "no parent" verdict, which every caller reads as a denial.
     return null;
   }
 
@@ -108,6 +111,7 @@ export async function findAncestorInSet(
     if (targetSet.has(parentId)) return parentId;
     currentId = parentId;
   }
+  debugWarn('ancestry walk exhausted without a match', { startId: normalizeId(startId), depth: MAX_ANCESTRY_DEPTH });
   return null;
 }
 

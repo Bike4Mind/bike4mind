@@ -174,8 +174,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     );
   }
 
-  // Single-use nonce: the csrfToken stored at connect time must match, and is
-  // consumed atomically so a replayed callback URL is rejected.
+  // Single-use nonce: the csrfToken carried in `state` must match the one stored at
+  // connect time. This is a read-then-compare, not a conditional write; the nonce is
+  // cleared in the same update that stores the connection below, so a callback replayed
+  // after that update fails this check.
   const existingUser = await userRepository.findById(userId);
 
   if (existingUser?.notionConnect?.status === 'connected') {
