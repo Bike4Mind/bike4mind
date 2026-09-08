@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -35,17 +36,17 @@ const handler = baseApi().post(
     // No `members` here on purpose: a toggle is direction-neutral, so this route cannot tell a join
     // from a leave and would refuse removals. The admission contract (#1680) runs inside
     // `toggleTags`, at the exact branch that makes a file a member.
-    await dataLakeService.assertCanWriteDataLakeTags(
-      { userId: req.user.id, isAdmin: !!req.user.isAdmin },
-      toggledTags,
-      {
-        db: {
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          ...settingsStores,
-        },
-      }
-    );
+    const ctx = await toAccessContext(req);
+    // Full actor, not a `{ userId, isAdmin }` literal: `canManageLake`'s org-admin rung reads
+    // `administeredOrgIds`, which cannot be derived from the user document, so a literal here
+    // makes this gate strictly narrower than every other lake-management gate in the app.
+    await dataLakeService.assertCanWriteDataLakeTags(ctx, toggledTags, {
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        ...settingsStores,
+      },
+    });
 
     const result = await fabFilesService.toggleTags(req.user.id, req.body, {
       db: {
@@ -57,6 +58,10 @@ const handler = baseApi().post(
         ...lakeConfigAuditDb,
         ...settingsStores,
       },
+      // The service re-gates every lake this toggle joins or leaves, so its actor has to stay as
+      // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived from
+      // the user document the service is handed.
+      administeredOrgIds: ctx.administeredOrgIds,
       logger: req.logger,
     });
 
