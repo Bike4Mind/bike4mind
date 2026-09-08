@@ -82,11 +82,16 @@ export const useHelpContent = (slug: string) => {
   const filePath = entry?.filePath;
   const accessLevel = entry?.accessLevel;
 
-  // Hash the token into the cache key so a fetched admin article can never be
-  // served from cache to a different identity on login/logout/user switch
-  // (mirrors useHelpIndex's sessionKey - the server does its own auth-based
-  // filtering regardless, this just keeps the client cache from being stale-wrong).
-  const sessionKey = accessToken ? hashForCacheKey(accessToken) : 'anonymous';
+  // Hash the token into the cache key so a fetched admin article can never be served from cache
+  // to a different identity on login/logout/user switch (mirrors useHelpIndex's sessionKey - the
+  // server does its own auth-based filtering regardless, this just keeps the client cache from
+  // being stale-wrong). Public articles are identity-independent static assets, so they keep a
+  // stable key instead of being refetched on every silent token rotation.
+  const sessionKey = isPublicAccessLevel(accessLevel)
+    ? 'public'
+    : accessToken
+      ? hashForCacheKey(accessToken)
+      : 'anonymous';
 
   const query = useQuery({
     queryKey: ['help-content', slug, sessionKey],

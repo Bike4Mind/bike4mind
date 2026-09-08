@@ -31,6 +31,18 @@ export function isPublicAccessLevel(accessLevel: HelpAccessLevel | undefined): b
 export const PUBLIC_HELP_CONTENT_DIR = 'public/help-content';
 export const ADMIN_HELP_CONTENT_DIR = 'app/generated/help-content-admin';
 
+/*
+ * Keep both of the above plain string literals. Next's output-file tracing is what carries the
+ * admin root into the standalone bundle: it statically resolves `path.join(process.cwd(), <this
+ * constant>)` to a directory and traces the files under it, which is the only reason
+ * `app/generated/help-content-admin/**` reaches a self-host image (the Dockerfile's runner stage
+ * copies `.next/standalone`, `.next/static` and `public/`, and nothing copies `app/generated`).
+ * Verified by inspecting `.next/server/pages/api/help/content.js.nft.json`, which lists all of the
+ * admin articles by name alongside the public ones. Building either path from a runtime value
+ * would defeat that analysis, and admin help would 404 in the container with nothing failing at
+ * build time.
+ */
+
 /**
  * Strip markdown inline formatting from text (bold, italic, code, links)
  * This ensures consistent text extraction from both raw markdown and rendered content

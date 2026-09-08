@@ -156,6 +156,31 @@ describe('useHelpContent identity scoping', () => {
     expect(lastRequest()[1]?.headers?.Authorization).toBe('Bearer token-b');
   });
 
+  it('does not refetch a public article when the access token rotates', async () => {
+    // Public articles are identity-independent static assets, so a silent token refresh must not
+    // invalidate them. Only the admin path is identity-scoped.
+    useHelpIndexMock.mockReturnValue({
+      data: { entries: [entry('features/overview', 'public')], categories: [], version: 'v' },
+    });
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const sharedWrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    useAccessToken.setState({ accessToken: 'token-a' });
+    const first = renderHook(() => useHelpContent('features/overview'), { wrapper: sharedWrapper });
+    await waitFor(() => expect(first.result.current.data).toBeDefined());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    useAccessToken.setState({ accessToken: 'token-b' });
+    const second = renderHook(() => useHelpContent('features/overview'), { wrapper: sharedWrapper });
+    await waitFor(() => expect(second.result.current.data).toBeDefined());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not reuse an authenticated body for an anonymous reader', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const sharedWrapper = ({ children }: { children: React.ReactNode }) => (

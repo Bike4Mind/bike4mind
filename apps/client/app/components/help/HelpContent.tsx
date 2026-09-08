@@ -277,7 +277,9 @@ function useAuthedMediaSrc(url: string | undefined, isAdmin: boolean): string | 
   const [objectUrl, setObjectUrl] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!isAdmin || !url) {
+    // No token means the authed route can only 401/404, so skip the round-trip. The article body
+    // itself fails the same way, so there is nothing extra to surface here.
+    if (!isAdmin || !url || !accessToken) {
       setObjectUrl(undefined);
       return;
     }
