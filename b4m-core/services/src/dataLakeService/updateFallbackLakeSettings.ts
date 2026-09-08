@@ -18,7 +18,7 @@ type UpdateFallbackLakeSettingsParams = z.infer<typeof UpdateFallbackLakeSetting
 
 interface UpdateFallbackLakeSettingsAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
     // 'listByPrincipal' (#2425) flows through to assertFallbackLakeSettingsWriteAccess's own
     // adapter type, which uses it to resolve a foreign-org owner/curator grant by slug.
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
