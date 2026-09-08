@@ -2360,3 +2360,67 @@ describe('GET /api/publish/serve - export affordances on the viewer surfaces (is
     expect(res._getData() as string).not.toContain('?export=');
   });
 });
+
+describe('GET /api/publish/serve - Save as PDF', () => {
+  const bundleHtml = Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>');
+
+  it('offers the bar button and ships the widget even with comments disabled', async () => {
+    // The button prints the LIVE frame, so it needs no re-authorization and is offered
+    // regardless of `?export=` eligibility. The widget is the only script the wrapper CSP
+    // admits, so it must ship for every non-embed wrapper, not just commented artifacts.
+    mockArtifactFindOne.mockReturnValue(bundle()); // no commentPolicy -> 'none'
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('class="b4m-bar-print"');
+    expect(data).toContain('<script src="/api/publish/widget" defer></script>');
+    expect(data).not.toContain('b4m-annotate-root'); // the comment mount stays opt-in
+    // Shipped hidden: the widget reveals it, so no-JS viewers never see a dead button.
+    expect(data).toContain('<button class="b4m-bar-print" type="button" hidden>');
+    expect(res.getHeader('Content-Security-Policy')).toContain('/api/publish/widget');
+  });
+
+  it('offers the floating variant on a share-token view, which has no lead-gen bar', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private' }));
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<div class="b4m-actions">');
+    expect(data).toContain('class="b4m-print"');
+    expect(data).not.toContain('class="b4m-bar-print"');
+  });
+
+  it('drops the button AND the widget in chrome-less embed mode', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+    await promise;
+
+    const data = res._getData() as string;
+    // Assert on the ELEMENTS - the CSS rules for these classes always ship in <style>.
+    expect(data).not.toContain('<button class="b4m-bar-print"');
+    expect(data).not.toContain('<button class="b4m-print"');
+    expect(data).not.toContain('/api/publish/widget');
+  });
+
+  it('puts the in-frame print trigger in the bundle document, not the wrapper', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const wrapper = run(['u', 'scope123', 'my-slug']);
+    await wrapper.promise;
+    const isolated = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await isolated.promise;
+
+    // The wrapper cannot call print() on the frame, so the trigger rides inside it.
+    expect(isolated.res._getData() as string).toContain('window.print');
+    expect(wrapper.res._getData() as string).not.toContain('window.print');
+  });
+});
