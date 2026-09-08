@@ -346,6 +346,90 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
   });
 });
 
+/**
+ * #2425: a lake scoped to an org the caller does not belong to is invisible to findBySlug's own-org
+ * and org-less arms. A real owner/curator grant on it (a cross-org transferLakeOwnership) is still
+ * legitimate access - canManageLake already admits it once the lake resolves - so assertLakeAccess
+ * must thread a grant-resolution fallback into findBySlug. `findBySlug` itself is mocked here (its
+ * real org-vs-grant arm logic is proved against a real Mongo in DataLakeModel.test.ts); this suite
+ * pins that assertLakeAccess actually SUPPLIES the thunk, and only when a grant repo is wired.
+ */
+describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => {
+  const theirs = lake({
+    id: 'foreign-granted',
+    slug: 'foreign-granted',
+    createdByUserId: 'other',
+    organizationId: 'orgA',
+  });
+
+  // Mirrors DataLakeModel.findBySlug's real shape: own-org/org-less miss, then a last-resort check
+  // against whatever ids the supplied thunk resolves to.
+  const findBySlugFake = () =>
+    vi
+      .fn()
+      .mockImplementation(
+        async (_slug: string, organizationIds?: string[], resolveGrantedLakeIds?: () => Promise<string[]>) => {
+          if (organizationIds?.includes('orgA')) return theirs;
+          if (!resolveGrantedLakeIds) return null;
+          const grantedIds = await resolveGrantedLakeIds();
+          return grantedIds.includes(theirs.id) ? theirs : null;
+        }
+      );
+
+  const grantRepo = (role: 'owner' | 'curator') => ({
+    listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: theirs.id, role }]),
+    listByLake: vi
+      .fn()
+      .mockResolvedValue([{ dataLakeId: theirs.id, principalType: 'user', principalId: 'grantee', role }]),
+  });
+
+  it('resolves the lake for a foreign-org owner-grant holder', async () => {
+    const db = {
+      dataLakes: { findById: vi.fn().mockRejectedValue(new Error('bad id')), findBySlug: findBySlugFake() },
+      dataLakeAccessGrants: grantRepo('owner'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).resolves.toBe(theirs);
+  });
+
+  it('resolves the lake for a foreign-org curator-grant holder', async () => {
+    const db = {
+      dataLakes: { findById: vi.fn().mockRejectedValue(new Error('bad id')), findBySlug: findBySlugFake() },
+      dataLakeAccessGrants: grantRepo('curator'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).resolves.toBe(theirs);
+  });
+
+  it('still denies (not-found-style) a foreign-org caller with NO grant - no enumeration widening', async () => {
+    const db = {
+      dataLakes: { findById: vi.fn().mockRejectedValue(new Error('bad id')), findBySlug: findBySlugFake() },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockResolvedValue([]),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'stranger', organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('never threads a grant thunk when no grant repo is wired - back-compat for callers that have not', async () => {
+    const findBySlug = findBySlugFake();
+    const db = { dataLakes: { findById: vi.fn().mockRejectedValue(new Error('bad id')), findBySlug } };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
+    expect(findBySlug).toHaveBeenCalledWith('foreign-granted', ['orgB'], undefined);
+  });
+});
+
 describe('assertLakeWritable / isFallbackLake — fallback lakes are read-only', () => {
   it('identifies a fallback lake by config id and refuses the write with a clear read-only error', () => {
     expect(isFallbackLake({ id: 'opti-knowledge' })).toBe(true);
