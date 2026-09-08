@@ -341,6 +341,7 @@ async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
   corpusLabel: string,
+  maxChunkChars: number,
   skipNotice?: SkipNotice | null,
   dataLakeTags: string[] = []
 ): Promise<void> {
@@ -370,6 +371,13 @@ async function emitSemanticCitables(
   // Appended to the one found-status rather than a second update, which would read as a bug.
   // warnings also accretes onto promptMeta so the notice survives in the quest record.
   const partial = skipNotice?.partial ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+  // Injected volume (RetrievalSummarySchema.injected). Counted over `ranked` - PASSAGES, not the
+  // per-file `citables` above - and priced with the same servedPassageText formatSemanticResults
+  // emits, so `chars` is the retrieved content the model actually received: trimmed, clipped to
+  // the serve budget, headings and framing excluded. That is the same thing forced retrieval's
+  // `used` counts, which is what lets the two sum into one number.
+  const injectedChars = ranked.reduce((sum, r) => sum + servedPassageText(r, maxChunkChars).text.length, 0);
+  const topScores = ranked.map(r => r.score);
   await context.statusUpdate(
     // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
     // does not narrow to this literal. Pre-existing pattern in this file.
@@ -377,7 +385,17 @@ async function emitSemanticCitables(
       promptMeta: {
         citables,
         ...(skipNotice ? { warnings: [skipNotice.text] } : {}),
-        retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags },
+        retrieval: {
+          attempted: true,
+          outcome: 'ok',
+          surfaces: ['knowledgeBaseSearch'],
+          dataLakeTags,
+          injected: {
+            chunks: ranked.length,
+            chars: injectedChars,
+            ...(topScores.length ? { topScore: Math.max(...topScores) } : {}),
+          },
+        },
       },
     } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
@@ -611,7 +629,7 @@ async function trySemanticKbSearch(
     });
     const ranked = bound.kept;
 
-    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice, dataLakeTags);
+    await emitSemanticCitables(context, ranked, 'the data lake', budgets.maxChunkChars, skipNotice, dataLakeTags);
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
     );
@@ -741,7 +759,7 @@ async function tryScopedSemanticKbSearch(
       logger: context.logger,
     });
     const ranked = bound.kept;
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice, []);
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base", budgets.maxChunkChars, skipNotice, []);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
     return {
@@ -1261,6 +1279,21 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // distinguishable from "never searched" (#1867).
           const keywordArmOutcome = semantic.retrievalOutcome ?? 'ok';
 
+          // Injected volume (RetrievalSummarySchema.injected). ZERO on both branches below, and
+          // deliberately NOT `rankedResults.length`: this arm matches file METADATA and emits
+          // names, types, tags and notes - no passage content reaches the model, which is why its
+          // output tells the model to call retrieve_knowledge_content for the text. `chunks`
+          // counts passages, so answering it with a document count would collapse the very
+          // distinction that keeps this field from restating `citables`. A keyword-only turn IS
+          // passage-starved, and recording that is the point.
+          //
+          // Unconditional because this arm cannot reach either write without completing its own
+          // search: `keywordArmOutcome` is only ever 'ok' or the semantic arm's PROVEN
+          // 'not_indexed' (proveRetrievalOutcome never returns 'failed'), and a semantic arm that
+          // threw writes its own 'failed' with no volume, leaving the merge to disagree in tone -
+          // worst-of outcome beside sum-of-completions volume, which is the documented shape.
+          const keywordArmInjected = { chunks: 0, chars: 0 };
+
           // Emit citable source chips so search results appear as clickable citations
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
@@ -1321,6 +1354,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     outcome: keywordArmOutcome,
                     surfaces: ['knowledgeBaseSearch'],
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                    injected: keywordArmInjected,
                   },
                 },
               } as any,
@@ -1343,6 +1377,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     outcome: keywordArmOutcome,
                     surfaces: ['knowledgeBaseSearch'],
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                    injected: keywordArmInjected,
                   },
                 },
               } as any,

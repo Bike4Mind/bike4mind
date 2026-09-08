@@ -48,6 +48,17 @@ const LakeMemorySchema = subSchema({
   dataLakeTags: [{ type: String, required: false }],
 });
 
+// Injected retrieval volume (passages + characters + best similarity). Its own subSchema, so
+// `default: undefined` on the path below can suppress auto-vivification: an inline nested object
+// would materialize `injected: {}` on every quest, which has no `chunks` and so fails the Zod
+// re-parse on read (Zod `chunks`/`chars` are required). Absent-or-fully-present, and absence is
+// load-bearing - it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
+const InjectedVolumeSchema = subSchema({
+  chunks: { type: Number, required: true },
+  chars: { type: Number, required: true },
+  topScore: { type: Number, required: false },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -66,6 +77,10 @@ const RetrievalSummarySchema = subSchema({
   // default: undefined for the same auto-vivification reason as dataLakeTags above.
   injectedLakePromptIds: { type: [String], required: false, default: undefined },
   injectedLakePromptCount: { type: Number, required: false },
+  // default: undefined for the same auto-vivification reason as the paths above - and here it also
+  // preserves the field's presence contract, since a materialized empty object would report
+  // "unknown volume" as a recorded one.
+  injected: { type: InjectedVolumeSchema, required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as

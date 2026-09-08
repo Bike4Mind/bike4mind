@@ -1949,6 +1949,8 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       outcome: 'ok',
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: ['datalake:x'],
+      // A completed search that injected nothing - recorded, not left unknown.
+      injected: { chunks: 0, chars: 0 },
     });
   });
 
@@ -1979,6 +1981,11 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       outcome: 'ok',
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: ['datalake:x'],
+      // ZERO even though a document was found, and that is the point: this arm matches file
+      // METADATA and emits names, types and tags - the model gets no passage content, which is
+      // why the output tells it to call retrieve_knowledge_content. `chunks` counts passages, so
+      // answering it with the document count would restate `citables` in the wrong unit.
+      injected: { chunks: 0, chars: 0 },
     });
   });
 
@@ -2106,6 +2113,89 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: [],
     });
+  });
+});
+
+describe('search_knowledge_base injected volume', () => {
+  const passage = (over: Record<string, unknown> = {}) => ({
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags: [],
+    chunkText: 'pto accrues monthly',
+    score: 0.81,
+    fileCreatedAt: null,
+    ...over,
+  });
+
+  /** Wires the deps the semantic arm needs so it actually runs rather than falling through. */
+  const semanticCtx = () =>
+    makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+  const retrievalWrites = (ctx: ToolContext) =>
+    (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => (c[0] as { promptMeta?: { retrieval?: { injected?: unknown } } })?.promptMeta?.retrieval)
+      .filter(Boolean);
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('reports passages, served characters and the best score from the semantic arm', async () => {
+    const hits = [passage(), passage({ chunkId: 'c2', chunkText: 'holidays accrue too', score: 0.62 })];
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: hits,
+      totalChunksSearched: 9,
+      filesInScope: 1,
+      chunksScored: 9,
+    });
+    const ctx = semanticCtx();
+
+    await run(ctx);
+
+    // Two PASSAGES from ONE document: `chunks` is per-passage, which is exactly the count
+    // `citables` (deduped per file, and 1 here) cannot express. `chars` is the served text, so a
+    // reader can tell a two-line answer from a budget-filling one.
+    expect(retrievalWrites(ctx)).toContainEqual(
+      expect.objectContaining({
+        outcome: 'ok',
+        injected: {
+          chunks: 2,
+          chars: hits[0].chunkText.length + hits[1].chunkText.length,
+          topScore: 0.81,
+        },
+      })
+    );
+  });
+
+  it('records no volume when the semantic arm throws, so a failure stays unknown rather than zero', async () => {
+    semanticDataLakeSearchMock.mockRejectedValue(new Error('embedding provider down'));
+    const ctx = semanticCtx();
+
+    await run(ctx);
+
+    const failed = retrievalWrites(ctx).find(r => r?.outcome === 'failed');
+    expect(failed).toBeDefined();
+    // The throwing surface reports no volume at all - it broke, so its volume is unknown, and a
+    // zero from it would be a lie. The keyword arm that runs next reports its own honest zero
+    // (it completed and injected no passage content), which is why the merged turn ends up
+    // 'failed' beside `chunks: 0`: worst-of outcome, sum-of-completions volume.
+    expect(failed?.injected).toBeUndefined();
   });
 });
 

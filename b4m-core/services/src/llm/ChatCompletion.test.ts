@@ -3716,7 +3716,17 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // One belief recalled and rendered. No `topScore`: belief relevance is a different scale
+        // from the cosine similarities the other surfaces report, so a max across the two would
+        // be a number that looks like a similarity and is not one.
+        injected: { chunks: 1, chars: expect.any(Number) },
       });
+      // `chars` is measured AFTER the render, so it covers the framing the model actually received
+      // rather than the raw belief text - which is the only reason it can be compared with forced
+      // retrieval's number.
+      expect((retrieval as { injected: { chars: number } }).injected.chars).toBeGreaterThan(
+        'The X-200 pump has a 5-year warranty.'.length
+      );
     });
 
     it('emits no lake-memory block when recall returns nothing, but still records attempted:true, outcome:ok (#1867 zero case)', async () => {
@@ -3731,6 +3741,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // Recall completed, so the zero is RECORDED rather than unknown - the same distinction
+        // 'ok' draws for the outcome, now drawn for the volume.
+        injected: { chunks: 0, chars: 0 },
       });
     });
 
@@ -3741,7 +3754,8 @@ describe('ChatCompletionProcess', () => {
       });
 
       expect(systemText).not.toContain('Background reference facts');
-      // A retrieval that threw must not be byte-identical to one never attempted.
+      // A retrieval that threw must not be byte-identical to one never attempted. No `injected`:
+      // recall broke mid-flight, so the volume is unknown and a zero would be a lie.
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
