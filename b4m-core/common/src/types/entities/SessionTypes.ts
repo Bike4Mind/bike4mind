@@ -603,6 +603,17 @@ export interface ISession {
    */
   retrievalTags?: string[];
   /**
+   * Lake ids a manager was admitted to for THIS session even though they are not a member of the
+   * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its
+   * own canManageLake check, as a write separate from session creation. Never part of
+   * createSession's input type (fork/clone/snip cannot copy it - a type error, not a runtime
+   * check) and never part of SessionUpdateRequestSchema (no session can grant itself this after
+   * the fact). Consumed only by the retrieval/injection widening in getDynamicDataLakeTags and
+   * getDataLakePrompts, and only once re-vetted against the request's authenticated principal -
+   * see ToolContext.sessionPreauthorizedLakeIds. Absent/empty = no widening.
+   */
+  preauthorizedLakeIds?: string[];
+  /**
    * How this session grounds an attached data-lake corpus (inline vs retrieve vs auto-by-size),
    * resolved ONCE at create time from the lake this session was created for (see
    * resolveLakeSessionDefaults). The completion path's corpus defer plan reads this to decide

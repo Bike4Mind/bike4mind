@@ -7,6 +7,7 @@ import {
   fabFileRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
+  memoryLedgerRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -44,6 +45,7 @@ const handler = baseApi()
         fabFiles: fabFileRepository,
         adminSettings: adminSettingsRepository,
         scopedSettings: scopedSettingsRepository,
+        memoryLedger: memoryLedgerRepository,
       },
       logger: req.logger,
     });

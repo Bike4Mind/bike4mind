@@ -24,7 +24,7 @@ import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipSc
  */
 export interface DataLakeAccessContext {
   db: {
-    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById'>;
     /**
      * Resolves the caller's org membership set (owner + `users[]` ACL) internally from
      * `user.id` - required so an absent resolver can't silently drop every org lake (#1674).

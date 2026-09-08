@@ -124,6 +124,8 @@ export default function DataLakeManagerPanel() {
           // Absent when withheld from a non-editor OR the lake predates the field; seed the default
           // so the picker always shows a concrete mode (matching how the resolver treats absence).
           groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          // Absent (predates the field) reads the same as an explicit false: never built.
+          lakeMemoryEnabled: l.lakeMemoryEnabled ?? false,
           // null/undefined both mean "no explicit policy" (the lake inherits), which is the state
           // the field renders as blank - and the state in which this lake never converges.
           requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,

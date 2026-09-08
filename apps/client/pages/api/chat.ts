@@ -306,6 +306,7 @@ function transformToInternalFormat(
     enableArtifacts: false,
     ...(request.promptMode ? { promptMode: request.promptMode } : {}),
     includeSystemPrompt: request.includeSystemPrompt,
+    ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     ...(isToolsEnabled
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.

@@ -161,6 +161,24 @@ describe('validateUserApiKey - embed context fields', () => {
     expect(result.branding).toEqual({ displayName: 'Acme', primaryColor: '#336699', hideBranding: true });
   });
 
+  it('carries preauthorizedLakeIds through the projection', async () => {
+    const { repo } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any } };
+
+    const { key } = await createUserApiKey(
+      'sys-1',
+      { ...mintParams, preauthorizedLakeIds: ['lake-a', 'lake-b'] },
+      { ...adapters, systemUserId: 'sys-1' }
+    );
+
+    const result = await validateUserApiKey(key, adapters);
+
+    // apiKeyAuth copies this onto req.apiKeyInfo and /api/sessions/create refuses every lake the
+    // key is not bound to, so dropping it here silently un-binds every key that has a binding.
+    expect(result.preauthorizedLakeIds).toEqual(['lake-a', 'lake-b']);
+  });
+
   it('leaves embed fields undefined for a non-embed key', async () => {
     const { repo } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

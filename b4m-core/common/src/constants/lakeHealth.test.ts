@@ -5,6 +5,9 @@ import {
   evaluateMemberHealth,
   summarizeLakeHealth,
   findDuplicateMembers,
+  isLeaseHeld,
+  deriveLakeMemoryState,
+  LAKE_MEMORY_EXTRACTION_LEASE_MS,
   type LakeHealthMemberInput,
 } from './lakeHealth';
 import { isMemberIndexingInFlight } from './lakeConvergence';
@@ -753,5 +756,85 @@ describe('findDuplicateMembers', () => {
       { fabFileId: 'e', fileName: 'triple.txt', fileSize: 1 },
     ]);
     expect(result.groups.map(g => g.fileName)).toEqual(['triple.txt', 'pair.txt']);
+  });
+});
+
+describe('isLeaseHeld', () => {
+  const now = new Date('2026-09-06T12:00:00.000Z');
+
+  it('is false when there is no lease timestamp', () => {
+    expect(isLeaseHeld(null, now)).toBe(false);
+    expect(isLeaseHeld(undefined, now)).toBe(false);
+  });
+
+  it('is true for a lease claimed within the lease window', () => {
+    const at = new Date(now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS / 2);
+    expect(isLeaseHeld(at, now)).toBe(true);
+  });
+
+  it('is true for a lease claimed exactly at the edge of the lease window', () => {
+    const at = new Date(now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS);
+    expect(isLeaseHeld(at, now)).toBe(true);
+  });
+
+  it('is false for a lease older than the lease window (a crashed run)', () => {
+    const at = new Date(now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS - 1);
+    expect(isLeaseHeld(at, now)).toBe(false);
+  });
+
+  it('accepts an ISO string the same as a Date', () => {
+    const at = new Date(now.getTime() - 1000).toISOString();
+    expect(isLeaseHeld(at, now)).toBe(true);
+  });
+
+  it('is false for an unparseable string', () => {
+    expect(isLeaseHeld('not-a-date', now)).toBe(false);
+  });
+});
+
+describe('deriveLakeMemoryState', () => {
+  const base = { platformEnabled: true, lakeEnabled: true, building: false, everBuilt: true, stale: false };
+
+  it('returns platform-off when the platform kill-switch is off, regardless of everything else', () => {
+    expect(
+      deriveLakeMemoryState({
+        ...base,
+        platformEnabled: false,
+        lakeEnabled: true,
+        building: true,
+        everBuilt: true,
+        stale: true,
+      })
+    ).toBe('platform-off');
+  });
+
+  it('returns lake-off when the lake itself is disabled, even mid-build with a profile', () => {
+    expect(deriveLakeMemoryState({ ...base, lakeEnabled: false, building: true, everBuilt: true, stale: true })).toBe(
+      'lake-off'
+    );
+  });
+
+  it('returns building when a build is in flight, even for a lake with no profile yet', () => {
+    expect(deriveLakeMemoryState({ ...base, building: true, everBuilt: false })).toBe('building');
+  });
+
+  it('returns never-built when nothing is building and no profile exists yet', () => {
+    expect(deriveLakeMemoryState({ ...base, everBuilt: false })).toBe('never-built');
+  });
+
+  it('returns stale when a profile exists but the lake has synced since it was built', () => {
+    expect(deriveLakeMemoryState({ ...base, everBuilt: true, stale: true })).toBe('stale');
+  });
+
+  it('returns current when a profile exists, is not stale, and nothing is building', () => {
+    expect(deriveLakeMemoryState(base)).toBe('current');
+  });
+
+  it('returns building even when the existing profile is stale (building outranks stale)', () => {
+    expect(deriveLakeMemoryState({ ...base, building: true, everBuilt: true, stale: true })).toBe('building');
+  });
+
+  it('returns never-built ahead of stale when no profile exists yet', () => {
+    expect(deriveLakeMemoryState({ ...base, everBuilt: false, stale: true })).toBe('never-built');
   });
 });
