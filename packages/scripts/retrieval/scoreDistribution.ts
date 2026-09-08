@@ -118,6 +118,17 @@ export type ArmRow = {
   band: ScoreBand;
   meanTopScore: number;
   /**
+   * Mean rank-1 cosine on the POSITIVE questions and on the NEGATIVE ones.
+   *
+   * The gap between them is the floor headroom: a similarity floor can only separate answerable
+   * from unanswerable questions if negatives score measurably lower. `falsePositiveRate` cannot say
+   * this here - it is structurally 1.0 for every arm, because an offline top-k applies no floor and
+   * so always returns k chunks however badly they score. These two numbers are what a later
+   * re-derivation of the ada-002-era cosine literals actually needs, and they cost nothing to carry.
+   */
+  positiveTopScore: number;
+  negativeTopScore: number;
+  /**
    * Per-query rank-1 minus rank-N, in query order. The published prod row lists these individually
    * (0.0294, 0.0172, 0.0139) rather than averaged, and the go signal is stated against them - so
    * they are kept rather than collapsed, and `meanSpread` is the summary rather than the datum.
@@ -149,6 +160,12 @@ export function buildArmRow(args: {
     queries: distributions.length,
     band: scoreBand(distributions),
     meanTopScore: mean(distributions.map(d => d.topScores[0] ?? 0)),
+    positiveTopScore: mean(
+      distributions.filter((_, i) => args.queries[i].supporting.length > 0).map(d => d.topScores[0] ?? 0)
+    ),
+    negativeTopScore: mean(
+      distributions.filter((_, i) => args.queries[i].supporting.length === 0).map(d => d.topScores[0] ?? 0)
+    ),
     spreads: distributions.map(d => d.spread),
     meanSpread: mean(distributions.map(d => d.spread)),
     quality: aggregate(distributions.map((d, i) => scoreQuestion(d.servedDocIds, new Set(args.queries[i].supporting)))),
@@ -180,7 +197,7 @@ export function formatArmSummary(row: ArmRow): string {
     `embedding_mismatch   : ${row.filesExcluded} excluded files, ${row.chunksExcluded} skipped chunks`,
     `retrieval_unavailable: n/a (offline exact kNN over a captured fixture)`,
     `superseded           : n/a (no collapse pass offline)`,
-    `rank-1 to rank-${RANK_DEPTH} spread : ${spreads}${elided}`,
+    `r1-r${RANK_DEPTH} spread`.padEnd(21) + `: ${spreads}${elided}`,
     `overall band         : ${row.band.min.toFixed(4)} - ${row.band.max.toFixed(4)} (width ${row.band.width.toFixed(4)})`,
   ].join('\n');
 }
@@ -205,11 +222,12 @@ export function formatComparisonTable(rows: readonly ArmRow[]): string {
     pad('band max', 10),
     pad('width', 8),
     pad('spread', 8),
+    pad('posTop', 8),
+    pad('negTop', 8),
     pad('recall', 8),
     pad('prec', 8),
     pad('hit', 8),
     pad('mrr', 8),
-    pad('fpr', 8),
   ].join('');
 
   const body = rows.map(r =>
@@ -222,11 +240,12 @@ export function formatComparisonTable(rows: readonly ArmRow[]): string {
       pad(num(r.band.max, 4), 10),
       pad(num(r.band.width, 4), 8),
       pad(num(r.meanSpread, 4), 8),
+      pad(num(r.positiveTopScore, 4), 8),
+      pad(num(r.negativeTopScore, 4), 8),
       pad(num(r.quality.recall, 3), 8),
       pad(num(r.quality.precision, 3), 8),
       pad(num(r.quality.hitRate, 3), 8),
       pad(num(r.quality.mrr, 3), 8),
-      pad(num(r.quality.falsePositiveRate, 3), 8),
     ].join('')
   );
 

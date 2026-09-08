@@ -106,6 +106,8 @@ describe('buildArmRow', () => {
     expect(row.queries).toBe(1);
     expect(row.band.width).toBeCloseTo(1, 6);
     expect(row.meanTopScore).toBeCloseTo(1, 6);
+    expect(row.positiveTopScore).toBeCloseTo(1, 6);
+    expect(row.negativeTopScore).toBe(0); // no negative questions in this arm
     expect(row.meanSpread).toBeCloseTo(1, 6);
     // docA ranked first out of three documents served.
     expect(row.quality.recall).toBe(1);
@@ -125,6 +127,10 @@ describe('buildArmRow', () => {
     });
     expect(row.quality.negatives).toBe(1);
     expect(row.quality.falsePositiveRate).toBe(1);
+    // The number that CAN move: how high an unanswerable question scores. A floor separates
+    // answerable from unanswerable only if this sits measurably below positiveTopScore.
+    expect(row.negativeTopScore).toBeCloseTo(1, 6);
+    expect(row.positiveTopScore).toBe(0);
   });
 });
 
@@ -148,6 +154,10 @@ describe('formatComparisonTable', () => {
     expect(lines[0]).toContain('band min');
     expect(lines[0]).toContain('width');
     expect(lines[0]).toContain('mrr');
+    expect(lines[0]).toContain('posTop');
+    expect(lines[0]).toContain('negTop');
+    // falsePositiveRate is structurally 1.0 offline (no floor is applied), so it is not a column.
+    expect(lines[0]).not.toContain('fpr');
     expect(lines[2]).toContain('a@1536');
     expect(lines[3]).toContain('b@3072');
     // Fixed-width, so the same column starts at the same offset on every row.
@@ -172,6 +182,7 @@ describe('formatArmSummary', () => {
     expect(summary).toContain('chunks_scored        : 2');
     expect(summary).toContain('embedding_mismatch   : 0 excluded files, 0 skipped chunks');
     expect(summary).toContain('overall band         : ');
+    expect(summary).toContain('r1-r10 spread        : ');
   });
 
   it('reports the counters this instrument cannot observe as n/a, never as zero', () => {
