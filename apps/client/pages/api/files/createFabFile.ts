@@ -1,4 +1,10 @@
-import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
+import {
+  CreateFabFileRequestInputType,
+  FabFileSourceType,
+  FileEvents,
+  Permission,
+  isExecutableUploadMimeType,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
@@ -32,6 +38,12 @@ const handler = baseApi()
       const { user } = req;
 
       const params = createFabFileSchema.parse(req.body);
+
+      // Reject executable upload types (html/xhtml/svg) like the presign siblings
+      // (generate-presigned-url.ts): this route also hands back a browser PUT presign, so without
+      // this gate it is an unguarded door for uploading active content that could be served back.
+      if (isExecutableUploadMimeType(params.mimeType))
+        throw new BadRequestError(`Content type ${params.mimeType} is not allowed`);
 
       // Same effective gate as the presign siblings (generate-presigned-url.ts,
       // generate-presigned-urls-batch.ts): when this create is bound to a data lake batch, the

@@ -141,6 +141,29 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
  * `assertCanWriteDataLakeTags`' `members` option - the contract's ONLY opt-in signal - and the real
  * service runs here, so deleting that option makes this refusal disappear.
  */
+describe('POST /api/files/createFabFile - executable mime gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it.each(['image/svg+xml', 'text/html', 'application/xhtml+xml'])(
+    'rejects executable upload type %s without creating a file',
+    async mimeType => {
+      const { res } = makeRes();
+      await expect(run(body({ fileName: 'x', mimeType }), res)).rejects.toThrow(/not allowed/i);
+      expect(h.fabFileCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows a normal image type', async () => {
+    const { res } = makeRes();
+    await run(body({ fileName: 'logo.png', mimeType: 'image/png' }), res);
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('POST /api/files/createFabFile - admission contract', () => {
   // Deliberately not a round number: the owner's chunk policy resolves to a coded default here, and
   // a required target that happened to match it would satisfy the contract instead of violating it.
