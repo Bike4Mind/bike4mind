@@ -1,8 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
+import { DATA_LAKES, OVERSIZED_PASSAGE_TOKEN_THRESHOLD, effectiveTagPrefixArm } from '@bike4mind/common';
 import { detectUnderChunkedFiles, countFailedLakeFiles } from './rebuildLakePassages';
+import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
 
-const lake = { datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', createdByUserId: 'owner-1' };
+const lake = {
+  id: '507f1f77bcf86cd799439011',
+  datalakeTag: 'datalake:acme',
+  fileTagPrefix: 'acme:',
+  createdByUserId: 'owner-1',
+};
 
 const makeDeps = (
   files: { id: string; userId: string }[],
@@ -114,5 +120,58 @@ describe('countFailedLakeFiles', () => {
       fileTagPrefix: 'acme:',
       creatorUserId: 'owner-1',
     });
+  });
+});
+
+/**
+ * The lake shape `assertLakeAccess` hands back for a hardcoded DATA_LAKES lake: the config spread
+ * over an owner-less synthetic document. A real registry id, so `isFallbackLake` decides by its own
+ * config-id rule rather than a flag.
+ */
+const REGISTRY_LAKE = { ...DATA_LAKES.find(dl => dl.id === 'opti-knowledge')!, createdByUserId: '' };
+
+/**
+ * `assertLakeRebuildAccess` is the ONE file-level gate that admits a fallback lake, so this door is
+ * the only one whose lake can be creator-less. Scoping it `owned` anyway dropped the prefix arm
+ * (`effectiveTagPrefixArm` returns null with no creator to anchor to), and a registry lake is mostly
+ * prefix-tagged members - so the rebuild reported itself finished having never looked at them.
+ *
+ * Asserted against the real builders, never a hand-written literal: an independently written second
+ * copy of the scope is exactly the drift being guarded against (registryScopeParity.test.ts records
+ * why at length).
+ */
+describe('registry-lake membership scope', () => {
+  it('scopes both detectUnderChunkedFiles reads through registryMembershipScope', async () => {
+    const deps = makeDeps([], []);
+    await detectUnderChunkedFiles(REGISTRY_LAKE, deps);
+    const expected = registryMembershipScope(REGISTRY_LAKE);
+    expect(deps.db.fabFiles.findChunkedFilesByScope).toHaveBeenCalledWith(expected);
+    expect(deps.db.fabFiles.findConvergencePausedFilesByScope).toHaveBeenCalledWith(expected);
+  });
+
+  it('scopes countFailedLakeFiles through registryMembershipScope', async () => {
+    const countFailedFilesByScope = vi.fn().mockResolvedValue(0);
+    await countFailedLakeFiles(REGISTRY_LAKE, { db: { fabFiles: { countFailedFilesByScope } } });
+    expect(countFailedFilesByScope).toHaveBeenCalledWith(registryMembershipScope(REGISTRY_LAKE));
+  });
+
+  it('keeps a persisted lake on the creator-anchored scope, so the two kinds are not collapsed', async () => {
+    const deps = makeDeps([], []);
+    await detectUnderChunkedFiles(lake, deps);
+    expect(deps.db.fabFiles.findChunkedFilesByScope).toHaveBeenCalledWith(lakeMembershipScope(lake));
+    expect(deps.db.fabFiles.findConvergencePausedFilesByScope).toHaveBeenCalledWith(lakeMembershipScope(lake));
+  });
+
+  // The scope's SHAPE can look fine while the arm it resolves to is gone - which is the whole bug:
+  // `{ kind: 'owned', creatorUserId: '' }` is well formed and matches meta-tag-only. So pin the
+  // decision the membership predicate actually makes. `effectiveTagPrefixArm` is what
+  // `buildDataLakeMembershipFilter` delegates that call to, and it lives in @bike4mind/common, so
+  // this pins the predicate without reaching across into the database package.
+  it('resolves to a LIVE prefix arm, where the owned scope over the same lake drops it', async () => {
+    const deps = makeDeps([], []);
+    await detectUnderChunkedFiles(REGISTRY_LAKE, deps);
+    const scope = deps.db.fabFiles.findChunkedFilesByScope.mock.calls[0][0];
+    expect(effectiveTagPrefixArm(scope)).toBe(REGISTRY_LAKE.fileTagPrefix);
+    expect(effectiveTagPrefixArm(lakeMembershipScope(REGISTRY_LAKE))).toBeNull();
   });
 });

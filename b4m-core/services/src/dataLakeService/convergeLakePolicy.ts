@@ -369,6 +369,12 @@ export async function planLakeConvergenceRun(
     return { report: emptyReport(null), wave: [] };
   }
 
+  // `lakeMembershipScope`, not `resolveLakeMembershipScope`: the `policyInherited` gate above is what
+  // keeps that safe. A registry lake's synthetic document carries no `requiredPassageTokenTarget`
+  // (DataLakeConfig has no such field), so it returns there and never reaches this line - which is
+  // the only reason an `owned` scope over a creator-less lake cannot silently drop the prefix arm
+  // here the way it did on the rebuild door. Move that gate below this read and this needs the
+  // resolving builder.
   const rows = await db.fabFiles.findLakeConvergenceMembers(lakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
   const scanTruncated = rows.length > MEMBER_SCAN_LIMIT;
   const members = scanTruncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows;

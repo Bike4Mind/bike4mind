@@ -16,8 +16,7 @@ import {
   type LakeMembershipReport,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
-import { isFallbackLake } from './assertLakeAccess';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSetting';
 
 /**
@@ -113,9 +112,8 @@ export async function computeLakeHealth(
   // ONE scope for both reads and for the disclosure. A registry lake has no backing document, so its
   // `createdByUserId` is `''` (assertLakeAccess) and an `owned` scope would fail closed to
   // meta-tag-only - silently dropping the very arm those lakes are mostly made of, while the
-  // disclosure still named a prefix. Branch here exactly as the sibling read paths do (see
-  // GET /api/data-lakes/:id/articles), and never re-derive the disclosure from the lake document.
-  const scope = isFallbackLake(lake) ? registryMembershipScope(lake) : lakeMembershipScope(lake);
+  // disclosure still named a prefix. Never re-derive the disclosure from the lake document.
+  const scope = resolveLakeMembershipScope(lake);
 
   // Defense in depth: `datalakeTag` is `required: true` on the lake, but an absent one would serialize
   // to `null` in the membership `$match` and degrade the query to "files with no tags" across every
