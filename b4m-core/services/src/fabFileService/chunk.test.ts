@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile, commitFabFileChunks, prepareFabFileChunks } from './chunk';
-import { ChunkClaimLostError } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, ChunkClaimLostError } from '@bike4mind/common';
 import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -313,7 +313,7 @@ describe('chunkFabfile', () => {
   // enqueues without a reset, so before this a fully re-chunked and re-vectorized file kept its
   // kill-switch marker - and every reader keying on it went on treating the file as broken.
   it('clears a convergence kill-switch marker when a rebuild succeeds', async () => {
-    for (const chunkStallReason of ['vectorizePaused', 'rechunkPaused'] as const) {
+    for (const chunkStallReason of CHUNK_STALL_REASONS) {
       mockAdapter.db.fabFiles.update.mockClear();
       mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, chunkStallReason });
 

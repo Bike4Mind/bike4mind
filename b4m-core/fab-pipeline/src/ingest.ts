@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
+import type { CheerioAPI } from 'cheerio';
 import mime from 'mime-types';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
 
@@ -169,6 +170,90 @@ async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   });
 }
 
+// Elements after which we force a line break, since cheerio's `.text()` on the whole body
+// otherwise concatenates every text node with no separator at all - a heading, a list item and
+// the next paragraph would run together as one word-jammed line. Framed as a DENYLIST of inline
+// elements rather than an allowlist of block ones: an allowlist is an open set that keeps
+// drifting as new pages exercise tags it didn't cover (this one already grew twice, from a bare
+// div-only list to adding article/section/header/footer/main/dt/dd/figcaption/caption, and still
+// missed summary/nav/aside/address/option/button). The HTML5 inline-element set is closed by
+// spec, so excluding it closes the gap for good - everything that isn't inline gets a break.
+// `td`/`th` are carved out here since they get their own space-only separator below (same row,
+// not a new line).
+const INLINE_SELECTOR =
+  'a, span, em, strong, b, i, u, code, kbd, samp, var, sub, sup, small, abbr, cite, q, time, mark, s, del, ins, bdi, bdo, wbr, ruby, rt, rp';
+const BLOCK_LEVEL_SELECTOR = `*:not(${INLINE_SELECTOR.split(', ').join('):not(')}):not(td):not(th)`;
+
+/**
+ * Extract readable text from the WHOLE document, not just `<p>` elements. The single collector
+ * this replaced was `<p>`-only and fell back to the raw HTML when it found none: on a page whose
+ * content isn't inside `<p>` (an RFC page using `<pre>`) that meant the fallback fired and stored
+ * markup verbatim; on a page with real substance in headings, list items, table cells or code
+ * blocks alongside its `<p>`s, that content was silently dropped.
+ *
+ * `head` (title/meta/script/style all live there, and the caller already reads `<title>`
+ * separately) plus any stray `script`/`style`/`noscript` outside it are removed before extraction,
+ * so none of that reaches what gets embedded. `<pre>` content is pulled out and stashed BEFORE the
+ * rest of the document is collapsed, and spliced back in verbatim afterward - it needs to skip the
+ * whitespace-collapse below (a code block's leading-space indentation is meaningful, unlike prose
+ * whitespace) but still needs to land in the right place relative to everything else. Table cells
+ * get a trailing space (still the same row, but no longer jammed into the next cell's word); every
+ * other block-level element gets a trailing newline; runs of whitespace and blank lines are then
+ * collapsed. Returns `''` when nothing extractable was found, so the caller stores nothing rather
+ * than falling back to raw HTML.
+ */
+function extractReadableText($: CheerioAPI): string {
+  $('head, script, style, noscript').remove();
+  $('br').replaceWith('\n');
+
+  // The stash-and-splice marker is scoped to a per-call random token, not a fixed string - this
+  // function processes arbitrary third-party HTML, and a fixed marker could collide with a page's
+  // own text (accidentally, or by design) and get silently overwritten with unrelated pre-block
+  // content. A private-use-area delimiter (never a real character in ordinary or malicious page
+  // text) plus the nonce makes an unintended match effectively impossible.
+  const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const markerFor = (index: number) => `\uE000PRE${nonce}_${index}\uE000`;
+  const markerPattern = new RegExp(`\\uE000PRE${nonce}_(\\d+)\\uE000`, 'g');
+
+  const preBlocks: string[] = [];
+  $('pre').each((_index, element) => {
+    const text = $(element).text();
+    // An empty <pre> has nothing worth preserving - remove it outright rather than stashing an
+    // empty placeholder, or a page whose only "content" is an empty <pre> would incorrectly stop
+    // being classified as having no extractable text.
+    if (text) {
+      preBlocks.push(text);
+      $(element).replaceWith(`${markerFor(preBlocks.length - 1)}\n`);
+    } else {
+      $(element).remove();
+    }
+  });
+
+  $('td, th').each((_index, cell) => {
+    $(cell).after(' ');
+  });
+  $(BLOCK_LEVEL_SELECTOR).each((_index, element) => {
+    $(element).after('\n');
+  });
+
+  // `$.root()` covers the whole remaining document in one call - no need to special-case a
+  // missing `<body>` (malformed HTML with no body tag still has its text picked up).
+  const collapsed = $.root()
+    .text()
+    .split('\n')
+    .map(line => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+
+  // Bounds-checked defensively: every marker this function emits has a valid index, but a
+  // corrupted/out-of-range match should never splice in the literal string "undefined" - leave
+  // it as the harmless marker text instead.
+  return collapsed.replace(markerPattern, (match, indexStr) => {
+    const index = Number(indexStr);
+    return index >= 0 && index < preBlocks.length ? preBlocks[index] : match;
+  });
+}
+
 // Fetch and parse HTML content from a URL; returns the page title and text.
 export async function fetchAndParseURL(url: string, { logger }: { logger: Logger }): Promise<ParsedContent> {
   logger.updateMetadata({ failedUrl: null });
@@ -261,13 +346,7 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       // Fallback names the page from the FINAL url rather than the pasted one - after a redirect the
       // caller's last path segment describes a different document than the one actually fetched.
       title = $('title').text() || lastPathSegment(currentUrl);
-      let textContent = '';
-      $('body')
-        .find('p')
-        .each((index, element) => {
-          textContent += $(element).text() + '\n';
-        });
-      urlContent = textContent || htmlContent;
+      urlContent = extractReadableText($);
     }
 
     // Both URLs when they differ: the pasted one is what the user recognises, the final one is what
@@ -277,7 +356,16 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
     const original = redactUrlCredentials(url);
     const final = redactUrlCredentials(currentUrl);
     const fetched = original === final ? original : `${original} -> ${final}`;
-    logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
+    // Distinguished from the ordinary success log below: an empty extraction still returns
+    // successfully (by design - see `extractReadableText`), so without this line it looks
+    // identical in the logs to a normal fetch that happened to parse into real content.
+    if (urlContent === '') {
+      logger.log(
+        `Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}, but no extractable text was found`
+      );
+    } else {
+      logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
+    }
     return { title, textContent: urlContent, mimeType: urlMimeType, ext: mime.extension(urlMimeType) || null };
   } catch (error) {
     // Redacted for the same reason as the success log: this metadata is attached to the log record, and

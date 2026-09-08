@@ -14,6 +14,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { getFileMembershipArm, type DataLakeMembershipArm, type IFabFileDocument } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
@@ -125,18 +126,28 @@ const handler = baseApi()
       }
     );
 
+    // Per-file membership arm: which signal makes this file a member, since the two arms behave
+    // differently (an OWNED lake's prefix arm requires the lake's creator to own the file; a
+    // REGISTRY lake's does not) and neither the lake manager nor the article panel previously said
+    // which one applied. `getFileMembershipArm` is `kind`-aware on the same `lakeMembership` scope
+    // used to build this list, so it cannot disagree with which lake kind is actually in play.
+    const data: (IFabFileDocument & { membershipArm?: DataLakeMembershipArm })[] = result.data.map(file => ({
+      ...file,
+      membershipArm: getFileMembershipArm(file, lakeMembership) ?? undefined,
+    }));
+
     // Best-effort audit write, only when something was actually returned - an empty
     // page reflects no lake content read. The lake is already resolved, so no attribution needed.
     // Awaited (never rethrows): a per-request serverless route must not race a post-response
     // freeze of the execution environment.
-    if (result.data.length > 0) {
+    if (data.length > 0) {
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
           ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
           organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
-          fileIds: (result.data as Array<{ id: string }>).map(f => f.id),
+          fileIds: (data as Array<{ id: string }>).map(f => f.id),
           surface: 'data-lake-articles',
           ...(search ? { queryText: search } : {}),
         },
@@ -145,7 +156,7 @@ const handler = baseApi()
       );
     }
 
-    return res.json({ data: result.data, total: result.total, hasMore: result.hasMore });
+    return res.json({ data, total: result.total, hasMore: result.hasMore });
   });
 
 export const config = {

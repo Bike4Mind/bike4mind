@@ -10,6 +10,7 @@ import { dispatch as researchEngineDispatch } from '@server/queueHandlers/resear
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
+import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
@@ -17,7 +18,7 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { runChunkRescueSweep } from './chunkRescueSweep';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 import { CHUNK_SCAN_BATCH } from './chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
@@ -134,6 +135,21 @@ async function main() {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
   }
 
+  // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
+  // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
+  // one rather than queueing work nothing will pick up.
+  const researchQueueUrl = Resource.dataLakeResearchQueue?.url;
+  if (researchQueueUrl) {
+    worker.registerQueueHandler('dataLakeResearchQueue', researchQueueUrl, dataLakeResearchRunDispatch, {
+      visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+      // 1, matching infra/queues.ts's hosted dlq.retry - the run row's claim already makes a
+      // redelivery a no-op, and an extra delivery on self-host would only add log noise.
+      maxReceiveCount: 1,
+    });
+  } else {
+    bootLogger.warn('dataLakeResearchQueue not configured; data-lake research runs will not run');
+  }
+
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
   // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the
   // Resource shim): this queue is self-host-only, so it isn't in the hosted SST types.
@@ -170,11 +186,20 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. Selection, pause scoping and
-  // enqueue accounting all live in chunkRescueSweep.ts, which the hosted daily cron also calls -
-  // the per-tick budget below is the only thing that differs.
+  // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose
+  // vectorize hand-off was stranded. Selection, pause scoping and enqueue accounting for both
+  // passes live in chunkRescueSweep.ts, shared in shape with the hosted daily cron - the per-tick
+  // budget below is the only thing that differs.
+  // Each pass is isolated, as in the hosted twin: neither guards its own FabFile.find, so a Mongo
+  // blip in the first would otherwise reject out of the tick and leave the stranded-vectorize
+  // backlog growing untouched until the error cleared.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger });
+    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger }).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] un-chunked rescue sweep failed: ${err}`);
+    });
+    await runStrandedVectorizeRescue(bootLogger).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] stranded-vectorize rescue sweep failed: ${err}`);
+    });
   });
 
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):

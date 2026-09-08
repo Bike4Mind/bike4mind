@@ -45,7 +45,8 @@ export * from './smallLLMHelpers';
 export * from './reranker';
 export { StatusManager } from './StatusManager';
 export { firecrawlFetch } from './tools/implementation/webfetch';
-export { serpApiSearch } from './tools/implementation/websearch';
+export { serpApiSearch, resolveWebSearchProvider } from './tools/implementation/websearch';
+export type { WebSearchOptions, WebSearchProvider, WebSearchProviderResult } from './tools/implementation/websearch';
 export { scrapeWithRetry } from './tools/implementation/webfetch/scrapeWithRetry';
 
 // Phase 4a - DAG task decomposition (coordinate_task)
