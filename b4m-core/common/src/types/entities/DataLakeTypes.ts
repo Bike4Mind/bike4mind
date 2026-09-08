@@ -389,12 +389,21 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * `userId` is the owner bypass + the Private-by-default rule: a lake with NO org and NO
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
    * omit only for owner-agnostic lookups (then gateless org-less lakes match no one).
+   *
+   * `grantedLakeIds` is the explicit-grant arm, mirroring `findAccessible`'s: a lake the caller
+   * holds an active grant on is reachable by that grant alone, so retrieval agrees with browse for
+   * a transferred/delegated lake. Pre-resolved by the caller (`grantedLakeIdsFor`); an empty or
+   * absent list adds no arm and cannot widen anything. Not every retrieval caller supplies it:
+   * getDataLakePrompts.ts deliberately omits it, since folding grants into the injection-trust
+   * decision is a separate piece of work (#1673) - an org-less transferred lake is denied by that
+   * trust gate regardless, so wiring the arm there today would be dead code.
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
     organizationIds?: string[] | null,
-    userId?: string | null
+    userId?: string | null,
+    grantedLakeIds?: string[] | null
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**

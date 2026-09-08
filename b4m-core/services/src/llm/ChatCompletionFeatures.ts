@@ -197,12 +197,16 @@ interface DatabaseAdapters {
     'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
   >;
   /**
-   * Grant reader for the per-turn manage re-check on a session's `preauthorizedLakeIds`
-   * (filterStillManagedLakes). Optional in the type but REQUIRED in practice on any host that
-   * creates pre-authorized sessions: without it the curator / org-grant / transferred-owner rungs
-   * cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+   * Access-grant lookup shared by two independent optional features:
+   * - the retrieval resolver's grant arm (getDynamicDataLakeAccess / `listByPrincipal`), so a
+   *   lake reached only by an owner/curator grant grounds a turn as it browses;
+   * - the per-turn manage re-check on a session's `preauthorizedLakeIds`
+   *   (filterStillManagedLakes / `listActiveByLakes`). REQUIRED in practice on any host that
+   *   creates pre-authorized sessions: without it the curator / org-grant / transferred-owner
+   *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+   * Optional here - absent means both features resolve lake access with no grant arm.
    */
-  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,

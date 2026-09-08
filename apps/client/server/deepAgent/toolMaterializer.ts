@@ -8,8 +8,8 @@ import {
 import {
   adminSettingsRepository,
   apiKeyRepository,
-  dataLakeRepository,
   dataLakeAccessGrantRepository,
+  dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fallbackLakeSettingsRepository,
