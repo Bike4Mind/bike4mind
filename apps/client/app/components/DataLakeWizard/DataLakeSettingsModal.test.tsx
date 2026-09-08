@@ -100,6 +100,14 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: (...a: unknown[]) => warn(...a) },
 }));
 
+// Platform lake-memory flag: on by default so the toggle's helper text describes the feature
+// rather than "disabled platform-wide" - the platform-off suite below overrides it per test.
+const lakeMemoryPlatformEnabled = vi.fn(() => true);
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useFeatureFlags: (features: string[]) =>
+    Object.fromEntries(features.map(f => [f, f === 'EnableLakeMemory' ? lakeMemoryPlatformEnabled() : false])),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
@@ -154,6 +162,7 @@ const gatedLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -169,6 +178,7 @@ const openLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -184,6 +194,7 @@ const entitlementGatedLake = {
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
   requiredPassageTokenTarget: null,
+  lakeMemoryEnabled: false,
   canManage: true,
 };
 
@@ -1124,11 +1135,12 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
     // Tags come back in the fetched-lakes list order, not selection order. The fixture tags are
     // deliberately unequal to the lake ids and carry the `datalake:` prefix, so this discriminates
-    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that no
-    // `corpusGroundingMode` rides along: /api/sessions/create strips it off any request without a
-    // `dataLakeId`, so sending one would be a silent no-op.
+    // both an id-for-tag mixup and a dropped prefix. The exact-object match also pins that the
+    // lake-under-test's own `groundingMode` rides along, not some other value.
     expect(startChatWithLakesMock).toHaveBeenCalledWith({
       retrievalTags: ['datalake:test-lake', 'datalake:open-lake'],
+      preauthorizedLakeIds: [],
+      groundingMode: 'retrieve',
     });
     // The scope dialog is a separate flow from the settings form - confirming it must not also
     // close the settings modal out from under the caller.
@@ -1149,5 +1161,92 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not start a test chat for this lake'));
     expect(screen.getByTestId('test-lake-scope-dialog')).toBeInTheDocument();
+  });
+
+  it("surfaces the route's own refusal rather than the generic fallback", async () => {
+    // An axios rejection, not a plain Error: the route's reason lives on response.data.error, and
+    // axios's `message` is only "Request failed with status code N" - a plain-Error mock cannot
+    // tell a working extraction from a broken one.
+    startChatWithLakesMock.mockRejectedValue({
+      message: 'Request failed with status code 403',
+      response: { data: { error: 'You do not manage data lake lake-1' } },
+    });
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId(`datalake-settings-test-btn-${openLake.id}`));
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('You do not manage data lake lake-1'));
+  });
+});
+
+describe('DataLakeSettingsModal - lake memory toggle', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+    lakeMemoryPlatformEnabled.mockReset();
+    lakeMemoryPlatformEnabled.mockReturnValue(true);
+  });
+
+  it('renders for an editor, seeded from the lake, and does not render for a non-editor', () => {
+    const readerLake = { ...openLake, id: 'lake-mem-1', canManage: false };
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-2', lakeMemoryEnabled: true }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-memory-toggle')).toBeChecked();
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-memory-toggle')).not.toBeInTheDocument();
+  });
+
+  it('sends the toggled value only when the editor changes it', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-memory-toggle'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ lakeMemoryEnabled: true });
+  });
+
+  it('never sends lakeMemoryEnabled when the editor leaves it unchanged', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-4' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('lakeMemoryEnabled');
+  });
+
+  it('explains the platform kill-switch when it is off, without hiding the toggle', () => {
+    lakeMemoryPlatformEnabled.mockReturnValue(false);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-5', lakeMemoryEnabled: true }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-memory-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-memory-toggle-help')).toHaveTextContent(/disabled platform-wide/i);
   });
 });

@@ -69,6 +69,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   deleteManyInIds: vi.fn(),
   softDeleteByIdsForUserBatch: vi.fn(),
   findAllByIds: vi.fn(),
+  findExistingIdsByIds: vi.fn(),
+  findCitableFieldsByIds: vi.fn(),
   findByBatchId: vi.fn(),
   search: vi.fn(),
   executeSearch: vi.fn(),

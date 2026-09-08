@@ -12,8 +12,10 @@ import type { Context, SQSEvent } from 'aws-lambda';
 import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
 
 const getSettingsValueMock = vi.fn();
+const findByIdMock = vi.fn();
 const extractMock = vi.fn();
 const sendToQueueMock = vi.fn();
+const setLakeMemoryCursorMock = vi.fn();
 
 // Pass the inner handler straight through so the test drives it directly, skipping connectDB and the
 // warmer-invocation shortcut that the real wrapper performs.
@@ -24,6 +26,10 @@ vi.mock('@server/queueHandlers/utils', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: (...a: unknown[]) => getSettingsValueMock(...a) },
+  dataLakeRepository: {
+    findById: (...a: unknown[]) => findByIdMock(...a),
+    setLakeMemoryCursor: (...a: unknown[]) => setLakeMemoryCursorMock(...a),
+  },
 }));
 vi.mock('@server/dataLakes/extractLakeMemory', () => ({
   extractLakeMemoryForBatch: (...a: unknown[]) => extractMock(...a),
@@ -41,6 +47,8 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     extractMock.mockResolvedValue({ docsProcessed: 1, factsWritten: 1, hasMore: false });
+    findByIdMock.mockResolvedValue({ lakeMemoryEnabled: true });
+    setLakeMemoryCursorMock.mockResolvedValue(undefined);
   });
 
   it('extracts when EnableLakeMemory is on', async () => {
@@ -62,6 +70,30 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
 
     // Same payload re-queued with the next slice; the next invocation resumes from the persisted cursor.
     expect(sendToQueueMock).toHaveBeenCalledWith('https://sqs.example/lake-memory', { ...PAYLOAD, slice: 1 });
+  });
+
+  /**
+   * The manual build door asks for a restart instead of clearing the cursor itself, so the clear
+   * happens inside the run, under the lease that serializes it. The flag must reach the producer, and
+   * must NOT ride along on the continuations: a chain that re-cleared the cursor at every slice would
+   * restart the lake from the top on each one and never finish.
+   */
+  it('forwards restart to the producer, and drops it from the continuation it enqueues', async () => {
+    getSettingsValueMock.mockResolvedValue(true);
+    extractMock.mockResolvedValue({ docsProcessed: 100, factsWritten: 250, hasMore: true });
+
+    await dispatch(event({ ...PAYLOAD, restart: true }), context());
+
+    expect(extractMock.mock.calls[0][0]).toEqual(expect.objectContaining({ restart: true }));
+    expect(sendToQueueMock).toHaveBeenCalledWith('https://sqs.example/lake-memory', { ...PAYLOAD, slice: 1 });
+  });
+
+  it('defaults restart to false for the automatic (batch-finalize) path', async () => {
+    getSettingsValueMock.mockResolvedValue(true);
+
+    await dispatch(event(PAYLOAD), context());
+
+    expect(extractMock.mock.calls[0][0]).toEqual(expect.objectContaining({ restart: false }));
   });
 
   it('stops the continuation chain at the slice ceiling instead of re-enqueuing unbounded', async () => {
@@ -86,11 +118,68 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
     expect(sendToQueueMock).not.toHaveBeenCalled();
   });
 
-  it('drops a queued extraction when the flag was turned off after enqueue', async () => {
+  // A chain that stops here never runs again, so any cursor an earlier slice parked is nobody's to
+  // clear - and the health state reads `building` from a non-null cursor, so leaving it behind pins the
+  // lake in a state nothing will move. Each intentional drop below therefore owes a cursor clear.
+  it('clears a parked continuation cursor when the platform flag drops the chain', async () => {
     getSettingsValueMock.mockResolvedValue(false);
+
+    await dispatch(event({ ...PAYLOAD, slice: 3 }), context());
+
+    expect(extractMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', null);
+  });
+
+  it.each([
+    ['false', false],
+    ['null', null],
+    ['absent', undefined],
+  ])('drops the chain and clears the cursor when the lake opted out (lakeMemoryEnabled: %s)', async (_l, value) => {
+    // All three spellings of "not opted in" have to behave identically. `false` is the explicit
+    // opt-out, `null` and absent are what a lake written before the field existed carries - and only
+    // an exact `=== true` treats the trio the same way.
+    getSettingsValueMock.mockResolvedValue(true);
+    findByIdMock.mockResolvedValue({ lakeMemoryEnabled: value });
+
+    await dispatch(event({ ...PAYLOAD, slice: 2 }), context());
+
+    expect(extractMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', null);
+  });
+
+  it('drops a chain whose lake no longer exists, without writing to the missing document', async () => {
+    // Reported separately from an opt-out: a deleted lake is not a manager's choice, and collapsing
+    // the two sent an operator hunting for a setting nobody had changed. There is also nothing to
+    // clear - the document is gone, so a cursor write would be pointless.
+    getSettingsValueMock.mockResolvedValue(true);
+    findByIdMock.mockResolvedValue(null);
 
     await dispatch(event(PAYLOAD), context());
 
+    expect(extractMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+  });
+
+  it('does not clear the cursor at the slice ceiling, which resumes on the next finalize', async () => {
+    // The one drop that KEEPS its cursor, deliberately: the chain stopped only because it was long,
+    // not because the lake stopped wanting it, and the next batch finalize resumes from there.
+    getSettingsValueMock.mockResolvedValue(true);
+    extractMock.mockResolvedValue({ docsProcessed: 100, factsWritten: 250, hasMore: true });
+
+    await dispatch(event({ ...PAYLOAD, slice: LAKE_MEMORY_MAX_CONTINUATION_SLICES - 1 }), context());
+
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+  });
+
+  it('still drops the chain when the cursor clear itself fails', async () => {
+    // Best-effort by design: the clear runs AFTER the drop decision, so a failed write must not
+    // resurrect work the flag just stopped, and must not DLQ a message that was correctly dropped.
+    getSettingsValueMock.mockResolvedValue(true);
+    findByIdMock.mockResolvedValue({ lakeMemoryEnabled: false });
+    setLakeMemoryCursorMock.mockRejectedValue(new Error('mongo down'));
+
+    await expect(dispatch(event(PAYLOAD), context())).resolves.toBeUndefined();
     expect(extractMock).not.toHaveBeenCalled();
   });
 

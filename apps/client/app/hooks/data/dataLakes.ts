@@ -12,6 +12,7 @@ import type {
   LakeAccessView,
   LakeOwnershipCandidateList,
   LakeHealthApiResponse,
+  LakeMemoryHealth,
   LakeConfigHistoryView,
   ManageableDataLakeConfig,
   TaxonomyTag,
@@ -1192,6 +1193,103 @@ export function useRechunkDataLake(dataLakeId: string | null) {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to start rebuild');
+    },
+  });
+}
+
+/**
+ * Wire shape of `LakeMemoryHealth`: `lastBuiltAt` crosses JSON as an ISO string, not a Date.
+ */
+export type LakeMemoryHealthResponse = Omit<LakeMemoryHealth, 'lastBuiltAt'> & { lastBuiltAt: string | null };
+
+export const LAKE_MEMORY_POLL_MS = 5_000;
+
+/**
+ * Poll cadence for the lake-memory build door. Exported and pure for the same reason
+ * `nextRebuildPoll` is: an inline poll predicate is executed by nothing in a test, so a bug in it
+ * ships green.
+ *
+ * Keys off `running` - a lease actually held - and NOT `state === 'building'`, which is also true for
+ * a parked continuation cursor. That distinction is the whole termination argument: a cursor left by
+ * a chain that ended unfinished never changes on its own, so polling `building` meant a tick every
+ * 5s for as long as the panel stayed open, against a state nothing was going to move. A lease, by
+ * contrast, either expires or is released.
+ */
+export function lakeMemoryPollInterval(data: Pick<LakeMemoryHealthResponse, 'running' | 'state'> | undefined) {
+  return data?.running ? LAKE_MEMORY_POLL_MS : (false as const);
+}
+
+/**
+ * The manual build door's own state (GET /api/data-lakes/:id/lake-memory) - kept separate
+ * from the whole-lake /health report so the UI can poll it while a build runs without paying for
+ * health's per-file member scan on every tick. Cadence in `lakeMemoryPollInterval`.
+ */
+export function useGetLakeMemoryHealth(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.lakeMemory(dataLakeId ?? ''),
+    queryFn: async (): Promise<LakeMemoryHealthResponse> => {
+      const res = await api.get<LakeMemoryHealthResponse>(`/api/data-lakes/${dataLakeId}/lake-memory`);
+      return res.data;
+    },
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: query => lakeMemoryPollInterval(query.state.data),
+  });
+}
+
+/** Hook: queue a full-lake (re)build of the memory profile. */
+export function useBuildLakeMemory(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post<{ ok: true; queued: true }>(`/api/data-lakes/${dataLakeId}/lake-memory`);
+      return res.data;
+    },
+    onSuccess: () => {
+      toast.success("Building this lake's memory profile...");
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeMemory(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      if (refusal) {
+        toast.error(refusal);
+        return;
+      }
+      toast.error(error.message || 'Failed to start the lake memory build');
+    },
+  });
+}
+
+/**
+ * Crypto-shred a lake's WHOLE memory profile, via the existing `DELETE /api/memory/lake/:id`
+ * door (built for the V2 memory dashboard, not new here). Irreversible: the ledger survives but every
+ * fact becomes unreadable, so the lake is treated as never-built until it is rebuilt from scratch.
+ */
+export function usePurgeLakeMemory(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.delete<{ ok: true; shredded: number }>(`/api/memory/lake/${dataLakeId}`);
+      return res.data;
+    },
+    onSuccess: data => {
+      toast.success(
+        data.shredded > 0
+          ? `Erased this lake's memory profile (${data.shredded} fact(s)).`
+          : 'This lake had no memory profile to erase.'
+      );
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeMemory(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || "Failed to erase this lake's memory profile");
     },
   });
 }

@@ -835,6 +835,113 @@ describe('DataLakeRepository - lake-memory extraction lease + continuation curso
     await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
     expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
   });
+
+  describe('fence-guarded cursor write', () => {
+    it('advances the cursor while the fence still matches the snapshot', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('refuses the write once a purge has moved the fence', async () => {
+      // The race the guard exists for: the extraction snapshotted an unpurged fence, a purge landed and
+      // cleared the cursor, and the unguarded write would reinstate it - sending the next build past
+      // documents whose beliefs the purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, new Date('2026-03-01T00:00:00Z'));
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(false);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('accepts the write when the snapshot carries the SAME earlier purge', async () => {
+      // A lake purged before the run started is a normal build, not a race. Comparing against a
+      // hardcoded null instead of the snapshot would lock out exactly these lakes.
+      const lake = await makeLake();
+      const purgedAt = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, purgedAt);
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', purgedAt)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('reports false for a lake that no longer exists', async () => {
+      expect(
+        await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(new mongoose.Types.ObjectId().toString(), 'd', null)
+      ).toBe(false);
+    });
+
+    it('reports true when re-writing the cursor value it already holds', async () => {
+      // `matchedCount`, not `modifiedCount`: mongo may elide a self-valued $set, so a modified-count
+      // guard would report a lost race on a write that in fact succeeded.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+    });
+  });
+
+  describe('purge fence', () => {
+    it('stamps the fence and clears the continuation cursor in one write', async () => {
+      // Both halves matter: the stamp stops an in-flight run, and the cleared cursor is what makes
+      // the NEXT build start from the beginning instead of resuming past documents whose facts the
+      // purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+
+      const at = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, at);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(at.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('moves the fence forward on a later purge', async () => {
+      const lake = await makeLake();
+      const first = new Date('2026-03-01T00:00:00Z');
+      const second = new Date('2026-03-02T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, first);
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, second);
+
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryPurgedAt?.getTime()).toBe(second.getTime());
+    });
+
+    it('never moves the fence backwards, so a late write cannot undo a newer purge', async () => {
+      // The write is `$max`, not `$set`. Two purges racing on one lake would otherwise let the later
+      // WRITE land the earlier TIMESTAMP, and the field is the honest answer to "when was this last
+      // purged". The cursor clear is unconditional either way - it is not part of the comparison.
+      const lake = await makeLake();
+      const newer = new Date('2026-03-02T00:00:00Z');
+      const older = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, newer);
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-7');
+
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, older);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(newer.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('reads back a never-purged lake as existing with no stamp', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: true, purgedAt: null });
+    });
+
+    it('reports a deleted lake as absent, which the extractor treats as a purge', async () => {
+      // A vanished document and a never-purged one both have no stamp, and they mean opposite things
+      // to a running extraction: the deletion sweep shreds the profile before it deletes the record,
+      // so `exists: false` has to stop the run rather than read as "nothing has happened".
+      const lake = await makeLake();
+      await dataLakeRepository.delete(lake.id);
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: false, purgedAt: null });
+    });
+
+    it('reports a fence read for an id that never existed as absent, not a throw', async () => {
+      const gone = new mongoose.Types.ObjectId().toString();
+      expect(await dataLakeRepository.getLakeMemoryFence(gone)).toEqual({ exists: false, purgedAt: null });
+    });
+  });
 });
 
 describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {

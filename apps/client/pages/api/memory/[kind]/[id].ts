@@ -3,6 +3,7 @@ import {
   agentRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
+  fabFileRepository,
   deepAgentCharterRepository,
   memoryLedgerRepository,
   memoryPrincipalKeyRepository,
@@ -30,7 +31,10 @@ import {
 import { createKeyProvider } from '@server/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
+import { createSurvivingSourcesResolver } from '@server/memory/lakeSourceReachability';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '@server/entitlements';
 
 // The kinds this endpoint reads/deletes. `lake` differs from the owner-scoped kinds: a lake is
@@ -51,13 +55,19 @@ const SUPPORTED_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'o
 async function resolveLakeMemoryTarget(
   req: EntitlementRequest,
   id: string
-): Promise<{ principal: Principal; ownerUserId: string } | null> {
+): Promise<{ principal: Principal; ownerUserId: string; dataLakeId: string } | null> {
   const ctx = await toAccessContext(req);
   const lake = await dataLakeService.assertLakeAccess(id, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
-  if (!lake.createdByUserId) return null;
-  return { principal: { kind: 'lake', id: lake.datalakeTag }, ownerUserId: lake.createdByUserId };
+  // BOTH halves of the ledger key must be present, and the tag half is not optional paranoia: the
+  // principal id below IS `datalakeTag`, and mongoose strips an `undefined` value out of a query
+  // filter rather than matching on it. So a tag-less lake would turn the DELETE path's keyed shred
+  // into an UNKEYED one - `{ principalKind: 'lake' }` with no id, i.e. every lake's key in the
+  // collection, including other tenants'. `extractLakeMemory` and `recallLakeMemoryForSession` guard
+  // the same pair for the same reason; a lake with no tag simply has no keyed ledger to serve.
+  if (!lake.createdByUserId || !lake.datalakeTag) return null;
+  return { principal: { kind: 'lake', id: lake.datalakeTag }, ownerUserId: lake.createdByUserId, dataLakeId: lake.id };
 }
 
 type ReadStore = { principal: Principal; store: MemoryStore } | { status: number; error: string };
@@ -166,8 +176,12 @@ handler.delete(async (req, res) => {
     // admin) may shred what the whole org reads. A reader who isn't the creator gets a 403, not a
     // 404 - assertLakeAccess already confirmed they can see the lake. Mirrors the lifecycle guards
     // (data-lakes/[id]/lifecycle.ts).
+    // The SAME predicate the list surface hands the UI as `canManageMemory`. Previously this was
+    // `canManageLake` called with neither grants nor `organizationId`, which happens to reduce to
+    // creator-or-admin - so the gate was right but expressed as a coincidence, and the button that
+    // fronts it was gated on the grant-aware flag instead. Named, both sides read the same rule.
     if (
-      !dataLakeService.canManageLake(
+      !dataLakeService.canShredLakeMemory(
         { createdByUserId: target.ownerUserId },
         { userId: ownerUserId, isAdmin: !!req.user?.isAdmin }
       )
@@ -192,6 +206,64 @@ handler.delete(async (req, res) => {
       target.principal,
       target.ownerUserId
     );
+
+    // Raise the purge FENCE, which is what makes the shred above durable against a build that is
+    // running right now. A concurrent extraction re-reads this stamp per document and stops when it
+    // moves; the same write clears the continuation watermark, so the next build re-scans the lake
+    // from the top instead of resuming past documents the purged scan had already passed.
+    //
+    // Fence AFTER the shred, never before: a run that stops on the fence while the old facts are
+    // still readable is merely a build cut short, whereas shredding after the fence rose would let a
+    // window exist in which the run has stopped but the profile is still live.
+    //
+    // Guarded, and the audit event below does NOT depend on it. The shred is already irreversible by
+    // this point, so letting a failed fence write throw out of the handler would destroy a key and
+    // leave no record that it happened. The stamp is idempotent (`$max` plus a constant `$set`), so
+    // one retry is free.
+    let fenceRaised = true;
+    try {
+      await dataLakeRepository.stampLakeMemoryPurge(target.dataLakeId, new Date());
+    } catch (first) {
+      try {
+        await dataLakeRepository.stampLakeMemoryPurge(target.dataLakeId, new Date());
+      } catch (second) {
+        fenceRaised = false;
+        req.logger.error(
+          `[lakeMemory] lake ${target.dataLakeId}: the memory key was destroyed but the purge fence could not ` +
+            `be raised: ${second instanceof Error ? second.message : String(second)}. A concurrent build is ` +
+            `still refused by the key tombstone, but the continuation cursor was not cleared, so the next ` +
+            `build resumes mid-lake until a re-scan. Retrying the purge is safe and fixes both.`
+        );
+      }
+    }
+
+    // Outside the guard on purpose: an irreversible destruction must be recorded even when the fence
+    // write failed, and `fenceRaised` is what tells an auditor which of the two halves landed.
+    await logAuditEvent(
+      {
+        userId: ownerUserId,
+        action: DataLakeAuditEvents.LAKE_MEMORY_PURGED,
+        metadata: {
+          dataLakeId: target.dataLakeId,
+          shredded,
+          fenceRaised,
+          ...resolveAuditPrincipal(req.user!, req.apiKeyInfo),
+        },
+      },
+      req.logger
+    );
+
+    if (!fenceRaised) {
+      // 500, but with the truth: the erase DID happen. Reporting plain success would hide a lake left
+      // with a stale cursor, and reporting plain failure would invite a caller to think their data
+      // survived. A retry is safe and idempotent.
+      return res.status(500).json({
+        error: 'Memory was erased, but the purge fence could not be raised. Please retry to complete the purge.',
+        shredded,
+        fenceRaised,
+      });
+    }
+
     return res.status(200).json({ ok: true, shredded });
   }
 
@@ -262,23 +334,49 @@ handler.get(async (req, res) => {
   const profile = await readPrincipalMemory(resolution.principal, resolution.store);
   if (!profile) return res.status(404).json({ error: 'No memory found for this principal.' });
 
+  // A lake belief cites the document it was distilled from, and `purgeDataLakeDocument` destroys the
+  // document without touching beliefs already derived from it - so a belief can outlive its only
+  // source. Chat never surfaces one (recallLakeMemory drops uncited beliefs); this read had no
+  // equivalent, which left a PERMANENTLY destroyed document's extracted content readable here
+  // indefinitely, and no purge can reach it afterwards because purges are keyed by source id.
+  //
+  // Existence, not citability - see createSurvivingSourcesResolver for why reusing the recall
+  // predicate here would wrongly hide live-but-unvectorized sources. And this withholds on READ
+  // only: the rows stay at rest under the lake DEK until a whole-lake purge or lake deletion shreds
+  // them, so it closes the disclosure and not the retention.
+  let served = profile;
+  let withheldOrphans = 0;
+  if (kind === 'lake') {
+    const survivingSources = createSurvivingSourcesResolver({ fabfiles: fabFileRepository });
+    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(b => b.sources ?? []))]);
+    // A source-less belief is kept: nothing was destroyed, so it is not an orphan.
+    const kept = profile.beliefs.filter(b => {
+      const sources = b.sources ?? [];
+      return sources.length === 0 || sources.some(sourceId => surviving.has(sourceId));
+    });
+    withheldOrphans = profile.beliefs.length - kept.length;
+    served = { ...profile, beliefs: kept };
+  }
+
   // Strip the embedding from each belief before serializing. A vector is 512 floats (~1MB across a
   // real user's beliefs) that no reader of this endpoint needs - and, like the /api/mementos 502, an
   // unbounded vector payload is how this route would eventually blow the Lambda response limit.
-  const lean = ({ embedding: _e, ...b }: (typeof profile.beliefs)[number]) => b;
-  const leanProfile = { ...profile, beliefs: profile.beliefs.map(lean) };
+  const lean = ({ embedding: _e, ...b }: (typeof served.beliefs)[number]) => b;
+  const leanProfile = { ...served, beliefs: served.beliefs.map(lean) };
+  // Reported rather than filtered silently, so a reader can tell a small profile from a censored one.
+  const orphanNote = withheldOrphans > 0 ? { withheldOrphans } : {};
 
   const query = typeof req.query.q === 'string' ? req.query.q : undefined;
   if (query !== undefined) {
-    const recalled = recall(profile.beliefs, query).map(r => ({
+    const recalled = recall(served.beliefs, query).map(r => ({
       belief: lean(r.belief),
       relevance: r.relevance,
       score: r.score,
     }));
-    return res.status(200).json({ profile: leanProfile, query, recalled });
+    return res.status(200).json({ profile: leanProfile, query, recalled, ...orphanNote });
   }
 
-  return res.status(200).json({ profile: leanProfile });
+  return res.status(200).json({ profile: leanProfile, ...orphanNote });
 });
 
 export default handler;

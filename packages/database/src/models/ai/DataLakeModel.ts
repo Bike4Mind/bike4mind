@@ -124,12 +124,18 @@ const DataLakeSchema = new mongoose.Schema(
     // Archive batch key (see IDataLake.filesArchivedAt): mirrors filesDeletedAt but on the
     // archive axis. Set only through claimFilesArchivedAt; cleared by unarchive and by restore.
     filesArchivedAt: { type: Date },
+    // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Gates both extraction-on-ingest
+    // and recall injection for this lake; `EnableLakeMemory` gates availability of the option at all. No
+    // dedicated index - same rationale as isPublic/auditQueryTextEnabled (tiny collection).
+    lakeMemoryEnabled: { type: Boolean, default: false },
     // Lake-memory producer (#1440) bookkeeping - server-managed, never client-writable. No index
     // (tiny collection, only read from a lake already in hand, same rationale as filesDeletedAt).
     // lakeMemoryExtractionAt is a concurrency lease; lakeMemoryCursor is the bounded-continuation
-    // watermark (last attempted doc id). See IDataLake for the full contract.
+    // watermark (last attempted doc id); lakeMemoryPurgedAt is the purge fence a running extraction
+    // re-checks per document. See IDataLake for the full contract.
     lakeMemoryExtractionAt: { type: Date },
     lakeMemoryCursor: { type: String },
+    lakeMemoryPurgedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -788,6 +794,68 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
   async setLakeMemoryCursor(id: string, cursor: string | null): Promise<void> {
     await this.dataLakeModel.updateOne({ _id: id }, { $set: { lakeMemoryCursor: cursor } });
+  }
+
+  /**
+   * Advance the continuation cursor ONLY IF the purge fence still reads what the caller snapshotted.
+   * Returns false when it moved (or the lake is gone), meaning the caller lost the race and must not
+   * chain a continuation.
+   *
+   * The unguarded setter cannot express this: an extraction re-reads the fence and then writes, and a
+   * purge landing in that gap has its cursor clear immediately reinstated - so the next build resumes
+   * mid-lake, past documents whose beliefs the purge destroyed, and those stay missing until two
+   * further runs walk the cursor off the end.
+   *
+   * `matchedCount`, not `modifiedCount`: re-writing the same cursor value is a legitimate no-op that
+   * mongo may elide, so only the match tells you whether the fence held.
+   *
+   * An equality match on `null` also matches an ABSENT field, which is what makes one filter shape
+   * cover both a never-purged lake and one whose fence was cleared.
+   */
+  async setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, lakeMemoryPurgedAt: fenceAt },
+      { $set: { lakeMemoryCursor: cursor } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  /**
+   * Raise the purge fence and clear the continuation cursor in ONE write (see
+   * IDataLake.lakeMemoryPurgedAt). Both halves belong to the same fact - this lake's learned state was
+   * discarded - and splitting them leaves a window where a fresh build resumes from the old cursor.
+   *
+   * The extraction LEASE is deliberately left alone: an in-flight run notices the moved fence at its
+   * next document boundary and releases the lease itself via its own compare-and-clear. Clearing it
+   * here would instead let a post-purge build start alongside the still-unwinding run, which is the
+   * exact concurrency the lease exists to prevent.
+   */
+  async stampLakeMemoryPurge(id: string, at: Date): Promise<void> {
+    // `$max`, not `$set`: two purges racing on one lake would otherwise let the later WRITE land the
+    // earlier TIMESTAMP, so the stamp would read as a purge that never happened last. The field is
+    // the honest answer to "when was this last purged", and $max is what keeps it monotonic.
+    await this.dataLakeModel.updateOne(
+      { _id: id },
+      { $max: { lakeMemoryPurgedAt: at }, $set: { lakeMemoryCursor: null } }
+    );
+  }
+
+  /**
+   * The current purge fence, read fresh and projected. Called once per document by a running
+   * extraction, so it reads only the one field rather than the whole lake document.
+   *
+   * `exists` is returned separately because a MISSING lake document and one that was never purged
+   * both have no stamp, and they mean opposite things to a caller: the lake-deletion sweep shreds the
+   * memory profile and then deletes the record, so a run that reads `exists: false` is extracting
+   * into a lake that is being purged out from under it. Collapsing the two into `null` would let that
+   * run keep appending facts to a deleted lake's ledger - exactly the "facts extracted from a deleted
+   * lake alive forever" outcome cleanupDeletedDataLake orders its steps to prevent.
+   */
+  async getLakeMemoryFence(id: string): Promise<{ exists: boolean; purgedAt: Date | null }> {
+    const doc = (await this.dataLakeModel.findById(id).select('lakeMemoryPurgedAt').lean().exec()) as {
+      lakeMemoryPurgedAt?: Date | null;
+    } | null;
+    return { exists: !!doc, purgedAt: doc?.lakeMemoryPurgedAt ?? null };
   }
 }
 

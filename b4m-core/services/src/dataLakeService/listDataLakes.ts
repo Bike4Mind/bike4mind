@@ -6,6 +6,7 @@ import type {
   IDataLakeRepository,
   IFallbackLakeSetting,
   IFallbackLakeSettingsRepository,
+  IOrganizationRepository,
   DataLakeConfig,
   ManageableDataLakeConfig,
   TransitionalDataLakeSummary,
@@ -19,7 +20,7 @@ import {
   lakeMatchesAccess,
   normalizeEntitlementKey,
 } from '@bike4mind/common';
-import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
+import { canManageLake, canShredLakeMemory, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
 import { grantedLakeIdsFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
 
@@ -28,6 +29,26 @@ type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'l
 
 /** Settings slice for the read-time grant cutover flag - governs reader-grant inclusion in the list. */
 type SettingsLookup = Pick<IAdminSettingsRepository, 'getSettingsValue'>;
+
+/** Org-admin lookup for the `canPreauthorize` rung. Optional for the same reason as the grant repo. */
+type OrgAdminLookup = Pick<IOrganizationRepository, 'findIdsWithAdminRights'>;
+
+/**
+ * The org-admin set to resolve `canPreauthorize` against.
+ *
+ * `toAccessContext` ZEROES `administeredOrgIds` for an admin caller (org resolution is pure
+ * overhead for the ordinary read gates, which grant an admin outright), so reading it off `ctx`
+ * would report `canPreauthorize: false` for a platform admin whose real rung on the lake is
+ * org-admin - the same trap `pages/api/sessions/create.ts` documents and avoids by re-resolving.
+ * Re-resolve here too, and ONLY for an admin: a non-admin's `ctx` value is already correct.
+ *
+ * Degrades to `[]` when no org repo is wired, which under-reports that one rung rather than
+ * over-reporting it: the affordance goes dark, the route stays authoritative.
+ */
+const preauthorizeOrgIdsFor = async (ctx: AccessContext, organizations?: OrgAdminLookup): Promise<string[]> => {
+  if (!ctx.isAdmin) return ctx.administeredOrgIds ?? [];
+  return organizations ? organizations.findIdsWithAdminRights(ctx.userId) : [];
+};
 
 /**
  * The active grants for a set of lakes, grouped by lake id, so per-lake `canManage`/`isOwn` labels
@@ -63,6 +84,11 @@ type OwnerLookup = { id: string; name?: string; username?: string }[];
 interface ListDataLakesAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findAccessible' | 'find'>;
+    /**
+     * Optional org-admin lookup, needed only to resolve the org-admin rung of `canPreauthorize`
+     * for an ADMIN caller (see preauthorizeOrgIdsFor). Unwired callers lose that one rung.
+     */
+    organizations?: OrgAdminLookup;
     /**
      * Optional owner-name lookup. When present (the manager list route), the projection labels
      * lakes the caller does NOT own with the creator's display name, so a global admin (who sees
@@ -203,18 +229,28 @@ const pendingCountsFor = async (
 const toManageableConfig = (
   dl: IDataLakeDocument,
   manageable: boolean,
+  canManageMemory: boolean,
   isOwn: boolean,
+  canPreauthorize: boolean,
   ownerDisplayName?: string,
   pendingProposalCount?: number
 ): ManageableDataLakeConfig => ({
   ...toConfig(dl),
   canManage: manageable,
+  // Deliberately NOT `manageable`: resolved without the platform-admin rung, mirroring the
+  // session-create route. See the field's doc comment for why the two must differ. The status test
+  // mirrors that route too - it 404s a non-active lake, so a draft offered here would advertise an
+  // admission the server is guaranteed to refuse.
+  canPreauthorize: canPreauthorize && dl.status === 'active',
   // A DB lake HAS a document, so rebuild and manage are the same decision - only a fallback
   // (built-in) lake needs the narrower `canRebuild`; see toFallbackConfig and the field's comment.
   canRebuild: manageable,
   // Same reasoning as canRebuild: a DB lake's settings live on its document, so this is identical
   // to canManage here - only a fallback lake needs the narrower ctx.isAdmin gate.
   canManageSettings: manageable,
+  // NOT `manageable`: erasing a memory profile is creator-or-platform-admin only, so this is the one
+  // manage-flavoured flag on a DB lake that does not track canManage. See canShredLakeMemory.
+  canManageMemory,
   isOwn,
   // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
   // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
@@ -284,8 +320,13 @@ const toFallbackConfig = (
   canManage: false,
   canRebuild: ctx.isAdmin,
   canManageSettings: ctx.isAdmin,
+  // A registry lake has no document and no memory profile, so there is nothing to erase.
+  canManageMemory: false,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
+  // A registry lake has no document, and session-create resolves every pre-authorized id through
+  // findById - so naming one could only ever 404. Never offer the affordance.
+  canPreauthorize: false,
   ...(ctx.isAdmin && overlay?.groundingMode ? { groundingMode: overlay.groundingMode } : {}),
   ...(ctx.isAdmin && overlay?.preferredSystemPromptId
     ? { preferredSystemPromptId: overlay.preferredSystemPromptId }
@@ -331,6 +372,17 @@ export const listDataLakes = async (
   // manage. `toManageableConfig` drops the count for the rest anyway, so narrowing the aggregate both
   // saves the discarded work and keeps a count the caller must not see out of this function entirely.
   const manageableById = new Map(dynamicLakes.map(dl => [dl.id, canManageLake(dl, ctx, grantsByLake.get(dl.id))]));
+  // The admission rung, resolved WITHOUT platform-admin - see canPreauthorize's doc comment. On this
+  // (non-admin) branch it can only ever equal canManage; it is computed separately anyway so the two
+  // branches share one rule and a future rung change cannot drift them apart.
+  const preauthorizeActor = {
+    userId: ctx.userId,
+    isAdmin: false,
+    administeredOrgIds: await preauthorizeOrgIdsFor(ctx, db.organizations),
+  };
+  const canPreauthorizeById = new Map(
+    dynamicLakes.map(dl => [dl.id, canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id))])
+  );
   const pendingCounts = await pendingCountsFor(
     dynamicLakes.filter(dl => manageableById.get(dl.id)),
     db.dataLakeProposals
@@ -339,7 +391,9 @@ export const listDataLakes = async (
     toManageableConfig(
       dl,
       manageableById.get(dl.id) ?? false,
+      canShredLakeMemory(dl, ctx),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      canPreauthorizeById.get(dl.id) ?? false,
       ownerNames.get(dl.createdByUserId),
       pendingCounts[dl.id]
     )
@@ -383,13 +437,24 @@ export const listAllDataLakes = async (
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
   const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
+  // This is the branch where canManage and canPreauthorize genuinely diverge: the admin manages every
+  // DB lake, but may only ADMIT the ones they hold a real rung on (owner/curator/org-admin/org-grant).
+  const preauthorizeActor = {
+    userId: ctx.userId,
+    isAdmin: false,
+    administeredOrgIds: await preauthorizeOrgIdsFor(ctx, db.organizations),
+  };
   // Admin manages every DB lake (canManage: true), but isOwn stays the true effective-owner test so
   // the "you" label still means ownership, not the admin's blanket manage power.
   const dynamicConfigs = dynamicLakes.map(dl =>
     toManageableConfig(
       dl,
       true,
+      // Admin, so the shred gate passes on every DB lake - but it is resolved through the same
+      // predicate rather than hardcoded, so a change to the rule reaches this surface too.
+      canShredLakeMemory(dl, ctx),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id)),
       ownerNames.get(dl.createdByUserId),
       pendingCounts[dl.id]
     )

@@ -57,6 +57,9 @@ export const dataLakeKeys = {
   /** One lake's convergence plan (GET /api/data-lakes/:id/converge), #1681 - the preview an owner
    *  reads before confirming a wave. */
   convergencePlan: (dataLakeId: string) => ['dataLakeConvergencePlan', dataLakeId] as const,
+  /** One lake's memory-profile state (GET /api/data-lakes/:id/lake-memory) - polled while
+   *  a build is running. */
+  lakeMemory: (dataLakeId: string) => ['dataLakeMemory', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>

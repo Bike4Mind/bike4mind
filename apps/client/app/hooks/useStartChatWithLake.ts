@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { ISessionDocument } from '@bike4mind/common';
+import type { DataLakeGroundingMode, ISessionDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -68,11 +68,18 @@ export default function useStartChatWithLake() {
  * for the single-lake `dataLakeId` path (sessionService/resolveLakeSessionDefaults.ts). Omitting
  * them would silently create an unscoped, non-retrieving session.
  *
- * `corpusGroundingMode` is deliberately NOT sent: /api/sessions/create strips any client-sent value
- * before the merge and only the `dataLakeId` arm re-supplies one, so a subset request cannot set it
- * at all. The test session inherits the size-only deferral default instead of the lake's configured
- * mode - invisible on the empty session created here, and only divergent once files are attached to
- * it. Carrying the mode through needs that server-side strip relaxed, not another client field.
+ * `corpusGroundingMode` IS sent: naming a lake subset by `retrievalTags` alone (no `dataLakeId`) is
+ * exactly the case /api/sessions/create trusts a client-sent mode for, since there is no later
+ * lake-defaults merge for it to override. Callers pass the lake's own `groundingMode` (falling back
+ * to `DEFAULT_DATA_LAKE_GROUNDING_MODE`, mirroring resolveLakeSessionDefaults) so the test session
+ * actually exercises what the lake is configured to do, rather than the size-only deferral default.
+ *
+ * `preauthorizedLakeIds` is the manage-but-not-member admission: a maintainer who is neither the
+ * lake's creator nor a member of its org otherwise gets an empty retrieval here, which is precisely
+ * the state a test session exists to disprove. Callers pass only ids the list marked
+ * `canPreauthorize` - /api/sessions/create re-authorizes each one live and 403s on any it refuses,
+ * so an unfiltered list would fail the whole request rather than degrade. Omitted when empty so an
+ * ordinary test session's body is unchanged.
  */
 export function useStartChatWithLakes() {
   const { setCurrentSession, setCurrentSessionId } = useSessions();
@@ -81,12 +88,18 @@ export function useStartChatWithLakes() {
   const closeManager = useDataLakeWizardStore(s => s.closeManager);
 
   return useCallback(
-    async (params: { retrievalTags: string[] }): Promise<ISessionDocument> =>
+    async (params: {
+      retrievalTags: string[];
+      groundingMode: DataLakeGroundingMode;
+      preauthorizedLakeIds?: string[];
+    }): Promise<ISessionDocument> =>
       createAndOpenSession(
         {
           name: 'New Notebook',
           retrievalTags: params.retrievalTags,
           forceKnowledgeRetrieval: true,
+          corpusGroundingMode: params.groundingMode,
+          ...(params.preauthorizedLakeIds?.length ? { preauthorizedLakeIds: params.preauthorizedLakeIds } : {}),
         },
         { queryClient, setCurrentSession, setCurrentSessionId, closeManager, navigate }
       ),

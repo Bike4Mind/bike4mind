@@ -30,6 +30,8 @@ interface CreateApiKeyBody {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  /** Lake ids to bind this key to for the manage-but-not-member session admission. Admin-only. */
+  preauthorizedLakeIds?: string[];
 }
 
 /**
@@ -57,7 +59,7 @@ const handler = baseApi({ auth: true })
         throw new BadRequestError('User not found');
       }
 
-      const { name, scopes, expiresAt, rateLimit } = req.body as CreateApiKeyBody;
+      const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
 
       // Reject any scope outside the mintable allowlist, including admin:* and cc-bridge:connect.
       const requestedScopes = Array.isArray(scopes) ? scopes : [];
@@ -73,6 +75,7 @@ const handler = baseApi({ auth: true })
           scopes: scopes as Parameters<typeof userApiKeyService.createUserApiKey>[1]['scopes'],
           expiresAt: expiresAt ? new Date(expiresAt) : undefined,
           rateLimit,
+          preauthorizedLakeIds,
           metadata: {
             clientIP: req.ip,
             userAgent: req.headers['user-agent'],

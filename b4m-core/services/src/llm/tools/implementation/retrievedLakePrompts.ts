@@ -31,7 +31,12 @@ export async function prependRetrievedLakePrompts(
     // (untrusted, or empty systemPrompt) - so a later call over the same lake is not re-resolved.
     for (const tag of fresh) injectedLakeTags.add(tag);
 
-    const prompts = await getAccessibleDataLakePrompts(context, { restrictToDatalakeTags: fresh });
+    const prompts = await getAccessibleDataLakePrompts(context, {
+      restrictToDatalakeTags: fresh,
+      preauthorizedLakeIds: context.sessionPreauthorizedLakeIds,
+    });
+    const preauthorizedSet = new Set(context.sessionPreauthorizedLakeIds ?? []);
+    const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
     // Recorded whenever this injection site ran, even if nothing qualified - see the field's own
     // comment in promptMeta.ts. Merges onto whatever the tool's own retrieval outcome write already
     // set (applyQuestStatusChanges / mergeRetrievalSummary), not a replacement. Its own try/catch:
@@ -46,6 +51,7 @@ export async function prependRetrievedLakePrompts(
             surfaces: [],
             dataLakeTags: [],
             injectedLakePromptIds: prompts.map(p => p.id),
+            ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
           },
         },
       });
