@@ -6,8 +6,10 @@
  * using OpenAI text-embedding-3-small. Output is saved to help-embeddings.json
  * for runtime vector similarity search.
  *
- * Reads from apps/client/public/help-content/ which already contains
- * the filtered, bundled markdown files.
+ * Reads from the two bundled content roots bundle-help-content.ts produces: the
+ * public root (apps/client/public/help-content/) and the admin-only root
+ * (apps/client/app/generated/help-content-admin/). Each article is read from
+ * whichever root matches its accessLevel in help-index.json.
  *
  * Usage: OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize
  *
@@ -24,13 +26,27 @@ import { glob } from 'glob';
 import { EmbeddingFactory } from '@bike4mind/fab-pipeline';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 import type { HelpEmbeddingChunk, HelpEmbeddingsIndex, HelpIndex, HelpAccessLevel } from './types.js';
-import { chunkByHeadings, estimateTokenCount, truncateAndNormalize } from './utils.js';
+import {
+  ADMIN_HELP_CONTENT_DIR,
+  PUBLIC_HELP_CONTENT_DIR,
+  chunkByHeadings,
+  estimateTokenCount,
+  isPublicAccessLevel,
+  truncateAndNormalize,
+} from './utils.js';
 import { helpEmbeddingsRequired } from './embeddingsConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const HELP_CONTENT_ROOT = path.resolve(__dirname, '../../../apps/client/public/help-content');
+// Public articles + media, served unauthenticated at /help-content/. Must stay in
+// sync with bundle-help-content.ts, which produces both this root and the admin
+// root below - the two are the only bundled outputs this script reads from.
+const CLIENT_ROOT = path.resolve(__dirname, '../../../apps/client');
+const HELP_CONTENT_ROOT = path.join(CLIENT_ROOT, PUBLIC_HELP_CONTENT_DIR);
+// Admin-only articles + media. Not statically served, so this root only ever exists
+// as an intermediate build artifact inside the regenerate/build pipeline.
+const ADMIN_HELP_CONTENT_ROOT = path.join(CLIENT_ROOT, ADMIN_HELP_CONTENT_DIR);
 const HELP_INDEX_PATH = path.resolve(__dirname, '../../../apps/client/app/generated/help-index.json');
 const OUTPUT_PATH = path.resolve(__dirname, '../../../apps/client/app/generated/help-embeddings.json');
 
@@ -121,26 +137,35 @@ export function relativePathToSlug(relativePath: string): string {
 export interface BuildChunksOptions {
   /** Overridable roots for testing; default to the real repo locations. */
   contentRoot?: string;
+  adminContentRoot?: string;
   indexPath?: string;
 }
 
+/** Which of the two bundled roots (see ADMIN_HELP_CONTENT_ROOT above) a discovered file came from. */
+type RootKind = 'public' | 'admin';
+
+interface DiscoveredArticle {
+  slug: string;
+  title: string;
+  content: string;
+  root: RootKind;
+}
+
 /**
- * Process all help articles into chunks ready for embedding.
- * Reads directly from apps/client/public/help-content/ (already filtered and bundled).
+ * Which root an accessLevel's body must be read from. Unset or 'public' resolves to
+ * the public root; anything else - including a value help-index.json's `as HelpIndex`
+ * cast let through that isn't actually in the HelpAccessLevel union - resolves to
+ * admin. Never the reverse: guessing 'public' on an unrecognised value would read an
+ * admin doc's body out of the unauthenticated public root's slug space.
  */
-export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkData[]> {
-  const contentRoot = opts.contentRoot ?? HELP_CONTENT_ROOT;
-  const indexPath = opts.indexPath ?? HELP_INDEX_PATH;
-  const accessLevelMap = loadAccessLevelMap(indexPath);
+export function expectedRootKind(accessLevel: HelpAccessLevel | undefined): RootKind {
+  return isPublicAccessLevel(accessLevel) ? 'public' : 'admin';
+}
 
-  const files = await glob('**/*.md', {
-    cwd: contentRoot,
-    absolute: true,
-  });
+async function discoverArticles(contentRoot: string, root: RootKind): Promise<DiscoveredArticle[]> {
+  const files = await glob('**/*.md', { cwd: contentRoot, absolute: true });
 
-  console.log(`Found ${files.length} markdown files in help-content`);
-
-  const articles: { slug: string; title: string; content: string }[] = [];
+  const articles: DiscoveredArticle[] = [];
   for (const filePath of files) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
     const { data: frontmatter, content } = matter(fileContent);
@@ -154,8 +179,34 @@ export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkD
       slug: relativePathToSlug(path.relative(contentRoot, filePath)),
       title: frontmatter.title as string,
       content,
+      root,
     });
   }
+  return articles;
+}
+
+/**
+ * Process all help articles into chunks ready for embedding.
+ * Reads directly from the two bundled content roots (already filtered and bundled by
+ * bundle-help-content.ts): the public root for 'public'/unset accessLevel articles,
+ * the admin root for everything else.
+ */
+export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkData[]> {
+  const contentRoot = opts.contentRoot ?? HELP_CONTENT_ROOT;
+  const adminContentRoot = opts.adminContentRoot ?? ADMIN_HELP_CONTENT_ROOT;
+  const indexPath = opts.indexPath ?? HELP_INDEX_PATH;
+  const accessLevelMap = loadAccessLevelMap(indexPath);
+
+  const [publicArticles, adminArticles] = await Promise.all([
+    discoverArticles(contentRoot, 'public'),
+    discoverArticles(adminContentRoot, 'admin'),
+  ]);
+  const articles = [...publicArticles, ...adminArticles];
+
+  console.log(
+    `Found ${articles.length} markdown files in help-content ` +
+      `(${publicArticles.length} public, ${adminArticles.length} admin)`
+  );
 
   // Report every unresolvable slug at once: a stale bundle typically misses many,
   // and throwing on the first would make it a one-slug-at-a-time fix. Sorted
@@ -170,8 +221,32 @@ export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkD
     );
   }
 
+  // Every slug must be resolved from the root ITS OWN accessLevel points to, not
+  // merely from wherever a file happened to turn up. This is what makes a missing
+  // admin root (or a stale file left in the wrong root after an accessLevel change)
+  // a loud "entry has no file" error instead of a silently dropped or
+  // cross-root-misread chunk.
+  const bySlugAndRoot = new Map(articles.map(article => [`${article.root}:${article.slug}`, article]));
+  const resolved: DiscoveredArticle[] = [];
+  const unresolved: string[] = [];
+  for (const [slug, accessLevel] of accessLevelMap) {
+    const article = bySlugAndRoot.get(`${expectedRootKind(accessLevel)}:${slug}`);
+    if (!article) {
+      unresolved.push(slug);
+      continue;
+    }
+    resolved.push(article);
+  }
+  if (unresolved.length > 0) {
+    const entryLabel = unresolved.length === 1 ? 'entry has' : 'entries have';
+    throw new Error(
+      `${unresolved.length} help-index.json ${entryLabel} no file in the content root matching its accessLevel: ` +
+        `${unresolved.sort().join(', ')} - ${REGENERATE_HINT}`
+    );
+  }
+
   const chunks: ChunkData[] = [];
-  for (const { slug, title, content } of articles) {
+  for (const { slug, title, content } of resolved) {
     const accessLevel = resolveAccessLevel(slug, accessLevelMap);
 
     for (const section of chunkByHeadings(content, title)) {
@@ -232,7 +307,8 @@ async function generateEmbeddings(chunks: ChunkData[], apiKey: string): Promise<
 
 async function main(): Promise<void> {
   console.log('Vectorizing help content...');
-  console.log(`Source: ${HELP_CONTENT_ROOT}`);
+  console.log(`Public source: ${HELP_CONTENT_ROOT}`);
+  console.log(`Admin source: ${ADMIN_HELP_CONTENT_ROOT}`);
   console.log(`Output: ${OUTPUT_PATH}`);
   console.log(`Model: ${EMBEDDING_MODEL}`);
   console.log(`Dimensions: ${EMBEDDING_DIMENSIONS}`);

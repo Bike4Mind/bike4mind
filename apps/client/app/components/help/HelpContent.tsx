@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Accordion, AccordionDetails, AccordionSummary, Box, CircularProgress, Typography } from '@mui/joy';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -8,7 +8,15 @@ import type { Options as RehypeSanitizeOptions } from 'rehype-sanitize';
 import type { PluggableList } from 'unified';
 import { useHelpContent } from '@client/app/hooks/useHelpContent';
 import { useHelpPanel } from '@client/app/hooks/useHelpPanel';
-import { toAnchor, resolveRelativePath, hasVideoExtension, parseYouTubeId } from '@bike4mind/scripts/help/utils';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import {
+  toAnchor,
+  resolveRelativePath,
+  hasVideoExtension,
+  parseYouTubeId,
+  isPublicAccessLevel,
+} from '@bike4mind/scripts/help/utils';
+import type { HelpAccessLevel } from '@bike4mind/scripts/help/types';
 import { CodeBlock } from '@client/app/components/common/CodeBlock';
 import HelpFeedbackWidget from './HelpFeedbackWidget';
 
@@ -217,21 +225,92 @@ const SummaryAccordionItem: React.FC<{ children?: React.ReactNode; node?: unknow
 );
 
 /**
- * Resolve a help media src (image/GIF/video) to its bundled URL under
- * /help-content/. Relative paths resolve against the current article's FILE
- * path using the same base the content validator uses (the article's
- * directory), so bare "media/x.gif" and "./media/x.gif" behave identically.
- * External URLs pass through untouched - the validator rejects them at build
- * time; the renderer just stays tolerant.
+ * Resolve a help media src (image/GIF/video) to its URL. Relative paths
+ * resolve against the current article's FILE path using the same base the
+ * content validator uses (the article's directory), so bare "media/x.gif" and
+ * "./media/x.gif" behave identically. External URLs pass through untouched -
+ * the validator rejects them at build time; the renderer just stays tolerant.
+ *
+ * A public article's media stays under the unauthenticated /help-content/
+ * static route (unchanged from before access levels existed). An admin
+ * article's media - bundled alongside its markdown in the server-only admin
+ * content root - is only reachable through the authenticated
+ * /api/help/content route (see pages/api/help/content.ts). Note that a bare
+ * <img>/<video src> cannot itself authenticate against that route (see
+ * useAuthedMediaSrc below); this only computes which URL to request.
  */
-export function resolveHelpMediaSrc(src: string | undefined, currentFilePath: string | undefined): string | undefined {
+export function resolveHelpMediaSrc(
+  src: string | undefined,
+  currentFilePath: string | undefined,
+  accessLevel?: HelpAccessLevel
+): string | undefined {
   if (!src) return src;
   const lower = src.toLowerCase();
   if (lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('//')) return src;
-  if (src.startsWith('/')) return `/help-content${src}`;
-  const fileBase = currentFilePath ? currentFilePath.replace(/\.md$/, '') : '';
-  const relative = src.startsWith('.') ? src : `./${src}`;
-  return `/help-content/${resolveRelativePath(fileBase, relative)}`;
+
+  let resolvedPath: string;
+  if (src.startsWith('/')) {
+    resolvedPath = src.substring(1); // Absolute path: docs-root relative
+  } else {
+    const fileBase = currentFilePath ? currentFilePath.replace(/\.md$/, '') : '';
+    const relative = src.startsWith('.') ? src : `./${src}`;
+    resolvedPath = resolveRelativePath(fileBase, relative);
+  }
+
+  return isPublicAccessLevel(accessLevel)
+    ? `/help-content/${resolvedPath}`
+    : `/api/help/content?path=${encodeURIComponent(resolvedPath)}`;
+}
+
+/**
+ * Bytes for an admin media route only reach the browser via a manual, headers-
+ * carrying fetch: /api/help/content requires a `Bearer` token (server/auth/
+ * auth.ts registers only `ExtractJwt.fromAuthHeaderAsBearerToken()`, no cookie
+ * extractor), which a plain <img>/<video src> cannot send - `credentials:
+ * 'include'` sends cookies, not an Authorization header. So a raw admin src
+ * would 404 for every admin viewer. Fetch it the same way the rest of the app
+ * authenticates and hand the element an object URL instead. Public URLs pass
+ * straight through, unfetched.
+ */
+function useAuthedMediaSrc(url: string | undefined, isAdmin: boolean): string | undefined {
+  const accessToken = useAccessToken(state => state.accessToken);
+  const [objectUrl, setObjectUrl] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!isAdmin || !url) {
+      setObjectUrl(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    let createdUrl: string | undefined;
+
+    fetch(url, {
+      credentials: 'include',
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+    })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Failed to fetch help media: ${response.status}`);
+        }
+        return response.blob();
+      })
+      .then(blob => {
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(blob);
+        setObjectUrl(createdUrl);
+      })
+      .catch(error => {
+        console.warn('[HelpMedia] Failed to load admin media:', error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [url, isAdmin, accessToken]);
+
+  return isAdmin ? objectUrl : url;
 }
 
 /**
@@ -239,8 +318,13 @@ export function resolveHelpMediaSrc(src: string | undefined, currentFilePath: st
  * the viewport, then it autoplays muted on a loop (controls kept for
  * pause/scrub). Authored via markdown image syntax, so it renders inside a
  * <p> - hence span wrappers (display:block) instead of div/Box.
+ *
+ * For admin content, the authed blob fetch (useAuthedMediaSrc) is deliberately
+ * gated on the same `inView` flag rather than starting as soon as the article
+ * renders - otherwise every admin demo clip on the page would download up
+ * front, defeating the scroll-gated laziness this component exists for.
  */
-const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) => {
+const HelpVideo: React.FC<{ src?: string; label?: string; isAdmin?: boolean }> = ({ src, label, isAdmin }) => {
   const containerRef = useRef<HTMLSpanElement>(null);
   // No IntersectionObserver (jsdom, very old browsers): load immediately.
   const [inView, setInView] = useState(() => typeof IntersectionObserver === 'undefined');
@@ -262,12 +346,15 @@ const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) =
     return () => observer.disconnect();
   }, [inView]);
 
+  const authedSrc = useAuthedMediaSrc(inView ? src : undefined, !!isAdmin);
+  const playableSrc = isAdmin ? authedSrc : src;
+
   return (
     <span ref={containerRef} style={{ display: 'block' }} data-testid="help-video-container">
       {inView ? (
         // Video styling lives in the parent Box sx ('& video') for theme parity
         <video
-          src={src}
+          src={playableSrc}
           aria-label={label || undefined}
           autoPlay
           muted
@@ -297,15 +384,21 @@ const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) =
 };
 
 /**
- * File path of the article currently being rendered, provided by HelpContent
- * for media src resolution. A context rather than the useHelpPanel store
- * (which handleLinkClick reads) because media srcs are computed at RENDER
- * time: the store is only synced from a post-commit effect, so on a
- * cached-content navigation the first render would read the PREVIOUS
- * article's path and compute a wrong (404) URL that never self-corrects.
- * Links are immune - they resolve at click time, long after that effect ran.
+ * File path and access level of the article currently being rendered,
+ * provided by HelpContent for media src resolution. A context rather than the
+ * useHelpPanel store (which handleLinkClick reads) because media srcs are
+ * computed at RENDER time: the store is only synced from a post-commit
+ * effect, so on a cached-content navigation the first render would read the
+ * PREVIOUS article's path/access level and compute a wrong (404) URL that
+ * never self-corrects. Links are immune - they resolve at click time, long
+ * after that effect ran.
  */
-export const HelpArticleFilePathContext = React.createContext<string | undefined>(undefined);
+export interface HelpArticleContextValue {
+  filePath?: string;
+  accessLevel?: HelpAccessLevel;
+}
+
+export const HelpArticleFilePathContext = React.createContext<HelpArticleContextValue>({});
 
 /**
  * YouTube embed for hosted demo videos. Authored with the same ![alt](url)
@@ -345,6 +438,13 @@ const HelpYouTube: React.FC<{ id: string; label?: string }> = ({ id, label }) =>
  * Media renderer for markdown images. Dispatches by src: YouTube links become
  * embeds, .webm/.mp4 become gif-style demo videos, everything else is an image.
  * All three use the same ![alt](src) markdown syntax.
+ *
+ * Images fetch admin media eagerly (via useAuthedMediaSrc) rather than staying
+ * scroll-gated like HelpVideo: there is no existing IntersectionObserver
+ * plumbing for images (native `loading="lazy"` only defers a browser-driven
+ * fetch, not this JS-driven one), and admin articles' inline images are
+ * expected to be few and small. Videos keep their scroll gating inside
+ * HelpVideo itself.
  */
 const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }> = ({
   node: _node,
@@ -352,17 +452,23 @@ const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: u
   alt,
   ...props
 }) => {
-  const currentFilePath = React.useContext(HelpArticleFilePathContext);
+  const { filePath: currentFilePath, accessLevel } = React.useContext(HelpArticleFilePathContext);
   const rawSrc = typeof src === 'string' ? src : undefined;
   const youTubeId = rawSrc ? parseYouTubeId(rawSrc) : null;
+  const isAdmin = !isPublicAccessLevel(accessLevel);
+  const isVideo = !!rawSrc && hasVideoExtension(rawSrc);
+  const routedSrc = youTubeId ? undefined : resolveHelpMediaSrc(rawSrc, currentFilePath, accessLevel);
+  // Hook called unconditionally (before the early returns below) to satisfy the
+  // rules of hooks; it is a no-op when there is nothing to fetch (youTubeId/video).
+  const imgSrc = useAuthedMediaSrc(isVideo ? undefined : routedSrc, isAdmin);
+
   if (youTubeId) {
     return <HelpYouTube id={youTubeId} label={alt} />;
   }
-  const resolvedSrc = resolveHelpMediaSrc(rawSrc, currentFilePath);
-  if (rawSrc && hasVideoExtension(rawSrc)) {
-    return <HelpVideo src={resolvedSrc} label={alt} />;
+  if (isVideo) {
+    return <HelpVideo src={routedSrc} label={alt} isAdmin={isAdmin} />;
   }
-  return <img src={resolvedSrc} alt={alt} loading="lazy" decoding="async" {...props} />;
+  return <img src={imgSrc} alt={alt} loading="lazy" decoding="async" {...props} />;
 };
 
 // Stable components object for ReactMarkdown - prevents re-renders.
@@ -383,8 +489,12 @@ export const markdownComponents = {
 };
 
 const HelpContent: React.FC<HelpContentProps> = ({ slug, anchor }) => {
-  const { data: content, isLoading, error, filePath } = useHelpContent(slug);
+  const { data: content, isLoading, error, filePath, accessLevel } = useHelpContent(slug);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Stable reference so media components (which read this via context) don't
+  // re-fetch/re-render on every HelpContent render, only when the article changes.
+  const articleContextValue = useMemo(() => ({ filePath, accessLevel }), [filePath, accessLevel]);
 
   // Keep the store's current file path in sync with the displayed article so
   // relative-link resolution (handleLinkClick) can use the file path instead of
@@ -563,7 +673,7 @@ const HelpContent: React.FC<HelpContentProps> = ({ slug, anchor }) => {
         },
       }}
     >
-      <HelpArticleFilePathContext.Provider value={filePath}>
+      <HelpArticleFilePathContext.Provider value={articleContextValue}>
         <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
           {content}
         </ReactMarkdown>

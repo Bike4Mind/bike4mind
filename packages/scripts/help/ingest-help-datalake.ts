@@ -139,6 +139,11 @@ async function main(opts: Options): Promise<number> {
   }
 
   // --- Load the public help corpus from the generated index + bundled markdown ---
+  // Public-only, and HELP_CONTENT_ROOT is deliberately the public root alone. The bundler splits
+  // admin articles into app/generated/help-content-admin (see bundle-help-content.ts); do NOT
+  // extend this to read that root the way retrieval.ts and vectorize-help-content.ts do. The
+  // `system-help` lake declares no requiredUserTag/requiredEntitlement, so anything ingested here
+  // is semantically searchable by every authenticated user.
   const helpIndex = JSON.parse(fs.readFileSync(HELP_INDEX_PATH, 'utf-8')) as HelpIndex;
   const publicEntries = helpIndex.entries.filter(e => e.accessLevel === 'public');
   console.log(`Public help articles to ingest: ${publicEntries.length}`);

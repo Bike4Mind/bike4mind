@@ -3,6 +3,34 @@
  * Used by both the index builder (Node.js) and the client (React)
  */
 
+import type { HelpAccessLevel } from './types.js';
+
+/**
+ * Whether an entry is publicly readable. Unset counts as public, matching
+ * filterHelpIndex in apps/client/pages/api/help/index.ts.
+ *
+ * Every access-level branch must be written as "is it public?" rather than
+ * "is it admin?": bundle-help-content.ts sends anything non-public to the
+ * admin-only root, so a new HelpAccessLevel value added to the union would
+ * otherwise be requested from the public static path and fail open on the
+ * client while 404ing in practice. Keep this the single definition.
+ */
+export function isPublicAccessLevel(accessLevel: HelpAccessLevel | undefined): boolean {
+  return !accessLevel || accessLevel === 'public';
+}
+
+/**
+ * Bundled help content locations, relative to apps/client.
+ *
+ * Four call sites must agree on these: bundle-help-content.ts writes both roots,
+ * vectorize-help-content.ts embeds from both, and apps/client's server/help/retrieval.ts
+ * and pages/api/help/content.ts read them at runtime. Divergence is silent and dangerous -
+ * a value that put the admin root back under public/ would re-expose admin-only articles as
+ * unauthenticated static assets with every test still passing - so both live here only.
+ */
+export const PUBLIC_HELP_CONTENT_DIR = 'public/help-content';
+export const ADMIN_HELP_CONTENT_DIR = 'app/generated/help-content-admin';
+
 /**
  * Strip markdown inline formatting from text (bold, italic, code, links)
  * This ensures consistent text extraction from both raw markdown and rendered content
