@@ -619,6 +619,28 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
     expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
     expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
   });
+
+  // #2005: the queue's reviewer of last resort is an org admin who did NOT create the lake - the
+  // succession role - and every existing case above describes a creator, so nothing pinned that the
+  // count reaches this one. Two gates have to agree for it to arrive: `findAccessible` must return
+  // the lake at all (pinned against a real Mongo in DataLakeModel.orgScopeAgreement.test.ts, which
+  // is where the bug was) and `canManageLake` must then rate the caller an editor, which is what
+  // admits the count. This covers the second half; `findAccessible` is mocked here, so it cannot
+  // and does not stand in for the first.
+  it('carries the count for an org admin who did not create the lake', async () => {
+    const orgLake = lake({ id: 'org-lake', slug: 'org-lake', createdByUserId: 'creator', organizationId: 'org-a' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() },
+      dataLakeProposals: counts({ 'org-lake': 2 }),
+    };
+
+    // administeredOrgIds ONLY, with an empty membership set - exactly the principal #2005 describes
+    // (a team manager or appointed admin who sits on no read/write users[] ACL row).
+    const result = await listDataLakes(ctx({ userId: 'manager', administeredOrgIds: ['org-a'] }), { db });
+
+    expect(result.find(l => l.id === 'org-lake')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'org-lake')?.pendingProposalCount).toBe(2);
+  });
 });
 
 describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () => {

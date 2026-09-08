@@ -407,10 +407,17 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
-   * Datastore-side accessibility filter - owner OR public OR (org-match AND requirement-match
-   * AND not-private). The org and requirement constraints are BOTH required for a non-owner: a
-   * tag/entitlement-holder in a different org is excluded, and a lake with no org and no gate
-   * stays owner-only. Defaults to the active+draft statuses.
+   * Datastore-side accessibility filter - owner OR org-admin OR public OR (org-match AND
+   * requirement-match AND not-private). The org and requirement constraints are BOTH required for
+   * a non-owner reaching a lake by membership: a tag/entitlement-holder in a different org is
+   * excluded, and a lake with no org and no gate stays owner-only. Defaults to the active+draft
+   * statuses.
+   *
+   * `ctx.administeredOrgIds` is the org-ADMIN arm and is not interchangeable with
+   * `ctx.organizationIds`: it grants no more than the single gate already grants (`canManageLake`
+   * rung 4 admits the same principal, and manage implies read), it exists so the succession roles -
+   * team manager, appointed admin - can DISCOVER the org lakes they may already manage. Absent or
+   * empty simply adds no arm.
    */
   findAccessible(
     ctx: AccessContext,

@@ -40,6 +40,13 @@ const MEMBER_PERMISSIONS = ORG_MEMBERSHIP_ACL_PERMISSIONS;
  *
  * Deliberately NO groups arm, unlike the shareable ACL (`findAccessibleById`) that the write-side
  * `resolveActiveOrg` validates against; see that function's note on the wider write predicate.
+ *
+ * Deliberately NO managerId/adminUserIds arms either, and #2005 is the reason to keep it that way:
+ * org-admin rights DO grant lake visibility, but they earn it through `AccessContext
+ * .administeredOrgIds` (`findIdsWithAdminRights` -> the org-admin arm of `findAccessible`), not by
+ * being folded in here. Widening this predicate would reach the switcher and therefore
+ * `resolveActiveOrg`, turning "may administer that org" into "may write as that org" - a privilege
+ * change, not a visibility fix. Admin rights and membership are meant to be different sets.
  */
 const orgMembershipFilter = (userId: string): Record<string, unknown> => ({
   $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
