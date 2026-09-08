@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, getEmbeddingModelCost } from '@bike4mind/common';
 import {
-  assertSupportedModels,
+  parseSupportedModels,
   formatCapturePlan,
   planCapture,
   selectReusableChunks,
@@ -138,12 +138,12 @@ describe('selectReusableChunks', () => {
   });
 });
 
-describe('assertSupportedModels', () => {
-  it('accepts registered models', () => {
-    expect(() => assertSupportedModels([SMALL, LARGE, ADA])).not.toThrow();
+describe('parseSupportedModels', () => {
+  it('accepts registered models and returns them narrowed', () => {
+    expect(parseSupportedModels([SMALL, LARGE, ADA])).toEqual([SMALL, LARGE, ADA]);
   });
 
   it('names the offending value instead of failing opaquely inside the factory later', () => {
-    expect(() => assertSupportedModels([SMALL, 'text-embedding-4-enormous'])).toThrow(/text-embedding-4-enormous/);
+    expect(() => parseSupportedModels([SMALL, 'text-embedding-4-enormous'])).toThrow(/text-embedding-4-enormous/);
   });
 });

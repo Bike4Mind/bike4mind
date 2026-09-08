@@ -10,7 +10,12 @@
  * credentialed entrypoint.
  */
 
-import { getEmbeddingModelCost, isSupportedEmbeddingModel, OllamaEmbeddingModel } from '@bike4mind/common';
+import {
+  getEmbeddingModelCost,
+  isSupportedEmbeddingModel,
+  OllamaEmbeddingModel,
+  type SupportedEmbeddingModel,
+} from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 
 /** OpenAI's per-request input ceiling - what the shipped batcher splits on. */
@@ -163,15 +168,17 @@ export const totalExcluded = (excluded: ReuseSelection['excluded']): number =>
   excluded.unlabeled + excluded.modelMismatch + excluded.missingVector + excluded.dimensionMismatch;
 
 /**
- * Reject a model id the shipped registry does not know, before anything is spent.
+ * Validate model ids against the shipped registry and narrow them, before anything is spent.
  *
  * An unrecognised id fails CLOSED several layers down (the embedding factory throws on an unknown
  * provider), but only after the capture has connected, scanned the lake and read every chunk. This
- * turns a late opaque failure into an immediate one that names the offending value.
+ * turns a late opaque failure into an immediate one that names the offending value - and returns the
+ * narrowed type, so the caller does not restate the check with a cast.
  */
-export function assertSupportedModels(models: readonly string[]): void {
+export function parseSupportedModels(models: readonly string[]): SupportedEmbeddingModel[] {
   const unknown = models.filter(m => !isSupportedEmbeddingModel(m));
   if (unknown.length > 0) {
     throw new Error(`Unsupported embedding model(s): ${unknown.join(', ')}. See SupportedEmbeddingModelSchema.`);
   }
+  return models as SupportedEmbeddingModel[];
 }
