@@ -124,8 +124,9 @@ export function NavLifecycleSection<T extends LifecycleSectionLake>({
   open: boolean;
   onToggle: () => void;
   testid: string;
-  /** Right-hand text on the static row when the section has nothing in it, e.g. "No files". */
-  emptyLabel: string;
+  /** Right-hand text on the static row when the section has nothing in it, e.g. "No files".
+   *  Optional: a section its caller renders only when non-empty never reaches that row. */
+  emptyLabel?: string;
   lakes: T[] | undefined;
   hoverBg: string;
   renderActions: (lake: T) => React.ReactNode;

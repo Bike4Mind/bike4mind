@@ -537,7 +537,6 @@ export default function ManagerNav({
                 open={showTransitional}
                 onToggle={() => setShowTransitional(v => !v)}
                 testid="datalake-transitional-section"
-                emptyLabel=""
                 lakes={filterByName(transitionalLakes)}
                 hoverBg={hoverBg}
                 renderRowTrailing={lake => (
