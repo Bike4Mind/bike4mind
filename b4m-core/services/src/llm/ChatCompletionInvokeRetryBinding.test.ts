@@ -19,7 +19,7 @@ const makeHarness = (questDoc: Record<string, unknown> | null) => {
 
   const db = {
     sessions: {
-      findById: vi.fn().mockResolvedValue({ id: SESSION, agentIds: [] }),
+      findById: vi.fn().mockResolvedValue({ id: SESSION, userId: 'user-A', agentIds: [] }),
       update: vi.fn().mockResolvedValue(undefined),
     },
     quests: {
