@@ -133,6 +133,28 @@ interface ListDataLakesAdapters {
   logger?: LakeAccessLogger;
 }
 
+/**
+ * `listDataLakes`-only options (#2425 P3 review): kept OUT of `ListDataLakesAdapters` on purpose,
+ * even though it is a sibling of `db`/`logger` there, because that type is shared with
+ * `listAllDataLakes`/`listArchivedDataLakes`/`listDeletedDataLakes` and none of them honor this
+ * field - two of them even run their own `grantedLakeIdsFor` call, so a field that looked
+ * type-valid there but was silently dropped would be worse than not having the option at all.
+ * Scoping it to a type only `listDataLakes` accepts keeps the field's type-checked surface equal
+ * to its actual support.
+ */
+interface ListDataLakesOptions extends ListDataLakesAdapters {
+  /**
+   * Optional pre-resolved grant-id set: skips this function's own `grantedLakeIdsFor` call when
+   * the caller already ran the identical query. Only safe to pass when the caller never threads
+   * `db.settings` above, so `resolveEnforceReadGrants` (and thus the `includeReaders` this
+   * function would otherwise resolve to) is always `false` - enforced below with a thrown error
+   * if both are supplied together, rather than left as a caller-observed precondition only.
+   * `handleList` (apps/client/server/slack/handleDataLakeCommand.ts) is the one caller today, and
+   * it satisfies that precondition by construction. Absent -> recomputes exactly as before.
+   */
+  grantedLakeIds?: string[];
+}
+
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
 
 /**
@@ -348,15 +370,23 @@ const toFallbackConfig = (
  */
 export const listDataLakes = async (
   ctx: AccessContext,
-  { db }: ListDataLakesAdapters
+  { db, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
 ): Promise<ManageableDataLakeConfig[]> => {
+  // The precomputed set is only valid under includeReaders=false (see the field's doc comment) -
+  // a caller that also threads `settings` could get includeReaders=true below, silently
+  // mismatching what the precomputed set was actually resolved with. Guarded rather than
+  // assumed, so that combination fails loudly instead of quietly dropping reader/org grants.
+  // Checked BEFORE the settings read below, so an invalid combination costs nothing.
+  if (precomputedGrantedLakeIds && db.settings) {
+    throw new Error(
+      'listDataLakes: grantedLakeIds and db.settings cannot both be supplied - the precomputed set ' +
+        'is only valid when includeReaders is forced false (no settings adapter)'
+    );
+  }
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds =
+    precomputedGrantedLakeIds ??
+    (await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders));
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });

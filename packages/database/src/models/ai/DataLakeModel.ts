@@ -339,8 +339,31 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
         .sort({ organizationId: 1 });
       if (own) return own.toJSON() as IDataLakeDocument;
     }
-    const orgless = await this.dataLakeModel.findOne({ slug, organizationId: { $in: [null, ''] } });
+    // Sorted too (#2425 review): `organizationId: null` and `organizationId: ''` are both stored
+    // as "org-less" but are distinct index keys, so two org-less lakes CAN share a slug. Without
+    // this, which one wins would depend on document order rather than being merely unspecified.
+    const orgless = await this.dataLakeModel
+      .findOne({ slug, organizationId: { $in: [null, ''] } })
+      .sort({ organizationId: 1 });
     return (orgless?.toJSON() as IDataLakeDocument) ?? null;
+  }
+
+  /**
+   * Last-resort slug resolution (#2425): a lake in an org the caller is not a member of is
+   * invisible to `findBySlug`, but a real owner/curator grant on it is still legitimate access -
+   * canManageLake already admits it once the lake resolves. The caller (`assertLakeAccess`)
+   * decides whether it is worth resolving the grant-held id set at all, so this method takes the
+   * ALREADY-resolved candidates rather than a thunk - keeping the "when to pay for the extra
+   * grants query" decision in the service layer instead of hidden inside the data layer.
+   */
+  async findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null> {
+    if (ids.length === 0) return null;
+    // Sorted for the same reason as the own-org arm above: two granted lakes can share a slug
+    // across two different non-member orgs (e.g. two independent transferLakeOwnership calls),
+    // and an unsorted `$in` match has no ordering guarantee - without a tie-break, which lake
+    // wins would be nondeterministic rather than merely unspecified-but-stable.
+    const granted = await this.dataLakeModel.findOne({ slug, _id: { $in: ids } }).sort({ _id: 1 });
+    return (granted?.toJSON() as IDataLakeDocument) ?? null;
   }
 
   async findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null> {

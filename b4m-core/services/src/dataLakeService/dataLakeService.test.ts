@@ -283,7 +283,9 @@ describe('canAccessLake - lake org id shape parity with the casting collection q
 describe('assertLakeAccess — not-found-style denial', () => {
   it('throws a not-found-style error for a denied non-member (does not disclose existence)', async () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
-    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn(), findBySlugAmongIds: vi.fn() },
+    };
     await expect(
       assertLakeAccess('lake1', ctx({ organizationIds: ['orgB'], userTags: ['opti'] }), { db })
     ).rejects.toThrow(/not found/i);
@@ -291,17 +293,22 @@ describe('assertLakeAccess — not-found-style denial', () => {
 
   it('returns the lake on grant', async () => {
     const l = lake();
-    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn(), findBySlugAmongIds: vi.fn() },
+    };
     await expect(assertLakeAccess('lake1', ctx({ userId: 'owner' }), { db })).resolves.toBe(l);
   });
 });
 
 describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', () => {
-  // The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake.
+  // The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake. No
+  // dataLakeAccessGrants wired, so the #2425 grant-fallback arm never calls findBySlugAmongIds -
+  // it's mocked only to satisfy the adapter type.
   const emptyDb = () => ({
     dataLakes: {
       findById: vi.fn().mockRejectedValue(new Error('bad id')),
       findBySlug: vi.fn().mockResolvedValue(null),
+      findBySlugAmongIds: vi.fn().mockResolvedValue(null),
     },
   });
 
@@ -336,6 +343,7 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
       dataLakes: {
         findById: vi.fn().mockRejectedValue(new Error('bad id')),
         findBySlug: vi.fn().mockResolvedValue(dbLake),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
       },
     };
     await expect(assertLakeAccess('opti-knowledge', ctx({ userId: 'owner' }), { db })).resolves.toBe(dbLake);
@@ -347,11 +355,127 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
       dataLakes: {
         findById: vi.fn().mockRejectedValue(new Error('bad id')),
         findBySlug: vi.fn().mockResolvedValue(dbLake),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
       },
     };
     await expect(
       assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationIds: ['orgB'] }), { db })
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+/**
+ * #2425: a lake scoped to an org the caller does not belong to is invisible to findBySlug's own-org
+ * and org-less arms. A real owner/curator grant on it (a cross-org transferLakeOwnership) is still
+ * legitimate access - canManageLake already admits it once the lake resolves - so on a findBySlug
+ * miss, assertLakeAccess resolves the grant-held id set itself and retries via
+ * `findBySlugAmongIds`, a separate repository method (its own real query logic is proved against a
+ * real Mongo in DataLakeModel.test.ts). This suite pins that assertLakeAccess only calls it on a
+ * miss, and only when a grant repo is wired.
+ */
+describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => {
+  const theirs = lake({
+    id: 'foreign-granted',
+    slug: 'foreign-granted',
+    createdByUserId: 'other',
+    organizationId: 'orgA',
+  });
+
+  // `findBySlug` mocks the own-org/org-less arms directly (real shape, real signature - no thunk
+  // param): a miss for anyone not in orgA. `findBySlugAmongIds` is the separate #2425 last-resort
+  // method `assertLakeAccess` calls itself on that miss, mirroring DataLakeModel's own split.
+  const findBySlugMiss = () => vi.fn().mockResolvedValue(null);
+  const findBySlugAmongIdsFake = () =>
+    vi.fn().mockImplementation(async (_slug: string, ids: string[]) => (ids.includes(theirs.id) ? theirs : null));
+
+  const grantRepo = (role: 'owner' | 'curator') => ({
+    listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: theirs.id, role }]),
+    listByLake: vi
+      .fn()
+      .mockResolvedValue([{ dataLakeId: theirs.id, principalType: 'user', principalId: 'grantee', role }]),
+  });
+
+  it('resolves the lake for a foreign-org owner-grant holder', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: grantRepo('owner'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).resolves.toBe(theirs);
+  });
+
+  it('resolves the lake for a foreign-org curator-grant holder', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: grantRepo('curator'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).resolves.toBe(theirs);
+  });
+
+  it('still denies (not-found-style) a foreign-org caller with NO grant - no enumeration widening', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockResolvedValue([]),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'stranger', organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('never calls findBySlugAmongIds when no grant repo is wired - back-compat for callers that have not', async () => {
+    const findBySlugAmongIds = findBySlugAmongIdsFake();
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds,
+      },
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
+    expect(findBySlugAmongIds).not.toHaveBeenCalled();
+  });
+
+  it('never calls findBySlugAmongIds when findBySlug already resolved the lake (laziness)', async () => {
+    // The extra grants query must only run on a MISS - if it ran unconditionally, the common
+    // own-org/org-less hit path would pay for a listByPrincipal call it never needed.
+    const findBySlugAmongIds = findBySlugAmongIdsFake();
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(theirs),
+        findBySlugAmongIds,
+      },
+      dataLakeAccessGrants: grantRepo('owner'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgA'] }), { db })
+    ).resolves.toBe(theirs);
+    expect(findBySlugAmongIds).not.toHaveBeenCalled();
   });
 });
 
@@ -549,6 +673,30 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     const result = await listDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
 
     expect(result.find(l => l.id === 'granted')?.canManage).toBe(false);
+  });
+});
+
+describe('listDataLakes - precomputed grantedLakeIds (#2425 P3)', () => {
+  const dbFor = () => ({ dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } });
+
+  it('reuses a precomputed grantedLakeIds set instead of re-resolving it', async () => {
+    const db = dbFor();
+    const grantedLakeIds = ['granted-1'];
+
+    await listDataLakes(ctx({ userId: 'me' }), { db, grantedLakeIds });
+
+    expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
+      statuses: ['draft', 'active'],
+      grantedLakeIds,
+    });
+  });
+
+  it('throws when a precomputed set and a settings adapter are supplied together', async () => {
+    const db = { ...dbFor(), settings: { getSettingsValue: vi.fn() } };
+
+    await expect(listDataLakes(ctx({ userId: 'me' }), { db, grantedLakeIds: ['granted-1'] })).rejects.toThrow(
+      /grantedLakeIds and db.settings cannot both be supplied/
+    );
   });
 });
 
