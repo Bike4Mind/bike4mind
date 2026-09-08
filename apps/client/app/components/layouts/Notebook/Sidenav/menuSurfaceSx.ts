@@ -2,6 +2,13 @@ import type { Theme } from '@mui/joy/styles';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 
 /**
+ * The one inset a menu surface and the list on it both use - menuSurfaceSx as padding,
+ * menuListSx as Joy's --List-padding. Shared rather than restated so the two cannot drift:
+ * the content sits the same distance from the edge whether the surface is a List or a Box.
+ */
+const MENU_INSET = '8px';
+
+/**
  * Shared look for the app's floating menu surfaces (the profile menu, its "More" flyout, the
  * Data Lake row and lake menus, the chat panel's layout Select). One recipe so a tweak to the
  * ground or the lift reaches all of them. `radius` is the surface's own corner: the profile
@@ -20,7 +27,7 @@ export const menuSurfaceSx = (theme: Theme, radius = '8px') => ({
     theme.palette.mode === 'dark'
       ? '0 24px 70px rgba(0, 0, 0, 0.28), 0 8px 20px rgba(0, 0, 0, 0.14)'
       : '0 24px 30px rgba(0, 0, 0, 0.03), 0 8px 20px rgba(0, 0, 0, 0.02)',
-  p: 1,
+  p: MENU_INSET,
 });
 
 /**
@@ -36,11 +43,11 @@ export const menuSurfaceSx = (theme: Theme, radius = '8px') => ({
  * --List-radius is only the derivation's input, and menuSurfaceSx owns the corner you see.
  *
  * `gap` is the only knob: 4px for a Select's listbox, 2px for the denser action menus. The
- * 8px --List-padding is the same 8px menuSurfaceSx applies as `p: 1`, deliberately - one inset
- * whether the surface is a List or a plain Box.
+ * padding is MENU_INSET, the same constant menuSurfaceSx pads with, so the two stay equal by
+ * construction.
  */
 export const menuListSx = ({ gap = '4px' }: { gap?: string } = {}) => ({
-  '--List-padding': '8px',
+  '--List-padding': MENU_INSET,
   '--List-radius': '8px',
   '--List-gap': gap,
   '--ListItem-radius': '8px',
@@ -75,8 +82,9 @@ export const selectListboxSx = (theme: Theme, opts?: { gap?: string }) => ({
     '&[aria-selected="true"]': {
       backgroundColor: theme.palette.notebooklist.focusedBackground,
       fontWeight: 600,
-      // Joy repaints an Option's ink from --variant-plainActiveColor while it is pressed; the
-      // row is already marked by its ground, so the text stays ordinary ink through the press.
+      // Joy's base plain variant paints EVERY Option's ink from --variant-plainColor; `inherit`
+      // drops the selected row back to the listbox's own ink, so the bold weight marks it rather
+      // than a different colour. (Nothing repaints on press - plainActive carries no `color`.)
       color: 'inherit',
     },
     '&:focus-visible': {

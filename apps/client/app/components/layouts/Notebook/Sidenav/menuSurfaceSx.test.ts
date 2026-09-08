@@ -32,6 +32,12 @@ describe('menuListSx', () => {
   it('carries the app scrollbar so a long menu does not fall back to the platform bar', () => {
     expect(Object.keys(menuListSx())).toContain('&::-webkit-scrollbar-thumb');
   });
+
+  // The surface pads with the same constant, so content sits the same distance from the edge
+  // whether the surface is a List or a plain Box. Two independent literals could drift.
+  it('insets the list by the same amount the surface pads with', () => {
+    expect(menuListSx()['--List-padding']).toBe(menuSurfaceSx(theme).p);
+  });
 });
 
 describe('selectListboxSx', () => {
