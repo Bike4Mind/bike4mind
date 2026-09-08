@@ -119,13 +119,28 @@ the ground truth does not describe, the "positive" and "negative" halves are an 
 their gap is noise. `band` and `spread` need no labels and stay valid.
 
 `retrieval_unavailable` is a real number: the capture enumerates the lake with the lifecycle-sweep
-reader (which returns every id the lake has ever held) and then filters it to what the served path can
-actually reach - live, not archived, not retrieval-excluded, `vectorizedChunkCount >= chunkCount > 0`.
+reader (which returns every id the lake has ever held) and then filters it to the files retrieval can
+reach - live, not archived, not retrieval-excluded, `vectorizedChunkCount >= chunkCount > 0`.
 That count is the files it dropped. The predicate mirrors the shipped `isFabFileCitable` minus its
-`embeddingModel` clause, which the arms deliberately vary - and that clause is the only one making
-`isFabFileCitable` stricter than the served path, so the three conditions left are the served path's
-own. On a mixed-stamp lake production drops the model-mismatched files too, so this counter is a lower
-bound on production's, never an inflation of it.
+`embeddingModel` clause, which the arms deliberately vary.
+
+It is the CITATION bar, which on one point is stricter than what the vector read actually returns, so
+this counter **overstates** production's withheld count and the band is measured over a slightly
+narrower corpus. The partially-vectorized file is the case: `partitionByIndexAvailability`
+(b4m-core/services/src/dataLakeService/retrievalUnavailable.ts) withholds a file only when it is marked
+stalled with nothing vectorized, or its indexing is in flight, and its docblock says outright that "a
+partially vectorized file (40 of 90) really does return its embedded passages, so it ranks normally" -
+because the read filters `vector: {$exists, $ne: []}` per CHUNK, not per file.
+
+The corpus defer gate (`ChatCompletionProcess.resolveCorpusInlinePlan`) does treat
+`vectorizedChunkCount >= chunkCount` as the condition for the semantic arm reaching a doc, so the two
+shipped sites do not read the same on this file. That gate can afford to be conservative - being wrong
+there only means inlining a doc it could have deferred - while the partition is the one describing what
+comes back. Taking the partition as the truth is what makes this an overstatement rather than an
+undercount.
+
+Every arm shares one filter, so the model+width comparison is unaffected either way; the absolute band
+is what carries the bias.
 
 `superseded` prints as `n/a`, not `0`: this instrument runs no collapse pass, so claiming it checked
 and found none would be untrue.

@@ -223,6 +223,14 @@ export type CapturableFileFields = {
  * one unreachable chunk moves the headline number that production's `search_knowledge_base` would
  * never have returned.
  *
+ * KNOWN OVERSTATEMENT, on one file only. `vectorizedChunkCount >= chunkCount` withholds a partially
+ * vectorized file, and `partitionByIndexAvailability` (../../../b4m-core/services/src/dataLakeService/
+ * retrievalUnavailable.ts) says such a file really does rank its embedded passages, because the read
+ * filters `vector: {$exists, $ne: []}` per CHUNK. The corpus defer gate reads it the other way, and
+ * can afford to. So `filesUnreachable` is an upper bound on what production withholds, and the band
+ * is measured over a marginally narrower corpus. Every arm shares this filter, so the model+width
+ * comparison is unaffected; only the absolute band carries it.
+ *
  * `opts` is empty in practice: a capture has no session, so there is no retrieval filter to apply and
  * that arm is a no-op today. The call stays because the shipped predicate makes it, and a filter that
  * silently omits one of the four conditions is how these two drift.
