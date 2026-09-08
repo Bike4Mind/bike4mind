@@ -706,6 +706,56 @@ describe('DataLakeRepository.findBySlug', () => {
     const resolved = await dataLakeRepository.findBySlug('shared-slug', ['org-b', 'org-a']);
     expect(resolved?.organizationId).toBe('org-a');
   });
+
+  // #2425: a lake scoped to an org the caller does NOT belong to is invisible to the own-org and
+  // org-less arms above. A real owner/curator grant on it (e.g. after a cross-org
+  // transferLakeOwnership) is still legitimate access, so a third, last-resort arm tries the
+  // caller's granted lake ids - fed in lazily, exactly as `assertLakeAccess` wires it.
+  it('resolves a foreign-org lake by slug when the caller has a granted lake id (#2425)', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    // Caller belongs only to org-b, so neither the own-org nor org-less arm can match; the grant
+    // is what makes the lake reachable.
+    const resolved = await dataLakeRepository.findBySlug('foreign-org-lake', ['org-b'], async () => [created.id]);
+
+    expect(resolved?.id).toBe(created.id);
+  });
+
+  it('returns null for a foreign-org lake when the caller holds no grant on it - no enumeration widening', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake-2', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    const resolved = await dataLakeRepository.findBySlug('foreign-org-lake-2', ['org-b'], async () => []);
+
+    expect(resolved).toBeNull();
+  });
+
+  it('never invokes resolveGrantedLakeIds when the own-org arm already resolves the lake', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'own-org-lake', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+    const resolveGrantedLakeIds = async (): Promise<string[]> => {
+      throw new Error('resolveGrantedLakeIds should not be called on an own-org hit');
+    };
+
+    const resolved = await dataLakeRepository.findBySlug('own-org-lake', ['org-a'], resolveGrantedLakeIds);
+
+    expect(resolved?.organizationId).toBe('org-a');
+  });
+
+  it('never invokes resolveGrantedLakeIds when the org-less arm already resolves the lake', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'orgless-lake', createdByUserId: 'someone' }));
+    const resolveGrantedLakeIds = async (): Promise<string[]> => {
+      throw new Error('resolveGrantedLakeIds should not be called on an org-less hit');
+    };
+
+    const resolved = await dataLakeRepository.findBySlug('orgless-lake', ['org-a'], resolveGrantedLakeIds);
+
+    expect(resolved?.slug).toBe('orgless-lake');
+  });
 });
 
 describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)', () => {
