@@ -82,9 +82,16 @@ describe('resolveRetryAction', () => {
     expect(resolveRetryAction(lake('restoring', { deleted: true }))).toBe('restore');
   });
 
+  // Both marks is the routine archive-then-delete lake, not an ambiguous one: a delete admits an
+  // 'archived' source and clears neither mark, while nothing that settles to 'archived' can leave
+  // filesDeletedAt behind. Reading filesArchivedAt first would answer 'unarchive' here and strand
+  // it, so the ORDER is the assertion.
+  it('resolves a restoring lake carrying both marks onto the delete axis', () => {
+    expect(resolveRetryAction(lake('restoring', { archived: true, deleted: true }))).toBe('restore');
+  });
+
   it('withholds a retry from a restoring lake whose axis is not provable', () => {
     expect(resolveRetryAction(lake('restoring'))).toBeUndefined();
-    expect(resolveRetryAction(lake('restoring', { archived: true, deleted: true }))).toBeUndefined();
   });
 
   it('reads a missing mark field the same as an unset one', () => {

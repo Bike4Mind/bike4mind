@@ -3970,15 +3970,24 @@ describe('listTransitionalDataLakes - the only list a stranded lake appears in',
     const deleteAxis = stranded({ status: 'restoring', filesDeletedAt: new Date('2020-01-01') });
     const [fromDelete] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([deleteAxis]) });
     expect(fromDelete!.retryAction).toBe('restore');
-  });
 
-  it('still lists a restoring lake whose axis is ambiguous, with no retry offered', async () => {
-    const both = stranded({
+    // Both marks is the shape a UI-driven delete leaves (it admits an 'archived' source and clears
+    // neither mark), and it is still the delete axis - nothing settling to 'archived' can write
+    // filesDeletedAt. Reading the archive mark first would answer 'unarchive' and strand it.
+    const archiveThenDelete = stranded({
       status: 'restoring',
       filesArchivedAt: new Date('2020-01-01'),
       filesDeletedAt: new Date('2020-01-02'),
     });
-    const [row] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([both]) });
+    const [fromBoth] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), {
+      db: dbWith([archiveThenDelete]),
+    });
+    expect(fromBoth!.retryAction).toBe('restore');
+  });
+
+  it('still lists a restoring lake whose axis is not provable, with no retry offered', async () => {
+    const noMarks = stranded({ status: 'restoring' });
+    const [row] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([noMarks]) });
     expect(row!.id).toBe('lake1');
     expect(row!.retryAction).toBeUndefined();
   });
@@ -3986,7 +3995,7 @@ describe('listTransitionalDataLakes - the only list a stranded lake appears in',
   // The manage predicate's grant rungs, which the adapter-less fixtures above never reach: without
   // these, narrowing the manage filter could silently drop every curator-granted lake and the rest
   // of this block would stay green.
-  const dbWithGrant = (lakes: IDataLakeDocument[], role: string) => ({
+  const dbWithGrant = (lakes: IDataLakeDocument[], role: 'owner' | 'curator' | 'reader') => ({
     ...dbWith(lakes),
     dataLakeAccessGrants: {
       listActiveByLakes: vi
@@ -4001,7 +4010,7 @@ describe('listTransitionalDataLakes - the only list a stranded lake appears in',
   it('serves a lake the caller neither created nor administers when a curator grant says they manage it', async () => {
     const foreign = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
     const result = await listTransitionalDataLakes(ctx({ userId: 'guest', administeredOrgIds: [] }), {
-      db: dbWithGrant([foreign], 'curator') as never,
+      db: dbWithGrant([foreign], 'curator'),
     });
     expect(result.map(l => l.id)).toEqual(['lake1']);
   });
@@ -4009,7 +4018,7 @@ describe('listTransitionalDataLakes - the only list a stranded lake appears in',
   it('withholds that same lake when the grant is read-only', async () => {
     const foreign = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
     const result = await listTransitionalDataLakes(ctx({ userId: 'guest', administeredOrgIds: [] }), {
-      db: dbWithGrant([foreign], 'reader') as never,
+      db: dbWithGrant([foreign], 'reader'),
     });
     expect(result).toEqual([]);
   });

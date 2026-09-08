@@ -109,10 +109,18 @@ const retryActionForStatus = (status: DataLakeStatus): TransitionalRetryAction |
  * `active` whose files nothing can reach, with no route back (unarchive refuses an `active` lake).
  * The mirror holds on the other axis.
  *
- * The sweep marks are the only axis evidence the document carries, so exactly one mark set is the
- * only provable case. Neither mark (a crash before the mark claim, or a pre-mark-field lake) and
- * both marks are ambiguous, and an ambiguous lake gets NO retry - it is still surfaced, so a human
- * can look, which is the whole point of the needs-attention list.
+ * The sweep marks are the axis evidence, and they are read in ORDER, not compared: `filesDeletedAt`
+ * decides on its own. That mark is written only by `claimFilesDeletedAt`, reached only from
+ * `deleteDataLake`, which settles the lake to `deleted`; it is cleared only by
+ * `restoreDeletedDataLake`'s settle, which lands the lake on `active`. So an `archived` lake - the
+ * only source an archive-axis `restoring` can have come from - cannot be carrying it. Both marks
+ * together is therefore not ambiguous but the ORDINARY archive-then-delete lake, and `restore` is
+ * the call built for it: it clears `deletedAt` bounded by `filesDeletedAt` and `archivedAt` bounded
+ * by `filesArchivedAt` in the same pass.
+ *
+ * Only NEITHER mark is unprovable (a crash before the mark claim, or a pre-mark-field lake), and
+ * such a lake gets NO retry - it is still surfaced, so a human can look, which is the whole point
+ * of the needs-attention list.
  */
 export const resolveRetryAction = (lake: {
   status: DataLakeStatus;
@@ -120,10 +128,8 @@ export const resolveRetryAction = (lake: {
   filesDeletedAt?: Date | null;
 }): TransitionalRetryAction | undefined => {
   if (lake.status !== 'restoring') return retryActionForStatus(lake.status);
-  const archiveAxis = !!lake.filesArchivedAt;
-  const deleteAxis = !!lake.filesDeletedAt;
-  if (archiveAxis === deleteAxis) return undefined;
-  return archiveAxis ? 'unarchive' : 'restore';
+  if (lake.filesDeletedAt) return 'restore';
+  return lake.filesArchivedAt ? 'unarchive' : undefined;
 };
 
 /**
