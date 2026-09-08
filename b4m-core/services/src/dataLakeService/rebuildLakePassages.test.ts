@@ -132,9 +132,8 @@ const REGISTRY_LAKE = { ...DATA_LAKES.find(dl => dl.id === 'opti-knowledge')!, c
 
 /**
  * `assertLakeRebuildAccess` is the ONE file-level gate that admits a fallback lake, so this door is
- * the only one whose lake can be creator-less. Scoping it `owned` anyway dropped the prefix arm
- * (`effectiveTagPrefixArm` returns null with no creator to anchor to), and a registry lake is mostly
- * prefix-tagged members - so the rebuild reported itself finished having never looked at them.
+ * the only one whose lake can be creator-less - see `resolveLakeMembershipScope` for why an `owned`
+ * scope over such a lake silently drops the prefix arm the lake is mostly made of.
  *
  * Asserted against the real builders, never a hand-written literal: an independently written second
  * copy of the scope is exactly the drift being guarded against (registryScopeParity.test.ts records
