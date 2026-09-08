@@ -312,7 +312,9 @@ const ImageContainer: FC<ImageContainerProps> = ({
         a.href = url;
         a.download = getAssetFilename(freshUrl, blob);
         a.click();
-        URL.revokeObjectURL(url);
+        // Revoke on a later tick: a synchronous revoke can abort the download before the browser
+        // has read the blob.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
         toast.success('Clipboard unavailable - image downloaded instead.');
       }
     } catch (error) {
