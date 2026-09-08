@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository, agentRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
+import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { IAgentDocument, redactSessionForClient } from '@bike4mind/common';
 
 const handler = baseApi()
@@ -13,6 +14,8 @@ const handler = baseApi()
       if (typeof sessionId !== 'string') {
         throw new BadRequestError('Invalid session ID');
       }
+
+      await assertSessionAccess(sessionId, req.user!.id);
 
       const agentIds = await sessionRepository.getAttachedAgents(sessionId);
       const agents = await Promise.all(agentIds.map(agentId => agentRepository.findById(agentId)));
@@ -38,6 +41,8 @@ const handler = baseApi()
         throw new BadRequestError('Agent ID is required');
       }
 
+      await assertSessionAccess(sessionId, req.user!.id);
+
       // Object-level authz honoring owner + user-shares + group-shares
       const agent = await agentRepository.shareable.findAccessibleById(req.user!, agentId);
       if (!agent) {
@@ -61,6 +66,8 @@ const handler = baseApi()
       if (!agentId || typeof agentId !== 'string') {
         throw new BadRequestError('Agent ID is required');
       }
+
+      await assertSessionAccess(sessionId, req.user!.id);
 
       const updatedSession = await sessionRepository.detachAgent(sessionId, agentId);
 

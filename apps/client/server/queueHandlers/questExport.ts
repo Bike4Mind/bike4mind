@@ -14,6 +14,7 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { filterReadableQuests } from '@server/utils/sessionAccess';
 import { apiKeyService } from '@bike4mind/services';
 import { ChatModels, isImageServeable } from '@bike4mind/common';
 import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
@@ -319,8 +320,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'assembling', 20, 'Loading responses...');
 
-    // Batch fetch all ChatHistoryItems
-    const chatItems = questIds.length > 0 ? await Quest.find({ _id: { $in: questIds } }).lean() : [];
+    // Batch fetch all ChatHistoryItems, then drop any whose session is not owned by (or shared
+    // with) the plan owner: a doctored subQuest.questId could otherwise pull another user's quest
+    // into this export. The plan is already owner/shares-gated above, so gate quests by the plan
+    // owner's session access (falling back to the caller for legacy plans with no userId).
+    const planOwnerId = plan.userId || userId;
+    const chatItems =
+      questIds.length > 0
+        ? await filterReadableQuests(await Quest.find({ _id: { $in: questIds } }).lean(), planOwnerId)
+        : [];
     const chatItemMap = new Map<string, Record<string, unknown>>();
     for (const item of chatItems) {
       chatItemMap.set((item._id as { toString(): string }).toString(), item as Record<string, unknown>);

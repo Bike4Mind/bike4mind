@@ -1,8 +1,8 @@
-import { Quest, Session } from '@bike4mind/database';
+import { Quest } from '@bike4mind/database';
 import { rollDice } from '@server/managers/dice';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { NotFoundError } from '@server/utils/errors';
+import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { z } from 'zod';
 
 const RollRequestSchema = z.object({
@@ -26,8 +26,7 @@ const handler = baseApi()
     const roll: number = rollDice(diceSpec);
     req.logger.debug(`[DICE] Roll result: ${roll}`);
 
-    const session = await Session.findById(sessionId);
-    if (!session) throw new NotFoundError('Session not found');
+    await assertSessionAccess(sessionId, req.user!.id);
 
     const quest = await Quest.create({
       sessionId,

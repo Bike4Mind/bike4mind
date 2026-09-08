@@ -5,6 +5,7 @@ import {
   apiKeyRepository,
   rapidReplyMappingRepository,
   rapidReplyResultRepository,
+  questRepository,
   Connection,
 } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
@@ -12,7 +13,8 @@ import { StatusManager } from '@bike4mind/services';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
-import { ChatModels } from '@bike4mind/common';
+import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
@@ -54,6 +56,19 @@ const handler = baseApi()
     const isOpti = isOptiHint === true && hasOptiAccess;
 
     req.logger.info(`🚀 [RapidReply] Endpoint invoked for quest ${questId || 'new quest'}${isOpti ? ' (opti)' : ''}`);
+
+    // Object-level authz: bind the caller-supplied sessionId (and questId when present) to the
+    // caller before we persist a rapid-reply row or stream it over the websocket. Outside the try
+    // below so a cross-tenant attempt surfaces as a real 403/404 rather than a soft {success:false}.
+    if (sessionId) {
+      await assertSessionAccess(sessionId, userId);
+      if (questId) {
+        const quest = await questRepository.findById(questId);
+        if (quest && quest.sessionId !== sessionId) {
+          throw new NotFoundError('Quest not found');
+        }
+      }
+    }
 
     try {
       // 1. Feature toggle - OptiHashi sessions bypass the global toggle (scoped enablement)
