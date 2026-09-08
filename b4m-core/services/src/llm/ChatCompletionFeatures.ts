@@ -52,6 +52,7 @@ import {
   resolveHistoryFetchLimit,
   buildMemoryContext,
   buildLakeMemoryContext,
+  lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   DATALAKE_TAG_PREFIX,
@@ -794,11 +795,17 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
       // sanitizes + length-bounds each fact (uploaded-doc content is untrusted). Distinct from the
       // memento framing used above.
-      const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
-      // Recorded AFTER the render, so `chars` is what actually reached the model rather than the
-      // pre-render belief text. The render can return an empty string, which makes `chunks > 0`
-      // with `chars: 0` a real (and honest) shape: beliefs were recalled, nothing was injected.
-      recordRetrieval('ok', dataLakeTags, { chunks: beliefs.length, chars: context.length });
+      // Sanitized once, up front, so the volume below counts the facts the render actually emits.
+      // `beliefs.length` would overcount (a fact that sanitizes to empty is dropped) and
+      // `context.length` would overcount `chars` by the framing preamble and the `- ` bullets -
+      // and `chars` is specified as retrieved CONTENT only, so it means the same thing here as on
+      // the cosine surfaces, which is what makes the merge's SUM meaningful.
+      const injectedFacts = lakeMemoryFacts(beliefs.map(b => b.fact));
+      const context = buildLakeMemoryContext(injectedFacts);
+      recordRetrieval('ok', dataLakeTags, {
+        chunks: injectedFacts.length,
+        chars: injectedFacts.reduce((total, fact) => total + fact.length, 0),
+      });
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
       // A retrieval that threw must not be byte-identical to one never attempted - record it
@@ -2354,13 +2361,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // 'ok' per RetrievalSummarySchema - this is the case the field exists to distinguish from
         // "never asked". Partial-scan hedging rides on promptMeta.warnings via reportCoverage above.
         // The starve this field exists to record. `topScore` is the diagnostic that says how close
-        // the best candidate came to the floor; guarded on >= 0 because an empty scan leaves the
-        // -1 sentinel (unreachable here, since scoredCount > 0, but the guard states the rule once
-        // rather than relying on a proof two branches away).
+        // the best candidate came to the floor; guarded on scoredCount because an unscored scan
+        // leaves the -1 sentinel. Not guarded on `topScore >= 0`, which would discard a genuinely
+        // negative cosine - a real near-miss, and the very diagnostic this exit is here to carry.
         recordRetrieval('ok', dataLakeTags, {
           chunks: 0,
           chars: 0,
-          ...(topScore >= 0 ? { topScore } : {}),
+          ...(scoredCount > 0 ? { topScore } : {}),
         });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
@@ -2373,7 +2380,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       recordRetrieval('ok', dataLakeTags, {
         chunks: sections.length,
         chars: used,
-        ...(topScore >= 0 ? { topScore } : {}),
+        ...(scoredCount > 0 ? { topScore } : {}),
       });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".

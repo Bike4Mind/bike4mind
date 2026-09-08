@@ -48,11 +48,14 @@ const LakeMemorySchema = subSchema({
   dataLakeTags: [{ type: String, required: false }],
 });
 
-// Injected retrieval volume (passages + characters + best similarity). Its own subSchema, so
-// `default: undefined` on the path below can suppress auto-vivification: an inline nested object
-// would materialize `injected: {}` on every quest, which has no `chunks` and so fails the Zod
-// re-parse on read (Zod `chunks`/`chars` are required). Absent-or-fully-present, and absence is
-// load-bearing - it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
+// Injected retrieval volume (passages + characters + best similarity). Its own subSchema for a
+// DIFFERENT reason than LakeMemorySchema below: it has no array child, so nothing auto-vivifies
+// here. Declared inline, its `required` children would become unconditional validators, and a
+// quest carrying `retrieval` without a volume - the documented absent case - would throw
+// ValidationError on `promptMeta.retrieval.injected.chunks`. Absent-or-fully-present, and absence
+// is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
+// `default: undefined` on the path below is inert for a single nested subdocument (nothing
+// vivifies it) and kept only for symmetry with the siblings, where it does work.
 const InjectedVolumeSchema = subSchema({
   chunks: { type: Number, required: true },
   chars: { type: Number, required: true },

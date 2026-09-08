@@ -3719,14 +3719,26 @@ describe('ChatCompletionProcess', () => {
         // One belief recalled and rendered. No `topScore`: belief relevance is a different scale
         // from the cosine similarities the other surfaces report, so a max across the two would
         // be a number that looks like a similarity and is not one.
-        injected: { chunks: 1, chars: expect.any(Number) },
+        // `chars` counts the sanitized fact text ONLY - not the rendered block, whose framing
+        // preamble and `- ` bullets would inflate it by a fixed overhead and make it mean
+        // something different here than on the surfaces this field is summed with.
+        injected: { chunks: 1, chars: 'The X-200 pump has a 5-year warranty.'.length },
       });
-      // `chars` is measured AFTER the render, so it covers the framing the model actually received
-      // rather than the raw belief text - which is the only reason it can be compared with forced
-      // retrieval's number.
-      expect((retrieval as { injected: { chars: number } }).injected.chars).toBeGreaterThan(
-        'The X-200 pump has a 5-year warranty.'.length
-      );
+    });
+
+    it('counts only the beliefs that survive sanitizing, since a blank fact reaches the model as nothing', async () => {
+      const fact = 'The X-200 pump has a 5-year warranty.';
+      const { retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [
+          { fact, relevance: 0.9, sources: ['doc1'] },
+          { fact: '   ', relevance: 0.8, sources: ['doc2'] },
+        ],
+      });
+
+      // buildLakeMemoryContext drops the whitespace-only fact, so two recalled beliefs render one
+      // bullet. `injected` is what reached the model, not what recall returned.
+      expect(retrieval).toMatchObject({ injected: { chunks: 1, chars: fact.length } });
     });
 
     it('emits no lake-memory block when recall returns nothing, but still records attempted:true, outcome:ok (#1867 zero case)', async () => {

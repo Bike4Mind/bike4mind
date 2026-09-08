@@ -51,6 +51,17 @@ function sanitizeLakeFact(fact: string): string {
 }
 
 /**
+ * The facts `buildLakeMemoryContext` will actually render: sanitized, with the ones that sanitize to
+ * nothing dropped. Exported so a caller that has to REPORT what it injected (retrieval telemetry's
+ * `injected.chunks` / `injected.chars`) counts the same facts the render emits, rather than the raw
+ * beliefs or the rendered block including its framing. `sanitizeLakeFact` is idempotent, so passing
+ * this straight into `buildLakeMemoryContext` is safe and keeps the sanitize unconditional there.
+ */
+export function lakeMemoryFacts(facts: readonly string[]): string[] {
+  return facts.map(sanitizeLakeFact).filter(Boolean);
+}
+
+/**
  * Framing for LAKE reference facts (#1440) - a deliberate sibling of `buildMemoryContext`, kept HERE so
  * all memory framing still lives in one auditable place. It differs on purpose: lake facts are reference
  * material extracted from curated documents, NOT things the assistant knows about the person, so they
@@ -59,7 +70,7 @@ function sanitizeLakeFact(fact: string): string {
  * the content is untrusted uploaded text.
  */
 export function buildLakeMemoryContext(facts: readonly string[]): string {
-  const clean = facts.map(sanitizeLakeFact).filter(Boolean);
+  const clean = lakeMemoryFacts(facts);
   if (clean.length === 0) return '';
   return (
     `Background reference facts from the user's knowledge base. Use them to ground your answer where ` +
