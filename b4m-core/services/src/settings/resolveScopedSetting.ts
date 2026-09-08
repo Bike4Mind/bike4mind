@@ -364,6 +364,15 @@ export function scopeForFileOwner(file: { userId: string; organizationId?: strin
  * the caller's own and shared files), so there is no single lake for a narrower rung to key on.
  * Owner derivation matches `scopeForLake`/`scopeForFileOwner`: an org member resolves at
  * `owner:<orgId>`, otherwise at `owner:<userId>`.
+ *
+ * CAVEAT for a second consumer: unlike its two siblings, this one cannot derive the org from the
+ * resource - there is no resource - so it keys on `caller.organizationId`, which callers feed from
+ * `user.organizationId`: the SELECTED-org display pointer, not proof of membership. The #1674
+ * invariant is that org resolution comes from membership, and this is the one derivation that does
+ * not satisfy it. Tolerable for a read-only BUDGET (worst case a member of two orgs reads the
+ * other's ceiling for one search), and NOT tolerable for anything that grants access, hides data or
+ * spends money. A consumer in that class must resolve membership first and pass the result here,
+ * not reach for this function as-is.
  */
 export function scopeForCaller(caller: { userId: string; organizationId?: string | null }): SettingScope {
   const orgId = caller.organizationId || undefined;

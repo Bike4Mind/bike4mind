@@ -3357,7 +3357,9 @@ export const settingsMap = {
       "setting's own value is then unused there, though it still governs the keyword-search " +
       'fallback, and the count served if token pricing itself fails). Does NOT raise the ' +
       "tool's hard ceiling of 10 passages per call - a model that reads max_results up to 10 " +
-      "from its own tool schema won't ask for more than that regardless of this setting.",
+      "from its own tool schema won't ask for more than that regardless of this setting. " +
+      'A change is not instantaneous: the settings cache is per-instance, so it applies immediately ' +
+      'on the instance that served the change and within ~5 min (one cache TTL) everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 5,
@@ -3388,7 +3390,9 @@ export const settingsMap = {
       'chunked smaller no longer silently returns less material for the same setting. 0 (default) ' +
       'disables it: search_knowledge_base then serves exactly kbSearchDefaultResults passages, ' +
       'unchanged from before this setting existed. The FIRST matching passage is always returned ' +
-      'even if it alone exceeds the budget - a search that found something never returns nothing.',
+      'even if it alone exceeds the budget - a search that found something never returns nothing. ' +
+      'A change is not instantaneous: the settings cache is per-instance, so it applies immediately ' +
+      'on the instance that served the change and within ~5 min (one cache TTL) everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 6,
@@ -3408,7 +3412,9 @@ export const settingsMap = {
       'Cosine similarity is not comparable across embedding models: a floor tuned for one model can ' +
       'filter out an entire alternate model, when a lake mixes embedding models, more aggressively ' +
       "than intended. Start low and raise gradually while watching the tool's own retrieval-" +
-      'skipped notices.',
+      'skipped notices. A change is not instantaneous: the settings cache is per-instance, so it ' +
+      'applies immediately on the instance that served the change and within ~5 min (one cache TTL) ' +
+      'everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 7,

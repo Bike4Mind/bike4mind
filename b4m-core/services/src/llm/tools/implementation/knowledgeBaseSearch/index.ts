@@ -186,6 +186,22 @@ function formatSkipNotice(skipNotice?: SkipNotice | null): string {
 }
 
 /**
+ * Did a configured relevance floor empty an otherwise-populated result set - as opposed to there
+ * having been nothing to filter?
+ *
+ * `comparedNoPassages` is what makes the claim honest: an unembedded lake, or a tag filter that
+ * matched no files, also returns zero results, and blaming the floor there sends the model (and the
+ * sweep in packages/scripts/retrieval) chasing a threshold that never ran. Deliberately NOT
+ * `chunksScored > 0` - a healthy all-ANN lake legitimately scores zero chunks (see
+ * `comparedNoPassages` in semanticDataLakeSearch), which that check would misread as unindexed.
+ *
+ * Shared by both semantic arms so the attribution rule cannot drift between them.
+ */
+function floorEmptiedResultSet(search: SemanticDataLakeSearchResult, kbMinRelevance: number): boolean {
+  return kbMinRelevance > 0 && search.results.length === 0 && !comparedNoPassages(search);
+}
+
+/**
  * Compose the one notice channel that survives the fall-through to keyword search.
  *
  * The relevance-floor reason leads and is COMPOSED with (not replaced by) the search limitations:
@@ -576,7 +592,7 @@ async function trySemanticKbSearch(
     // relevance floor that emptied an otherwise-thin-but-nonempty result set has to fold into
     // `skipNotice` here, not just a server log, or the model reads a bare metadata listing as
     // "the knowledge base has nothing on this topic".
-    const floorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
+    const floorEmptiedResults = floorEmptiedResultSet(search, budgets.kbMinRelevance);
     const skipNotice = buildSkipNotice(search, floorEmptiedResults);
     if (search.results.length === 0) {
       if (floorEmptiedResults) {
@@ -711,7 +727,7 @@ async function tryScopedSemanticKbSearch(
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
     // See the matching branch in trySemanticKbSearch above for why this folds into skipNotice.
-    const scopedFloorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
+    const scopedFloorEmptiedResults = floorEmptiedResultSet(search, budgets.kbMinRelevance);
     const skipNotice = buildSkipNotice(search, scopedFloorEmptiedResults);
     if (search.results.length === 0) {
       if (scopedFloorEmptiedResults) {
