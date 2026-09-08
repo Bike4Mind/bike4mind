@@ -35,6 +35,10 @@ const convergeMutate = vi.fn((_vars?: { limit?: number; confirm?: boolean }, opt
 // empty-section rendering.
 const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+// The needs-attention list defaults to EMPTY, not in-flight: its section renders only when
+// non-empty, so an empty default is what keeps every other case in this file unaffected.
+const useGetTransitionalDataLakes = vi.fn(() => ({ data: [] as unknown[] | undefined }));
+const retryMutate = vi.fn();
 // LakeInfoPanel's Drive chip and the purge dialog's warning both read the connection. Default to
 // "no connection" so existing cases are unaffected; the Drive-specific cases override it.
 const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: false, isLoading: false }));
@@ -56,6 +60,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
     useGetArchivedDataLakes: () => useGetArchivedDataLakes(),
     useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
+    useGetTransitionalDataLakes: () => useGetTransitionalDataLakes(),
+    useRetryLakeLifecycle: () => ({ mutate: retryMutate, isPending: false }),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
     // LakeInfoPanel renders <LakeHealthBadge> unconditionally; the badge renders null on no data.
@@ -282,6 +288,9 @@ beforeEach(() => {
   useGetArchivedDataLakes.mockReturnValue({ data: undefined });
   useGetDeletedDataLakes.mockReset();
   useGetDeletedDataLakes.mockReturnValue({ data: undefined });
+  useGetTransitionalDataLakes.mockReset();
+  useGetTransitionalDataLakes.mockReturnValue({ data: [] });
+  retryMutate.mockClear();
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
   useDataLakeWizardStore.setState({ managerTab: 'mine' });
@@ -1222,5 +1231,80 @@ describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
     expect(screen.getByTestId('datalake-converge-confirm')).toHaveTextContent(
       '4 file(s) are excluded because another data lake requires a different passage target'
     );
+  });
+});
+
+describe('DataLakeManagerPanel - needs-attention section', () => {
+  /** A lake stranded mid-lifecycle, as GET /api/data-lakes/transitional serves it. */
+  const strandedLake = (status: string, id = 'stuck') => ({
+    id,
+    name: `Stuck ${id}`,
+    slug: id,
+    fileTagPrefix: 'st:',
+    status,
+    updatedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+  });
+
+  it('renders no section at all when nothing is stranded', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [] });
+    renderPanel();
+    // Absent, not an empty "No files" header like Archived/Deleted: on a healthy install this
+    // section is not part of the app's furniture.
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+
+  it('renders no section while the list is still in flight', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: undefined });
+    renderPanel();
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+
+  it('shows a stranded lake with the status it is stuck in', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-section')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-transitional-section-toggle')).toHaveTextContent('Needs attention');
+    // The status is the row's whole point: without it the reader cannot tell what Retry will do.
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('archiving');
+  });
+
+  it('retries with the lake id and status, so the hook resolves the action', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('deleting')] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-stuck'));
+    const retry = screen.getByTestId('datalake-retry-btn-stuck');
+    // The action is named on the item, not left as a bare "Retry" - the reader is about to re-run
+    // a lifecycle operation and must see which one.
+    expect(retry).toHaveTextContent('Retry delete');
+    await user.click(retry);
+
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', status: 'deleting' });
+  });
+
+  it('lists a purging lake read-only, with no retry and no dead menu trigger', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('purging')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('purging');
+    // A purge is already accepted and its sweep irreversible, so there is nothing to retry - and
+    // the row must not offer a menu trigger that would open empty.
+    expect(screen.queryByTestId('datalake-retry-btn-stuck')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-stuck')).not.toBeInTheDocument();
+  });
+
+  it('keeps the retryable rows actionable when a purging lake is listed beside them', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({
+      data: [strandedLake('purging', 'purger'), strandedLake('archiving', 'archiver')],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-purger')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-archiver'));
+    await user.click(screen.getByTestId('datalake-retry-btn-archiver'));
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'archiver', status: 'archiving' });
   });
 });

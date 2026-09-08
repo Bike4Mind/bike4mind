@@ -490,19 +490,23 @@ export const listTransitionalDataLakes = async (
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   const strandedBefore = Date.now() - STRANDED_LAKE_CUTOFF_MS;
-  return (
-    lakes
-      .filter(lake => canManageLake(lake, ctx, grantsByLake.get(lake.id)))
-      // `new Date(...)`, not `.getTime()` on the field: it is a Date in-process but an ISO string
-      // once it has crossed a wire, and both shapes reach this function.
-      .filter(lake => new Date(lake.updatedAt).getTime() <= strandedBefore)
-      .map(lake => ({
-        id: lake.id,
-        name: lake.name,
-        slug: lake.slug,
-        fileTagPrefix: lake.fileTagPrefix,
-        status: lake.status,
-        updatedAt: lake.updatedAt,
-      }))
-  );
+  return lakes
+    .filter(lake => canManageLake(lake, ctx, grantsByLake.get(lake.id)))
+    .filter(lake => {
+      // `new Date(...)`, not `.getTime()` on the field: it is a Date in-process but an ISO
+      // string once it has crossed a wire, and both shapes reach this function.
+      const movedAt = new Date(lake.updatedAt).getTime();
+      // NaN - a lake with no or an unparseable timestamp - is SHOWN, not hidden: the cutoff is
+      // there to withhold a lake we can prove is still busy, and an absent timestamp proves
+      // nothing. Failing closed would hide exactly the lake this list exists to surface.
+      return Number.isNaN(movedAt) || movedAt <= strandedBefore;
+    })
+    .map(lake => ({
+      id: lake.id,
+      name: lake.name,
+      slug: lake.slug,
+      fileTagPrefix: lake.fileTagPrefix,
+      status: lake.status,
+      updatedAt: lake.updatedAt,
+    }));
 };
