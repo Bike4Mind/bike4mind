@@ -1,4 +1,12 @@
-import { QuestMasterPlan, Quest, FabFile, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import {
+  QuestMasterPlan,
+  Quest,
+  FabFile,
+  fabFileRepository,
+  userRepository,
+  apiKeyRepository,
+  adminSettingsRepository,
+} from '@bike4mind/database';
 import { secureParameters, getSettingsByNames } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -286,6 +294,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw new Error('Access denied');
     }
 
+    // Loaded once for the per-image object-level access check in the download loop below (its
+    // `groups` feed the share predicate). Plan access is already verified above; a missing user
+    // doc here fails the per-image check closed rather than leaking bytes.
+    const exportUser = await userRepository.findById(userId);
+
     // Idempotency check: skip if ZIP already exists (must be after plan load to get slug)
     const slug = slugify(plan.goal);
     const finalZipKey = `exports/quest/${exportJobId}/questmaster-${slug}-${dateStr}.zip`;
@@ -446,6 +459,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           }
           if (fabFile && !isImageServeable(fabFile)) {
             throw new Error('Image is pending moderation review and is not available');
+          }
+
+          // Object-level guard: a tracked fab-file key embedded in the plan markdown must belong
+          // to (or be shared with) the user running the export, or its bytes would leak into their
+          // zip (IDOR). Untracked keys (external/generated-image URLs) have no FabFile owner record
+          // and fall through unaffected - the same limitation the generated-image copy/serve paths
+          // carry. Lake-tag access isn't resolved here (a queue handler has no entitlement context),
+          // so a curated-lake image degrades to the breadcrumb below rather than leaking. Fails
+          // closed: a tracked file with no loadable export user is treated as inaccessible.
+          if (fabFile) {
+            const accessible = exportUser
+              ? await fabFileRepository.shareable.findAccessibleById(exportUser, fabFile.id)
+              : null;
+            if (!accessible) throw new Error('Image is not available');
           }
 
           const buffer = await storage.download(key);

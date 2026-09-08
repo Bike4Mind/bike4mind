@@ -34,6 +34,12 @@ const handler = baseApi()
       const { user } = req;
       const { imageS3Key, fileName } = copyGeneratedImageSchema.parse(req.body);
 
+      // NOTE: `imageS3Key` is a caller-supplied key into the generated-images bucket, and there is
+      // no per-object ownership check here - generated images are stored at bare uuid keys with no
+      // DB row or userId-scoped prefix recording who created them, so nothing server-side can decide
+      // whether this key is the caller's. Closing this needs an ownership model for generated images
+      // (owner-scoped keys at generation time, or a ledger), a change spanning the generation tools
+      // and the generated-content serve route - tracked as its own follow-up, out of scope here.
       const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
 
       const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
