@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 /**
@@ -19,9 +20,14 @@ import path from 'node:path';
  * `merge_group` path specifically cannot be reached from a `pull_request` run, so the PR that adds
  * a trigger to ci.yml is green regardless of what the action does with it. Hence a static
  * cross-check: every trigger ci.yml declares must have its own arm, and every env var an arm reads
- * must be plumbed into the step's `env:` block and bound to that event's own payload. That second
- * half is not redundant - an arm on its own is a no-op, reading unset variables and failing open
- * exactly as before.
+ * must be plumbed into the step's `env:` block, bound to that event's own payload, and bound to the
+ * end of the range its name claims. The plumbing half is not redundant - an arm on its own is a
+ * no-op, reading unset variables and failing open exactly as before. Nor is the binding half:
+ * declaring a key against the wrong payload field fails CLOSED, which is worse still, because an
+ * empty diff skips the very legs the gate exists to trigger and the run again looks normal.
+ *
+ * The trigger list comes from ci.yml because ci.yml is the action's only consumer, which is
+ * asserted here too - a second consumer with its own `on:` block would otherwise be unguarded.
  *
  * Deliberately letting an event fail open is still allowed: write the arm explicitly
  * (`BASE=""; HEAD=""`) so the decision is visible in the action rather than inherited by silence.
@@ -119,6 +125,34 @@ function readEnvRefs(body: string): string[] {
  */
 const DISPATCH_LOCALS = new Set(['BASE', 'HEAD']);
 
+/** Workflow files that call the changes-filter action. Both YAML extensions are in use here. */
+function readActionConsumers(workflowsDir: string): string[] {
+  return fs
+    .readdirSync(workflowsDir)
+    .filter(name => /\.ya?ml$/.test(name))
+    .filter(name => fs.readFileSync(path.join(workflowsDir, name), 'utf8').includes('actions/changes-filter'));
+}
+
+/**
+ * Which end of the diff range a SHA env key claims by its own name, or null if it names neither.
+ *
+ * Derived from the key rather than tabulated per event, so a key added for some future trigger is
+ * covered the day it lands - the same reason the trigger list is read from ci.yml instead of listed
+ * here. `push` predates the `_BASE_SHA`/`_HEAD_SHA` convention and names its endpoints after the
+ * payload fields (`before`/`after`).
+ */
+function readShaRole(key: string): 'base' | 'head' | null {
+  if (/_BASE_SHA$/.test(key) || key === 'PUSH_BEFORE') return 'base';
+  if (/_HEAD_SHA$/.test(key) || key === 'PUSH_AFTER') return 'head';
+  return null;
+}
+
+/** Payload fields that legitimately supply each end of the range, across all three events. */
+const ROLE_FIELDS: Record<'base' | 'head', RegExp> = {
+  base: /\.(base_sha|base\.sha|before)\b/,
+  head: /\.(head_sha|head\.sha|after)\b/,
+};
+
 describe('changes-filter event dispatch vs ci.yml triggers', () => {
   const ci = fs.readFileSync(CI_WORKFLOW, 'utf8');
   const action = fs.readFileSync(CHANGES_FILTER, 'utf8');
@@ -173,6 +207,28 @@ describe('changes-filter event dispatch vs ci.yml triggers', () => {
       misbound.map(({ key, value }) => `${key}: ${value}`),
       "env keys wired to another event's payload; declared, but empty on the event whose arm reads them"
     ).toEqual([]);
+  });
+
+  // The event check above is satisfied by any field of the right payload, so base and head can
+  // still cross within one event. That mutation fails CLOSED, which is worse than the fail-open
+  // this file exists to catch: BASE equals HEAD, every diff comes back empty, and the run skips
+  // the build and docs legs the gate exists to trigger - silently, on every run of that trigger.
+  it("binds each event's SHA vars to the end of the range their names claim", () => {
+    const crossed = readStepEnvBindings(action).filter(({ key, value }) => {
+      const role = readShaRole(key);
+      return role !== null && !ROLE_FIELDS[role].test(value);
+    });
+    expect(
+      crossed.map(({ key, value }) => `${key}: ${value}`),
+      'env keys bound to the opposite end of the range; BASE==HEAD makes every diff empty and skips the legs the gate should trigger'
+    ).toEqual([]);
+  });
+
+  it('is consumed only by ci.yml, whose triggers are the list checked above', () => {
+    expect(
+      readActionConsumers(path.join(REPO_ROOT, '.github', 'workflows')),
+      "another workflow calls changes-filter, so its own `on:` triggers need arms too; either union its trigger list into the check above or keep ci.yml the action's sole consumer"
+    ).toEqual(['ci.yml']);
   });
 });
 
@@ -281,6 +337,53 @@ describe('readStepEnvKeys', () => {
       ].join('\n')
     );
     expect(keys).toEqual(['EVENT_NAME', 'PUSH_BEFORE']);
+  });
+});
+
+describe('readActionConsumers', () => {
+  // Both extensions are live in .github/workflows, so a .yml-only scan would report a .yaml
+  // consumer as absent - the "silently partial" shape this whole file argues against.
+  it('finds consumers under either YAML extension and ignores unrelated workflows', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'changes-filter-consumers-'));
+    fs.writeFileSync(path.join(dir, 'ci.yml'), 'uses: ./.github/actions/changes-filter\n');
+    fs.writeFileSync(path.join(dir, 'release.yaml'), 'uses: ./.github/actions/changes-filter\n');
+    fs.writeFileSync(path.join(dir, 'unrelated.yml'), 'uses: actions/checkout@v4\n');
+    fs.writeFileSync(path.join(dir, 'README.md'), 'uses: ./.github/actions/changes-filter\n');
+
+    expect(readActionConsumers(dir).sort()).toEqual(['ci.yml', 'release.yaml']);
+  });
+});
+
+describe('readShaRole', () => {
+  it('reads the range endpoint off the key name, including the push spelling', () => {
+    expect(readShaRole('MERGE_GROUP_BASE_SHA')).toBe('base');
+    expect(readShaRole('PR_HEAD_SHA')).toBe('head');
+    expect(readShaRole('PUSH_BEFORE')).toBe('base');
+    expect(readShaRole('PUSH_AFTER')).toBe('head');
+  });
+
+  it('claims no endpoint for a key that names none', () => {
+    expect(readShaRole('EVENT_NAME')).toBeNull();
+    expect(readShaRole('EXCLUDE_PATHS')).toBeNull();
+  });
+
+  // Each of these passed the event-prefix check while pointing at the wrong end of the range.
+  it('pairs with ROLE_FIELDS to catch base and head crossed inside one payload', () => {
+    const crossed: Array<[string, string]> = [
+      ['MERGE_GROUP_BASE_SHA', '${{ github.event.merge_group.head_sha }}'],
+      ['PR_BASE_SHA', '${{ github.event.pull_request.head.sha }}'],
+      ['PUSH_BEFORE', '${{ github.event.after }}'],
+    ];
+    for (const [key, value] of crossed) {
+      const role = readShaRole(key);
+      expect(role, key).not.toBeNull();
+      expect(ROLE_FIELDS[role!].test(value), `${key}: ${value}`).toBe(false);
+    }
+  });
+
+  it('accepts the head fallback expression the action actually ships', () => {
+    expect(ROLE_FIELDS.head.test('${{ github.event.merge_group.head_sha || github.sha }}')).toBe(true);
+    expect(ROLE_FIELDS.base.test('${{ github.event.merge_group.head_sha || github.sha }}')).toBe(false);
   });
 });
 

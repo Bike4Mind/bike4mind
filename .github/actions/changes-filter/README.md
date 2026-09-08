@@ -104,12 +104,14 @@ unnecessary deploy for never silently dropping one.
 
 That posture only holds for a *one-off* unresolved range. An event with no arm in the
 action's `case "$EVENT_NAME"` block fails open on **every** run of that trigger, and
-the run looks entirely normal — nothing errors, some extra jobs just run. That is what
+the run looks entirely normal - nothing errors, some extra jobs just run. That is what
 `merge_group` did before it was handled: the merge queue evaluated
 `deployable=true, docs-changed=true` unconditionally and so gated on a different signal
 than the PR's own CI, which lets a queue run fail a leg the PR legitimately skipped.
 `packages/scripts/src/checkChangesFilterEvents.test.ts` therefore cross-checks `ci.yml`'s
-trigger list against the arms, and checks that each arm's SHAs are both declared in the
-step's `env:` block and bound to that event's own payload (an arm alone reads unset vars
-and fails open identically). Letting an event fail open on purpose is fine — write the arm
+trigger list against the arms, and checks that each arm's SHAs are declared in the
+step's `env:` block, bound to that event's own payload, and bound to the end of the range
+their names claim (an arm alone reads unset vars and fails open identically; a base bound
+to a head fails closed, which is worse - the diff is empty and the legs the gate should
+trigger are skipped instead). Letting an event fail open on purpose is fine - write the arm
 explicitly (`BASE=""; HEAD=""`) so the choice is visible rather than inherited.
