@@ -19,12 +19,12 @@ import {
 
 interface AssertLakeAccessAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
     // Optional: when wired, a transferred/delegated owner or curator reaches the lake through the
     // single read gate too (canAccessLake delegates to the grant-aware canManageLake). Absent ->
     // read access falls back to createdByUserId + org/tag/public, the pre-grant behavior.
     // `listByPrincipal` (#2425) additionally lets a foreign-org owner/curator grant holder
-    // resolve the lake BY SLUG in the first place - see the findBySlug call below.
+    // resolve the lake BY SLUG in the first place - see the findBySlugAmongIds call below.
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
     // Optional: the read-time grant cutover flag (#1673). When wired, a persisted READER grant
     // resolves into an ephemeral membership view at the gate; the flag governs whether that
@@ -164,6 +164,25 @@ async function resolveFallbackLake(
 }
 
 /**
+ * The #2425 last-resort arm: only called on a `findBySlug` miss, and only when a grants repo is
+ * wired. Owner/curator only (`includeReaders: false`) - a foreign-org grant resolves the lake
+ * here, but `canManageLake` in the caller still gates what the grant actually admits the caller
+ * to do with it. Extracted so the miss-only laziness is visible at the call site (an `??` on two
+ * awaited calls) rather than hidden inside a thunk passed into the repository method.
+ */
+const resolveGrantHeldLakeBySlug = async (
+  slug: string,
+  ctx: AccessContext,
+  dataLakeAccessGrants: AssertLakeAccessAdapters['db']['dataLakeAccessGrants'],
+  dataLakes: Pick<IDataLakeRepository, 'findBySlugAmongIds'>
+): Promise<IDataLakeDocument | null> => {
+  if (!dataLakeAccessGrants) return null;
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], dataLakeAccessGrants, false);
+  if (grantedLakeIds.length === 0) return null;
+  return dataLakes.findBySlugAmongIds(slug, grantedLakeIds);
+};
+
+/**
  * The single access gate. Resolves a lake by id (then slug) from the DB, falling back
  * to the hardcoded DATA_LAKES configs (which have no backing document but are listed
  * by listDataLakes, so they must be openable). A DB lake always takes precedence - a
@@ -174,10 +193,12 @@ async function resolveFallbackLake(
  *
  * Slug resolution (#2425): findBySlug's own-org/org-less arms miss a lake in an org the
  * caller isn't a member of, even when they hold a real owner/curator grant on it (e.g. a
- * cross-org transferLakeOwnership). When `dataLakeAccessGrants` is wired, a lazy
- * grantedLakeIdsFor lookup is threaded through as findBySlug's last-resort fallback arm, so
- * a foreign-org grant holder can still reach the lake by slug - canManageLake below still
- * gates what they're actually allowed to do with it.
+ * cross-org transferLakeOwnership). On that miss, and only when `dataLakeAccessGrants` is
+ * wired, this resolves the grant-held id set itself (owner/curator only, includeReaders=false)
+ * and retries via `findBySlugAmongIds` - so a foreign-org grant holder can still reach the lake
+ * by slug, and canManageLake below still gates what they're actually allowed to do with it. The
+ * extra grants query only ever runs on a miss, matching the prior lazy-thunk design, but the
+ * decision now lives here rather than inside the repository method.
  */
 export const assertLakeAccess = async (
   lakeIdOrSlug: string,
@@ -186,16 +207,8 @@ export const assertLakeAccess = async (
 ): Promise<IDataLakeDocument> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
-    (await db.dataLakes.findBySlug(
-      lakeIdOrSlug,
-      ctx.organizationIds,
-      // Lazy (#2425): only invoked by findBySlug on an own-org/org-less miss. Owner/curator only
-      // (includeReaders=false) - a foreign-org grant resolves the lake here, but canManageLake
-      // below still gates what the grant actually admits the caller to do with it.
-      db.dataLakeAccessGrants
-        ? () => grantedLakeIdsFor(ctx.userId, ctx.organizationIds, db.dataLakeAccessGrants, false)
-        : undefined
-    ));
+    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds)) ??
+    (await resolveGrantHeldLakeBySlug(lakeIdOrSlug, ctx, db.dataLakeAccessGrants, db.dataLakes));
   if (lake) {
     // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
     // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.
