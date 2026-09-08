@@ -18,6 +18,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getOktaConfigWithFallback, generatePkceParams, buildAuthorizationUrl } from '@server/auth/oktaOidcClient';
 import { createStateToken } from '@server/auth/jwtStateStore';
+import { issueStateNonce, setPkceVerifierCookie } from '@server/auth/oauthFlowCookie';
 import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@server/auth/oktaConstants';
 import { NotFoundError } from '@server/utils/errors';
 import { validateAppUrl } from '@server/utils/validators';
@@ -61,15 +62,19 @@ const handler = baseApi({ auth: false })
       // Generate PKCE parameters
       const pkceParams = await generatePkceParams();
 
-      // Create state token with IDP ID, PKCE verifier, and the post-login
-      // redirect target (round-tripped via the IdP, restored in the callback).
+      // Bind this flow to the initiating browser and stash the PKCE verifier in a
+      // browser-bound HttpOnly cookie (never in state - see oauthFlowCookie.ts).
+      const nonceHash = issueStateNonce(res);
+      setPkceVerifierCookie(res, pkceParams.codeVerifier);
+
+      // Create state token with IDP ID and the post-login redirect target
+      // (round-tripped via the IdP, restored in the callback).
       const statePayload: OktaStateInput = {
         idpId: idp?.id || undefined,
-        codeVerifier: pkceParams.codeVerifier,
         redirectTo: typeof req.query.redirectTo === 'string' ? req.query.redirectTo : undefined,
       };
 
-      const stateToken = createStateToken<OktaStateInput>({ audience: OKTA_STATE_AUDIENCE }, statePayload);
+      const stateToken = createStateToken<OktaStateInput>({ audience: OKTA_STATE_AUDIENCE }, statePayload, nonceHash);
 
       // Build callback URL - in dev, derive from request host so OAuth
       // redirects back to the correct port (Next.js may not be on :3000)

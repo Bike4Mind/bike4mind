@@ -20,6 +20,12 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from '@server/auth/oktaOidcClient';
 import { verifyStateToken } from '@server/auth/jwtStateStore';
+import {
+  readStateNonceHash,
+  clearStateNonce,
+  readPkceVerifierCookie,
+  clearPkceVerifierCookie,
+} from '@server/auth/oauthFlowCookie';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
@@ -99,10 +105,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       return res.redirect('/login?error=missing_code');
     }
 
-    // Verify and decode the state token to get IDP ID and PKCE verifier
-    const stateResult = verifyStateToken<OktaStatePayload>(state, {
-      audience: OKTA_STATE_AUDIENCE,
-    });
+    // Verify and decode the state token to get IDP ID. Browser-binding: the
+    // token's nonce hash must match this browser's cookie (readStateNonceHash
+    // returns null when absent -> fails closed).
+    const stateResult = verifyStateToken<OktaStatePayload>(
+      state,
+      { audience: OKTA_STATE_AUDIENCE },
+      readStateNonceHash(req)
+    );
 
     if (!stateResult.valid) {
       Logger.error('[Okta Callback] Invalid state token:', stateResult.reason);
@@ -117,11 +127,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       return res.redirect(`/login?error=${encodeURIComponent(stateResult.message)}`);
     }
 
-    const { idpId, codeVerifier, redirectTo } = stateResult.payload;
+    const { idpId, redirectTo } = stateResult.payload;
     Logger.debug('[Okta Callback] State verified, IDP ID:', idpId || 'sst-fallback');
 
+    // PKCE verifier travels in a browser-bound HttpOnly cookie, not in state.
+    const codeVerifier = readPkceVerifierCookie(req);
     if (!codeVerifier) {
-      Logger.error('[Okta Callback] Missing code verifier in state');
+      Logger.error('[Okta Callback] Missing PKCE code verifier cookie');
       return res.redirect('/login?error=invalid_state');
     }
 
@@ -152,6 +164,10 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     // Exchange authorization code for tokens with PKCE verifier
     const { accessToken, tokenResponse } = await exchangeCodeForTokens(config, callbackUrl, codeVerifier, state, idp);
+
+    // Burn the single-use flow cookies now that the code is exchanged.
+    clearStateNonce(res);
+    clearPkceVerifierCookie(res);
 
     // Get subject from ID token claims
     const claims = tokenResponse.claims?.();
