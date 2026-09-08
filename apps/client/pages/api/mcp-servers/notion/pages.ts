@@ -136,13 +136,18 @@ const handler = baseApi().get(async (req, res) => {
   }
 });
 
+const MAX_TOP_LEVEL_PAGES = 200;
+const MAX_SEARCH_ROUNDS = 10;
+
 async function fetchTopLevelPages(headers: Record<string, string>): Promise<PageNode[]> {
   const allPages: PageNode[] = [];
   let startCursor: string | undefined;
   let hasMore = true;
+  let rounds = 0;
 
   // Paginate through search results to find workspace-level pages
-  while (hasMore) {
+  while (hasMore && allPages.length < MAX_TOP_LEVEL_PAGES && rounds < MAX_SEARCH_ROUNDS) {
+    rounds++;
     const body: Record<string, unknown> = {
       page_size: 100,
       sort: { direction: 'ascending', timestamp: 'last_edited_time' },
