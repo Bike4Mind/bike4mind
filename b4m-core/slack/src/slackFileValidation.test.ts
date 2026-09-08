@@ -96,6 +96,12 @@ describe('validateSlackFileForIngest', () => {
     expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
   });
 
+  it('still refuses app.properties - an unsupported extension longer than 8 chars must not be mistaken for extension-less', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'app.properties', mimetype: 'text/plain' }));
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+  });
+
   it('accepts an attachment with no client-reported mimetype - nothing downstream reads that field', () => {
     const result = validateSlackFileForIngest(attachment({ name: 'notes.pdf', mimetype: undefined }));
 
