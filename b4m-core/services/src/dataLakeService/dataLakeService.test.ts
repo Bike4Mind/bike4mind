@@ -627,6 +627,30 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
   });
 });
 
+describe('listDataLakes - precomputed grantedLakeIds (#2425 P3)', () => {
+  const dbFor = () => ({ dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } });
+
+  it('reuses a precomputed grantedLakeIds set instead of re-resolving it', async () => {
+    const db = dbFor();
+    const grantedLakeIds = ['granted-1'];
+
+    await listDataLakes(ctx({ userId: 'me' }), { db, grantedLakeIds });
+
+    expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
+      statuses: ['draft', 'active'],
+      grantedLakeIds,
+    });
+  });
+
+  it('throws when a precomputed set and a settings adapter are supplied together', async () => {
+    const db = { ...dbFor(), settings: { getSettingsValue: vi.fn() } };
+
+    await expect(listDataLakes(ctx({ userId: 'me' }), { db, grantedLakeIds: ['granted-1'] })).rejects.toThrow(
+      /grantedLakeIds and db.settings cannot both be supplied/
+    );
+  });
+});
+
 // systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
 // creator or an admin may read the wording. The list endpoint is where the editor UI gets the
 // value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
