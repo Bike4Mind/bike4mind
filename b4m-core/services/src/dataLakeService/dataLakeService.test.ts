@@ -7,7 +7,6 @@ import {
   DATA_LAKE_TRANSITIONAL_STATUSES,
   STRANDED_LAKE_CUTOFF_MS,
   UpdateDataLakeRequestInput,
-  retryActionFor,
   type AccessContext,
   type IDataLakeDocument,
   type IDataLakeBatchDocument,
@@ -3931,16 +3930,87 @@ describe('listTransitionalDataLakes - the only list a stranded lake appears in',
   it('returns the narrow DTO only - no editor-only field, even for the owner', async () => {
     const prompt = stranded({ status: 'archiving', systemPrompt: 'Answer only from this lake.' });
     const [row] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([prompt]) });
-    expect(Object.keys(row!).sort()).toEqual(['fileTagPrefix', 'id', 'name', 'slug', 'status', 'updatedAt']);
+    expect(Object.keys(row!).sort()).toEqual([
+      'fileTagPrefix',
+      'id',
+      'name',
+      'retryAction',
+      'slug',
+      'status',
+      'updatedAt',
+    ]);
     expect('systemPrompt' in row!).toBe(false);
   });
 
-  it('offers a retry action for every listed status except purging', async () => {
+  it('names the retry action on each row, and withholds it where none is safe', async () => {
     const lakes = DATA_LAKE_TRANSITIONAL_STATUSES.map(status =>
       stranded({ id: `lake-${status}`, slug: `lake-${status}`, status })
     );
     const result = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith(lakes) });
-    const unretryable = result.filter(l => !retryActionFor(l.status)).map(l => l.status);
-    expect(unretryable).toEqual(['purging']);
+    expect(Object.fromEntries(result.map(l => [l.status, l.retryAction]))).toEqual({
+      archiving: 'archive',
+      unarchiving: 'unarchive',
+      deleting: 'delete',
+      // Neither sweep mark is set on these fixtures, so 'restoring' has no provable axis; 'purging'
+      // has no retry at all.
+      restoring: undefined,
+      purging: undefined,
+    });
+  });
+
+  // 'restoring' is the pre-split shared value both reversal axes still admit as a claim source, so
+  // the action cannot come from the status. Running the wrong axis is not a refusal - the delete-
+  // axis restore would clear this lake's filesArchivedAt while its deletedAt-gated file update
+  // matched nothing, leaving files stamped archivedAt with no route back.
+  it('resolves a restoring lake to the axis its own sweep mark proves', async () => {
+    const archiveAxis = stranded({ status: 'restoring', filesArchivedAt: new Date('2020-01-01') });
+    const [fromArchive] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([archiveAxis]) });
+    expect(fromArchive!.retryAction).toBe('unarchive');
+
+    const deleteAxis = stranded({ status: 'restoring', filesDeletedAt: new Date('2020-01-01') });
+    const [fromDelete] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([deleteAxis]) });
+    expect(fromDelete!.retryAction).toBe('restore');
+  });
+
+  it('still lists a restoring lake whose axis is ambiguous, with no retry offered', async () => {
+    const both = stranded({
+      status: 'restoring',
+      filesArchivedAt: new Date('2020-01-01'),
+      filesDeletedAt: new Date('2020-01-02'),
+    });
+    const [row] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([both]) });
+    expect(row!.id).toBe('lake1');
+    expect(row!.retryAction).toBeUndefined();
+  });
+
+  // The manage predicate's grant rungs, which the adapter-less fixtures above never reach: without
+  // these, narrowing the manage filter could silently drop every curator-granted lake and the rest
+  // of this block would stay green.
+  const dbWithGrant = (lakes: IDataLakeDocument[], role: string) => ({
+    ...dbWith(lakes),
+    dataLakeAccessGrants: {
+      listActiveByLakes: vi
+        .fn()
+        .mockResolvedValue(lakes.map(l => ({ dataLakeId: l.id, role, principalType: 'user', principalId: 'guest' }))),
+      listByPrincipal: vi
+        .fn()
+        .mockResolvedValue(lakes.map(l => ({ dataLakeId: l.id, role, principalType: 'user', principalId: 'guest' }))),
+    },
+  });
+
+  it('serves a lake the caller neither created nor administers when a curator grant says they manage it', async () => {
+    const foreign = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
+    const result = await listTransitionalDataLakes(ctx({ userId: 'guest', administeredOrgIds: [] }), {
+      db: dbWithGrant([foreign], 'curator') as never,
+    });
+    expect(result.map(l => l.id)).toEqual(['lake1']);
+  });
+
+  it('withholds that same lake when the grant is read-only', async () => {
+    const foreign = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
+    const result = await listTransitionalDataLakes(ctx({ userId: 'guest', administeredOrgIds: [] }), {
+      db: dbWithGrant([foreign], 'reader') as never,
+    });
+    expect(result).toEqual([]);
   });
 });

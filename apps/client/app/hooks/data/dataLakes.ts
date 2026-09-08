@@ -16,11 +16,11 @@ import type {
   ManageableDataLakeConfig,
   TaxonomyTag,
   TransitionalDataLakeSummary,
-  DataLakeStatus,
+  TransitionalRetryAction,
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { DATA_LAKES, normalizeTagPrefix, retryActionFor, tagPrefixesOverlap } from '@bike4mind/common';
+import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
   UpdateDataLakeRequestInputType,
@@ -606,21 +606,18 @@ export function useGetTransitionalDataLakes(enabled = true) {
 }
 
 /**
- * Re-runs the lifecycle action a stranded lake's status implies, settling it. Not a repair path:
- * each lifecycle service re-admits its own transitional status for exactly this crash re-entry,
- * so this posts the SAME action that stranded the lake.
+ * Re-runs the lifecycle action that settles a stranded lake. Not a repair path: each lifecycle
+ * service re-admits its own transitional status for exactly this crash re-entry, so this posts the
+ * SAME action that stranded the lake.
  *
- * A status with no entry in TRANSITIONAL_RETRY_ACTION ('purging', whose sweep is irreversible) is
- * rejected rather than guessed at - the UI must not offer Retry on such a row at all.
+ * Takes the action, not the status: the server resolved it (see `resolveRetryAction`, which for
+ * `restoring` reads sweep marks this view does not carry), and a row whose DTO names no action
+ * must not offer Retry at all.
  */
 export function useRetryLakeLifecycle() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: DataLakeStatus }) => {
-      const action = retryActionFor(status);
-      if (!action) throw new Error(`No retry action for a data lake in '${status}' status`);
-      return postLifecycle(id, action);
-    },
+    mutationFn: ({ id, action }: { id: string; action: TransitionalRetryAction }) => postLifecycle(id, action),
     onSuccess: (_data, { id }) => {
       invalidateAfterLifecycle(queryClient, id);
       toast.success('Retrying the data lake operation');

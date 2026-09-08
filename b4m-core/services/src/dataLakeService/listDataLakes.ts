@@ -14,6 +14,7 @@ import {
   DATA_LAKES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
   STRANDED_LAKE_CUTOFF_MS,
+  resolveRetryAction,
   toDataLakeConfig,
   lakeMatchesAccess,
   normalizeEntitlementKey,
@@ -508,5 +509,9 @@ export const listTransitionalDataLakes = async (
       fileTagPrefix: lake.fileTagPrefix,
       status: lake.status,
       updatedAt: lake.updatedAt,
+      // Resolved here rather than by the consumer: for 'restoring' the answer depends on the
+      // lake's sweep marks, which this narrow DTO deliberately does not carry, and a client that
+      // guessed could run the wrong axis's recovery - see resolveRetryAction.
+      retryAction: resolveRetryAction(lake),
     }));
 };

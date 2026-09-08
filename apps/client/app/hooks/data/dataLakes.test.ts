@@ -1162,7 +1162,14 @@ describe('the needs-attention list and its retry', () => {
 
   it('reads the transitional route and unwraps the data envelope', async () => {
     const { wrapper } = mountWith();
-    const row = { id: 'stuck', name: 'Stuck', slug: 'stuck', fileTagPrefix: 'st:', status: 'archiving' };
+    const row = {
+      id: 'stuck',
+      name: 'Stuck',
+      slug: 'stuck',
+      fileTagPrefix: 'st:',
+      status: 'archiving',
+      retryAction: 'archive',
+    };
     apiGet.mockResolvedValueOnce({ data: { data: [row] } });
 
     const { result } = renderHook(() => useGetTransitionalDataLakes(), { wrapper });
@@ -1170,28 +1177,17 @@ describe('the needs-attention list and its retry', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/transitional');
   });
 
-  it('posts the action the stranded status implies, on the existing lifecycle endpoint', async () => {
+  it('posts the resolved action on the existing lifecycle endpoint', async () => {
     const { wrapper } = mountWith();
     apiPost.mockResolvedValueOnce({ data: { success: true } });
 
     const { result } = renderHook(() => useRetryLakeLifecycle(), { wrapper });
     await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', status: 'unarchiving' });
+      await result.current.mutateAsync({ id: 'lake1', action: 'unarchive' });
     });
 
-    // The same call that stranded the lake - not a repair endpoint. 'unarchive', not 'restore':
-    // the two reversal axes are distinct statuses precisely so this cannot be confused.
+    // The same call that stranded the lake - not a repair endpoint.
     expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
-  });
-
-  it('refuses a status with no retry action rather than guessing one', async () => {
-    const { wrapper } = mountWith();
-
-    const { result } = renderHook(() => useRetryLakeLifecycle(), { wrapper });
-    await act(async () => {
-      await expect(result.current.mutateAsync({ id: 'lake1', status: 'purging' })).rejects.toThrow(/purging/);
-    });
-    expect(apiPost).not.toHaveBeenCalled();
   });
 
   it('refreshes the needs-attention list after a retry settles, so the row leaves it', async () => {
@@ -1200,7 +1196,7 @@ describe('the needs-attention list and its retry', () => {
 
     const { result } = renderHook(() => useRetryLakeLifecycle(), { wrapper });
     await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', status: 'archiving' });
+      await result.current.mutateAsync({ id: 'lake1', action: 'archive' });
     });
 
     const keys = invalidatedKeys(invalidate);

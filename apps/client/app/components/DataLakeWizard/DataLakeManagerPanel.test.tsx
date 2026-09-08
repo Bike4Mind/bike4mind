@@ -1235,14 +1235,17 @@ describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
 });
 
 describe('DataLakeManagerPanel - needs-attention section', () => {
-  /** A lake stranded mid-lifecycle, as GET /api/data-lakes/transitional serves it. */
-  const strandedLake = (status: string, id = 'stuck') => ({
+  /** A lake stranded mid-lifecycle, as GET /api/data-lakes/transitional serves it. `retryAction`
+   *  is resolved server-side, so the fixture states it rather than deriving it from the status -
+   *  which is the point: for 'restoring' the two differ per axis. */
+  const strandedLake = (status: string, id = 'stuck', retryAction?: string) => ({
     id,
     name: `Stuck ${id}`,
     slug: id,
     fileTagPrefix: 'st:',
     status,
     updatedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+    retryAction,
   });
 
   it('renders no section at all when nothing is stranded', () => {
@@ -1260,7 +1263,7 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
   });
 
   it('shows a stranded lake with the status it is stuck in', () => {
-    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving')] });
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving', 'stuck', 'archive')] });
     renderPanel();
 
     expect(screen.getByTestId('datalake-transitional-section')).toBeInTheDocument();
@@ -1269,8 +1272,8 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
     expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('archiving');
   });
 
-  it('retries with the lake id and status, so the hook resolves the action', async () => {
-    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('deleting')] });
+  it('retries with the action the row carries, not one derived from the status', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('deleting', 'stuck', 'delete')] });
     const user = userEvent.setup();
     renderPanel();
 
@@ -1281,7 +1284,33 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
     expect(retry).toHaveTextContent('Retry delete');
     await user.click(retry);
 
-    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', status: 'deleting' });
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', action: 'delete' });
+  });
+
+  // 'restoring' is held by both reversal axes, so the row must post whatever the server resolved -
+  // a client that mapped the status to a fixed action would send an archive-axis lake through the
+  // delete-axis recovery, which strands it past any UI path back.
+  it.each([
+    ['unarchive', 'Retry unarchive'],
+    ['restore', 'Retry restore'],
+  ])('posts %s for a restoring row the server resolved that way', async (action, label) => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('restoring', 'stuck', action)] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-stuck'));
+    expect(screen.getByTestId('datalake-retry-btn-stuck')).toHaveTextContent(label);
+    await user.click(screen.getByTestId('datalake-retry-btn-stuck'));
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', action });
+  });
+
+  it('lists a restoring lake the server could not resolve an axis for, read-only', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('restoring')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('restoring');
+    expect(screen.queryByTestId('datalake-retry-btn-stuck')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-stuck')).not.toBeInTheDocument();
   });
 
   it('lists a purging lake read-only, with no retry and no dead menu trigger', () => {
@@ -1297,7 +1326,7 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
 
   it('keeps the retryable rows actionable when a purging lake is listed beside them', async () => {
     useGetTransitionalDataLakes.mockReturnValue({
-      data: [strandedLake('purging', 'purger'), strandedLake('archiving', 'archiver')],
+      data: [strandedLake('purging', 'purger'), strandedLake('archiving', 'archiver', 'archive')],
     });
     const user = userEvent.setup();
     renderPanel();
@@ -1305,6 +1334,18 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
     expect(screen.queryByTestId('datalake-transitional-section-menu-btn-purger')).not.toBeInTheDocument();
     await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-archiver'));
     await user.click(screen.getByTestId('datalake-retry-btn-archiver'));
-    expect(retryMutate).toHaveBeenCalledWith({ id: 'archiver', status: 'archiving' });
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'archiver', action: 'archive' });
+  });
+
+  // The section gates on non-empty, and the sidebar search narrows it: gating on the unfiltered
+  // list would render a header with an empty body and no empty-state label.
+  it('drops the whole section when the search matches no stranded lake', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving', 'stuck', 'archive')] });
+    const user = userEvent.setup();
+    renderPanel();
+    expect(screen.getByTestId('datalake-transitional-section')).toBeInTheDocument();
+
+    await user.type(screen.getByTestId('datalake-manager-search').querySelector('input')!, 'zzz');
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
   });
 });

@@ -4,7 +4,7 @@ import {
   DATA_LAKE_STATUSES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
   TRANSITIONAL_RETRY_ACTION,
-  retryActionFor,
+  resolveRetryAction,
   type DataLakeStatus,
 } from './DataLakeTypes';
 
@@ -30,20 +30,25 @@ describe('data lake status partition', () => {
 });
 
 describe('TRANSITIONAL_RETRY_ACTION', () => {
-  it('maps every transitional status except purging', () => {
-    const retryable = DATA_LAKE_TRANSITIONAL_STATUSES.filter(s => s in TRANSITIONAL_RETRY_ACTION);
-    expect(retryable.sort()).toEqual(['archiving', 'deleting', 'restoring', 'unarchiving']);
+  it('maps only the transitional statuses whose action the status alone determines', () => {
+    const mapped = DATA_LAKE_TRANSITIONAL_STATUSES.filter(s => s in TRANSITIONAL_RETRY_ACTION);
+    expect(mapped.sort()).toEqual(['archiving', 'deleting', 'unarchiving']);
+  });
+
+  // 'purging' has no retry (its sweep is accepted and irreversible); 'restoring' has no retry the
+  // STATUS determines, because both axes admit it as a claim source - resolveRetryAction below.
+  it('omits purging and restoring', () => {
     expect('purging' in TRANSITIONAL_RETRY_ACTION).toBe(false);
+    expect('restoring' in TRANSITIONAL_RETRY_ACTION).toBe(false);
   });
 
   // Each mapped action must be the one whose service re-admits that very status for crash
-  // re-entry (see archiveDataLake/unarchiveDataLake/restoreDeletedDataLake/deleteDataLake) -
-  // mapping a status onto any other action would hit that service's refusal guard instead.
+  // re-entry (see archiveDataLake/unarchiveDataLake/deleteDataLake) - mapping a status onto any
+  // other action would hit that service's refusal guard instead.
   it('maps each status to the action whose service re-admits it', () => {
     expect(TRANSITIONAL_RETRY_ACTION).toEqual({
       archiving: 'archive',
       unarchiving: 'unarchive',
-      restoring: 'restore',
       deleting: 'delete',
     });
   });
@@ -56,23 +61,46 @@ describe('TRANSITIONAL_RETRY_ACTION', () => {
   });
 });
 
-describe('retryActionFor', () => {
-  it('answers for every retryable transitional status', () => {
-    expect(retryActionFor('archiving')).toBe('archive');
-    expect(retryActionFor('unarchiving')).toBe('unarchive');
-    expect(retryActionFor('restoring')).toBe('restore');
-    expect(retryActionFor('deleting')).toBe('delete');
+describe('resolveRetryAction', () => {
+  const lake = (status: DataLakeStatus, marks: { archived?: boolean; deleted?: boolean } = {}) => ({
+    status,
+    filesArchivedAt: marks.archived ? new Date('2020-01-01T00:00:00Z') : null,
+    filesDeletedAt: marks.deleted ? new Date('2020-01-01T00:00:00Z') : null,
+  });
+
+  it('answers from the status alone where the status is axis-unique', () => {
+    expect(resolveRetryAction(lake('archiving'))).toBe('archive');
+    expect(resolveRetryAction(lake('unarchiving'))).toBe('unarchive');
+    expect(resolveRetryAction(lake('deleting'))).toBe('delete');
+  });
+
+  // The two cases that must not collapse into one fixed answer. Sending an archive-axis lake
+  // through the delete-axis restore clears its filesArchivedAt while matching none of its files
+  // (that update is gated on deletedAt), stranding it beyond any UI path; the mirror holds.
+  it('resolves a restoring lake by its own sweep mark, per axis', () => {
+    expect(resolveRetryAction(lake('restoring', { archived: true }))).toBe('unarchive');
+    expect(resolveRetryAction(lake('restoring', { deleted: true }))).toBe('restore');
+  });
+
+  it('withholds a retry from a restoring lake whose axis is not provable', () => {
+    expect(resolveRetryAction(lake('restoring'))).toBeUndefined();
+    expect(resolveRetryAction(lake('restoring', { archived: true, deleted: true }))).toBeUndefined();
+  });
+
+  it('reads a missing mark field the same as an unset one', () => {
+    expect(resolveRetryAction({ status: 'restoring' })).toBeUndefined();
+    expect(resolveRetryAction({ status: 'restoring', filesArchivedAt: new Date() })).toBe('unarchive');
   });
 
   // Undefined is the signal the UI reads to withhold Retry entirely - a purge is already accepted
   // and its sweep irreversible, so offering a retry would be a lie.
   it('has no answer for purging', () => {
-    expect(retryActionFor('purging')).toBeUndefined();
+    expect(resolveRetryAction(lake('purging'))).toBeUndefined();
   });
 
   it('has no answer for a stable status', () => {
     for (const status of DATA_LAKE_STABLE_STATUSES) {
-      expect(retryActionFor(status)).toBeUndefined();
+      expect(resolveRetryAction(lake(status))).toBeUndefined();
     }
   });
 });

@@ -66,32 +66,65 @@ export const DATA_LAKE_TRANSITIONAL_STATUSES: readonly DataLakeStatus[] = DATA_L
   s => !(DATA_LAKE_STABLE_STATUSES as readonly DataLakeStatus[]).includes(s)
 );
 
+export type TransitionalRetryAction = 'archive' | 'unarchive' | 'restore' | 'delete';
+
 /**
  * The lifecycle action that re-enters and settles a lake stranded in each transitional status. Each
  * of these services re-admits its own transitional status for exactly this crash re-entry, so the
  * retry is the SAME call that stranded it, not a repair path.
  *
- * `purging` is deliberately absent, per the irreversibility note on `DATA_LAKE_STATUSES` above:
- * its sweep is already accepted and the cleanup route refuses it, so there is nothing to retry.
- * Read it through `retryActionFor` below rather than indexing this table directly.
+ * Two statuses are deliberately absent, and both mean "do not offer a retry":
+ * - `purging`, per the irreversibility note on `DATA_LAKE_STATUSES` above - its sweep is already
+ *   accepted and the cleanup route refuses it, so there is nothing to retry.
+ * - `restoring`, which is not axis-unique. Both reversal axes admit it as a claim SOURCE
+ *   (claimRestoring and claimUnarchiving), so the status alone cannot say which one stranded the
+ *   lake, and the two recoveries are not interchangeable - see `resolveRetryAction`.
+ *
+ * Read it through `resolveRetryAction` below rather than indexing this table directly.
  */
 export const TRANSITIONAL_RETRY_ACTION = {
   archiving: 'archive',
   unarchiving: 'unarchive',
-  restoring: 'restore',
   deleting: 'delete',
-} as const satisfies Partial<Record<DataLakeStatus, 'archive' | 'unarchive' | 'restore' | 'delete'>>;
-
-export type TransitionalRetryAction = (typeof TRANSITIONAL_RETRY_ACTION)[keyof typeof TRANSITIONAL_RETRY_ACTION];
+} as const satisfies Partial<Record<DataLakeStatus, TransitionalRetryAction>>;
 
 /**
- * The retry action for a status, or `undefined` when there is none - the single predicate both
- * "may this row offer Retry" and "what does Retry post" read, so a status can never be offered a
- * retry the mutation would then refuse. Indexing TRANSITIONAL_RETRY_ACTION directly needs a cast
- * that claims every status has an entry; this states the truth once, here.
+ * The retry action a transitional status implies on its own, or `undefined` when the status alone
+ * does not determine one. Not for callers deciding whether to offer Retry - use
+ * `resolveRetryAction`, which also answers for `restoring`.
  */
-export const retryActionFor = (status: DataLakeStatus): TransitionalRetryAction | undefined =>
+const retryActionForStatus = (status: DataLakeStatus): TransitionalRetryAction | undefined =>
   (TRANSITIONAL_RETRY_ACTION as Partial<Record<DataLakeStatus, TransitionalRetryAction>>)[status];
+
+/**
+ * The action that settles a stranded lake, or `undefined` when no safe retry exists and the row
+ * must be listed read-only. The single predicate both "may this row offer Retry" and "what does
+ * Retry post" read, so a lake can never be offered a retry the service would then misapply.
+ *
+ * Resolved from the lake, not from the status, because of `restoring`: it is the pre-split shared
+ * value, so a lake holding it may be stranded on EITHER axis, and running the wrong recovery is
+ * unrecoverable rather than merely refused. The delete-axis restore gates its file update on
+ * `deletedAt` while clearing the lake's `filesArchivedAt` regardless, so an archive-axis lake put
+ * through it keeps every file's `archivedAt` and loses the stamp naming them - a lake reading
+ * `active` whose files nothing can reach, with no route back (unarchive refuses an `active` lake).
+ * The mirror holds on the other axis.
+ *
+ * The sweep marks are the only axis evidence the document carries, so exactly one mark set is the
+ * only provable case. Neither mark (a crash before the mark claim, or a pre-mark-field lake) and
+ * both marks are ambiguous, and an ambiguous lake gets NO retry - it is still surfaced, so a human
+ * can look, which is the whole point of the needs-attention list.
+ */
+export const resolveRetryAction = (lake: {
+  status: DataLakeStatus;
+  filesArchivedAt?: Date | null;
+  filesDeletedAt?: Date | null;
+}): TransitionalRetryAction | undefined => {
+  if (lake.status !== 'restoring') return retryActionForStatus(lake.status);
+  const archiveAxis = !!lake.filesArchivedAt;
+  const deleteAxis = !!lake.filesDeletedAt;
+  if (archiveAxis === deleteAxis) return undefined;
+  return archiveAxis ? 'unarchive' : 'restore';
+};
 
 /**
  * How long a lake may sit in a transitional status before it counts as stranded rather than busy.
@@ -111,6 +144,10 @@ export const STRANDED_LAKE_CUTOFF_MS = 5 * 60_000;
  *
  * `updatedAt` is a `Date` in-process and an ISO string once it has crossed the wire; both shapes
  * are declared because both are real and `new Date(...)` takes either.
+ *
+ * `retryAction` is resolved SERVER-side (see `resolveRetryAction`) because for `restoring` it needs
+ * the lake's sweep marks, which this narrow shape deliberately does not carry. Absent means the row
+ * is read-only: either the operation cannot be retried at all, or its axis is not provable.
  */
 export interface TransitionalDataLakeSummary {
   id: string;
@@ -119,6 +156,7 @@ export interface TransitionalDataLakeSummary {
   fileTagPrefix: string;
   status: DataLakeStatus;
   updatedAt: Date | string;
+  retryAction?: TransitionalRetryAction;
 }
 
 /**

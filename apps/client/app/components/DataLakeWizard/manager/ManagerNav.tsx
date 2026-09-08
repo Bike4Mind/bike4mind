@@ -65,7 +65,7 @@ import { RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { retryActionFor, satisfiesTagPrefix } from '@bike4mind/common';
+import { satisfiesTagPrefix } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 import { normalizePrefix, prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
@@ -200,6 +200,11 @@ export default function ManagerNav({
     const q = searchQuery.toLowerCase();
     return list.filter(l => l.name.toLowerCase().includes(q));
   };
+
+  // Filtered ONCE, because the needs-attention section gates on non-empty: gating on the unfiltered
+  // list while rendering the filtered one puts a search query that matches no stranded lake into
+  // the empty-row branch that section is built never to reach.
+  const strandedLakes = filterByName(transitionalLakes);
 
   // Search is scoped to the current level: entering/leaving a lake or drilling a category
   // clears it, so a query typed to find a lake at root can't silently filter (and hide) that
@@ -531,13 +536,13 @@ export default function ManagerNav({
             {/* Lakes a crashed or timed-out lifecycle call left mid-operation. Rendered ONLY when
                 non-empty: unlike Archived/Deleted this is not a standing view of the app, so a
                 steady-state "No stranded lakes" row would be noise on every healthy install. */}
-            {transitionalLakes?.length ? (
+            {strandedLakes?.length ? (
               <NavLifecycleSection
                 label="Needs attention"
                 open={showTransitional}
                 onToggle={() => setShowTransitional(v => !v)}
                 testid="datalake-transitional-section"
-                lakes={filterByName(transitionalLakes)}
+                lakes={strandedLakes}
                 hoverBg={hoverBg}
                 renderRowTrailing={lake => (
                   <Tooltip
@@ -555,17 +560,18 @@ export default function ManagerNav({
                     </Chip>
                   </Tooltip>
                 )}
-                // Withheld for a status with no retry action ('purging', whose sweep is already
-                // accepted and irreversible), which leaves that row status-only - the section
-                // drops its menu trigger rather than opening an empty one.
+                // Withheld for a row the server named no retry action for (a purge, whose sweep is
+                // already accepted and irreversible, or a 'restoring' lake whose axis is not
+                // provable), which leaves that row status-only - the section drops its menu trigger
+                // rather than opening an empty one.
                 renderActions={lake => {
-                  const action = retryActionFor(lake.status);
+                  const action = lake.retryAction;
                   return action ? (
                     <RowMenuItem
                       testId={`datalake-retry-btn-${lake.id}`}
                       icon={<ReplayIcon sx={{ fontSize: 16 }} />}
                       label={`Retry ${action}`}
-                      onClick={() => retryLifecycle.mutate({ id: lake.id, status: lake.status })}
+                      onClick={() => retryLifecycle.mutate({ id: lake.id, action })}
                     />
                   ) : null;
                 }}
