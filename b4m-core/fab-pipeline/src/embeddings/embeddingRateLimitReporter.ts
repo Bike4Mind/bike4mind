@@ -1,11 +1,8 @@
 /**
  * Passive reporting of embedding-provider rate-limit ceilings.
  *
- * A rate limit belongs to the provider organization behind the key, so rotating that key can move
- * the ceiling to a different tier or a different organization. The admin panel can read it on
- * demand, but that depends on somebody thinking to press a button at the one moment a rotation
- * makes everything look normal. Where a provider reports limits at all, every embedding response
- * already carries the answer in its headers, so reading them costs no extra request and no extra
+ * A rate limit belongs to the provider organization behind the key, and every embedding response
+ * already carries the ceiling in its headers, so reading them costs no extra request and no extra
  * tokens. Providers that do not report them (Bedrock, Ollama) simply never produce an observation.
  *
  * This module owns the "what did the provider say" half only. It has no opinion about data lakes
@@ -20,6 +17,8 @@ import { EmbeddingModelProvider } from './EmbeddingService';
 export interface EmbeddingRateLimitObservation {
   provider: EmbeddingModelProvider;
   model: string;
+  /** Which provider account the reading describes. See `recordEmbeddingRateLimitHeaders`. */
+  account: string;
   snapshot: EmbeddingRateLimitSnapshot;
   /** Epoch ms. */
   observedAt: number;
@@ -44,9 +43,9 @@ interface ProviderState {
 }
 
 /**
- * Process-local, and deliberately so. A cold start re-reports the ceiling it measures, which is
- * the behaviour we want - each container states what it saw - rather than a gap that shared
- * storage would need to close. Keyed by provider+model, so the map is bounded by the model list.
+ * Process-local, and deliberately so: a cold start re-reports what it measures rather than leaving
+ * a gap shared storage would have to close. Keyed by provider+model+account, so the map is bounded
+ * by the model list times the number of distinct credentials the process serves.
  */
 const stateByKey = new Map<string, ProviderState>();
 
@@ -57,11 +56,14 @@ const stateByKey = new Map<string, ProviderState>();
  */
 let hasReportedFailure = false;
 
-const keyFor = (provider: EmbeddingModelProvider, model: string): string => `${provider}:${model}`;
+const keyFor = (provider: EmbeddingModelProvider, model: string, account: string): string =>
+  `${provider}:${model}:${account}`;
 
 const ceilingChanged = (previous: EmbeddingRateLimitSnapshot, next: EmbeddingRateLimitSnapshot): boolean =>
   previous.limitTokens !== next.limitTokens || previous.limitRequests !== next.limitRequests;
 
+// Per-minute is an OpenAI/VoyageAI fact, not a universal one. A provider that reports a different
+// window has to render its own units rather than reuse this.
 const describeCeiling = (snapshot: EmbeddingRateLimitSnapshot): string =>
   `${snapshot.limitTokens ?? 'unreported'} tokens/min, ${snapshot.limitRequests ?? 'unreported'} requests/min`;
 
@@ -86,12 +88,20 @@ const pressuredDimensions = (snapshot: EmbeddingRateLimitSnapshot): string[] => 
  * reporting: the first sighting in this process, a change since the last sighting, or the window
  * running down. Returns the observation when the provider reported a usable ceiling, else null.
  *
+ * `account` identifies the provider account the reading belongs to and is part of the memo key,
+ * not just the log line. The credential is resolved per user - a stored personal key beats the
+ * platform key in `getEffectiveLLMApiKeys` - so one process can see several accounts on the same
+ * provider+model. Without the discriminator their readings would collapse into one entry that
+ * flaps between unrelated ceilings and attributes each figure to whoever reads the log next. The
+ * caller supplies it; it must never be key material.
+ *
  * Never throws. This hangs off the hot path of every embedding call, and a reporting fault must
  * not be able to fail an embedding that otherwise succeeded.
  */
 export function recordEmbeddingRateLimitHeaders(
   provider: EmbeddingModelProvider,
   model: string,
+  account: string,
   headers: unknown,
   now: number = Date.now()
 ): EmbeddingRateLimitObservation | null {
@@ -99,29 +109,31 @@ export function recordEmbeddingRateLimitHeaders(
     const snapshot = parseEmbeddingRateLimitHeaders(headers);
     if (!hasUsableLimits(snapshot)) return null;
 
-    const key = keyFor(provider, model);
+    const key = keyFor(provider, model, account);
     const previous = stateByKey.get(key);
-    const observation: EmbeddingRateLimitObservation = { provider, model, snapshot, observedAt: now };
+    const observation: EmbeddingRateLimitObservation = { provider, model, account, snapshot, observedAt: now };
+    const subject = `${provider} ${model} (account ${account})`;
 
     if (!previous) {
-      Logger.globalInstance.info(
-        `[embedding-limits] ${provider} ${model} ceiling measured: ${describeCeiling(snapshot)}`,
-        {
-          provider,
-          model,
-          limitTokens: snapshot.limitTokens,
-          limitRequests: snapshot.limitRequests,
-        }
-      );
+      Logger.globalInstance.info(`[embedding-limits] ${subject} ceiling measured: ${describeCeiling(snapshot)}`, {
+        provider,
+        model,
+        account,
+        limitTokens: snapshot.limitTokens,
+        limitRequests: snapshot.limitRequests,
+      });
     } else if (ceilingChanged(previous.last.snapshot, snapshot)) {
-      // The signal this module exists for: the account behind the key is not the one it was.
+      // Same account, different ceiling: the provider moved this account's tier or quota. A key
+      // rotation to a DIFFERENT organization does not land here - it is a new account, so it
+      // reports as a fresh "ceiling measured" naming an organization the log has not carried before.
       Logger.globalInstance.warn(
-        `[embedding-limits] ${provider} ${model} ceiling CHANGED: was ${describeCeiling(previous.last.snapshot)}, ` +
-          `now ${describeCeiling(snapshot)}. A provider key rotation can move the ceiling to a different tier or ` +
-          `organization; reconcile the data-lake throughput levers against the new figure.`,
+        `[embedding-limits] ${subject} ceiling CHANGED: was ${describeCeiling(previous.last.snapshot)}, ` +
+          `now ${describeCeiling(snapshot)}. Reconcile any throughput lever governed by this account ` +
+          `against the new figure.`,
         {
           provider,
           model,
+          account,
           previousLimitTokens: previous.last.snapshot.limitTokens,
           previousLimitRequests: previous.last.snapshot.limitRequests,
           limitTokens: snapshot.limitTokens,
@@ -137,11 +149,12 @@ export function recordEmbeddingRateLimitHeaders(
 
     if (logPressure) {
       Logger.globalInstance.warn(
-        `[embedding-limits] ${provider} ${model} is at or below ${PRESSURE_RATIO * 100}% of its ` +
+        `[embedding-limits] ${subject} is at or below ${PRESSURE_RATIO * 100}% of its ` +
           `${pressured.join(' and ')} window`,
         {
           provider,
           model,
+          account,
           remainingTokens: snapshot.remainingTokens,
           remainingRequests: snapshot.remainingRequests,
           limitTokens: snapshot.limitTokens,
@@ -172,19 +185,22 @@ export function recordEmbeddingRateLimitHeaders(
 }
 
 /**
- * The most recent ceiling this process measured for a provider+model, or null if it has not made
- * an embedding call yet. This is the seam for a layer that wants to interpret the ceiling - for
- * instance to compare it against a configured throughput lever.
+ * The most recent ceiling this process measured for a provider+model+account, or null if it has
+ * not made such a call yet. Doubles as the assertion seam for the provider tests, which would
+ * otherwise have to read the reporting decision back out of a log spy, and as the read seam for a
+ * layer that wants to interpret a ceiling - comparing it against a configured throughput lever
+ * being the obvious one.
  */
 export function getLastObservedEmbeddingRateLimit(
   provider: EmbeddingModelProvider,
-  model: string
+  model: string,
+  account: string
 ): EmbeddingRateLimitObservation | null {
-  return stateByKey.get(keyFor(provider, model))?.last ?? null;
+  return stateByKey.get(keyFor(provider, model, account))?.last ?? null;
 }
 
 /** Test seam: the module's memo is process-local state that leaks between test cases otherwise. */
-export function resetEmbeddingRateLimitReporter(): void {
+export function __resetEmbeddingRateLimitReporterForTests(): void {
   stateByKey.clear();
   hasReportedFailure = false;
 }

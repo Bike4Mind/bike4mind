@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { createHash } from 'crypto';
 import OpenAI from 'openai';
 import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '../EmbeddingService';
 import { EmbeddingAuthError } from '../EmbeddingErrors';
@@ -26,9 +27,29 @@ export const OPENAI_EMBEDDING_MODEL_MAP: Record<OpenAIEmbeddingModel, EmbeddingM
   },
 };
 
+/**
+ * Non-reversible stand-in for a credential, for use where two accounts have to be told apart in a
+ * log. Same construction as the API-key logging hash in the request middleware. Never emit the key.
+ */
+const fingerprintCredential = (apiKey: string): string =>
+  `key:${createHash('sha256').update(apiKey).digest('hex').slice(0, 16)}`;
+
+/**
+ * Total by construction. The only caller runs inside processSingleBatch's classifying try, where a
+ * throw would be misread as a provider error and re-issue the batch.
+ */
+const headerOrNull = (httpResponse: Response, name: string): string | null => {
+  try {
+    return httpResponse.headers?.get(name) ?? null;
+  } catch {
+    return null;
+  }
+};
+
 export class OpenAIEmbeddingService implements EmbeddingService {
   private client: OpenAI;
   private model: OpenAIEmbeddingModel;
+  private credentialFingerprint: string;
 
   /** Hard limit imposed by OpenAI's embeddings API. */
   private static readonly MAX_TOKENS_PER_REQUEST = 300000;
@@ -45,14 +66,22 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.client = new OpenAI({ apiKey });
     this.validateModel(model);
     this.model = model;
+    this.credentialFingerprint = fingerprintCredential(apiKey);
   }
 
   /**
    * Report the provider ceiling carried on a response we already received. Covers ingest and
    * query alike: both reach OpenAI through this class, so neither needs its own sampling point.
+   *
+   * The ceiling belongs to the organization behind the key, and the key is resolved per user
+   * (getEffectiveLLMApiKeys prefers a stored personal key over the platform one), so the reading
+   * has to say whose it is. `openai-organization` is the provider's own answer to that; the
+   * credential fingerprint covers the case where the response omits it, and still keeps two
+   * distinct keys as two readings rather than one that flaps between them.
    */
   private recordRateLimit(httpResponse: Response): void {
-    recordEmbeddingRateLimitHeaders(EmbeddingModelProvider.OPENAI, this.model, httpResponse.headers);
+    const account = headerOrNull(httpResponse, 'openai-organization') || this.credentialFingerprint;
+    recordEmbeddingRateLimitHeaders(EmbeddingModelProvider.OPENAI, this.model, account, httpResponse.headers);
   }
 
   private validateModel(model: OpenAIEmbeddingModel): void {
@@ -62,7 +91,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
-    const { data: response, response: httpResponse } = await this.client.embeddings
+    const { data: body, response: httpResponse } = await this.client.embeddings
       .create({
         model: this.model,
         input: text,
@@ -74,8 +103,8 @@ export class OpenAIEmbeddingService implements EmbeddingService {
 
     this.recordRateLimit(httpResponse);
 
-    if (response.data && response.data.length > 0) {
-      return response.data[0].embedding;
+    if (body.data && body.data.length > 0) {
+      return body.data[0].embedding;
     }
 
     throw new Error('No embedding data received from OpenAI');
@@ -319,7 +348,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
 
     // Normal batch processing
     try {
-      const { data: response, response: httpResponse } = await this.client.embeddings
+      const { data: body, response: httpResponse } = await this.client.embeddings
         .create({
           model: this.model,
           input: texts,
@@ -331,9 +360,9 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       // recordEmbeddingRateLimitHeaders swallows its own faults to hold that up.
       this.recordRateLimit(httpResponse);
 
-      if (response.data && response.data.length > 0) {
+      if (body.data && body.data.length > 0) {
         // Sort by index to ensure correct order (API may return out of order)
-        const sorted = response.data.sort((a, b) => a.index - b.index);
+        const sorted = body.data.sort((a, b) => a.index - b.index);
         return sorted.map(item => item.embedding);
       } else {
         throw new Error('No embedding data received from OpenAI');

@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 import { EmbeddingAuthError, isEmbeddingAuthError } from '../EmbeddingErrors';
@@ -62,18 +63,19 @@ vi.mock('tiktoken', () => ({
 }));
 
 const { OpenAIEmbeddingService } = await import('./OpenAIEmbeddingService');
-const { getLastObservedEmbeddingRateLimit, resetEmbeddingRateLimitReporter } =
+const { getLastObservedEmbeddingRateLimit, __resetEmbeddingRateLimitReporterForTests } =
   await import('../embeddingRateLimitReporter');
 const { EmbeddingModelProvider } = await import('../EmbeddingService');
 
 const REAL_KEY = 'sk-realLooking1234567890abcdef';
+const OTHER_KEY = 'sk-anotherAccount0987654321fedcba';
 const embedding = (index = 0) => ({ index, embedding: [0.1, 0.2, 0.3] });
 
 describe('OpenAIEmbeddingService 401 handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     responseHeaders = {};
-    resetEmbeddingRateLimitReporter();
+    __resetEmbeddingRateLimitReporterForTests();
   });
 
   it('generateEmbedding wraps a raw 401 into an actionable message and preserves the original', async () => {
@@ -132,7 +134,9 @@ describe('OpenAIEmbeddingService 401 handling', () => {
 });
 
 describe('OpenAIEmbeddingService rate-limit reporting', () => {
+  const ORG = 'org-platform';
   const LIMIT_HEADERS = {
+    'openai-organization': ORG,
     'x-ratelimit-limit-tokens': '5000000',
     'x-ratelimit-limit-requests': '10000',
     'x-ratelimit-remaining-tokens': '4999000',
@@ -144,10 +148,10 @@ describe('OpenAIEmbeddingService rate-limit reporting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     responseHeaders = {};
-    resetEmbeddingRateLimitReporter();
+    __resetEmbeddingRateLimitReporterForTests();
   });
 
-  it('records the ceiling off a single-embedding response', async () => {
+  it('records the ceiling off a single-embedding response, against the reported organization', async () => {
     responseHeaders = LIMIT_HEADERS;
     createMock.mockResolvedValue({ data: [embedding(0)] });
     const svc = new OpenAIEmbeddingService(REAL_KEY, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
@@ -156,7 +160,8 @@ describe('OpenAIEmbeddingService rate-limit reporting', () => {
 
     const observed = getLastObservedEmbeddingRateLimit(
       EmbeddingModelProvider.OPENAI,
-      OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002
+      OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002,
+      ORG
     );
     expect(observed?.snapshot.limitTokens).toBe(5_000_000);
     expect(observed?.snapshot.limitRequests).toBe(10_000);
@@ -171,9 +176,34 @@ describe('OpenAIEmbeddingService rate-limit reporting', () => {
 
     const observed = getLastObservedEmbeddingRateLimit(
       EmbeddingModelProvider.OPENAI,
-      OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL
+      OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL,
+      ORG
     );
     expect(observed?.snapshot.limitTokens).toBe(5_000_000);
+  });
+
+  it('attributes two credentials to two accounts even when the response names no organization', async () => {
+    // Personal provider keys are a shipped feature, so one process embeds against several accounts.
+    // Without a per-credential discriminator their ceilings would collapse into one flapping entry.
+    const info = vi.spyOn(Logger.globalInstance, 'info').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+    responseHeaders = { ...LIMIT_HEADERS };
+    delete (responseHeaders as Partial<typeof LIMIT_HEADERS>)['openai-organization'];
+    createMock.mockResolvedValue({ data: [embedding(0)] });
+
+    await new OpenAIEmbeddingService(REAL_KEY, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002).generateEmbedding('a');
+    await new OpenAIEmbeddingService(OTHER_KEY, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002).generateEmbedding('b');
+
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+    const accounts = info.mock.calls.map(call => (call[1] as { account: string }).account);
+    expect(new Set(accounts).size).toBe(2);
+    // A fingerprint, never the key itself.
+    for (const account of accounts) {
+      expect(account).toMatch(/^key:[0-9a-f]{16}$/);
+      expect(REAL_KEY).not.toContain(account.slice(4));
+    }
+    vi.restoreAllMocks();
   });
 
   it('still returns embeddings when the provider reports no rate-limit headers', async () => {
@@ -182,7 +212,7 @@ describe('OpenAIEmbeddingService rate-limit reporting', () => {
 
     await expect(svc.generateEmbedding('hello')).resolves.toEqual([0.1, 0.2, 0.3]);
     expect(
-      getLastObservedEmbeddingRateLimit(EmbeddingModelProvider.OPENAI, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
+      getLastObservedEmbeddingRateLimit(EmbeddingModelProvider.OPENAI, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, ORG)
     ).toBeNull();
   });
 });
