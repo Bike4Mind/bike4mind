@@ -1,6 +1,7 @@
 import { Chip, Tooltip } from '@mui/joy';
 import CloudIcon from '@mui/icons-material/Cloud';
-import { DRIVE_STATUS_BADGE, useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
+import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
+import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
 
 /**
  * Read-only "this lake has a Drive folder attached" marker, for the surfaces a user reaches when
@@ -26,24 +27,17 @@ export default function LakeDriveStatusChip({
   const { data: connection } = useLakeDriveConnection(lakeId, !!organizationId);
   if (!connection) return null;
 
-  const badge = DRIVE_STATUS_BADGE[connection.status];
+  // Wording and severity both come from describeDriveConnection - notably it does NOT read a
+  // 'connected' connection carrying a lastError as a healthy sync (see its doc).
+  const { title, color } = describeDriveConnection(connection);
   const folder = connection.folderName || connection.driveFolderId;
 
   return (
-    <Tooltip
-      size="sm"
-      title={
-        connection.status === 'connected'
-          ? `Syncing the Google Drive folder "${folder}"`
-          : `Google Drive folder "${folder}": ${badge.label.toLowerCase()}${
-              connection.lastError ? ` - ${connection.lastError}` : ''
-            }`
-      }
-    >
+    <Tooltip size="sm" title={title}>
       <Chip
         size="sm"
         variant="soft"
-        color={badge.color}
+        color={color}
         startDecorator={<CloudIcon sx={{ fontSize: 12 }} />}
         sx={{ fontSize: '11px', maxWidth: 220 }}
         data-testid={`datalake-drive-status-chip-${lakeId}`}

@@ -37,7 +37,7 @@ import {
 import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
-  isBatchComplete,
+  completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
@@ -526,12 +526,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'vectorizedFiles');
             await finalizeBatchIfComplete(batch, logger);
 
-            const isComplete = isBatchComplete(batch);
             await sendToClient(userId, Resource.websocket.managementEndpoint, {
               action: 'data_lake_batch_progress',
               batchId: fabFile.batchId,
               vectorizedFiles: batch?.vectorizedFiles ?? 1,
-              status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+              status: completedBatchStatus(batch),
             });
           }
         } catch (error) {
@@ -614,13 +613,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
         await finalizeBatchIfComplete(batch, logger);
 
-        const isComplete = isBatchComplete(batch);
         await sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'data_lake_batch_progress',
           batchId: existingFabFile.batchId,
           failedFiles: batch?.failedFiles ?? 1,
           processingFailedFiles: batch?.processingFailedFiles ?? 1,
-          status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+          status: completedBatchStatus(batch),
         });
       } catch (innerErr) {
         logger.error(`Error reporting batch failure: ${innerErr}`);
