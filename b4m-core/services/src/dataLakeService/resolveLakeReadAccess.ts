@@ -64,6 +64,14 @@ export interface LakeAccessLogger {
  * such producer exists yet; only createDataLake seeds an owner and transferLakeOwnership demotes to
  * curator) MUST still reject an org-principal grant whose org is not the lake's own org, so a bad
  * row is never persisted in the first place.
+ *
+ * SECOND OBLIGATION ON THAT WRITE PATH (#2495): an owner/curator grant is no longer read-only in its
+ * effect. `getAccessibleDataLakePrompts` treats one as injection trust, so granting someone curator
+ * also grants them "my lake's systemPrompt may enter your system prompt on turns you retrieve from
+ * it". Today that is unreachable (the two producers above only ever name the creator or a transfer
+ * counterparty), but the first UI that lets an owner curate an ARBITRARY user makes it live - and it
+ * is a consent question, not just an access one. Surface it at that grant UI; do not let it ship as
+ * an invisible side effect of a role picker.
  */
 export function resolveReadGrant(
   ctx: Pick<AccessContext, 'userId' | 'organizationIds'>,

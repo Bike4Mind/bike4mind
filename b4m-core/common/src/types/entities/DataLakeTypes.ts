@@ -248,9 +248,13 @@ export interface IDataLake {
    * this lake, on both channels - forced retrieval (KnowledgeRetrievalFeature) and the
    * model-driven knowledge tools (prependRetrievedLakePrompts) - resolved by
    * getAccessibleDataLakePrompts and rendered with the renderDataLakePromptSection defenses.
-   * Injected only for TRUSTED actors (the lake's creator, or a member of the lake's
-   * organization - see isTrustedForInjection); users reached via tag/entitlement grants read
-   * the lake WITHOUT this prompt. The org prompt stays authoritative on conflict. Editable
+   * Injected only for TRUSTED actors: the lake's creator, a member of the lake's organization (the
+   * #1674 governance path - see isTrustedForInjection), the holder of an owner/curator GRANT on it
+   * (#2495), or a manager admitted to a scoped session via `preauthorizedLakeIds`. A user who
+   * reaches the lake only by a tag, an entitlement, or a `reader` grant reads it WITHOUT this
+   * prompt. Note the org arm is membership, not manage rights - so "trusted" is deliberately
+   * curator-or-above for the GRANT arm specifically, not a property of the whole rule. The org
+   * prompt stays authoritative on conflict. Editable
    * only via canManageLake and withheld from non-managers by the server; uncapped, matching
    * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */

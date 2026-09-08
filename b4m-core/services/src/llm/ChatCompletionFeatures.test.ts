@@ -1646,9 +1646,17 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
             }
           : {}),
         // Wiring the grant reader is what lets the re-check trust a rung other than the creator's -
-        // see filterStillManagedLakes, which blanks the creator when this is absent.
+        // see filterStillManagedLakes, which blanks the creator when this is absent. `listByPrincipal`
+        // resolves EMPTY so these tests keep isolating the pre-authorization arm: the injection
+        // resolver reads it for its own owner/curator grant arm, which would otherwise admit the
+        // same lake for a different reason than the one under test.
         ...(opts.activeGrants
-          ? { dataLakeAccessGrants: { listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants) } }
+          ? {
+              dataLakeAccessGrants: {
+                listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants),
+                listByPrincipal: vi.fn().mockResolvedValue([]),
+              },
+            }
           : {}),
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),

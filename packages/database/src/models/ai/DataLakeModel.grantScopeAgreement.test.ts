@@ -130,6 +130,34 @@ describe('data-lake grant scope: chat retrieval agrees with browse', () => {
     expect(await retrievableSlugs('reader')).toEqual([]);
   });
 
+  /**
+   * The INJECTION read (getAccessibleDataLakePrompts, #2495) is a third consumer of this same
+   * grant-resolved id set - and the only one that compares those ids IN MEMORY
+   * (`grantedLakeIds.has(lake.id)`) instead of handing them to Mongo as a query arm. Every
+   * assertion above compares slugs, so a divergence between a grant's stored `dataLakeId` and the
+   * returned document's `id` would satisfy all of them while making the injection arm deny
+   * SILENTLY - the #1281 normalizeId failure mode, and the hard one to notice because it looks
+   * exactly like "this lake has no prompt". Pin the two forms against each other directly.
+   *
+   * Caveat, same as the rest of this file: the id set comes from the LOCAL mirror of
+   * `grantedUserLakeIdsFor` above, not the real helper (unreachable from this package). So this pins the
+   * persisted `dataLakeId` against the returned document's `id` - the load-bearing bit - and not the
+   * production helper's own output.
+   */
+  it('resolves grant ids in the same string form the returned documents carry', async () => {
+    const lake = await transferred('handbook', 'old-owner', 'new-owner');
+
+    const grantedIds = new Set(await grantedLakeIdsFor('old-owner'));
+    const [retrieved] = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], [], 'old-owner', [
+      ...grantedIds,
+    ]);
+
+    expect(retrieved).toBeDefined();
+    expect(retrieved.id).toBe(lake.id);
+    // The assertion the injection arm actually rests on.
+    expect(grantedIds.has(retrieved.id)).toBe(true);
+  });
+
   it('drops a LAPSED owner/curator grant from both reads', async () => {
     const lake = await dataLakeRepository.create(gatedLake('expired', 'owner'));
     await dataLakeAccessGrantRepository.upsertGrant({

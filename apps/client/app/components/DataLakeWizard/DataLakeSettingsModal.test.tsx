@@ -432,6 +432,21 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     expect(help).toHaveTextContent(/only people who can manage this lake can read this text/i);
   });
 
+  it('names the audience the injection gate actually admits, curators included', () => {
+    // Mirrors getDataLakePrompts' trust rule. The two halves have to move together: the copy is
+    // the only place a lake editor is told who their prompt reaches, so a widened gate with stale
+    // copy understates it and a narrowed one promises reach that never happens.
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    const help = screen.getByTestId('datalake-systemprompt-help');
+    expect(help).toHaveTextContent(/owner or curator of this lake/i);
+    expect(help).toHaveTextContent(/not to users given read-only access by tag, entitlement, or a reader grant/i);
+  });
+
   it('states the retrieval-scoped condition, so the copy cannot regress to always-on wording', () => {
     render(
       <Wrapper>
