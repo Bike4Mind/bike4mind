@@ -20,11 +20,18 @@
  * measured through the served path.
  */
 
-import { computeCosineSimilarity } from '@bike4mind/utils';
+import { computeCosineSimilarity, COSINE_SEARCH_TOP_K } from '@bike4mind/utils';
 import { aggregate, scoreQuestion, type Aggregate } from './metrics';
 
-/** How deep the ranking is inspected. 10 because the published prod band is a rank-1..rank-10 spread. */
-export const RANK_DEPTH = 10;
+/**
+ * How deep the ranking is inspected: the shipped retrieval depth, not a copy of it.
+ *
+ * It happens to be the 10 the published prod band is a rank-1..rank-10 spread over, but the reason
+ * to take it from `@bike4mind/utils` is the claim at the top of this file - scoring goes through the
+ * shipped cosine so harness and product cannot diverge. A private 10 here would be exactly that
+ * divergence, in the depth the band is measured at rather than in the comparison function.
+ */
+export const RANK_DEPTH = COSINE_SEARCH_TOP_K;
 
 /** A chunk to score. `docId` is the retrieval unit metrics.ts counts (a help slug / file id). */
 export type ScorableChunk = {
@@ -154,6 +161,21 @@ export type ArmRow = {
    * rendered `n/a` instead of a number nobody should act on.
    */
   groundTruthApplies: boolean;
+  /**
+   * How much of the ground truth this corpus actually holds: supporting documents present, over the
+   * total the committed questions name.
+   *
+   * `groundTruthApplies` is all-or-nothing, so a lake sharing 1 of 49 help slugs passes it and then
+   * renders `recall 0.02` as a number - which is the reading that flag exists to prevent. PARTIAL
+   * overlap is the likelier accident than zero overlap, and this is what lets the report say so.
+   */
+  groundTruthCoverage: { matched: number; total: number };
+  /**
+   * How deep the ranking actually went, which is `min(RANK_DEPTH, chunks)`. Carried so the spread
+   * label states the depth that was inspected rather than the depth that was asked for - on a lake
+   * smaller than RANK_DEPTH those differ.
+   */
+  rankDepth: number;
 };
 
 /** Score every probe query in one arm and roll it up into a row. */
@@ -168,7 +190,9 @@ export function buildArmRow(args: {
   depth?: number;
 }): ArmRow {
   const supporting = new Set(args.queries.flatMap(q => [...q.supporting]));
-  const groundTruthApplies = supporting.size === 0 || args.chunks.some(c => supporting.has(c.docId));
+  const capturedDocs = new Set(args.chunks.map(c => c.docId));
+  const matched = [...supporting].filter(docId => capturedDocs.has(docId)).length;
+  const groundTruthApplies = supporting.size === 0 || matched > 0;
   const distributions = args.queries.map(q =>
     scoreQueryDistribution(q.id, q.vector, args.chunks, args.depth ?? RANK_DEPTH)
   );
@@ -192,6 +216,8 @@ export function buildArmRow(args: {
     meanSpread: mean(distributions.map(d => d.spread)),
     quality: aggregate(distributions.map((d, i) => scoreQuestion(d.servedDocIds, new Set(args.queries[i].supporting)))),
     groundTruthApplies,
+    groundTruthCoverage: { matched, total: supporting.size },
+    rankDepth: Math.max(0, ...distributions.map(d => d.topScores.length)),
   };
 }
 
@@ -220,7 +246,7 @@ export function formatArmSummary(row: ArmRow): string {
     `embedding_mismatch   : ${row.filesExcluded} excluded files, ${row.chunksExcluded} skipped chunks`,
     `retrieval_unavailable: ${row.filesUnreachable} files unreachable by the served path (archived / not fully vectorized / excluded)`,
     `superseded           : n/a (no collapse pass offline)`,
-    `r1-r${RANK_DEPTH} spread`.padEnd(21) + `: ${spreads}${elided}`,
+    `r1-r${row.rankDepth} spread`.padEnd(21) + `: ${spreads}${elided}`,
     `overall band         : ${row.band.min.toFixed(4)} - ${row.band.max.toFixed(4)} (width ${row.band.width.toFixed(4)})`,
   ].join('\n');
 }

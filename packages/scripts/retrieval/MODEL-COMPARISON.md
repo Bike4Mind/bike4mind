@@ -68,7 +68,10 @@ npx sst shell --stage <stage> -- tsx packages/scripts/retrieval/capture-embeddin
 ```
 
 Cost is priced from the shipped rate table (`getEmbeddingModelCost`), never from a literal in this
-harness. A model with no published rate **aborts** rather than quoting $0.
+harness. On an embedding run, a model with no published rate **aborts** rather than quoting $0.
+(`--reuse-stored-vectors` embeds only the probe queries, which the plan output already calls rounding
+error, so it has no rate to check.) Any chunk over the provider's per-input token ceiling aborts here
+too, naming the chunk - the batcher's own check fires only after the spend is approved.
 
 ### 3. Score every arm
 
@@ -118,6 +121,11 @@ The last six columns all read `n/a` when no captured document matches a supporti
 the ground truth does not describe, the "positive" and "negative" halves are an arbitrary split and
 their gap is noise. `band` and `spread` need no labels and stay valid.
 
+PARTIAL overlap gets its own note, because the all-or-nothing check above passes on it: a lake sharing
+one supporting slug renders a full set of quality columns computed against the whole supporting set,
+so `recall` and `prec` are bounded well below 1 by the corpus rather than by the model. The note states
+the fraction (`3 of 49 supporting documents captured`); compare arms to each other, not to 1.
+
 `retrieval_unavailable` is a real number: the capture enumerates the lake with the lifecycle-sweep
 reader (which returns every id the lake has ever held) and then filters it to the files retrieval can
 reach - live, not archived, not retrieval-excluded, `vectorizedChunkCount >= chunkCount > 0`.
@@ -149,7 +157,7 @@ and found none would be untrue.
 it is structurally 1.0 for every arm. `negTop` is the number that can actually move, and it is what a
 later re-derivation of the ada-002-era cosine literals needs.
 
-### Four warnings the report raises for you
+### Five warnings the report raises for you
 
 - **`ARMS COVER DIFFERENT CHUNK SETS`** - the `--reuse-stored-vectors` baseline keeps only chunks whose
   stamp names its model, while an embedded arm covers the whole lake. When the counts differ, the bands
@@ -158,12 +166,17 @@ later re-derivation of the ada-002-era cosine literals needs.
 - **`GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS`** - `corpus.ts` names help slugs, so a capture of any
   other lake matches nothing and the quality columns render `n/a`. The geometry columns need no labels
   and stay valid. This is the expected state for a production-lake arm.
+- **`GROUND TRUTH ONLY PARTLY DESCRIBES THIS CORPUS`** - some supporting documents are captured and
+  some are not, which the flag above does not catch. The quality columns are real numbers, just capped
+  by the corpus; the note gives the fraction so nobody reads a low `recall` as a model verdict.
 - **`NOT THE LONG-DOCUMENT REGIME`** - the corpus-regime gate, restated here as well as on the
   capture's stdout, because whoever scores the fixtures later sees only this report. Discard the model
   verdict and capture a production lake.
-- **`SCORED AT CAPTURE WIDTH ONLY`** - a non-Matryoshka capture (ada-002, Voyage, Bedrock, Ollama)
-  ignored `--widths` entirely. A prefix of one of those vectors is not an embedding, so no width arm
-  is derived from it.
+- **`SCORED AT CAPTURE WIDTH ONLY`** - a capture this harness will not truncate ignored `--widths`
+  entirely. For ada-002, Bedrock and Ollama that is because a prefix of one of those vectors is not an
+  embedding at all. `voyage-3-large` is the one exception worth knowing: it does ship MRL widths, but
+  they come from the provider's own `output_dimension` at embed time, so a Voyage width arm has to be
+  captured rather than derived.
 
 ### The go signal
 

@@ -1,14 +1,20 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, getEmbeddingModelCost } from '@bike4mind/common';
 import {
-  isCapturableFile,
-  parseSupportedModels,
+  assertOnePerInput,
+  embedAll,
+  findOversizedChunks,
   formatCapturePlan,
+  isCapturableFile,
+  modalLength,
+  parseSupportedModels,
   planCapture,
   selectReusableChunks,
   totalExcluded,
   type StoredChunk,
 } from './capturePlan';
+import { OPENAI_MAX_INPUTS_PER_REQUEST, OPENAI_MAX_TOKENS_PER_INPUT } from '@bike4mind/fab-pipeline';
+import type { EmbeddingService } from '@bike4mind/fab-pipeline';
 
 const SMALL = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 const LARGE = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE;
@@ -27,11 +33,22 @@ describe('planCapture', () => {
     expect(plan.totalUsd).toBeCloseTo(plan.perModel[0].usd + plan.perModel[1].usd, 12);
   });
 
-  it('counts chunks and batches at the provider request ceiling', () => {
+  it('counts chunks and batches at the provider input ceiling', () => {
     const plan = planCapture(new Array(5000).fill(10), [SMALL]);
     expect(plan.chunks).toBe(5000);
     expect(plan.perModel[0].tokens).toBe(50_000);
-    expect(plan.perModel[0].batches).toBe(3); // 2048 inputs per request
+    expect(plan.perModel[0].batches).toBe(Math.ceil(5000 / OPENAI_MAX_INPUTS_PER_REQUEST));
+  });
+
+  it('splits on the TOKEN ceiling too, which is what a long-document corpus actually hits', () => {
+    // 2048 chunks of ~550 tokens is over a million, well past the per-request token limit - so an
+    // input-count-only estimate under-reports the requests by an order of magnitude.
+    const plan = planCapture(new Array(2000).fill(2000), [SMALL]);
+    expect(plan.perModel[0].batches).toBeGreaterThan(Math.ceil(2000 / OPENAI_MAX_INPUTS_PER_REQUEST));
+  });
+
+  it('plans no batch for no chunks', () => {
+    expect(planCapture([], [SMALL]).perModel[0].batches).toBe(0);
   });
 
   it('reports 3-large as the more expensive arm, which is the whole cost argument', () => {
@@ -57,7 +74,7 @@ describe('planCapture', () => {
     expect(plan.anyUnpriced).toBe(false);
   });
 
-  it('does not call a zero-token plan unpriced', () => {
+  it('does not call a zero-token plan of a priced model unpriced', () => {
     expect(planCapture([], [SMALL]).anyUnpriced).toBe(false);
   });
 
@@ -113,7 +130,7 @@ describe('isCapturableFile', () => {
     expect(isCapturableFile({ ...live, fileName: 'MARKdown.pdf' }, { excludeFilenameMarkers: ['mark'] })).toBe(true);
   });
 
-  it('ignores the embeddingModel stamp, which is one arm\'s business and not the file set\'s', () => {
+  it("ignores the embeddingModel stamp, which is one arm's business and not the file set's", () => {
     // Deliberately NOT isFabFileCitable's fifth condition: the arms vary the model on purpose, and
     // the stamp comparison belongs to selectReusableChunks.
     expect(isCapturableFile({ ...live, embeddingModel: ADA } as never)).toBe(true);
@@ -196,5 +213,80 @@ describe('parseSupportedModels', () => {
 
   it('names the offending value instead of failing opaquely inside the factory later', () => {
     expect(() => parseSupportedModels([SMALL, 'text-embedding-4-enormous'])).toThrow(/text-embedding-4-enormous/);
+  });
+});
+
+describe('findOversizedChunks', () => {
+  it('names the chunk the provider would refuse, which its own error cannot', () => {
+    const over = findOversizedChunks([
+      { chunkId: 'a', tokenCount: 500 },
+      { chunkId: 'b', tokenCount: OPENAI_MAX_TOKENS_PER_INPUT + 1 },
+    ]);
+    expect(over.map(c => c.chunkId)).toEqual(['b']);
+  });
+
+  it('passes a chunk exactly at the ceiling - the provider accepts it', () => {
+    expect(findOversizedChunks([{ chunkId: 'a', tokenCount: OPENAI_MAX_TOKENS_PER_INPUT }])).toEqual([]);
+  });
+});
+
+describe('modalLength', () => {
+  it('reads the corpus width off the majority rather than off the first vector', () => {
+    expect(modalLength([512, 1536, 1536, 1536])).toBe(1536);
+  });
+
+  it('breaks an exact tie deterministically, not on Mongo document order', () => {
+    // The lake read has no sort, so insertion order IS document order. Both orders must agree.
+    expect(modalLength([512, 512, 1536, 1536])).toBe(1536);
+    expect(modalLength([1536, 1536, 512, 512])).toBe(1536);
+  });
+
+  it('returns undefined for no vectors, i.e. no width guard for the caller to apply', () => {
+    expect(modalLength([])).toBeUndefined();
+  });
+
+  it('returns the only width there is', () => {
+    expect(modalLength([1536, 1536])).toBe(1536);
+  });
+});
+
+describe('embedAll', () => {
+  const vector = (n: number) => [n, n, n];
+
+  it('uses the provider batch path when it has one, in one call', async () => {
+    const generateEmbeddingBatch = vi.fn(async (texts: string[]) => texts.map((_, i) => vector(i)));
+    const service = {
+      generateEmbeddingBatch,
+      generateEmbedding: vi.fn(),
+      getModelInfo: vi.fn(),
+    } as unknown as EmbeddingService;
+
+    expect(await embedAll(service, ['a', 'b'])).toEqual([vector(0), vector(1)]);
+    expect(generateEmbeddingBatch).toHaveBeenCalledTimes(1);
+    // Token counts are deliberately not forwarded: the batcher recalculates with tiktoken, which
+    // beats the counts this harness holds. See embedAll's docblock.
+    expect(generateEmbeddingBatch).toHaveBeenCalledWith(['a', 'b']);
+  });
+
+  it('falls back to the one-at-a-time contract every provider implements', async () => {
+    const generateEmbedding = vi.fn(async (text: string) => vector(text.length));
+    const service = { generateEmbedding, getModelInfo: vi.fn() } as unknown as EmbeddingService;
+
+    expect(await embedAll(service, ['a', 'bb'])).toEqual([vector(1), vector(2)]);
+    expect(generateEmbedding).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('assertOnePerInput', () => {
+  it('accepts one vector per input', () => {
+    expect(() => assertOnePerInput([[1], [2]], 2, 'chunks')).not.toThrow();
+  });
+
+  it('rejects a short batch, which JSON.stringify would otherwise drop silently', () => {
+    expect(() => assertOnePerInput([[1]], 2, 'chunks')).toThrow(/expected 2 vectors/);
+  });
+
+  it('rejects an empty vector, which is not an embedding of anything', () => {
+    expect(() => assertOnePerInput([[1], []], 2, 'probe queries')).toThrow(/probe queries/);
   });
 });

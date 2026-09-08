@@ -43,9 +43,13 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { countCodePoints } from '@bike4mind/common';
 import { PROBE_QUESTIONS } from './corpus';
 import {
-  isCapturableFile,
-  parseSupportedModels,
+  assertOnePerInput,
+  embedAll,
+  findOversizedChunks,
   formatCapturePlan,
+  isCapturableFile,
+  modalLength,
+  parseSupportedModels,
   planCapture,
   selectReusableChunks,
   totalExcluded,
@@ -94,6 +98,9 @@ if (lake.status !== 'active') throw new Error(`Lake "${argv.lake}" is ${lake.sta
 const fileIds = await fabFileRepository.findIdsByDataLakeTag({ kind: 'registry', datalakeTag: lake.datalakeTag });
 if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`);
 
+// Stored vectors are only read by the --reuse-stored-vectors arm. Materializing them otherwise
+// would hold the whole lake's embeddings in memory to compute a token count and a char length.
+const needStoredVectors = argv['reuse-stored-vectors'];
 const stored: StoredChunk[] = [];
 const tokenCounts: number[] = [];
 const capturedDocs = new Set<string>();
@@ -127,7 +134,7 @@ for (const fileId of fileIds) {
       chunkId: String(chunk.id ?? chunk._id),
       docId,
       text,
-      vector: (chunk.vector as number[]) ?? [],
+      vector: needStoredVectors ? ((chunk.vector as number[]) ?? []) : [],
       parentEmbeddingModel: anyChunkStamped ? chunk.embeddingModel : file.embeddingModel,
     });
     tokenCounts.push(chunk.tokenCount ?? Math.ceil(text.length / 4));
@@ -162,6 +169,20 @@ const plan = planCapture(tokenCounts, embedModels);
 console.log(`${formatCapturePlan(plan)}\n`);
 if (plan.anyUnpriced) {
   throw new Error('At least one model has no published rate, so the real spend is unknown. Add its rate first.');
+}
+// Named here rather than left to the batcher, which throws `Input at index N` - an index into an
+// array the operator never sees, and only after they have read the cost and typed --yes.
+if (embedModels.length > 0) {
+  const oversized = findOversizedChunks(stored.map((c, i) => ({ chunkId: c.chunkId, tokenCount: tokenCounts[i] })));
+  if (oversized.length > 0) {
+    throw new Error(
+      `${oversized.length} chunk(s) exceed the provider's per-input token ceiling, which fails the ` +
+        `whole batch: ${oversized
+          .slice(0, 5)
+          .map(c => `${c.chunkId} (${c.tokenCount} tokens)`)
+          .join(', ')}. Re-chunk the lake at a smaller chunk size, or capture a different lake.`
+    );
+  }
 }
 if (argv['dry-run']) {
   console.log('--dry-run: nothing embedded.');
@@ -263,44 +284,3 @@ console.log(
     `--fixtures ${models.map(m => `out/${m}.${argv.lake}.fixture.json`).join(',')}`
 );
 process.exit(0);
-
-/**
- * Embed via the provider's batch path when it has one. `generateEmbeddingBatch` lives on the OpenAI
- * service rather than the abstract EmbeddingService, so this narrows instead of casting, and falls
- * back to the one-at-a-time contract every provider does implement.
- */
-async function embedAll(service: unknown, texts: string[]): Promise<number[][]> {
-  const batch = (service as { generateEmbeddingBatch?: (t: string[]) => Promise<number[][]> }).generateEmbeddingBatch;
-  if (typeof batch === 'function') return batch.call(service, texts);
-  const single = service as { generateEmbedding: (t: string) => Promise<number[]> };
-  const out: number[][] = [];
-  for (const text of texts) out.push(await single.generateEmbedding(text));
-  return out;
-}
-
-/**
- * The batcher must return exactly one vector per input, in order. The shipped OpenAI batcher does
- * (`generateEmbeddingBatch` index-places into a pre-sized array), so this guards an unlikely path -
- * but the failure would land AFTER the spend, as an opaque zod error naming no chunk, because
- * `JSON.stringify` drops an `undefined` vector entirely.
- */
-function assertOnePerInput(vectors: number[][], expected: number, what: string): void {
-  if (vectors.length !== expected || vectors.some(v => !Array.isArray(v) || v.length === 0)) {
-    throw new Error(`Embedding ${what}: expected ${expected} vectors, got ${vectors.length} (some may be empty).`);
-  }
-}
-
-/** The most common vector width in a set - the width the corpus is actually stored at. */
-function modalLength(lengths: number[]): number | undefined {
-  const tally = new Map<number, number>();
-  for (const n of lengths) tally.set(n, (tally.get(n) ?? 0) + 1);
-  let best: number | undefined;
-  let bestCount = 0;
-  for (const [len, count] of tally) {
-    if (count > bestCount) {
-      best = len;
-      bestCount = count;
-    }
-  }
-  return best;
-}

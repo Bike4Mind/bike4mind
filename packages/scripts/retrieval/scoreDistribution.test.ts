@@ -3,10 +3,12 @@ import {
   buildArmRow,
   formatArmSummary,
   formatComparisonTable,
+  RANK_DEPTH,
   scoreBand,
   scoreQueryDistribution,
   type ScorableChunk,
 } from './scoreDistribution';
+import { COSINE_SEARCH_TOP_K } from '@bike4mind/utils';
 
 /**
  * Hand-computable 2-D unit vectors: cosine against [1,0] is just the x component, so every number
@@ -186,7 +188,14 @@ describe('formatArmSummary', () => {
     expect(summary).toContain('chunks_scored        : 2');
     expect(summary).toContain('embedding_mismatch   : 0 excluded files, 0 skipped chunks');
     expect(summary).toContain('overall band         : ');
-    expect(summary).toContain('r1-r10 spread        : ');
+    expect(summary).toContain('r1-r2 spread         : ');
+  });
+
+  it('labels the spread with the depth actually inspected, not the depth asked for', () => {
+    // Two chunks cannot produce a rank-10, and a label claiming r1-r10 on a small lake states a
+    // depth nothing looked at.
+    expect(row.rankDepth).toBe(2);
+    expect(formatArmSummary(row)).not.toContain(`r1-r${RANK_DEPTH}`);
   });
 
   it('reports the counter this instrument cannot observe as n/a, never as zero', () => {
@@ -235,6 +244,25 @@ describe('groundTruthApplies', () => {
     expect(buildArmRow(args('anything', [])).groundTruthApplies).toBe(true);
   });
 
+  it('carries the coverage fraction, because the flag itself is all-or-nothing', () => {
+    // One shared slug out of many flips the flag true and then renders recall off a fraction of the
+    // ground truth. Partial overlap is the likelier accident than none, so the fraction is the datum.
+    const partial = buildArmRow({
+      ...args('features/mementos', ['features/mementos']),
+      queries: [
+        { id: 'q1', vector: QUERY, supporting: ['features/mementos'] },
+        { id: 'q2', vector: QUERY, supporting: ['features/quests', 'features/notebooks'] },
+      ],
+    });
+    expect(partial.groundTruthApplies).toBe(true);
+    expect(partial.groundTruthCoverage).toEqual({ matched: 1, total: 3 });
+  });
+
+  it('reports full coverage when every supporting document is captured', () => {
+    const row = buildArmRow(args('features/mementos', ['features/mementos']));
+    expect(row.groundTruthCoverage).toEqual({ matched: 1, total: 1 });
+  });
+
   it('renders the quality columns as n/a rather than a zero nobody should act on', () => {
     const table = formatComparisonTable([buildArmRow(args('unmatched-file-id', ['features/mementos']))]);
     // The four quality columns (recall, prec, hit, mrr) plus posTop/negTop, which are partitioned by
@@ -242,5 +270,13 @@ describe('groundTruthApplies', () => {
     expect(table.split('n/a').length - 1).toBe(6);
     // The geometry needs no labels, so it is still a real number.
     expect(table).toMatch(/1\.0000/);
+  });
+});
+
+describe('RANK_DEPTH', () => {
+  it('is the shipped retrieval depth rather than a copy of the number', () => {
+    // The claim at the top of this module is that harness and product cannot diverge because the
+    // cosine is shared. The DEPTH the band is measured at has to come from the same place.
+    expect(RANK_DEPTH).toBe(COSINE_SEARCH_TOP_K);
   });
 });

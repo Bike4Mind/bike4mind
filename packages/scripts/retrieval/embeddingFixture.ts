@@ -112,9 +112,14 @@ export type DerivedArm = {
  *
  * Matryoshka is a property of a specific model, not of embeddings (see the MEMENTO_EMBEDDING_DIMS
  * docblock and b4m-core/memory/src/eval/dimensions.test.ts). `text-embedding-ada-002` predates MRL,
- * as do the Voyage, Bedrock and Ollama embedders - a truncated ada-002 vector is not an embedding of
+ * as do the Bedrock and Ollama embedders - a truncated ada-002 vector is not an embedding of
  * anything, and rendering it as a width arm next to a legitimate `3-small@512` row puts a number in
  * the decision table that measures nothing.
+ *
+ * `voyage-3-large` is left out for a different reason: it DOES ship MRL widths, but they come from
+ * the provider's own `output_dimension` parameter at embed time, not from truncating a full-width
+ * vector here. Deriving one by truncation would be an unverified claim about that model, so this
+ * harness scores it at its capture width and a Voyage width arm has to be captured, not derived.
  */
 const MATRYOSHKA_MODELS = new Set<string>([
   OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL,

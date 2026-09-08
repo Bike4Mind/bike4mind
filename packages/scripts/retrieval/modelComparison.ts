@@ -43,6 +43,31 @@ export function assertSameCorpus(fixtures: readonly EmbeddingFixture[]): void {
 }
 
 /**
+ * Every fixture must carry the SAME question set, by id.
+ *
+ * `resolveQueries` only rejects an id `corpus.ts` does not know; it cannot see a fixture carrying
+ * FEWER known ids. So a fixture captured before `PROBE_QUESTIONS` grew loads clean beside a fresh
+ * one, and the table compares 25 questions against 30 with no column that would say so. That is
+ * verbatim the hazard `resolveQueries`' own docblock names: an arm scored on fewer, or easier,
+ * questions reads as a better model.
+ *
+ * Compared as id SETS, not counts - two same-size fixtures with different ids are the identical bug,
+ * and a length check waves it through.
+ */
+export function assertSameQuerySet(fixtures: readonly EmbeddingFixture[]): void {
+  const keyed = fixtures.map(f => ({ fixture: f, key: [...new Set(f.queries.map(q => q.id))].sort().join(',') }));
+  const distinct = [...new Set(keyed.map(k => k.key))];
+  if (distinct.length > 1) {
+    throw new Error(
+      'Fixtures carry different question sets: ' +
+        `${keyed.map(k => `${k.fixture.model}@${k.fixture.dims} (${k.fixture.queries.length} queries)`).join(', ')}. ` +
+        'An arm scored on fewer, or different, questions reads as a better model and the table cannot ' +
+        'show it. Re-capture every arm against the current PROBE_QUESTIONS.'
+    );
+  }
+}
+
+/**
  * Resolve a fixture's queries against the committed ground truth.
  *
  * A query id with no entry in `corpus.ts` is an ERROR, not a skip. Silently dropping it would shrink
@@ -80,6 +105,7 @@ export function applicableWidths(fixture: EmbeddingFixture, widths: readonly num
 /** Build one row per (fixture, width) arm. */
 export function compareArms(fixtures: readonly EmbeddingFixture[], widths: readonly number[]): ArmRow[] {
   assertSameCorpus(fixtures);
+  assertSameQuerySet(fixtures);
   const rows: ArmRow[] = [];
 
   for (const fixture of fixtures) {
@@ -165,6 +191,18 @@ export function formatComparison(rows: readonly ArmRow[], fixtures: readonly Emb
       'GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS: no captured document matches a supporting slug in ' +
         'corpus.ts, so recall/prec/hit/mrr read n/a - and so do posTop/negTop, which are partitioned ' +
         'by the same labels. Read the band and the spread, which need no labels, and ignore the rest.'
+    );
+  }
+  // Partial overlap is the likelier accident than none, and it does NOT trip the flag above: one
+  // shared slug renders a full set of quality columns off a fraction of the ground truth. Stating
+  // the fraction fixes the reading without pretending the numbers are unusable.
+  const partial = rows.filter(r => r.groundTruthApplies && r.groundTruthCoverage.matched < r.groundTruthCoverage.total);
+  if (partial.length > 0) {
+    const { matched, total } = partial[0].groundTruthCoverage;
+    notes.push(
+      `GROUND TRUTH ONLY PARTLY DESCRIBES THIS CORPUS (${matched} of ${total} supporting documents ` +
+        'captured). recall and prec are computed against the full supporting set, so they are bounded ' +
+        'well below 1 by the corpus rather than by the model. Compare arms to each other, not to 1.'
     );
   }
   // The gate the ticket exists over, restated where the verdict is actually read. The capture warns

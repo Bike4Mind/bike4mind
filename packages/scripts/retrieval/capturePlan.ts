@@ -4,27 +4,32 @@
  *
  * Split out from `capture-embeddings.ts` so both are testable without credentials. That entrypoint
  * has to connect to Mongo and hold a provider key, so nothing in it can run in CI - which is
- * exactly why the two judgements that can silently corrupt a result live here instead: the cost
- * preflight (which decides whether to spend) and the stored-vector stamp gate (which decides what
- * gets scored). Same split the rest of this directory already uses - pure modules plus one
- * credentialed entrypoint.
+ * exactly why every judgement that can silently corrupt a result lives here instead: the cost
+ * preflight (which decides whether to spend), the stored-vector stamp gate and `modalLength` (which
+ * together decide what gets scored and what is reported as a width mismatch), and the two guards on
+ * what the provider hands back. What stays over there is the orchestration: connect, read, write.
+ * Same split the rest of this directory already uses - pure modules plus one credentialed entrypoint.
  */
 
 import {
   getEmbeddingModelCost,
+  hasPublishedEmbeddingRate,
   isSupportedEmbeddingModel,
-  OllamaEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
+import {
+  OPENAI_EFFECTIVE_TOKEN_LIMIT,
+  OPENAI_MAX_INPUTS_PER_REQUEST,
+  OPENAI_MAX_TOKENS_PER_INPUT,
+  type EmbeddingService,
+} from '@bike4mind/fab-pipeline';
 import { dataLakeService } from '@bike4mind/services';
 import { isRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
-
-/** OpenAI's per-request input ceiling - what the shipped batcher splits on. */
-const MAX_INPUTS_PER_REQUEST = 2048;
 
 export type ModelCostPlan = {
   model: string;
   tokens: number;
+  /** API requests the shipped batcher will issue - see `countBatches`. */
   batches: number;
   usd: number;
   /**
@@ -44,30 +49,69 @@ export type CapturePlan = {
 };
 
 /**
- * Ollama embedders run on the operator's own hardware and are priced at an explicit 0, so a $0
- * total is the truth for them rather than a missing rate. Everything else costing exactly 0 for a
- * non-zero token count means the price table has no entry.
+ * Requests the shipped batcher will issue for these chunks.
+ *
+ * It splits on BOTH ceilings, and on a corpus of long passages the TOKEN one is what actually binds:
+ * 2048 chunks of ~550 tokens is over a million, well past the per-request limit. Greedy in input
+ * order, matching `createBatches`, and off the limits that module exports - so the numbers cannot
+ * drift, only the shape of the loop can.
  */
-const isKeylessLocalModel = (model: string): boolean =>
-  Object.values(OllamaEmbeddingModel).includes(model as OllamaEmbeddingModel);
+function countBatches(tokenCounts: readonly number[]): number {
+  let batches = 0;
+  let inputs = 0;
+  let tokens = 0;
+  for (const count of tokenCounts) {
+    if (inputs === 0 || inputs >= OPENAI_MAX_INPUTS_PER_REQUEST || tokens + count > OPENAI_EFFECTIVE_TOKEN_LIMIT) {
+      batches++;
+      inputs = 0;
+      tokens = 0;
+    }
+    inputs++;
+    tokens += count;
+  }
+  return batches;
+}
+
+/**
+ * Chunks the provider will refuse, named so the operator can fix the right one.
+ *
+ * `generateEmbeddingBatch` validates the per-input ceiling before it issues a request, so no money
+ * is lost - but it throws `Input at index N exceeds ...`, an index into an array the operator never
+ * sees, and it throws AFTER they read the cost and typed --yes. Same reasoning as
+ * `assertOnePerInput`, applied to the case that predicate cannot cover.
+ *
+ * Unreachable on prod's ~550-token passages; reachable on a lake with a large chunk-size setting,
+ * which the runbook does point this at.
+ */
+export function findOversizedChunks(
+  chunks: readonly { chunkId: string; tokenCount: number }[]
+): { chunkId: string; tokenCount: number }[] {
+  return chunks.filter(c => c.tokenCount > OPENAI_MAX_TOKENS_PER_INPUT);
+}
 
 /**
  * What this capture will cost, priced from the SHIPPED rate table (`getEmbeddingModelCost`) rather
  * than from any number written down here. Prices move; a literal in a script goes stale silently
  * and a preflight that under-quotes is worse than no preflight at all.
  *
- * Query embeddings are deliberately not modelled: 31 probe questions against hundreds of ~550-token
+ * Query embeddings are deliberately not modelled: 30 probe questions against hundreds of ~550-token
  * chunks is rounding error, and inventing a second estimate would suggest a precision this does not
  * have. The chunk total is the number that decides whether to run.
  */
 export function planCapture(chunkTokenCounts: readonly number[], models: readonly string[]): CapturePlan {
   const tokens = chunkTokenCounts.reduce((sum, n) => sum + n, 0);
-  const batches = Math.ceil(chunkTokenCounts.length / MAX_INPUTS_PER_REQUEST);
+  const batches = countBatches(chunkTokenCounts);
 
-  const perModel = models.map(model => {
-    const usd = getEmbeddingModelCost(model, tokens);
-    return { model, tokens, batches, usd, unpriced: usd === 0 && tokens > 0 && !isKeylessLocalModel(model) };
-  });
+  const perModel = models.map(model => ({
+    model,
+    tokens,
+    batches,
+    usd: getEmbeddingModelCost(model, tokens),
+    // Asked of the price table directly rather than inferred from a $0 result: a locally-hosted
+    // embedder priced at an explicit 0 and a model with no rate at all both cost $0, and only the
+    // second one must stop the run.
+    unpriced: !hasPublishedEmbeddingRate(model),
+  }));
 
   return {
     chunks: chunkTokenCounts.length,
@@ -240,4 +284,72 @@ export function isCapturableFile(file: CapturableFileFields, opts: RetrievalExcl
   if (isRetrievalExcluded(file, opts)) return false;
   const chunks = file.chunkCount ?? 0;
   return chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
+}
+
+/** An embedding service that also exposes the provider's batch path (OpenAI's does). */
+type BatchEmbeddingService = EmbeddingService & {
+  generateEmbeddingBatch(texts: string[]): Promise<number[][]>;
+};
+
+const hasBatchPath = (service: EmbeddingService): service is BatchEmbeddingService =>
+  'generateEmbeddingBatch' in service && typeof service.generateEmbeddingBatch === 'function';
+
+/**
+ * Embed via the provider's batch path when it has one, else the one-at-a-time contract every
+ * provider does implement. `generateEmbeddingBatch` lives on the OpenAI service rather than on the
+ * abstract `EmbeddingService`, so this narrows rather than casts.
+ *
+ * `tokenCounts` is deliberately NOT passed through. Absent them the batcher recalculates with
+ * tiktoken, which is strictly better than the counts this harness holds (stored by an unknown
+ * tokenizer, or the capture's own chars/4 fallback) - so passing them would look like an
+ * optimization while making the batch split less accurate.
+ */
+export async function embedAll(service: EmbeddingService, texts: string[]): Promise<number[][]> {
+  if (hasBatchPath(service)) return service.generateEmbeddingBatch(texts);
+  const out: number[][] = [];
+  for (const text of texts) out.push(await service.generateEmbedding(text));
+  return out;
+}
+
+/**
+ * The batcher must return exactly one vector per input, in order. The shipped OpenAI batcher does
+ * (`generateEmbeddingBatch` index-places into a pre-sized array), so this guards an unlikely path -
+ * but the failure would land AFTER the spend, as an opaque zod error naming no chunk, because
+ * `JSON.stringify` drops an `undefined` vector entirely.
+ */
+export function assertOnePerInput(vectors: number[][], expected: number, what: string): void {
+  if (vectors.length !== expected || vectors.some(v => !Array.isArray(v) || v.length === 0)) {
+    throw new Error(`Embedding ${what}: expected ${expected} vectors, got ${vectors.length} (some may be empty).`);
+  }
+}
+
+/**
+ * The width the stored corpus is actually at: the most common vector length in the set.
+ *
+ * Reading the width off the corpus instead of assuming one is what makes a partly re-embedded lake
+ * surface as `dimensionMismatch` rather than scoring across two spaces as noise. It also DECIDES
+ * that classification, which is why it lives here with a test rather than in the credentialed
+ * entrypoint.
+ *
+ * Ties break on the WIDER width. Not because it is more correct - on an exact 50/50 split there is
+ * no majority to find - but because the alternative was insertion order, which is the lake read's
+ * unsorted return order, which is Mongo document order. Either choice sends half the corpus to
+ * `dimensionMismatch`, and the excluded counters plus the differing-chunk-sets note both report
+ * that; a nondeterministic choice is the one thing that cannot be reported.
+ *
+ * `undefined` on empty input means "no width guard", which is the right answer: the caller got here
+ * with no labelled vector at all, and its next selection pass is what reports that.
+ */
+export function modalLength(lengths: readonly number[]): number | undefined {
+  const tally = new Map<number, number>();
+  for (const n of lengths) tally.set(n, (tally.get(n) ?? 0) + 1);
+  let best: number | undefined;
+  let bestCount = 0;
+  for (const [len, count] of tally) {
+    if (count > bestCount || (count === bestCount && best !== undefined && len > best)) {
+      best = len;
+      bestCount = count;
+    }
+  }
+  return best;
 }

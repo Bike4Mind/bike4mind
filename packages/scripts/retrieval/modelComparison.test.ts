@@ -7,6 +7,7 @@ import {
   reportFromRaw,
   resolveQueries,
   assertSameCorpus,
+  assertSameQuerySet,
 } from './modelComparison';
 import { loadEmbeddingFixture, type EmbeddingFixture } from './embeddingFixture';
 import tinyFixture from './fixtures/tiny-comparison.fixture.json';
@@ -26,6 +27,34 @@ describe('assertSameCorpus', () => {
 
   it('refuses to table two arms measured over different lakes', () => {
     expect(() => assertSameCorpus([fixture, other({ corpus: 'some-other-lake' })])).toThrow(/different corpora/);
+  });
+});
+
+describe('assertSameQuerySet', () => {
+  it('accepts fixtures carrying the same question ids in any order', () => {
+    expect(() => assertSameQuerySet([fixture, other({ queries: [...fixture.queries].reverse() })])).not.toThrow();
+  });
+
+  it('refuses a fixture scored on fewer questions than its neighbour', () => {
+    // resolveQueries cannot see this: every id it holds IS in corpus.ts, there are just fewer of
+    // them - and no table column would have shown 4 questions beside 5.
+    const short = other({ queries: fixture.queries.slice(0, -1) });
+    expect(() => assertSameQuerySet([fixture, short])).toThrow(/different question sets/);
+  });
+
+  it('refuses two same-size fixtures whose question ids differ', () => {
+    // The count check a reader would reach for first passes here, which is why the compare is on sets.
+    const swapped = other({
+      queries: [...fixture.queries.slice(0, -1), { id: 'q05', vector: fixture.queries[0].vector }],
+    });
+    expect(swapped.queries).toHaveLength(fixture.queries.length);
+    expect(() => assertSameQuerySet([fixture, swapped])).toThrow(/different question sets/);
+  });
+
+  it('is enforced by compareArms, not only available to it', () => {
+    expect(() => compareArms([fixture, other({ queries: fixture.queries.slice(0, 2) })], [16])).toThrow(
+      /different question sets/
+    );
   });
 });
 
@@ -183,6 +212,20 @@ describe('ground-truth applicability in the report', () => {
 
   it('stays quiet when the ground truth does describe the corpus', () => {
     expect(formatComparison(compareArms([fixture], [16]))).not.toContain('GROUND TRUTH DOES NOT');
+    expect(formatComparison(compareArms([fixture], [16]))).not.toContain('ONLY PARTLY DESCRIBES');
+  });
+
+  it('names the coverage fraction when the corpus holds only part of the ground truth', () => {
+    // One shared slug passes the all-or-nothing flag above, and then recall is bounded by the
+    // corpus rather than by the model - which is the reading that flag exists to prevent.
+    const partial = other({
+      chunks: fixture.chunks.map((c, i) =>
+        c.docId === 'features/organizations-teams' ? c : { ...c, docId: `67f0a1b2c3d4e5f60000000${i % 10}` }
+      ),
+    });
+    const report = formatComparison(compareArms([partial], [16]));
+    expect(report).toContain('GROUND TRUTH ONLY PARTLY DESCRIBES THIS CORPUS (1 of 5 supporting documents');
+    expect(report).not.toContain('GROUND TRUTH DOES NOT DESCRIBE');
   });
 });
 
