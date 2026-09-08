@@ -25,6 +25,10 @@ import { useTranslation } from 'react-i18next';
 import { DATA_LAKES, isResearchRunInFlight, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
+  DuplicateBucket,
+  RepairDecision,
+  SourceIdentityTier,
+  MembershipRepairPlanRead,
   UpdateDataLakeRequestInputType,
   UpdateFallbackLakeSettingsRequestInputType,
 } from '@bike4mind/common';
@@ -109,6 +113,30 @@ export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) 
     staleTime: 1000 * 60 * 2,
     queryFn: async () => {
       const response = await api.get<LakeHealthApiResponse>(`/api/data-lakes/${dataLakeId}/health`);
+      return response.data;
+    },
+  });
+}
+
+/**
+ * One lake's unanswered duplicate groups (#2238): the same document held twice, narrowed to the
+ * groups no ruling has settled. The read the duplicate chip and its dialog render.
+ *
+ * A separate read from `useGetDataLakeHealth` rather than a slice of it, matching the routes: health
+ * is readable by anyone who can read the lake and is blind to rulings, while this is manage-gated and
+ * suppresses what an owner has already answered. `enabled` is how a caller declines to ask on a lake
+ * it knows it cannot manage - a mere reader gets a 4xx, and like the other manage-gated reads it does
+ * not retry that.
+ */
+export function useGetLakeMembershipDuplicates(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.membershipDuplicates(dataLakeId ?? ''),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
+    queryFn: async () => {
+      const response = await api.get<MembershipRepairPlanRead>(`/api/data-lakes/${dataLakeId}/membership-duplicates`);
       return response.data;
     },
   });
@@ -831,6 +859,8 @@ export function invalidateLakeFileMembershipQueries(
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
   // Membership changes the lake's reachable-content denominator and predicate tallies.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+  // Adding or removing a member can open a duplicate group or empty one out (#2238).
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.membershipDuplicates(dataLakeId) });
   // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
   // A membership write can reach activateIfDraft's draft -> active flip (see
@@ -910,6 +940,97 @@ export function useAddFileToDataLake() {
       const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
       const message = refusal || error.message || 'Failed to restore the file to the data lake';
       toast.error(message, toastId !== undefined ? { id: toastId } : undefined);
+    },
+  });
+}
+
+/**
+ * Hook: record the owner's answer to "this lake already holds this document" and carry it out
+ * (#2238). The question is raised by the same-identity check at the post-chunk admission
+ * checkpoint; this is the answer.
+ *
+ * `keep-newest` removes the older copies through the ordinary lake-scoped removal door, so the file
+ * survives in its owner's Files list and in every other lake, and the server mints the same
+ * short-TTL restore record every removal does. `keep-both` records the ruling and removes nothing,
+ * so a later repair run does not re-ask about a pair the owner deliberately kept. Cancelling is not
+ * an answer, so there is nothing to send for it - the caller simply closes the dialog.
+ *
+ * Offers Undo on the replacement toast for the same reason `useRemoveFileFromDataLake` does, and
+ * SPENDS the same records: `removedFabFileIds` names every member the ruling removed, and each one
+ * carries a short-TTL restore record on the server. That toast is the only affordance that can spend
+ * them (see UNDO_TOAST_DURATION_MS), and the dialog's copy promises it, so a plain success toast
+ * here would have made a destructive action irreversible for a non-owner in practice.
+ *
+ * Invalidates through `invalidateLakeFileMembershipQueries` rather than a bespoke list, because a
+ * `keep-newest` genuinely IS a membership change and stales exactly what a removal stales.
+ */
+export interface MembershipDecisionVariables {
+  dataLakeId: string;
+  fileName: string;
+  decision: RepairDecision;
+  /** Required for `keep-specific` and rejected for anything else - the server enforces both. */
+  keptFabFileId?: string | null;
+}
+
+export interface MembershipDecisionResponse {
+  success: true;
+  fileName: string;
+  decision: RepairDecision;
+  tier: SourceIdentityTier;
+  bucket: DuplicateBucket;
+  removedFabFileIds: string[];
+}
+
+export function useRecordMembershipDecision() {
+  const queryClient = useQueryClient();
+  const addFileToDataLake = useAddFileToDataLake();
+  return useMutation({
+    mutationFn: async ({ dataLakeId, fileName, decision, keptFabFileId }: MembershipDecisionVariables) => {
+      const res = await api.post<MembershipDecisionResponse>(`/api/data-lakes/${dataLakeId}/membership-decisions`, {
+        fileName,
+        decision,
+        ...(keptFabFileId ? { keptFabFileId } : {}),
+      });
+      return res.data;
+    },
+    onSuccess: (data, { dataLakeId }) => {
+      invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
+
+      const removed = data.removedFabFileIds;
+      if (removed.length === 0) {
+        // "every copy", not "both": a group of three is routine (the duplicated corpus this lane
+        // came from held several generations of one name), and there is nothing to undo here.
+        toast.success(`Kept every copy of "${data.fileName}". You will not be asked again unless they change.`);
+        return;
+      }
+
+      const toastId = toast.success(
+        `Replaced: ${removed.length} older ${removed.length === 1 ? 'copy' : 'copies'} of ` +
+          `"${data.fileName}" left this lake.`,
+        {
+          duration: UNDO_TOAST_DURATION_MS,
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              // One restore per removed member, and no per-call callbacks: this click routinely
+              // happens after the dialog holding the hook has unmounted, which is exactly when those
+              // are dropped. Every restore addresses THIS toast, so the last one to land - a success
+              // or a refusal - is what the manager is left reading. Sequential ordering is not
+              // needed: the restores are independent lake writes over distinct files.
+              for (const fabFileId of removed) {
+                addFileToDataLake.mutate({ dataLakeId, fabFileId, toastId });
+              }
+            },
+          },
+        }
+      );
+    },
+    onError: (error: Error) => {
+      // Surface the server's own refusal text: "You do not have permission to resolve duplicates in
+      // this data lake" and "That file name no longer has duplicate members in this data lake" are
+      // both actionable, and a status string is the one message that cannot help.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to record the decision');
     },
   });
 }
