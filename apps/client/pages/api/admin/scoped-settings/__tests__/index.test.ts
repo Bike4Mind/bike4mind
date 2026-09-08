@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ApiKeyScope } from '@bike4mind/common';
 
 // Keep @bike4mind/common real: the settingsMap, SettingKeySchema and HTTP error classes under test
 // are the actual ones. Mock only the infra + service + middleware seams.
@@ -28,7 +29,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     };
   }
-  return { baseApi: () => chain };
+  return {
+    baseApi: (config?: unknown) => {
+      chain.__config = config;
+      return chain;
+    },
+  };
 });
 
 import handler from '../index';
@@ -74,6 +80,12 @@ describe('admin/scoped-settings authorization', () => {
     expect(writeScopedOverride).not.toHaveBeenCalled();
     expect(clearScopedOverride).not.toHaveBeenCalled();
     expect(find).not.toHaveBeenCalled();
+  });
+
+  it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
+    // Pins the whole config object, not just requiredScopes - a sibling `auth: false` would skip
+    // baseApi's entire api-key chain and disable this gate while leaving requiredScopes untouched.
+    expect((handler as unknown as { __config?: unknown }).__config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
   });
 });
 

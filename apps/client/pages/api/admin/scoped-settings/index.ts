@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
-import { CreditHolderType, SettingKeySchema, SettingScopeLevel } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel } from '@bike4mind/common';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -16,6 +16,8 @@ import { BadRequestError, ensureAdmin } from '@server/utils/errors';
  * is the platform operator rather than a lake manager.
  *
  * Session/admin route, not a public API-key endpoint, so it carries no api-contract definition.
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key before req.user
+ * exists, so `ensureAdmin` still has to run per method for the session path.
  */
 
 // The override altitudes only. Rejecting `platform` structurally (rather than with a hand-written
@@ -85,7 +87,7 @@ const runWrite = async (write: () => Promise<void>): Promise<void> => {
   }
 };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     ensureAdmin(req.user?.isAdmin);
     // The whole collection in one read. It is small by design - a row exists only where an operator
