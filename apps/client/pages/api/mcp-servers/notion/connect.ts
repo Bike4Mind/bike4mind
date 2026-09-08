@@ -63,10 +63,7 @@ const handler = baseApi().get(async (req, res) => {
   authUrl.searchParams.set('owner', 'user'); // Request access to user's workspaces
   authUrl.searchParams.set('state', state);
 
-  console.log('[Notion Connect] OAuth Authorization URL Generated');
-  console.log('clientId:', clientId);
-  console.log('redirectUri:', redirectUri);
-  console.log('Full authUrl:', authUrl.toString());
+  console.log('[Notion Connect] OAuth authorization URL generated');
 
   return res.json({ authUrl: authUrl.toString(), state });
 });
