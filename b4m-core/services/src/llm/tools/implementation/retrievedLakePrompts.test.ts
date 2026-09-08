@@ -101,4 +101,36 @@ describe('prependRetrievedLakePrompts', () => {
     });
     expect(result).toContain('Sales playbook.');
   });
+
+  it('records preauthorizedLakeIdsUsed for an injected id drawn from the pre-authorized set', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'managed', name: 'Managed Lake', systemPrompt: 'Sales playbook.' },
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    const context = makeContext({ sessionPreauthorizedLakeIds: ['managed'] });
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:managed', 'datalake:ordinary'], new Set());
+
+    expect(context.statusUpdate).toHaveBeenCalledWith({
+      promptMeta: {
+        retrieval: {
+          attempted: true,
+          surfaces: [],
+          dataLakeTags: [],
+          injectedLakePromptIds: ['managed', 'ordinary'],
+          preauthorizedLakeIdsUsed: ['managed'],
+        },
+      },
+    });
+  });
+
+  it('omits preauthorizedLakeIdsUsed when no injected id came from the pre-authorized set', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    const context = makeContext();
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:ordinary'], new Set());
+
+    const call = (context.statusUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect('preauthorizedLakeIdsUsed' in call.promptMeta.retrieval).toBe(false);
+  });
 });

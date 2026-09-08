@@ -98,6 +98,19 @@ describe('POST /api/sessions/create - preauthorizedLakeIds', () => {
     expect(h.sessionUpdate).toHaveBeenCalledWith({ id: 's1', preauthorizedLakeIds: [LAKE_ID] });
   });
 
+  it('rejects a lake that resolves but is not active', async () => {
+    h.findById.mockResolvedValue({ id: LAKE_ID, status: 'draft', createdByUserId: 'other', organizationId: 'org1' });
+    h.resolveCanManageLake.mockResolvedValue(true);
+    const { res } = makeRes();
+
+    await expect(run(post({ name: 'N', preauthorizedLakeIds: [LAKE_ID] }), res)).rejects.toThrow(
+      `Data lake ${LAKE_ID} not found`
+    );
+    // The manage check runs after the status test and is mocked to PASS here, so the refusal can
+    // only have come from the status guard - not from a manage failure wearing the same message.
+    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+  });
+
   it('rejects the request when the caller does not manage the lake, rather than dropping the id', async () => {
     h.resolveCanManageLake.mockResolvedValue(false);
     const { res } = makeRes();
@@ -181,5 +194,47 @@ describe('POST /api/sessions/create - preauthorizedLakeIds', () => {
 
     expect(h.resolveCanManageLake).not.toHaveBeenCalled();
     expect(h.sessionUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/sessions/create - preauthorizedLakeIds API key containment', () => {
+  const postAsApiKey = (body: Record<string, unknown>, apiKeyInfo: { preauthorizedLakeIds?: string[] }) =>
+    ({ method: 'POST', user: { id: 'u1' }, ability: {}, body, apiKeyInfo }) as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createSession.mockResolvedValue({ id: 's1', name: 'New Notebook', knowledgeIds: [], agentIds: [] });
+    h.findByIdAndUpdate.mockResolvedValue(undefined);
+    h.findIdsWithAdminRights.mockResolvedValue([]);
+    h.findById.mockResolvedValue({ id: LAKE_ID, status: 'active', createdByUserId: 'other', organizationId: 'org1' });
+    h.sessionUpdate.mockResolvedValue({ preauthorizedLakeIds: [LAKE_ID] });
+    h.resolveCanManageLake.mockResolvedValue(true);
+  });
+
+  it('rejects a lake the API key is not bound to, even though the underlying user manages it', async () => {
+    const { res } = makeRes();
+
+    await expect(
+      run(postAsApiKey({ name: 'N', preauthorizedLakeIds: [LAKE_ID] }, { preauthorizedLakeIds: [MISSING_ID] }), res)
+    ).rejects.toThrow(`This API key is not bound to data lake ${LAKE_ID}`);
+    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+    expect(h.createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a lake entirely when the key carries no preauthorizedLakeIds binding at all', async () => {
+    const { res } = makeRes();
+
+    await expect(run(postAsApiKey({ name: 'N', preauthorizedLakeIds: [LAKE_ID] }, {}), res)).rejects.toThrow(
+      `This API key is not bound to data lake ${LAKE_ID}`
+    );
+  });
+
+  it('admits a lake the API key is bound to, still subject to the manage check', async () => {
+    const { res } = makeRes();
+
+    await run(postAsApiKey({ name: 'N', preauthorizedLakeIds: [LAKE_ID] }, { preauthorizedLakeIds: [LAKE_ID] }), res);
+
+    expect(h.resolveCanManageLake).toHaveBeenCalled();
+    expect(h.sessionUpdate).toHaveBeenCalledWith({ id: 's1', preauthorizedLakeIds: [LAKE_ID] });
   });
 });

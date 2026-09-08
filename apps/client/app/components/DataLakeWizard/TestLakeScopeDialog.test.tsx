@@ -6,7 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
-type MockLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean };
+type MockLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean; canPreauthorize?: boolean };
 
 const useGetDataLakesMock = vi.fn<
   [],
@@ -22,8 +22,8 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
 );
 
 const LAKES: MockLake[] = [
-  { id: 'lake-a', name: 'Alpha Lake', datalakeTag: 'datalake:alpha' },
-  { id: 'lake-b', name: 'Beta Lake', datalakeTag: 'datalake:beta', isOwn: false },
+  { id: 'lake-a', name: 'Alpha Lake', datalakeTag: 'datalake:alpha', canPreauthorize: true },
+  { id: 'lake-b', name: 'Beta Lake', datalakeTag: 'datalake:beta', isOwn: false, canPreauthorize: false },
 ];
 
 beforeEach(() => {
@@ -45,7 +45,50 @@ describe('TestLakeScopeDialog', () => {
     expect(screen.getByTestId('test-lake-scope-checkbox-lake-b').querySelector('input')).not.toBeChecked();
 
     await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
-    expect(onConfirm).toHaveBeenCalledWith(['datalake:alpha']);
+    expect(onConfirm).toHaveBeenCalledWith({
+      retrievalTags: ['datalake:alpha'],
+      preauthorizedLakeIds: ['lake-a'],
+    });
+  });
+
+  it('admits only the checked lakes the caller may pre-authorize, while scoping retrieval to all of them', async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-a" onClose={vi.fn()} onConfirm={onConfirm} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('test-lake-scope-checkbox-lake-b').querySelector('input')!);
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+
+    // Both lakes narrow retrieval; only lake-a is admitted. Sending lake-b would 403 the whole
+    // request at /api/sessions/create, taking the working lake-a scoping down with it.
+    expect(onConfirm).toHaveBeenCalledWith({
+      retrievalTags: ['datalake:alpha', 'datalake:beta'],
+      preauthorizedLakeIds: ['lake-a'],
+    });
+  });
+
+  it('confirms with no admission when the caller may pre-authorize none of the checked lakes', async () => {
+    // The platform-admin-only maintainer: canManage would be true for these, canPreauthorize is not.
+    useGetDataLakesMock.mockReturnValue({
+      data: [{ id: 'lake-a', name: 'Alpha Lake', datalakeTag: 'datalake:alpha', canPreauthorize: false }],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-a" onClose={vi.fn()} onConfirm={onConfirm} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('test-lake-scope-confirm-btn'));
+    expect(onConfirm).toHaveBeenCalledWith({ retrievalTags: ['datalake:alpha'], preauthorizedLakeIds: [] });
   });
 
   it('marks a not-owned lake with the owner icon', () => {

@@ -424,6 +424,24 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   isOwn: boolean;
   /**
+   * Whether the caller may name this lake in `preauthorizedLakeIds` at session create - i.e. the
+   * manage-but-not-member admission that lets a maintainer ground a scoped session on a lake the
+   * ordinary tag/entitlement gate would not give them.
+   *
+   * NOT the same predicate as `canManage`, and the difference is the point: this one is resolved
+   * with `isAdmin: false`, exactly as `pages/api/sessions/create.ts` and `filterStillManagedLakes`
+   * both resolve it. Platform-admin is deliberately not an admission rung there (the admission
+   * widens FILE retrieval, not just prompt injection - see unionPreauthorizedLakeAccess), so a
+   * platform admin who holds no other rung on the lake gets `canManage: true` and
+   * `canPreauthorize: false`. The UI must gate the admission on THIS field: gating on `canManage`
+   * would send ids the route rejects with a 403.
+   *
+   * REQUIRED for the same reason as `isOwn`: a projection that forgot it would silently send no
+   * admission and reintroduce the bug with a green typecheck. Built-in fallback lakes have no
+   * document (session-create resolves ids via `findById`), so `false`.
+   */
+  canPreauthorize: boolean;
+  /**
    * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
    * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
    * manager list route) - the content-scope resolver and Slack omit it and pay for no extra

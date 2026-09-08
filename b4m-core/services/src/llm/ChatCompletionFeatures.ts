@@ -1827,6 +1827,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         { db, user, entitlementKeys, logger: this.logger },
         { restrictToDatalakeTags: datalakeTags, preauthorizedLakeIds: this.preauthorizedLakeIds }
       );
+      const preauthorizedSet = new Set(this.preauthorizedLakeIds);
+      const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
       quest.promptMeta = quest.promptMeta ?? {};
@@ -1835,6 +1837,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         surfaces: [],
         dataLakeTags: [],
         injectedLakePromptIds: prompts.map(p => p.id),
+        ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;

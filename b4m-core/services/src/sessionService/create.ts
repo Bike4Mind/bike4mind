@@ -30,8 +30,10 @@ const createSessionParametersSchema = z.object({
   disableUserIntegrations: z.boolean().optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
-  // Resolved from the lake at the create route (resolveLakeSessionDefaults), NOT client-supplied:
-  // the route deletes any client-sent value before merging, so the lake is authoritative for it.
+  // Resolved from the lake at the create route (resolveLakeSessionDefaults) whenever `dataLakeId`
+  // is set: the route deletes the client-sent value there, so the lake is authoritative. A session
+  // that names a lake ONLY by `retrievalTags` keeps the caller's own mode, having no lake-defaults
+  // merge for it to override.
   // secureParameters strips unknown keys, so it MUST be declared here or the resolved grounding mode
   // is silently dropped and the completion path falls back to size-only behavior.
   corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
