@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { menuItemClasses } from '@mui/joy/MenuItem';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeLakePicker from './DataLakeLakePicker';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
@@ -176,6 +177,36 @@ describe('DataLakeLakePicker', () => {
 
     // A bare total under a single visible row reads as a stale count.
     expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('1 of 8 lakes');
+  });
+
+  // menuItemListSx reaches these rows through a `[role="menuitem"]` selector and marks the
+  // selected one off `.Mui-selected`, so both are load-bearing: a Joy change to either would
+  // silently drop the picker's rows back to Joy's neutral defaults.
+  it('renders its rows as menuitems, the hook the shared row recipe styles them through', () => {
+    renderPicker({
+      lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
+      selectedLakeId: 'a',
+    });
+    openMenu();
+
+    const selected = screen.getByTestId('datalake-lake-picker-lake-a');
+    expect(selected).toHaveAttribute('role', 'menuitem');
+    expect(selected).toHaveClass(menuItemClasses.selected);
+    expect(screen.getByTestId('datalake-lake-picker-lake-b')).not.toHaveClass(menuItemClasses.selected);
+  });
+
+  it('leaves the menu chrome off the row recipe, so only real rows pick up the row states', () => {
+    const lakes = Array.from({ length: 8 }, (_, i) => lake({ id: `l${i}`, name: `Lake ${i}` }));
+    renderPicker({ lakes });
+    openMenu();
+
+    // Joy gives a ListItem inside a Menu role="none"; the filter box and the count chip ride on
+    // those, so the [role="menuitem"] rule never reaches them.
+    const chrome = [
+      screen.getByTestId('datalake-lake-picker-search').closest('li'),
+      screen.getByTestId('datalake-lake-picker-lake-count').closest('li'),
+    ];
+    chrome.forEach(el => expect(el).not.toHaveAttribute('role', 'menuitem'));
   });
 
   it('lets the trigger label inherit the button color, which the themed body-sm default does not', () => {

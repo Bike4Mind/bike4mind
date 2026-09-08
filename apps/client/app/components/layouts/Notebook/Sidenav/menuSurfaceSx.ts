@@ -1,4 +1,5 @@
 import type { Theme } from '@mui/joy/styles';
+import { menuItemClasses } from '@mui/joy/MenuItem';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 
 /**
@@ -15,7 +16,7 @@ const MENU_INSET = '8px';
  * panel and the Data Lake menus use 8px, the More flyout 12px.
  *
  * Anything on this ground that renders as a Joy List - a Menu, a Select listbox - wants
- * menuListSx too, and a Select's listbox wants selectListboxSx.
+ * menuListSx too, and its rows want selectListboxSx (a Select) or menuItemListSx (a Menu).
  */
 export const menuSurfaceSx = (theme: Theme, radius = '8px') => ({
   backgroundColor: theme.palette.background.surface,
@@ -65,7 +66,8 @@ export const menuListSx = ({ gap = '4px' }: { gap?: string } = {}) => ({
  * declaration that outweighs Joy's `:active` on specificity.
  *
  * Scoped to [role="option"], so spreading it on a Joy Menu is inert - Menu rows are
- * role="menuitem" and take menuRowSx per item, which owns the danger variant too.
+ * role="menuitem" and take menuItemListSx, or menuRowSx per item where a row wants the fixed
+ * icon + label geometry (and the danger variant) too.
  *
  * Not every Select in the app belongs here: the model-filter, file-browser and upload dropdowns
  * (Session/ModelSelection, Files/Browser/MobileSearchFilter, Files/Browser/UploadActionsSelect)
@@ -87,6 +89,41 @@ export const selectListboxSx = (theme: Theme, opts?: { gap?: string }) => ({
       // than a different colour. (Nothing repaints on press - plainActive carries no `color`.)
       color: 'inherit',
     },
+    '&:focus-visible': {
+      outline: `2px solid ${theme.palette.primary[500]}`,
+      outlineOffset: '-2px',
+    },
+  },
+});
+
+/**
+ * The [role="menuitem"] mirror of selectListboxSx: a Joy Menu's rows on a menuSurfaceSx ground.
+ * selectListboxSx is inert on these - Menu rows are menuitem, not option - which is how menus
+ * sitting on the same ground ended up marking their rows differently.
+ *
+ * Sets no geometry on purpose, so it tolerates rows that are not menuRowSx's single 40px
+ * icon + label line: the lake picker's are two-line, with a decorator and a trailing count.
+ *
+ * Hover and press go through Joy's variables because Joy's own ListItemButton rules outrank a
+ * bare `&:hover` here. The selected row cannot: Joy paints `.Mui-selected` from the plainActive
+ * variant as well, so pointing that variable at the hover ground alone would erase the selected
+ * marker. It is a plain declaration, which outweighs Joy's variant rule on specificity.
+ *
+ * A per-item sx CANNOT override what this sets - `.menu [role="menuitem"]` outranks the row's
+ * own class - so a menu with per-row grounds (rowActionsMenu's destructive row) stays on
+ * menuRowSx per item instead. Joy gives a ListItem inside a Menu role="none", so a menu's
+ * non-row content (the lake picker's filter box, skeletons and count chip) is untouched.
+ */
+export const menuItemListSx = (theme: Theme, opts?: { gap?: string }) => ({
+  ...menuListSx(opts),
+  '& [role="menuitem"]': {
+    transition: 'background 0.15s',
+    '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+    '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+    // The ground is the whole marker here. selectListboxSx can add a bold weight because a Select
+    // Option's label is bare text; these rows label themselves with a Joy Typography, whose own
+    // fontWeight declaration beats anything inherited from the row.
+    [`&.${menuItemClasses.selected}`]: { backgroundColor: theme.palette.notebooklist.focusedBackground },
     '&:focus-visible': {
       outline: `2px solid ${theme.palette.primary[500]}`,
       outlineOffset: '-2px',

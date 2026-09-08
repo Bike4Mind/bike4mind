@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { extendTheme } from '@mui/joy/styles';
+import { menuItemClasses } from '@mui/joy/MenuItem';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { menuListSx, menuRowSx, menuSurfaceSx, selectListboxSx } from './menuSurfaceSx';
+import { menuItemListSx, menuListSx, menuRowSx, menuSurfaceSx, selectListboxSx } from './menuSurfaceSx';
 
 const theme = extendTheme({ ...getThemeConfig() });
 
@@ -66,6 +67,42 @@ describe('selectListboxSx', () => {
   });
 });
 
+describe('menuItemListSx', () => {
+  const rowSx = menuItemListSx(theme)['& [role="menuitem"]'];
+
+  it('keeps the list tokens it layers on', () => {
+    expect(menuItemListSx(theme)['--List-gap']).toBe('4px');
+    expect(menuItemListSx(theme, { gap: '2px' })['--List-gap']).toBe('2px');
+  });
+
+  it('routes hover and press through the variables Joy actually paints from', () => {
+    expect(rowSx['--variant-plainHoverBg']).toBe(theme.palette.notebooklist.hoverBg);
+    expect(rowSx['--variant-plainActiveBg']).toBe(theme.palette.notebooklist.hoverBg);
+  });
+
+  // Joy paints .Mui-selected from the plainActive variant too, so the selected ground has to be a
+  // plain declaration - through the variable it would collapse onto the hover ground.
+  it('marks the selected row by its own ground, not by the press variable', () => {
+    expect(rowSx[`&.${menuItemClasses.selected}`]).toMatchObject({
+      backgroundColor: theme.palette.notebooklist.focusedBackground,
+    });
+    expect(theme.palette.notebooklist.focusedBackground).not.toBe(rowSx['--variant-plainActiveBg']);
+  });
+
+  // The two-line lake picker rows are the reason this exists rather than menuRowSx: a fixed
+  // height, padding or gap here would crop them.
+  it('sets no row geometry, so a two-line row with a decorator and a count still fits', () => {
+    expect(Object.keys(rowSx)).not.toContain('height');
+    expect(Object.keys(rowSx)).not.toContain('px');
+    expect(Object.keys(rowSx)).not.toContain('gap');
+  });
+
+  it('styles menuitem rows only, so it is inert on a Select listbox (rows are role="option")', () => {
+    const roleSelectors = Object.keys(menuItemListSx(theme)).filter(key => key.includes('role='));
+    expect(roleSelectors).toEqual(['& [role="menuitem"]']);
+  });
+});
+
 describe('menuRowSx', () => {
   // Joy's ListItemButton carries an unconditional `&:active` painted from --variant-plainActiveBg.
   // Unset, it falls through to neutral.plainActiveBg, which this theme tints brand blue, so a
@@ -87,5 +124,13 @@ describe('menuRowSx', () => {
     expect(dangerRow['--variant-plainHoverBg']).toBe(theme.palette.danger.plainHoverBg);
     expect(dangerRow['--variant-plainActiveBg']).toBe(theme.palette.danger.plainHoverBg);
     expect(dangerRow['&:hover'].backgroundColor).toBe(theme.palette.danger.plainHoverBg);
+  });
+
+  // Both halves of the menuitem recipe sit on the same ground, so a plain row marks a press the
+  // same way whichever one styles it.
+  it('agrees with menuItemListSx on the press ground', () => {
+    expect(menuRowSx(theme)['--variant-plainActiveBg']).toBe(
+      menuItemListSx(theme)['& [role="menuitem"]']['--variant-plainActiveBg']
+    );
   });
 });

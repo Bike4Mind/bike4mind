@@ -35,8 +35,9 @@ const TRIGGER_SX = {
 const MENU_ICON_FRAME_SX = { ...MENU_ROW_ICON_SX, width: 20, height: 20 } as const;
 
 /**
- * One item in a row's action menu, styled like the profile menu's rows, which now carry the Joy
- * hover and press variables themselves - so this only has to state where it DIVERGES from them.
+ * One item in a row's action menu, styled like the profile menu's rows. Stays on menuRowSx per
+ * item rather than the menu-wide menuItemListSx: the destructive row wants its own ground, and a
+ * list-scoped `[role="menuitem"]` rule would outrank anything set here.
  */
 export function RowMenuItem({
   testId,
