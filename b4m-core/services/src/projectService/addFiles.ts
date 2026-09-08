@@ -7,6 +7,7 @@ import {
   Permission,
   secureParameters,
   BadRequestError,
+  NotFoundError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { pushShareable } from '../sharingService';
@@ -38,7 +39,11 @@ export const addFiles = async (
   // this predicate returns a hydrated document where findAccessibleById did not, and `project` is
   // handed to db.projects.update below.
   const found = await db.projects.shareable.findUpdateAccessById(user, projectId);
-  if (!found) throw new Error('Project not found');
+  // NotFoundError, not a bare Error: this refusal is routine and user-triggerable - a read-only
+  // sharee clicking the button reaches it - and a bare Error is a 500 that pages LiveOps. 404
+  // rather than 403 for the same reason every other door in this service answers 404: it does not
+  // tell a caller whether a project they cannot reach exists.
+  if (!found) throw new NotFoundError('Project not found');
 
   const project = (
     typeof (found as { toJSON?: unknown }).toJSON === 'function'

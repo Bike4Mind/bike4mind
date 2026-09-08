@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 import { removeSystemPrompts } from './removeSystemPrompts';
 import { createShareableFake } from '../__tests__/utils/shareableFake';
 
@@ -40,7 +40,7 @@ describe('removeSystemPrompts authorization', () => {
         { projectId: 'project-1', fileIds: ['file-1'] },
         adapters as any
       )
-    ).rejects.toThrow('Project not found');
+    ).rejects.toThrow(NotFoundError);
 
     expect(project.systemPrompts).toEqual([{ fileId: 'file-1', enabled: true }]);
     expect(projectUpdate).not.toHaveBeenCalled();

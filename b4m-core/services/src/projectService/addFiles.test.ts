@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { addFiles } from './addFiles';
 import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
-import { IFabFileRepository, IProjectRepository, IUserDocument, Permission } from '@bike4mind/common';
+import { IFabFileRepository, IProjectRepository, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 
 // TODO: Skipped temporarily due to test failures that need fixing
 describe.skip('projectService - addFiles', () => {
@@ -92,9 +92,7 @@ describe.skip('projectService - addFiles', () => {
     const mockUser = { id: contributorId } as IUserDocument;
     (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(null);
 
-    await expect(addFiles(mockUser, { projectId: 'any', fileIds: ['any'] }, adapters)).rejects.toThrow(
-      'Project not found'
-    );
+    await expect(addFiles(mockUser, { projectId: 'any', fileIds: ['any'] }, adapters)).rejects.toThrow(NotFoundError);
   });
 
   it('should throw error when some files are not accessible', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 import { addFiles } from './addFiles';
 import { createShareableFake } from '../__tests__/utils/shareableFake';
 
@@ -40,7 +40,7 @@ describe('addFiles authorization', () => {
 
     await expect(
       addFiles({ id: SHAREE } as IUserDocument, { projectId: 'project-1', fileIds: ['file-1'] }, adapters as any)
-    ).rejects.toThrow();
+    ).rejects.toThrow(NotFoundError);
 
     expect(project.fileIds).toEqual([]);
     expect(projectUpdate).not.toHaveBeenCalled();
