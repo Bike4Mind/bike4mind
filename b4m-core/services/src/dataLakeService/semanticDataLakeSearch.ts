@@ -36,6 +36,13 @@ import {
   partitionByIndexAvailability,
   type RetrievalUnavailableReport,
 } from './retrievalUnavailable';
+import {
+  buildSupersessionReport,
+  emptySupersessionReport,
+  partitionBySupersession,
+  type SupersessionReport,
+} from './supersession';
+import type { AttributableLake } from './attributeAccessedLakes';
 import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
 import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
@@ -191,6 +198,14 @@ export interface SemanticDataLakeSearchResult {
    * contribute nothing while its neighbours are re-ranked into the top-K (#1681 constraint 1).
    */
   retrievalUnavailable: RetrievalUnavailableReport;
+  /**
+   * The third reason a search returns less than the whole corpus, alongside `embeddingMismatch`
+   * (could not be COMPARED) and `retrievalUnavailable` (could not be SERVED): older generations of
+   * a document the same lake also holds a newer generation of, dropped before the chunk scan so the
+   * recovered budget goes to other files. Always empty unless the caller opted in - see
+   * `supersessionCollapseEnabled`.
+   */
+  supersession: SupersessionReport;
   /** Same value as `scan.filesScoped`; retained for existing consumers. */
   filesInScope: number;
   embeddingModel: string;
@@ -282,6 +297,20 @@ export interface SemanticDataLakeSearchParams {
    * now (a queryable Atlas index, or self-host OpenSearch enabled) - see rankChunksForFiles.
    */
   vectorSearchEnabled?: boolean;
+  /**
+   * The caller's resolved lakes, used ONLY to attribute a scoped file back to one lake so
+   * supersession can group per lake (see supersession.ts). Never a second way to resolve access:
+   * this module still takes its scope from `dataLakeTags`/`dataLakeTagPrefixes` exactly as before,
+   * and omitting this simply means nothing is attributable and nothing collapses.
+   */
+  lakes?: AttributableLake[];
+  /**
+   * Server-side gate for supersession collapse (admin setting
+   * `EnableRetrievalSupersessionCollapse`) - the caller reads it, not this module, matching
+   * `vectorSearchEnabled` above. Off by default: every caller that omits this (or omits `lakes`)
+   * keeps today's behavior byte-for-byte.
+   */
+  supersessionCollapseEnabled?: boolean;
   logger?: Logger;
 }
 
@@ -328,6 +357,22 @@ interface RankableFile {
   /** A requested-but-uncommitted passage rebuild (#1939) - the only in-flight signal a CHUNKLESS
    *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
   chunkRebuildRequestedAt?: Date | string | null;
+  /**
+   * These two, plus `createdAt` above, are the source-identity key supersession collapse groups on,
+   * read there ONLY by `partitionBySupersession`. `createdAt` is shared with the passage header
+   * rather than declared twice - it is the recency signal here and the document date there, and one
+   * field serving both is why a builder that drops it breaks two features at once. Both builders
+   * below populate all three even though only the lake-scoped entrypoint opts into the collapse -
+   * see the note at each builder.
+   */
+  relativePath?: string;
+  driveFileId?: string;
+  /**
+   * The file's owner, read by the collapse's ATTRIBUTION rather than its key: a dynamic lake's
+   * content-tag prefix identifies a lake only when the lake's creator owns the file. Omitting it
+   * fails quiet - the collapse silently narrows to meta-tagged members - so both builders carry it.
+   */
+  userId?: string;
 }
 
 /**
@@ -396,6 +441,7 @@ function emptyResult(
     embeddingModel,
     embeddingMismatch: emptyEmbeddingMismatchReport(),
     retrievalUnavailable: emptyRetrievalUnavailableReport(),
+    supersession: emptySupersessionReport(),
     scan: { ...emptyScanAccounting(budgets), ...overrides },
     alternateModelsEmbedded: [],
   };
@@ -631,6 +677,12 @@ async function rankChunksForFiles(args: {
   filesMatching: number;
   fileBudgetHit: boolean;
   vectorSearchEnabled: boolean;
+  /**
+   * Opt-in to per-lake supersession collapse. Present only from `semanticDataLakeSearch`;
+   * `fileScopedSemanticSearch` deliberately never passes it (see the note at its builder), so the
+   * collapse cannot reach a curated allow-list by accident.
+   */
+  supersession?: { lakes: AttributableLake[] };
   logger?: Logger;
   fabfilechunks: FabFileChunksAdapter;
   vectorIndex?: OpenSearchVectorSearchAdapters;
@@ -665,6 +717,7 @@ async function rankChunksForFiles(args: {
     return {
       id,
       fileName: file?.fileName,
+      fileTags: file?.fileTags ?? [],
       embeddingModel: file?.embeddingModel,
       vectorizedChunkCount: file?.vectorizedChunkCount,
       chunkEmbeddingModelStampedAt: file?.chunkEmbeddingModelStampedAt,
@@ -673,6 +726,13 @@ async function rankChunksForFiles(args: {
       chunkStallReason: file?.chunkStallReason,
       notes: file?.notes,
       chunkRebuildRequestedAt: file?.chunkRebuildRequestedAt,
+      // Source identity for the supersession collapse below. `fileTags` above and `userId` here are
+      // what attribute the file to a lake (a dynamic lake's prefix arm is creator-anchored), so they
+      // belong to the same partition and are not the mismatch projection's concern.
+      relativePath: file?.relativePath,
+      driveFileId: file?.driveFileId,
+      createdAt: file?.createdAt,
+      userId: file?.userId,
     };
   });
   // Refuse mid-(re)index files BEFORE anything else looks at them (#1681 constraint 1). Their old
@@ -688,7 +748,29 @@ async function rankChunksForFiles(args: {
       { fileIds: reindexing.slice(0, 5).map(f => f.id) }
     );
   }
-  const { primary: rankable, alternates } = groupFilesByEmbeddingModel(scopedFiles, embeddingModel);
+  const { primary: modelMatchedFiles, alternates } = groupFilesByEmbeddingModel(scopedFiles, embeddingModel);
+  // Collapse superseded generations AFTER BOTH partitions above, never before. The invariant is
+  // that a winner which cannot actually be served must never suppress a sibling that can, or the
+  // lake contributes NOTHING for that document where today the older generation still ranks:
+  //  - availability: a newest generation that is mid-(re)index is withheld above and carries no
+  //    vectors at all;
+  //  - embedding model: only the query model's bucket is scanned. The alternate buckets reach the
+  //    ANN phase below ONLY when `vectorSearchEnabled` is set, and that setting is off by default,
+  //    so on the default deployment a foreign-model file is a hard DROP rather than a deferral.
+  // Same ordering, for the same reason, as the forced-retrieval path in ChatCompletionFeatures.
+  //
+  // Collapsing the primary bucket alone can therefore MISS a collapse (two generations that are
+  // both foreign-model and both ANN-served rank together). That is the safe direction: it serves a
+  // duplicate rather than dropping a document, which is the trade this whole module makes.
+  const { servable: rankable, superseded } = args.supersession
+    ? partitionBySupersession(modelMatchedFiles, args.supersession)
+    : { servable: modelMatchedFiles, superseded: [] };
+  const supersession = buildSupersessionReport(superseded);
+  if (superseded.length > 0) {
+    logger?.warn?.(`[semanticSearch] suppressed ${superseded.length} superseded file(s) before ranking`, {
+      superseded: supersession.sample,
+    });
+  }
   // Foreign-model files no path has served (yet). Filtering `scopedFiles` (rather than
   // concatenating the grouper's alternate buckets) preserves scope order, so `excludedFiles.sample`
   // stays byte-identical to before this cutover on any lake with no served alternates. `served` is
@@ -711,6 +793,7 @@ async function rankChunksForFiles(args: {
       ...emptyResult(embeddingModel, budgets, { filesMatching: args.filesMatching, filesScoped: fileIds.length }),
       embeddingMismatch: mismatch.report(),
       retrievalUnavailable,
+      supersession,
     };
   }
 
@@ -984,6 +1067,7 @@ async function rankChunksForFiles(args: {
     chunksScored: scanned.chunksScored,
     embeddingMismatch: mismatchReport,
     retrievalUnavailable,
+    supersession,
     embeddingModel,
     scan,
     alternateModelsEmbedded,
@@ -1066,6 +1150,13 @@ export async function semanticDataLakeSearch(
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.
         chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
+        // Source identity for the supersession collapse - with `createdAt` above, which the passage
+        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
+        // the collapse today, but a builder that quietly stopped carrying these would make the
+        // collapse a silent no-op rather than an error.
+        relativePath: f.relativePath,
+        driveFileId: f.driveFileId,
+        userId: f.userId,
       },
     ])
   );
@@ -1082,6 +1173,9 @@ export async function semanticDataLakeSearch(
     filesMatching: scoped.filesMatching,
     fileBudgetHit: scoped.fileBudgetHit,
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
+    // Both halves are required: the flag alone with no lakes could not attribute anything, and
+    // lakes alone would collapse behind an admin's back.
+    supersession: params.supersessionCollapseEnabled && params.lakes?.length ? { lakes: params.lakes } : undefined,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
     vectorIndex: adapters.vectorIndex,
@@ -1144,6 +1238,14 @@ export async function fileScopedSemanticSearch(
   const withinBudget = ordered.slice(0, budgets.maxFiles);
   const fileBudgetHit = ordered.length > withinBudget.length;
 
+  // No supersession collapse here, deliberately. A curated kbScope is an explicit allow-list - a
+  // human chose these ids - and silently dropping some of them overrides that curation, a worse
+  // failure than showing a near-duplicate. This path also has no lake context at all, so the
+  // collapse would be a guaranteed no-op anyway (an unattributable member groups only with itself).
+  // The identity fields are still populated below so the two builders stay symmetric; see the
+  // comment there. If duplicate curation ever becomes a real complaint it belongs to the curation
+  // layer, not to this seam.
+
   const fileById = new Map<string, RankableFile>(
     withinBudget.map(f => [
       f.id,
@@ -1165,6 +1267,13 @@ export async function fileScopedSemanticSearch(
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.
         chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
+        // Source identity for the supersession collapse - with `createdAt` above, which the passage
+        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
+        // the collapse today, but a builder that quietly stopped carrying these would make the
+        // collapse a silent no-op rather than an error.
+        relativePath: f.relativePath,
+        driveFileId: f.driveFileId,
+        userId: f.userId,
       },
     ])
   );

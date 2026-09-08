@@ -113,7 +113,11 @@ export interface ExportedArtifact {
   id: string;
   name: string;
   type: string;
-  /** Optional: the artifact body lives in a separate collection and is not joined by this export. */
+  /**
+   * The artifact body, joined from its own collection at the version the artifact points at.
+   * Optional only because a body can be missing at source; an artifact without one cannot be
+   * imported, since `contentHash`/`contentSize`/`contentId` are all derived from it.
+   */
   content?: string;
   createdAt: string; // ISO timestamp
   updatedAt: string; // ISO timestamp
@@ -181,9 +185,10 @@ export interface NotebookExportOptions {
   includeImages: boolean; // Embed images as base64
   maxFileSize: number; // Max size for embedded files (bytes)
 
-  // Date range filtering
-  fromDate?: string; // ISO timestamp
-  toDate?: string; // ISO timestamp
+  // Date range filtering. Either a full ISO timestamp or a bare "2026-01-15"; a bare date at
+  // `toDate` covers that whole day, so the two forms are ~24h apart at the top of the range.
+  fromDate?: string;
+  toDate?: string;
 }
 
 // Processing result types
@@ -220,7 +225,19 @@ export const CURRENT_EXPORT_VERSION = '1.0.0';
 export const SUPPORTED_IMPORT_VERSIONS = ['1.0.0'];
 
 // Error types
+/**
+ * Status per failure code, following the same rule the HTTP error handler uses: below 500 is the
+ * caller's condition and logs at `warn`, 500 and above is ours and pages. Carried on the error so
+ * the service and the route both read it, rather than each keeping its own copy of the list.
+ */
+const STATUS_BY_CODE = new Map<string, number>([
+  ['NO_NOTEBOOKS', 404],
+  ['INVALID_NOTEBOOK_ID', 400],
+]);
+
 export class NotebookExportError extends Error {
+  public readonly statusCode: number;
+
   constructor(
     message: string,
     public code: string,
@@ -228,6 +245,7 @@ export class NotebookExportError extends Error {
   ) {
     super(message);
     this.name = 'NotebookExportError';
+    this.statusCode = STATUS_BY_CODE.get(code) ?? 500;
   }
 }
 

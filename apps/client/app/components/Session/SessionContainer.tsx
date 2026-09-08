@@ -7,7 +7,7 @@ import SessionBottom from './SessionBottom';
 import SessionMiddle from './SessionMiddle';
 import SessionTop from './SessionTop';
 import NotebookSplash from './NotebookSplash';
-import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { setSessionLayout, type DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookFilepond } from '@client/app/components/Session/NotebookFilepondProvider';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import KnowledgeViewer from '../Knowledge/KnowledgeViewer';
@@ -48,6 +48,20 @@ export function shouldAttemptSessionOpen(
   return (
     !isLoading && !!currentSessionId && currentSessionId !== contextSessionId && currentSessionId !== attemptedSessionId
   );
+}
+
+/**
+ * The single predicate for the desktop side-by-side split (KnowledgeViewer beside the chat).
+ * The chat's 56px app-chrome band, the ResizableSplitter, and the inter-pane padding all derive
+ * from it - so a mobile split (collapsed to a stack) and every non-vertical layout get none of them.
+ *
+ * A positive `=== 'vertical'` check, deliberately: a NEW `DefaultLayoutType` member is false here by
+ * default. This is exactly the property the old band predicate lacked - it was a `layout !== ...`
+ * negative chain, so `horizontal`/`pip` silently fell into the true case (#2304). Exported and
+ * table-tested so that regression cannot re-enter as the union grows.
+ */
+export function shouldShowChromeBand(layout: DefaultLayoutType, isMobile: boolean): boolean {
+  return layout === 'vertical' && !isMobile;
 }
 
 interface SessionLayoutProps {
@@ -429,12 +443,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
 
   // The side-by-side split (KnowledgeViewer beside the chat). Mobile collapses it to a
   // stack, so it is not one there.
-  const isVerticalSplit = layout === 'vertical' && !isMobile;
-  // Mirrors the guard on the KnowledgeViewer Box below: where that renders, the chat's own
-  // top bar has a header to line up with, so it joins the app-chrome band (56px, level1
-  // ground, 16px gutters, contents centred vertically). In the default full-width chat it
-  // keeps its original loose 60px header - framing it there moves the Data Lakes button.
-  const isKnowledgeViewerOpen = layout !== 'hide' && layout !== 'dockRight' && layout !== 'dockBottom';
+  const isVerticalSplit = shouldShowChromeBand(layout, isMobile);
   // Only the edge FACING the splitter is padded here - the notebook layout already puts an
   // 8px gutter around the outside of the content, and paying it twice reads as a wide frame.
   // The row is reversed, so the chat sits left (inner edge = right) and the viewer right
@@ -473,7 +482,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
           </Box>
         )}
         {/* Resizable splitter - only show in vertical layout when KnowledgeViewer is visible (and not on mobile) */}
-        {layout === 'vertical' && !isMobile && <ResizableSplitter />}
+        {isVerticalSplit && <ResizableSplitter />}
         <Box
           ref={chatContainerRef}
           display="flex"
@@ -521,17 +530,21 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                     flexShrink: 0,
                     // Only in the band: the full-width chat's bar is not a chrome header and
                     // a rule under it just cuts the pane in two.
-                    borderBottom: isKnowledgeViewerOpen ? '1px solid' : 'none',
+                    borderBottom: isVerticalSplit ? '1px solid' : 'none',
                     borderColor: 'divider',
-                    background: isKnowledgeViewerOpen ? theme.palette.background.level1 : theme.palette.background.body,
+                    background: isVerticalSplit ? theme.palette.background.level1 : theme.palette.background.body,
                     zIndex: 1,
                     padding: '8px 8px 16px',
                     display: {
-                      xs: project ? (isKnowledgeViewerOpen ? 'flex' : 'block') : 'none',
-                      sm: isKnowledgeViewerOpen ? 'flex' : 'block',
+                      // xs (<600px) is always below useIsMobile's `sm` breakpoint, so isVerticalSplit
+                      // is necessarily false here - the band never applies on a phone.
+                      xs: project ? 'block' : 'none',
+                      sm: isVerticalSplit ? 'flex' : 'block',
                     },
-                    // Only the band is a fixed 56px; outside it the bar is content-sized.
-                    ...(isKnowledgeViewerOpen ? { height: '56px', alignItems: 'center', px: '16px', pb: '8px' } : {}),
+                    // Only the band is a fixed 56px (kept in sync with DockedChatPanel.tsx:54); outside it
+                    // the bar is content-sized. Not framing the full-width chat is deliberate: the band's
+                    // 16px gutter would shift SessionTop's leading DataLakeToggle (SessionTop.tsx:87).
+                    ...(isVerticalSplit ? { height: '56px', alignItems: 'center', px: '16px', pb: '8px' } : {}),
                   })}
                 >
                   <SessionTop listClosed={listClosed} onChatWidthToggle={setIsFullWidth} />

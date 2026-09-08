@@ -1,5 +1,11 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, LLMApiRequestBody, redactSessionForClient } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  LLMApiRequestBody,
+  PROMPT_TEXT_MAX,
+  UnprocessableEntityError,
+  redactSessionForClient,
+} from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
@@ -30,6 +36,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   )
   .post(async (req: Request<unknown, unknown, LLMApiRequestBody>, res) => {
     const { sessionId: reqSessionId, sessionName, ...invokeParams } = req.body;
+
+    // This route spreads req.body straight into the invoke params rather than parsing it here, but
+    // it is not unvalidated: the ChatCompletionInvokeParamsSchema.parse that opens invoke() caps
+    // systemPrompt and throws outside any try, so an oversized value already 422s with no quest row.
+    // Re-checking here is purely about side effects, and how many depends on the branch: with no
+    // sessionId, getOrCreateSession creates a session, notifies and writes event logs; on every
+    // request the lastNotebookId update just below fires at push time, so it lands even though the
+    // throw path never awaits asyncPromises. Thrown rather than returned so errorHandler logs the
+    // rejection - a returned status leaves no line carrying one.
+    const { systemPrompt } = req.body;
+    if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
+      throw new UnprocessableEntityError('systemPrompt must be a string.', { code: 'SYSTEM_PROMPT_INVALID' });
+    }
+    if (typeof systemPrompt === 'string' && systemPrompt.length > PROMPT_TEXT_MAX) {
+      throw new UnprocessableEntityError(`systemPrompt exceeds the ${PROMPT_TEXT_MAX}-character limit.`, {
+        code: 'SYSTEM_PROMPT_TOO_LONG',
+      });
+    }
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: req.body.sessionId,

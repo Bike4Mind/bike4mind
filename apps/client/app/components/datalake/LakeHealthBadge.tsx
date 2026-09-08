@@ -89,7 +89,9 @@ function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
     if (level === 'degraded') return 'Health: needs attention';
     return 'Health: not measured';
   }
-  return `Reachable ${pct(health.reachableShare)}`;
+  // Scoped like the member-count chip beside it (LakeInfoPanel): membership, and so this share, is
+  // computed against the lake's CREATOR - see buildDataLakeMembershipFilter's docblock.
+  return `Reachable ${pct(health.reachableShare)} (as creator)`;
 }
 
 const DRILLDOWN_ROWS = 8;

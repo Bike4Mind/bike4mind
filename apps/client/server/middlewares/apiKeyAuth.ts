@@ -138,6 +138,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,
         organizationId: validation.organizationId,
+        preauthorizedLakeIds: validation.preauthorizedLakeIds,
       };
 
       // Create CASL ability for the user

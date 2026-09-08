@@ -91,6 +91,12 @@ const handler = baseApi()
               fabFiles: FabFile,
               users: User,
               dataLakes: dataLakeRepository,
+              // The service re-gates the lake tag internally, so its inputs must stay at least as
+              // wide as the route's own prologue above: without the grant repo that re-gate loses
+              // the curator and transferred-owner rungs and refuses a caller this route just
+              // authorized. Same shape as proposalAdmissionDeps.ts / dataLakeIngestDeps.ts.
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              scopedSettings: scopedSettingsRepository,
             },
             storage: {
               upload: async (filepath, content, option) => {
@@ -109,6 +115,10 @@ const handler = baseApi()
             // server-side `provenance` adapter, never from the request body, so the origin cannot be
             // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
             provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
+            // The other half of the same parity: the grant repo restores the grant rungs, but the
+            // org rungs need the actor's administered-org set, which the service cannot read off a
+            // user document.
+            administeredOrgIds: ctx.administeredOrgIds,
           }
         );
       });

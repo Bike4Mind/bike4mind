@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Principal } from '@bike4mind/memory';
 import {
@@ -11,14 +11,25 @@ import {
   type Keyring,
 } from './factCipher';
 
-/** In-memory keyring for the provider tests. */
+/**
+ * In-memory keyring for the provider tests.
+ *
+ * Models the real repository's TOMBSTONE semantics, not a plain map: `destroy` unsets the key but
+ * keeps a `destroyedAt`, and `getOrCreate` re-mints only when that stamp strictly predates the
+ * caller's `startedAt`. A fake that merely deleted the entry would re-mint unconditionally and make
+ * every fence test here pass for the wrong reason.
+ */
 function makeKeyring() {
   const store = new Map<string, string>();
+  const destroyed = new Map<string, Date>();
   const k = (kind: string, id: string) => `${kind}:${id}`;
   const keyring: Keyring = {
-    async getOrCreate(kind, id, _owner, candidate) {
+    async getOrCreate(kind, id, _owner, candidate, startedAt) {
       const existing = store.get(k(kind, id));
       if (existing) return existing;
+      const tombstone = destroyed.get(k(kind, id));
+      if (tombstone && tombstone.getTime() >= startedAt.getTime()) return null;
+      destroyed.delete(k(kind, id));
       store.set(k(kind, id), candidate);
       return candidate;
     },
@@ -27,10 +38,13 @@ function makeKeyring() {
     },
     async destroy(kind, id) {
       store.delete(k(kind, id));
+      destroyed.set(k(kind, id), new Date());
     },
   };
   return { keyring, store };
 }
+
+const WORK_STARTED = new Date('2026-01-01T00:00:00.000Z');
 
 const user: Principal = { kind: 'user', id: 'u1' };
 
@@ -74,8 +88,8 @@ describe('createKeyProvider', () => {
   it('mints one stable key per principal and forgets it on destroy', async () => {
     const { keyring } = makeKeyring();
     const keys = createKeyProvider(keyring, undefined);
-    const a = await keys.getOrCreateDek(user, 'u1');
-    const b = await keys.getOrCreateDek(user, 'u1');
+    const a = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
+    const b = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
     expect(a.equals(b)).toBe(true); // stable
     expect((await keys.getDek(user))?.equals(a)).toBe(true);
     await keys.destroyDek(user);
@@ -86,16 +100,43 @@ describe('createKeyProvider', () => {
     const { keyring, store } = makeKeyring();
     const master = createHash('sha256').update('master-secret').digest();
     const keys = createKeyProvider(keyring, master);
-    const dek = await keys.getOrCreateDek(user, 'u1');
+    const dek = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
     // Stored value is wrapped, not the raw key.
     expect(store.get('user:u1')?.startsWith('enc:')).toBe(true);
     expect((await keys.getDek(user))?.equals(dek)).toBe(true);
   });
 
+  it("threads the caller's startedAt through to the keyring, in the position the fence reads", async () => {
+    // The load-bearing seam of the whole crypto-shred fence, and the one place a typecheck cannot help:
+    // apps/client/tsconfig.json excludes test files, so dropping this argument compiles cleanly and the
+    // fence silently stops applying for every production caller. Assert the exact position, not just
+    // that a refusal is possible.
+    const { keyring } = makeKeyring();
+    const getOrCreate = vi.fn(keyring.getOrCreate);
+    const keys = createKeyProvider({ ...keyring, getOrCreate }, undefined);
+
+    const dek = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
+
+    expect(dek).not.toBeNull();
+    expect(getOrCreate).toHaveBeenCalledWith('user', 'u1', 'u1', expect.any(String), WORK_STARTED);
+  });
+
+  it('returns null when the key was shredded after the work began, and re-keys a later rebuild', async () => {
+    // Both halves of the fence through the real provider: work that predates the shred must fail closed
+    // (null, so the caller writes nothing), while a rebuild starting after it legitimately re-keys.
+    const { keyring } = makeKeyring();
+    const keys = createKeyProvider(keyring, undefined);
+    await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
+    await keys.destroyDek(user);
+
+    expect(await keys.getOrCreateDek(user, 'u1', WORK_STARTED)).toBeNull();
+    expect(await keys.getOrCreateDek(user, 'u1', new Date(Date.now() + 60_000))).not.toBeNull();
+  });
+
   it('encrypts a fact end-to-end through the provider key', async () => {
     const { keyring } = makeKeyring();
     const keys = createKeyProvider(keyring, undefined);
-    const dek = await keys.getOrCreateDek(user, 'u1');
+    const dek = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
     const sealed = encryptFact(dek, 'discovery calls');
     const fetched = await keys.getDek(user);
     expect(fetched && decryptFact(fetched, sealed)).toBe('discovery calls');

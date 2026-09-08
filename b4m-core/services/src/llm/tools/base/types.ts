@@ -11,6 +11,7 @@ import {
   IFabFileChunkRepository,
   IUserRepository,
   IProjectRepository,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
   ISkillRepository,
@@ -105,7 +106,7 @@ export interface ToolContext {
     projects?: IProjectRepository;
     dataLakes?: Pick<
       IDataLakeRepository,
-      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
     >;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
@@ -133,7 +134,14 @@ export interface ToolContext {
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
      * an absent resolver would silently drop every org lake from retrieval.
      */
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    /**
+     * Grant reader for the per-turn manage re-check on a session's `preauthorizedLakeIds`
+     * (filterStillManagedLakes). Optional in the type but REQUIRED in practice on any host that
+     * creates pre-authorized sessions: without it the curator / org-grant / transferred-owner rungs
+     * cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+     */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
     /**
      * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
@@ -198,6 +206,20 @@ export interface ToolContext {
    * documents why the prefix buckets are filtered rather than rebuilt. Absent/empty = unscoped.
    */
   sessionRetrievalTags?: string[];
+  /**
+   * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
+   * lake they can manage but are not a member of - see canManageLake, checked once at
+   * pages/api/sessions/create.ts, never re-derived here). Unioned into the resolved lake access
+   * set BEFORE narrowLakeAccessToSession runs (see unionPreauthorizedLakeAccess) so the lake's
+   * files and prompt become reachable for exactly this session. Absent/empty = no widening - the
+   * ordinary case for every session that isn't a maintainer's admitted test session.
+   *
+   * Vetted against the request's authenticated principal at the point this field is populated
+   * (ChatCompletionProcess, agentExecutor); a worker path with no authenticated principal (a
+   * scheduled/proactive job) must leave this unset even when the session itself carries the
+   * field, since there is no principal to vet it against.
+   */
+  sessionPreauthorizedLakeIds?: string[];
   /**
    * FabFile ids attached to THIS session whose text was actually delivered into this turn's
    * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT

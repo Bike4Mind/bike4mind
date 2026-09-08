@@ -185,6 +185,14 @@ export interface IUserApiKey {
   agentId?: string;
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
+  /**
+   * Lake ids this key is bound to for the manage-but-not-member session admission (see
+   * `preauthorizedLakeIds` on the session, and its containment check at
+   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * authority to admit a lake - the caller must still pass the live canManageLake check on every
+   * request, this only narrows which lakes that authority may be exercised for.
+   */
+  preauthorizedLakeIds?: string[];
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**
