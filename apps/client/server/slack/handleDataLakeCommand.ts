@@ -108,12 +108,23 @@ const isSlugAddressable = (lake: ListableLake, scope: ListScope, grantedLakeIds:
   return !orgId || (scope.organizationIds ?? []).includes(orgId) || grantedLakeIds.has(lake.id);
 };
 
-/** findBySlug's three arms, in the order it tries them - own-org, then org-less, then grant-held. */
+/**
+ * findBySlug's three arms, in the order it tries them - own-org, then org-less, then grant-held.
+ * Only ever called on lakes `isSlugAddressable` already passed, so a foreign-org lake reaching
+ * here is expected to be grant-held - asserted directly (rather than assumed by elimination) so a
+ * future caller that skips that filter fails loudly instead of silently misranking an ungranted
+ * lake as tier 2.
+ */
 const slugPriorityTier = (lake: ListableLake, scope: ListScope, grantedLakeIds: ReadonlySet<string>): 0 | 1 | 2 => {
   const orgId = lakeOrgId(lake);
   if (orgId && (scope.organizationIds ?? []).includes(orgId)) return 0;
   if (!orgId) return 1;
-  return 2; // foreign-org, addressable only via a grant
+  if (!grantedLakeIds.has(lake.id)) {
+    throw new Error(
+      `slugPriorityTier: foreign-org lake ${lake.id} has no grant - caller must filter via isSlugAddressable first`
+    );
+  }
+  return 2;
 };
 
 /**
@@ -172,28 +183,33 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
   // through the non-admin arms, so without the keys an entitlement-gated lake in the admin's OWN
   // org would fail findAccessible's requirement constraint and vanish from a list `add` still takes.
   const ctx = await buildSlackAccessContext(params.actor, params.deps, { resolveEntitlementsForAdmin: true });
-  const lakes = await dataLakeService.listDataLakes(
-    { ...ctx, isAdmin: false },
-    // Grants make the reply agree with `add`, which already resolves them: without this repo
-    // `listDataLakes` degrades both of its grant reads to empty, so a curator-granted or
-    // transferred lake neither enters the row set nor earns a manage label, and `list` omits a lake
-    // `add` accepts. Deliberately NO `settings` adapter alongside it: that flag is what admits
-    // READER grants specifically, and a reader cannot write, so passing it would advertise lakes
-    // `add` then refuses - the #2022 failure in a new place. (An org-principal owner/curator grant
-    // - canManageLake's fifth rung - CAN write; nothing mints that principal type yet, so this is a
-    // bound on today's system, not a rung this omission is meant to guard against.)
-    { db: { dataLakes: params.deps.dataLakes, dataLakeAccessGrants: params.deps.dataLakeAccessGrants } }
-  );
   // The same last-resort grant lookup findBySlug's #2425 fallback arm runs, so a foreign-org
   // owner/curator grant holder sees the lake here too - otherwise `list` would omit exactly the
   // lake `add` now accepts (isSlugAddressable would filter it out before dedupe/write-gate ever run).
-  const grantedLakeIds = new Set(
-    await dataLakeService.grantedLakeIdsFor(
-      ctx.userId,
-      ctx.organizationIds ?? [],
-      params.deps.dataLakeAccessGrants,
-      false
-    )
+  // Resolved ONCE and handed to listDataLakes below as its precomputed set, rather than each
+  // independently running the identical listByPrincipal query - listDataLakes' own includeReaders
+  // is always false here too, since we deliberately never thread a settings adapter (see below).
+  const grantedLakeIdsArray = await dataLakeService.grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    params.deps.dataLakeAccessGrants,
+    false
+  );
+  const grantedLakeIds = new Set(grantedLakeIdsArray);
+  const lakes = await dataLakeService.listDataLakes(
+    { ...ctx, isAdmin: false },
+    {
+      // Grants make the reply agree with `add`, which already resolves them: without this repo
+      // `listDataLakes` degrades both of its grant reads to empty, so a curator-granted or
+      // transferred lake neither enters the row set nor earns a manage label, and `list` omits a lake
+      // `add` accepts. Deliberately NO `settings` adapter alongside it: that flag is what admits
+      // READER grants specifically, and a reader cannot write, so passing it would advertise lakes
+      // `add` then refuses - the #2022 failure in a new place. (An org-principal owner/curator grant
+      // - canManageLake's fifth rung - CAN write; nothing mints that principal type yet, so this is a
+      // bound on today's system, not a rung this omission is meant to guard against.)
+      db: { dataLakes: params.deps.dataLakes, dataLakeAccessGrants: params.deps.dataLakeAccessGrants },
+      grantedLakeIds: grantedLakeIdsArray,
+    }
   );
   // Order matters, and it mirrors `add`: resolve the slug's winning lake FIRST, then apply the write
   // gate to that winner. `findBySlug` picks by org priority alone and never falls back when the lake
