@@ -329,7 +329,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return super.find(filter, { ...options, ...LIST_PROJECTION_FIELDS });
   }
 
-  async findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null> {
+  async findBySlug(
+    slug: string,
+    organizationIds?: string[],
+    resolveGrantedLakeIds?: () => Promise<string[]>
+  ): Promise<IDataLakeDocument | null> {
     // Slug is unique per (organizationId, slug). Prefer a lake in one of the caller's own
     // orgs, then fall back to an org-less lake with the same slug. Sorted so two own-org
     // matches resolve deterministically rather than by document order.
@@ -340,7 +344,23 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       if (own) return own.toJSON() as IDataLakeDocument;
     }
     const orgless = await this.dataLakeModel.findOne({ slug, organizationId: { $in: [null, ''] } });
-    return (orgless?.toJSON() as IDataLakeDocument) ?? null;
+    if (orgless) return orgless.toJSON() as IDataLakeDocument;
+    // Last resort, and lazy on purpose (#2425): a lake in an org the caller is not a member of
+    // is invisible to both arms above, but a real owner/curator grant on it is still legitimate
+    // access - canManageLake already admits it once the lake resolves. Only invoked on a miss so
+    // the extra grants query never runs on the common own-org/org-less hit path.
+    if (resolveGrantedLakeIds) {
+      const grantedLakeIds = await resolveGrantedLakeIds();
+      if (grantedLakeIds.length > 0) {
+        // Sorted for the same reason as the own-org arm above: two granted lakes can share a slug
+        // across two different non-member orgs (e.g. two independent transferLakeOwnership calls),
+        // and an unsorted `$in` match has no ordering guarantee - without a tie-break, which lake
+        // wins would be nondeterministic rather than merely unspecified-but-stable.
+        const granted = await this.dataLakeModel.findOne({ slug, _id: { $in: grantedLakeIds } }).sort({ _id: 1 });
+        if (granted) return granted.toJSON() as IDataLakeDocument;
+      }
+    }
+    return null;
   }
 
   async findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null> {
