@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, getEmbeddingModelCost } from '@bike4mind/common';
 import {
+  isCapturableFile,
   parseSupportedModels,
   formatCapturePlan,
   planCapture,
@@ -66,6 +67,56 @@ describe('planCapture', () => {
     expect(text).toContain(SMALL);
     expect(text).toContain(LARGE);
     expect(text).toMatch(/TOTAL {16}: \$\d/);
+  });
+
+  it('does not quote a chunk-embed plan under --reuse-stored-vectors', () => {
+    // No model in the plan means nothing is embedded but the probe queries. A chunk count would be
+    // of chunks that will NOT be embedded, and a $0.0000 total would omit the queries that are.
+    const text = formatCapturePlan(planCapture([1000, 1000], []));
+    expect(text).toContain('reusing stored vectors');
+    expect(text).not.toContain('chunks to embed');
+    expect(text).not.toContain('$0.0000');
+  });
+});
+
+describe('isCapturableFile', () => {
+  const live = { chunkCount: 12, vectorizedChunkCount: 12, fileName: 'guide.pdf', vectorized: true };
+
+  it('admits a live, fully vectorized file', () => {
+    expect(isCapturableFile(live)).toBe(true);
+  });
+
+  it('excludes an ARCHIVED file, which findIdsByDataLakeTag returns and the served path never does', () => {
+    expect(isCapturableFile({ ...live, archivedAt: new Date() })).toBe(false);
+  });
+
+  it('excludes a soft-deleted file', () => {
+    expect(isCapturableFile({ ...live, deletedAt: new Date() })).toBe(false);
+  });
+
+  it('excludes a file whose vectorization stopped part way', () => {
+    // Its chunks are not reliably in the vector index, so scoring them moves the band by chunks
+    // production cannot surface.
+    expect(isCapturableFile({ ...live, vectorizedChunkCount: 5 })).toBe(false);
+    expect(isCapturableFile({ ...live, vectorizedChunkCount: undefined })).toBe(false);
+  });
+
+  it('excludes a file with no chunks at all', () => {
+    expect(isCapturableFile({ ...live, chunkCount: 0, vectorizedChunkCount: 0 })).toBe(false);
+    expect(isCapturableFile({ ...live, chunkCount: undefined })).toBe(false);
+  });
+
+  it('applies the shipped retrieval-exclusion filter when one is given', () => {
+    expect(isCapturableFile({ ...live, fileName: 'MARK - draft.pdf' }, { excludeFilenameMarkers: ['mark'] })).toBe(
+      false
+    );
+    expect(isCapturableFile({ ...live, fileName: 'MARKdown.pdf' }, { excludeFilenameMarkers: ['mark'] })).toBe(true);
+  });
+
+  it('ignores the embeddingModel stamp, which is one arm\'s business and not the file set\'s', () => {
+    // Deliberately NOT isFabFileCitable's fifth condition: the arms vary the model on purpose, and
+    // the stamp comparison belongs to selectReusableChunks.
+    expect(isCapturableFile({ ...live, embeddingModel: ADA } as never)).toBe(true);
   });
 });
 

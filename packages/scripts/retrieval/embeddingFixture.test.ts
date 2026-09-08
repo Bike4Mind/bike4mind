@@ -4,6 +4,7 @@ import {
   deriveArm,
   formatCorpusRegime,
   isLongDocumentRegime,
+  isTruncatableModel,
   loadEmbeddingFixture,
   PROD_REGIME_REFERENCE,
   type EmbeddingFixture,
@@ -18,6 +19,7 @@ const base = (over: Partial<EmbeddingFixture> = {}): unknown => ({
   filesInScope: 1,
   chunksExcluded: 0,
   filesExcluded: 0,
+  filesUnreachable: 0,
   chunks: [{ chunkId: 'c1', docId: 'docA', vector: [1, 0, 0, 0], charLength: 2200 }],
   queries: [{ id: 'q01', vector: [0, 1, 0, 0] }],
   ...over,
@@ -97,6 +99,33 @@ describe('deriveArm', () => {
     expect(arm.filesInScope).toBe(7);
     expect(arm.chunksExcluded).toBe(2);
     expect(arm.filesExcluded).toBe(1);
+    expect(arm.filesUnreachable).toBe(3);
+  });
+
+  it('refuses to narrow a non-Matryoshka capture, whose prefix is not an embedding', () => {
+    const ada = loadEmbeddingFixture(base({ model: 'text-embedding-ada-002' }));
+    expect(() => deriveArm(ada, 2)).toThrow(/not a Matryoshka model/);
+    // Its own capture width is still a legitimate arm.
+    expect(deriveArm(ada, 4).arm).toBe('text-embedding-ada-002@4');
+  });
+});
+
+describe('isTruncatableModel', () => {
+  it('admits only the Matryoshka models the registry ships', () => {
+    expect(isTruncatableModel('text-embedding-3-small')).toBe(true);
+    expect(isTruncatableModel('text-embedding-3-large')).toBe(true);
+  });
+
+  it('refuses the pre-MRL and non-OpenAI embedders', () => {
+    expect(isTruncatableModel('text-embedding-ada-002')).toBe(false);
+    expect(isTruncatableModel('voyage-3-large')).toBe(false);
+    expect(isTruncatableModel('nomic-embed-text')).toBe(false);
+  });
+
+  it('admits a model the registry does not know, which only a synthetic fixture can be', () => {
+    // capture-embeddings.ts validates every model against the registry before it spends, so no real
+    // capture can carry an unregistered id - see the docblock.
+    expect(isTruncatableModel('synthetic-eval-embedding')).toBe(true);
   });
 });
 

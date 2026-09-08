@@ -6,6 +6,7 @@
   "filesInScope": 7,
   "chunksExcluded": 2,
   "filesExcluded": 1,
+  "filesUnreachable": 3,
   "chunks": [
     {
       "chunkId": "c01",

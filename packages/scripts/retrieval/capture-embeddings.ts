@@ -38,6 +38,7 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { countCodePoints } from '@bike4mind/common';
 import { PROBE_QUESTIONS } from './corpus';
 import {
+  isCapturableFile,
   parseSupportedModels,
   formatCapturePlan,
   planCapture,
@@ -81,14 +82,27 @@ const lake = await dataLakeRepository.findBySlug(argv.lake);
 if (!lake) throw new Error(`No "${argv.lake}" lake on this stage.`);
 if (lake.status !== 'active') throw new Error(`Lake "${argv.lake}" is ${lake.status}, not active.`);
 
+// The LIFECYCLE-SWEEP reader: it returns every id the lake has ever held, with no archivedAt or
+// deletedAt condition (see its index docblock in FabFileModel, and the findLakeMemoryExtractionMembers
+// docblock that explains what it deliberately is NOT). Everything it hands back is a candidate, not a
+// member - `isCapturableFile` below is what reduces it to the set the served path can actually reach.
 const fileIds = await fabFileRepository.findIdsByDataLakeTag({ kind: 'registry', datalakeTag: lake.datalakeTag });
 if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`);
 
 const stored: StoredChunk[] = [];
 const tokenCounts: number[] = [];
+const capturedDocs = new Set<string>();
+let filesUnreachable = 0;
 for (const fileId of fileIds) {
   const file = await fabFileRepository.findById(fileId);
-  if (!file) continue;
+  // A tombstone (or a soft-deleted file, which the softDeletePlugin's findOne hook resolves to null)
+  // and a file the reachability predicate rejects are one class for this counter: the served path
+  // would never have returned either, so scoring their chunks would move the band by chunks
+  // production cannot surface.
+  if (!file || !isCapturableFile(file)) {
+    filesUnreachable++;
+    continue;
+  }
   // Prefer the help slug so the capture joins to corpus.ts's ground truth; fall back to the file id,
   // which is the right document identity for any other lake.
   const helpTag = file.tags?.find(t => t.name.startsWith(HELP_TAG_PREFIX));
@@ -109,14 +123,21 @@ for (const fileId of fileIds) {
       parentEmbeddingModel: chunk.embeddingModel ?? file.embeddingModel,
     });
     tokenCounts.push(chunk.tokenCount ?? Math.ceil(text.length / 4));
+    capturedDocs.add(docId);
   }
 }
-if (stored.length === 0) throw new Error(`Lake "${argv.lake}" has ${fileIds.length} files but no chunks.`);
+if (stored.length === 0) {
+  throw new Error(
+    `Lake "${argv.lake}" has ${fileIds.length} candidate files but no capturable chunks ` +
+      `(${filesUnreachable} unreachable: archived, deleted, not fully vectorized or retrieval-excluded).`
+  );
+}
+console.log(`\nfiles: ${capturedDocs.size} capturable, ${filesUnreachable} unreachable of ${fileIds.length}`);
 
 // --- Corpus-regime gate: is this the long-document case the model question is about? ---
 const regime = corpusRegime(
   stored.map(c => ({ docId: c.docId, charLength: countCodePoints(c.text) })),
-  fileIds.length
+  capturedDocs.size
 );
 console.log(`\n${formatCorpusRegime(regime)}\n`);
 if (!isLongDocumentRegime(regime)) {
@@ -161,6 +182,7 @@ for (const model of models) {
   // a query must live in the same space as the chunks it is scored against.
   const questions = PROBE_QUESTIONS.map(q => q.question);
   const queryVectors = await embedAll(service, questions);
+  assertOnePerInput(queryVectors, questions.length, `${model} probe queries`);
 
   let chunks: { chunkId: string; docId: string; vector: number[]; charLength: number }[];
   let chunksExcluded = 0;
@@ -194,6 +216,7 @@ for (const model of models) {
       service,
       stored.map(c => c.text)
     );
+    assertOnePerInput(vectors, stored.length, `${model} chunks`);
     chunks = stored.map((c, i) => ({
       chunkId: c.chunkId,
       docId: c.docId,
@@ -208,9 +231,10 @@ for (const model of models) {
     dims,
     corpus: argv.lake,
     capturedAt,
-    filesInScope: fileIds.length,
+    filesInScope: capturedDocs.size,
     chunksExcluded,
     filesExcluded,
+    filesUnreachable,
     chunks,
     queries: PROBE_QUESTIONS.map((q, i) => ({ id: q.id, vector: queryVectors[i] })),
   };
@@ -220,7 +244,12 @@ for (const model of models) {
   console.log(`Wrote ${outPath} (${chunks.length} chunks, ${dims} dims)`);
 }
 
-console.log('\nNow score them:\n  pnpm --filter @bike4mind/scripts retrieval:model-comparison --fixtures <paths>');
+// Paths relative to packages/scripts/, which is the cwd `pnpm --filter` runs in and where --out-dir
+// defaults - see MODEL-COMPARISON.md step 3.
+console.log(
+  '\nNow score them (from the repo root):\n  pnpm --filter @bike4mind/scripts retrieval:model-comparison ' +
+    `--fixtures ${models.map(m => `out/${m}.${argv.lake}.fixture.json`).join(',')}`
+);
 process.exit(0);
 
 /**
@@ -235,6 +264,18 @@ async function embedAll(service: unknown, texts: string[]): Promise<number[][]> 
   const out: number[][] = [];
   for (const text of texts) out.push(await single.generateEmbedding(text));
   return out;
+}
+
+/**
+ * The batcher must return exactly one vector per input, in order. The shipped OpenAI batcher does
+ * (`generateEmbeddingBatch` index-places into a pre-sized array), so this guards an unlikely path -
+ * but the failure would land AFTER the spend, as an opaque zod error naming no chunk, because
+ * `JSON.stringify` drops an `undefined` vector entirely.
+ */
+function assertOnePerInput(vectors: number[][], expected: number, what: string): void {
+  if (vectors.length !== expected || vectors.some(v => !Array.isArray(v) || v.length === 0)) {
+    throw new Error(`Embedding ${what}: expected ${expected} vectors, got ${vectors.length} (some may be empty).`);
+  }
 }
 
 /** The most common vector width in a set - the width the corpus is actually stored at. */

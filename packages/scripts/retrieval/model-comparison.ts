@@ -6,8 +6,12 @@
  * `capture-embeddings.ts`, so this can be re-run freely - at a new width, or after a metrics change -
  * without embedding anything twice.
  *
+ * Paths are resolved from `packages/scripts/`, which is the cwd `pnpm --filter` runs in and where
+ * `capture-embeddings.ts` writes its `out/` by default - so the two halves agree without an absolute
+ * path in either.
+ *
  *   pnpm --filter @bike4mind/scripts retrieval:model-comparison \
- *     --fixtures out/ada-002.fixture.json,out/3-small.fixture.json \
+ *     --fixtures out/text-embedding-ada-002.system-help.fixture.json,out/text-embedding-3-small.system-help.fixture.json \
  *     --widths 3072,1536,512
  *
  * See MODEL-COMPARISON.md for the full runbook and how to read the output.
@@ -16,7 +20,7 @@
 import { readFileSync } from 'node:fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import { compareFromRaw, formatComparison } from './modelComparison';
+import { reportFromRaw } from './modelComparison';
 
 const argv = await yargs(hideBin(process.argv))
   .option('fixtures', {
@@ -45,4 +49,4 @@ if (paths.length === 0) throw new Error('--fixtures matched no paths.');
 if (widths.length === 0) throw new Error(`--widths "${argv.widths}" parsed to no positive integers.`);
 
 const raws = paths.map(p => JSON.parse(readFileSync(p, 'utf8')) as unknown);
-console.log(formatComparison(compareFromRaw(raws, widths)));
+console.log(reportFromRaw(raws, widths));

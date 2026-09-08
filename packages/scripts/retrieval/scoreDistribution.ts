@@ -46,6 +46,9 @@ export type QueryDistribution = {
   servedDocIds: string[];
 };
 
+/** Total order on chunk ids. Returns 0 for equal ids, as the shipped `compareRankedChunks` does. */
+const byChunkId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 /**
  * Score one query against every chunk and keep the top `RANK_DEPTH`.
  *
@@ -60,7 +63,7 @@ export function scoreQueryDistribution(
 ): QueryDistribution {
   const ranked = chunks
     .map(chunk => ({ chunk, score: computeCosineSimilarity(queryVector, chunk.vector) }))
-    .sort((a, b) => b.score - a.score || (a.chunk.chunkId < b.chunk.chunkId ? -1 : 1))
+    .sort((a, b) => b.score - a.score || byChunkId(a.chunk.chunkId, b.chunk.chunkId))
     .slice(0, depth);
 
   const seen = new Set<string>();
@@ -114,6 +117,11 @@ export type ArmRow = {
   chunksExcluded: number;
   /** Distinct files dropped wholesale before their chunks were read (their stamp named another model). */
   filesExcluded: number;
+  /**
+   * Files the served path could not have reached, dropped before their chunks were read: archived,
+   * soft-deleted, not fully vectorized, or retrieval-excluded. See `isCapturableFile` in capturePlan.
+   */
+  filesUnreachable: number;
   queries: number;
   band: ScoreBand;
   meanTopScore: number;
@@ -155,6 +163,7 @@ export function buildArmRow(args: {
   filesInScope: number;
   chunksExcluded: number;
   filesExcluded: number;
+  filesUnreachable: number;
   queries: readonly { id: string; vector: number[]; supporting: readonly string[] }[];
   depth?: number;
 }): ArmRow {
@@ -169,6 +178,7 @@ export function buildArmRow(args: {
     chunksScored: args.chunks.length,
     chunksExcluded: args.chunksExcluded,
     filesExcluded: args.filesExcluded,
+    filesUnreachable: args.filesUnreachable,
     queries: distributions.length,
     band: scoreBand(distributions),
     meanTopScore: mean(distributions.map(d => d.topScores[0] ?? 0)),
@@ -192,10 +202,10 @@ const SPREAD_SAMPLE = 6;
  * Render one arm in the shape of the published prod probe block, so a reader can set the two
  * side by side without re-deriving anything.
  *
- * Two counters from that block are deliberately reported as `n/a` rather than as 0. This harness
- * scores exact cosine over a captured fixture, so `retrieval_unavailable` (indexing/paused files)
- * and `superseded` (collapsed_files) cannot arise here at all - printing 0 would claim the harness
- * checked and found none, which is a different and untrue statement.
+ * `retrieval_unavailable` is the capture's own reachability drop count (`isCapturableFile`), because
+ * the capture enumerates the lake with the lifecycle-sweep reader and therefore genuinely sees that
+ * class. `superseded` stays `n/a` rather than 0: this harness runs no collapse pass, so a 0 would
+ * claim it checked and found none, which is a different and untrue statement.
  */
 export function formatArmSummary(row: ArmRow): string {
   const spreads = row.spreads
@@ -208,7 +218,7 @@ export function formatArmSummary(row: ArmRow): string {
     `files_in_scope       : ${row.filesInScope}`,
     `chunks_scored        : ${row.chunksScored}`,
     `embedding_mismatch   : ${row.filesExcluded} excluded files, ${row.chunksExcluded} skipped chunks`,
-    `retrieval_unavailable: n/a (offline exact kNN over a captured fixture)`,
+    `retrieval_unavailable: ${row.filesUnreachable} files unreachable by the served path (archived / not fully vectorized / excluded)`,
     `superseded           : n/a (no collapse pass offline)`,
     `r1-r${RANK_DEPTH} spread`.padEnd(21) + `: ${spreads}${elided}`,
     `overall band         : ${row.band.min.toFixed(4)} - ${row.band.max.toFixed(4)} (width ${row.band.width.toFixed(4)})`,

@@ -17,6 +17,7 @@ import {
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
+import { isRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 
 /** OpenAI's per-request input ceiling - what the shipped batcher splits on. */
 const MAX_INPUTS_PER_REQUEST = 2048;
@@ -77,6 +78,12 @@ export function planCapture(chunkTokenCounts: readonly number[], models: readonl
 }
 
 export function formatCapturePlan(plan: CapturePlan): string {
+  // No model in the plan means --reuse-stored-vectors. Rendering the chunk count would quote chunks
+  // that will NOT be embedded, and a $0.0000 total would omit the probe queries the reuse arm does
+  // pay for. Both halves mislead, in opposite directions, in the spend gate's own output.
+  if (plan.perModel.length === 0) {
+    return 'reusing stored vectors: no chunk is embedded, only the probe queries (rounding error).';
+  }
   const lines = plan.perModel.map(
     m =>
       `  ${m.model.padEnd(28)} ${String(m.tokens).padStart(10)} tokens  ${String(m.batches).padStart(4)} batches  ` +
@@ -181,4 +188,43 @@ export function parseSupportedModels(models: readonly string[]): SupportedEmbedd
     throw new Error(`Unsupported embedding model(s): ${unknown.join(', ')}. See SupportedEmbeddingModelSchema.`);
   }
   return models as SupportedEmbeddingModel[];
+}
+
+/**
+ * The FabFile fields the capture's reachability filter reads - a projection, so the caller can fetch
+ * only these. Mirrors `CitableFileFields` (apps/client/server/memory/lakeSourceReachability.ts) minus
+ * `embeddingModel`, for the reason `isCapturableFile` explains.
+ */
+export type CapturableFileFields = {
+  deletedAt?: Date | null;
+  archivedAt?: Date | null;
+  chunkCount?: number | null;
+  vectorizedChunkCount?: number | null;
+} & Parameters<typeof isRetrievalExcluded>[0];
+
+/**
+ * Can the served retrieval path actually reach this file's chunks?
+ *
+ * MUST STAY IN SYNC with `isFabFileCitable` (apps/client/server/memory/lakeSourceReachability.ts),
+ * which carries the same note and names the corpus defer gate as its own twin. This is that
+ * predicate MINUS its `embeddingModel === queryEmbeddingModel` clause, because the arms deliberately
+ * vary the model - the stamp comparison is `selectReusableChunks`'s job and belongs to one arm, not
+ * to the file set every arm shares.
+ *
+ * The capture enumerates a lake with `findIdsByDataLakeTag`, which is the LIFECYCLE-SWEEP reader: it
+ * returns every id the lake has ever held, with no archivedAt/deletedAt condition (see its index
+ * docblock in FabFileModel). Without this filter an archived or half-vectorized file is embedded,
+ * paid for, and scored into the band - and `scoreBand` pools min/max across every query's top-k, so
+ * one unreachable chunk moves the headline number that production's `search_knowledge_base` would
+ * never have returned.
+ *
+ * `opts` is empty in practice: a capture has no session, so there is no retrieval filter to apply and
+ * that arm is a no-op today. The call stays because the shipped predicate makes it, and a filter that
+ * silently omits one of the four conditions is how these two drift.
+ */
+export function isCapturableFile(file: CapturableFileFields, opts: RetrievalExclusionOptions = {}): boolean {
+  if (file.deletedAt || file.archivedAt) return false;
+  if (isRetrievalExcluded(file, opts)) return false;
+  const chunks = file.chunkCount ?? 0;
+  return chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
 }

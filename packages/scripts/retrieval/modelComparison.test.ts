@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { compareArms, compareFromRaw, formatComparison, resolveQueries, assertSameCorpus } from './modelComparison';
+import {
+  applicableWidths,
+  compareArms,
+  compareFromRaw,
+  formatComparison,
+  reportFromRaw,
+  resolveQueries,
+  assertSameCorpus,
+} from './modelComparison';
 import { loadEmbeddingFixture, type EmbeddingFixture } from './embeddingFixture';
 import tinyFixture from './fixtures/tiny-comparison.fixture.json';
 
@@ -60,6 +68,21 @@ describe('compareArms', () => {
     expect(() => compareArms([fixture], [3072, 1536])).toThrow(/exceeds the capture width/);
   });
 
+  it('gives a non-Matryoshka capture exactly one arm, at its capture width', () => {
+    // The runbook's own step 3 passes the ada-002 baseline alongside --widths 3072,1536,512. A
+    // truncated ada-002 prefix is not an embedding, and it would render indistinguishably from a
+    // legitimate 3-small@512 row.
+    const ada = other({ model: 'text-embedding-ada-002' });
+    expect(compareArms([ada], [3072, 1536, 512]).map(r => r.arm)).toEqual(['text-embedding-ada-002@16']);
+  });
+
+  it('keeps that arm even when the width list omits the capture width', () => {
+    // The baseline is the arm the instrument check is read off; it must not vanish on a width typo.
+    const ada = other({ model: 'text-embedding-ada-002' });
+    expect(applicableWidths(ada, [512])).toEqual([16]);
+    expect(compareArms([ada], [512]).map(r => r.arm)).toEqual(['text-embedding-ada-002@16']);
+  });
+
   it('scores every arm over the same question set and the same corpus counters', () => {
     const rows = compareArms([fixture], [16, 8]);
     expect(new Set(rows.map(r => r.queries))).toEqual(new Set([5]));
@@ -90,6 +113,30 @@ describe('compareFromRaw', () => {
   it('validates raw JSON before scoring it', () => {
     expect(() => compareFromRaw([tinyFixture], [16])).not.toThrow();
     expect(() => compareFromRaw([{ ...tinyFixture, dims: 8 }], [8])).toThrow(/another width/);
+  });
+});
+
+describe('reportFromRaw', () => {
+  it('renders the CLI report from raw JSON, carrying the capture-level notes', () => {
+    const report = reportFromRaw([tinyFixture], [16, 8]);
+    expect(report).toContain('arm                  : synthetic-eval-embedding@16');
+    expect(report).toContain('retrieval_unavailable: 3 files unreachable');
+  });
+
+  it('raises the corpus-regime gate where the verdict is read, not only on the capture stdout', () => {
+    const shortFacts = {
+      ...tinyFixture,
+      chunks: tinyFixture.chunks.map(c => ({ ...c, charLength: 180 })),
+    };
+    expect(reportFromRaw([shortFacts], [16])).toContain('NOT THE LONG-DOCUMENT REGIME');
+    expect(reportFromRaw([tinyFixture], [16])).not.toContain('NOT THE LONG-DOCUMENT REGIME');
+  });
+
+  it('says a non-Matryoshka arm ignored the requested widths, rather than staying silent', () => {
+    const ada = { ...tinyFixture, model: 'text-embedding-ada-002' };
+    const report = reportFromRaw([ada], [3072, 1536, 512]);
+    expect(report).toContain('SCORED AT CAPTURE WIDTH ONLY (text-embedding-ada-002@16)');
+    expect(report).not.toContain('text-embedding-ada-002@512');
   });
 });
 

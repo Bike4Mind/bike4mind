@@ -93,6 +93,7 @@ describe('buildArmRow', () => {
       filesInScope: 2,
       chunksExcluded: 4,
       filesExcluded: 1,
+      filesUnreachable: 0,
       queries: [{ id: 'q1', vector: QUERY, supporting: ['docA'] }],
       depth: 3,
     });
@@ -122,6 +123,7 @@ describe('buildArmRow', () => {
       filesInScope: 3,
       chunksExcluded: 0,
       filesExcluded: 0,
+      filesUnreachable: 0,
       queries: [{ id: 'q1', vector: QUERY, supporting: [] }],
       depth: 3,
     });
@@ -143,6 +145,7 @@ describe('formatComparisonTable', () => {
         filesInScope: 2,
         chunksExcluded: 0,
         filesExcluded: 0,
+        filesUnreachable: 0,
         queries: [{ id: 'q1', vector: QUERY, supporting: ['docA'] }],
         depth: 2,
       })
@@ -172,6 +175,7 @@ describe('formatArmSummary', () => {
     filesInScope: 49,
     chunksExcluded: 0,
     filesExcluded: 0,
+    filesUnreachable: 0,
     queries: [{ id: 'q1', vector: QUERY, supporting: ['docA'] }],
     depth: 2,
   });
@@ -185,12 +189,17 @@ describe('formatArmSummary', () => {
     expect(summary).toContain('r1-r10 spread        : ');
   });
 
-  it('reports the counters this instrument cannot observe as n/a, never as zero', () => {
-    // Offline exact kNN has no indexing state and runs no collapse pass. Printing 0 would claim the
-    // harness looked and found none - a different, and untrue, statement than "cannot arise here".
-    const summary = formatArmSummary(row);
-    expect(summary).toContain('retrieval_unavailable: n/a');
-    expect(summary).toContain('superseded           : n/a');
+  it('reports the counter this instrument cannot observe as n/a, never as zero', () => {
+    // The harness runs no collapse pass, so printing 0 would claim it looked and found none - a
+    // different, and untrue, statement than "cannot arise here".
+    expect(formatArmSummary(row)).toContain('superseded           : n/a');
+  });
+
+  it('reports unreachable files as the capture measured them, not as n/a', () => {
+    // The capture enumerates the lake with the lifecycle-sweep reader and filters it with
+    // isCapturableFile, so it genuinely observes this class - an n/a would deny that.
+    expect(formatArmSummary(row)).toContain('retrieval_unavailable: 0 files unreachable');
+    expect(formatArmSummary({ ...row, filesUnreachable: 4 })).toContain('retrieval_unavailable: 4 files unreachable');
   });
 
   it('elides the per-query spreads once a real 31-question run would overflow the line', () => {
@@ -207,6 +216,7 @@ describe('groundTruthApplies', () => {
     filesInScope: 1,
     chunksExcluded: 0,
     filesExcluded: 0,
+    filesUnreachable: 0,
     queries: [{ id: 'q1', vector: QUERY, supporting }],
     depth: 1,
   });

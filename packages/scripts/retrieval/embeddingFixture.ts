@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod';
+import { isSupportedEmbeddingModel, OpenAIEmbeddingModel } from '@bike4mind/common';
 import { truncateAndNormalize } from '../help/utils';
 import type { ScorableChunk } from './scoreDistribution';
 
@@ -50,6 +51,12 @@ export const EmbeddingFixtureSchema = z.object({
    */
   chunksExcluded: z.number().int().nonnegative(),
   filesExcluded: z.number().int().nonnegative(),
+  /**
+   * Files the served retrieval path could not have reached - archived, soft-deleted, not fully
+   * vectorized, or retrieval-excluded. See `isCapturableFile`. Recorded so an arm reports the number
+   * instead of the `n/a` that would claim the harness cannot observe the class at all.
+   */
+  filesUnreachable: z.number().int().nonnegative(),
   chunks: z.array(CapturedChunkSchema),
   queries: z.array(CapturedQuerySchema),
 });
@@ -96,7 +103,35 @@ export type DerivedArm = {
   filesInScope: number;
   chunksExcluded: number;
   filesExcluded: number;
+  filesUnreachable: number;
 };
+
+/**
+ * Models whose vectors survive prefix truncation, so that a narrower arm is a real embedding rather
+ * than the first N coordinates of one.
+ *
+ * Matryoshka is a property of a specific model, not of embeddings (see the MEMENTO_EMBEDDING_DIMS
+ * docblock and b4m-core/memory/src/eval/dimensions.test.ts). `text-embedding-ada-002` predates MRL,
+ * as do the Voyage, Bedrock and Ollama embedders - a truncated ada-002 vector is not an embedding of
+ * anything, and rendering it as a width arm next to a legitimate `3-small@512` row puts a number in
+ * the decision table that measures nothing.
+ */
+const MATRYOSHKA_MODELS = new Set<string>([
+  OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL,
+  OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE,
+]);
+
+/**
+ * May a narrower arm be derived from a capture of this model?
+ *
+ * A model the shipped registry does not know is allowed through: `capture-embeddings.ts` validates
+ * every model against that registry (`parseSupportedModels`) before it spends anything, so no real
+ * capture can carry an unregistered id. What reaches here with one is a synthetic test fixture, and
+ * gating those would cost this harness its own end-to-end width coverage while closing no hole.
+ */
+export function isTruncatableModel(model: string): boolean {
+  return MATRYOSHKA_MODELS.has(model) || !isSupportedEmbeddingModel(model);
+}
 
 /**
  * Truncate a fixture to `dims` and renormalize - exactly what OpenAI's `dimensions` parameter does,
@@ -104,14 +139,27 @@ export type DerivedArm = {
  * evals produce identical vectors for the same width.
  *
  * Reuses the shipped `truncateAndNormalize` (packages/scripts/help/utils.ts) rather than carrying a
- * third copy of five lines of arithmetic. Widening past the capture width is rejected: it is not a
- * no-op, it is a request for information the capture never held.
+ * third copy of five lines of arithmetic. At FULL width that helper returns the input array as-is
+ * rather than renormalizing, so the full-width arm aliases the fixture's own vectors - which is
+ * correct here (captured vectors are already unit-norm and cosine is scale-invariant) but means the
+ * arm must be treated as read-only.
+ *
+ * Two widths are rejected rather than rendered. Widening past the capture is not a no-op, it is a
+ * request for information the capture never held; narrowing a non-Matryoshka model produces a number
+ * that measures nothing (see `isTruncatableModel`).
  */
 export function deriveArm(fixture: EmbeddingFixture, dims: number): DerivedArm {
   if (dims > fixture.dims) {
     throw new Error(
       `Cannot derive a ${dims}-dim arm from a ${fixture.dims}-dim capture of ${fixture.model}. ` +
         'Matryoshka truncation only goes narrower; re-capture at the wider width.'
+    );
+  }
+  if (dims < fixture.dims && !isTruncatableModel(fixture.model)) {
+    throw new Error(
+      `${fixture.model} is not a Matryoshka model, so a ${dims}-dim prefix of its ${fixture.dims}-dim ` +
+        'vectors is not an embedding - it is the first coordinates of one. Score it at its capture ' +
+        'width only.'
     );
   }
   return {
@@ -125,6 +173,7 @@ export function deriveArm(fixture: EmbeddingFixture, dims: number): DerivedArm {
     filesInScope: fixture.filesInScope,
     chunksExcluded: fixture.chunksExcluded,
     filesExcluded: fixture.filesExcluded,
+    filesUnreachable: fixture.filesUnreachable,
   };
 }
 

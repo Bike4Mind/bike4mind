@@ -14,7 +14,15 @@
  */
 
 import { PROBE_QUESTIONS } from './corpus';
-import { deriveArm, loadEmbeddingFixture, type EmbeddingFixture } from './embeddingFixture';
+import {
+  corpusRegime,
+  deriveArm,
+  isLongDocumentRegime,
+  isTruncatableModel,
+  loadEmbeddingFixture,
+  PROD_REGIME_REFERENCE,
+  type EmbeddingFixture,
+} from './embeddingFixture';
 import { buildArmRow, formatArmSummary, formatComparisonTable, type ArmRow } from './scoreDistribution';
 
 const SUPPORTING_BY_ID = new Map(PROBE_QUESTIONS.map(q => [q.id, q.supporting]));
@@ -53,13 +61,23 @@ export function resolveQueries(fixture: EmbeddingFixture): { id: string; vector:
 }
 
 /**
- * Build one row per (fixture, width) arm.
+ * Which widths this fixture actually has arms at, widest first.
  *
- * A width wider than a fixture's capture is skipped rather than thrown on: a run naming
- * `3072,1536,512` is asking for every width that applies, and 3072 simply does not apply to a
- * 1536-dim capture of 3-small. Widening would be an error (`deriveArm` throws); omitting the row is
- * the correct reading of the request.
+ * A width wider than the capture is skipped rather than thrown on: a run naming `3072,1536,512` is
+ * asking for every width that applies, and 3072 simply does not apply to a 1536-dim capture of
+ * 3-small. Widening would be an error (`deriveArm` throws); omitting the row is the correct reading.
+ *
+ * A non-Matryoshka capture has exactly ONE honest arm - its own width - and it gets that arm
+ * whatever was asked for. Two reasons it is not merely filtered: a truncated ada-002 prefix would
+ * render as a first-class row beside a legitimate `3-small@512`, and the ada-002 baseline is the arm
+ * the instrument check is read off, so it must not vanish because the width list omitted 1536.
  */
+export function applicableWidths(fixture: EmbeddingFixture, widths: readonly number[]): number[] {
+  if (!isTruncatableModel(fixture.model)) return [fixture.dims];
+  return [...widths].sort((a, b) => b - a).filter(width => width <= fixture.dims);
+}
+
+/** Build one row per (fixture, width) arm. */
 export function compareArms(fixtures: readonly EmbeddingFixture[], widths: readonly number[]): ArmRow[] {
   assertSameCorpus(fixtures);
   const rows: ArmRow[] = [];
@@ -68,8 +86,7 @@ export function compareArms(fixtures: readonly EmbeddingFixture[], widths: reado
     const queries = resolveQueries(fixture);
     if (queries.length === 0) throw new Error(`Fixture "${fixture.corpus}" (${fixture.model}) carries no queries.`);
 
-    for (const width of [...widths].sort((a, b) => b - a)) {
-      if (width > fixture.dims) continue;
+    for (const width of applicableWidths(fixture, widths)) {
       const arm = deriveArm(fixture, width);
       const byId = new Map(arm.queries.map(q => [q.id, q.vector]));
       rows.push(
@@ -79,6 +96,7 @@ export function compareArms(fixtures: readonly EmbeddingFixture[], widths: reado
           filesInScope: arm.filesInScope,
           chunksExcluded: arm.chunksExcluded,
           filesExcluded: arm.filesExcluded,
+          filesUnreachable: arm.filesUnreachable,
           queries: queries.map(q => ({ ...q, vector: byId.get(q.id) ?? q.vector })),
         })
       );
@@ -96,13 +114,24 @@ export function compareFromRaw(raws: readonly unknown[], widths: readonly number
   return compareArms(raws.map(loadEmbeddingFixture), widths);
 }
 
+/** Parse raw fixture JSON, compare it, and render the report - what the CLI does, in one call. */
+export function reportFromRaw(raws: readonly unknown[], widths: readonly number[]): string {
+  const fixtures = raws.map(loadEmbeddingFixture);
+  return formatComparison(compareArms(fixtures, widths), fixtures);
+}
+
 /**
  * The full report: one published-shaped block per arm, then the cross-arm table.
  *
  * Both, not either. The per-arm block is what compares against the published prod probe; the table
  * is what compares the arms against each other. A reader needs the first to trust the second.
+ *
+ * `fixtures` is what the arms were derived from, and it is optional only so the row-level tests can
+ * call this without one. Pass it: the corpus-regime gate and the non-Matryoshka note are properties
+ * of the CAPTURE, not of a row, and the whole point of the credential split is that someone else
+ * scores these fixtures later - they see this report and nothing else.
  */
-export function formatComparison(rows: readonly ArmRow[]): string {
+export function formatComparison(rows: readonly ArmRow[], fixtures: readonly EmbeddingFixture[] = []): string {
   const notes = [
     'Band width and spread are the geometry; recall/prec/hit/mrr are whether it bought better retrieval.',
     'Scores are exact cosine over the captured chunks, NOT the ANN path prod measured through.',
@@ -127,6 +156,31 @@ export function formatComparison(rows: readonly ArmRow[]): string {
       'GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS: no captured document matches a supporting slug in ' +
         'corpus.ts, so recall/prec/hit/mrr read n/a. The geometry columns need no labels and remain ' +
         'valid - read the band, the spread and the posTop/negTop gap, and ignore the rest.'
+    );
+  }
+  // The gate the ticket exists over, restated where the verdict is actually read. The capture warns
+  // about it on its own stdout, which the person scoring the fixture later never sees - so a clean
+  // table would be the only thing in front of them.
+  const shortCorpora = fixtures
+    .map(f => ({ model: f.model, regime: corpusRegime(f.chunks, f.filesInScope) }))
+    .filter(f => !isLongDocumentRegime(f.regime));
+  if (shortCorpora.length > 0) {
+    notes.push(
+      `NOT THE LONG-DOCUMENT REGIME (median chunk ${shortCorpora.map(f => f.regime.medianChars).join(', ')} ` +
+        `chars against a prod reference of ${PROD_REGIME_REFERENCE.medianChars}). text-embedding-3-small ` +
+        'was chosen on short facts, and the argument for it is exactly the one that does not transfer ' +
+        'to long prose. A model verdict read off this capture inherits that bias - capture a ' +
+        'production lake instead.'
+    );
+  }
+  // A non-MRL capture ignores --widths entirely, and silence would read as "no narrower arm was asked
+  // for" rather than "a narrower arm of this model would not be an embedding".
+  const nonMatryoshka = fixtures.filter(f => !isTruncatableModel(f.model)).map(f => `${f.model}@${f.dims}`);
+  if (nonMatryoshka.length > 0) {
+    notes.push(
+      `SCORED AT CAPTURE WIDTH ONLY (${nonMatryoshka.join(', ')}): not a Matryoshka model, so a ` +
+        'narrower prefix of its vectors is not an embedding. Any requested width was ignored for it; ' +
+        'only text-embedding-3-small and text-embedding-3-large yield width arms.'
     );
   }
   return [...rows.map(r => formatArmSummary(r)), '', formatComparisonTable(rows), '', ...notes].join('\n\n');
