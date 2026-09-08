@@ -364,18 +364,19 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
    * preferred, falling back to an org-less lake with that slug. Without a set, only
    * org-less lakes match.
-   *
-   * `resolveGrantedLakeIds` is a last-resort, lazily-invoked fallback (#2425): when the own-org
-   * and org-less arms both miss, and it is supplied, the ids it resolves to are tried as a third
-   * `{slug, _id: {$in: ...}}` arm - so a real owner/curator grant on a lake in a non-member org
-   * still resolves by slug. Lazy so callers that omit it (and the existing own-org/org-less hit
-   * path) never pay for the extra grants lookup.
    */
-  findBySlug(
-    slug: string,
-    organizationIds?: string[],
-    resolveGrantedLakeIds?: () => Promise<string[]>
-  ): Promise<IDataLakeDocument | null>;
+  findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
+  /**
+   * Resolve a lake by slug, restricted to a specific candidate id set (#2425). The caller's
+   * last-resort arm: when `findBySlug`'s own-org/org-less lookup misses, a real owner/curator
+   * grant on a lake in a non-member org is still legitimate access, so the caller (typically
+   * `assertLakeAccess`, via `grantedLakeIdsFor`) resolves the grant-held id set itself and tries
+   * it here - keeping the decision of WHEN to pay for that extra grants lookup in the service
+   * layer, not hidden inside this repository method. Sorted by `_id` so two candidates sharing a
+   * slug (e.g. two independent `transferLakeOwnership` calls into different non-member orgs)
+   * resolve to the same winner every time.
+   */
+  findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
   /**
