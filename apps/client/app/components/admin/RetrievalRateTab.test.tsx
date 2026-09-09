@@ -29,6 +29,11 @@ const summary = (over: Partial<OptionalPathRetrievalRate> = {}): OptionalPathRet
   offeredTurns: 40,
   retrievedTurns: 10,
   rate: 0.25,
+  guidance: {
+    injected: { turns: 20, retrievedTurns: 7, rate: 0.35 },
+    notInjected: { turns: 15, retrievedTurns: 3, rate: 0.2 },
+    unrecorded: { turns: 5, retrievedTurns: 0, rate: 0 },
+  },
   forcedSuppressed: {
     turns: 8,
     retrievedTurns: 4,

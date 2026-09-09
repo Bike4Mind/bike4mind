@@ -150,6 +150,7 @@ import {
   filterByPromptMode,
   filterFeaturesByPromptMode,
   markShareablePrefixBoundary,
+  PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
@@ -2711,12 +2712,34 @@ export class ChatCompletionProcess {
       // and the knowledge tools write the same field later in the turn (mergeRetrievalSummary
       // keeps 'forced' and never lets this not-attempted seed erase a real outcome).
       const knowledgeToolOffered = offeredToolNames.includes('search_knowledge_base');
+      // Resolved here rather than inline at the buildToolPrompt call below so the seed can record
+      // whether the guidance section actually shipped. Read 2-arg on purpose: a cleared setting
+      // returns '' and the section drops out, which is its documented off switch.
+      const knowledgeBaseGuidance = getSettingsValue('KnowledgeBaseRetrievalPrompt', defaultAdminSettings);
+      // ToolBuilder's gate is not the last word: its output is tagged `toolPrompt`, which
+      // filterByPromptMode admits under no promptMode. A promptMode caller naming
+      // search_knowledge_base itself still gets knowledgeToolOffered (resolveEnabledTools unions
+      // requestTools before skipAutoOffers is consulted), so without this a `raw` turn - forced
+      // retrieval off, hence in the optional fold - would record `true` having received no
+      // section, biasing the exact arm the flag exists to measure. Read off PROMPT_MODE_SOURCES
+      // rather than `!promptMode` so admitting `toolPrompt` to a mode moves the flag with it.
+      const toolPromptAdmitted = !promptMode || PROMPT_MODE_SOURCES[promptMode].includes('toolPrompt');
+      // Mirrors ToolBuilder.buildToolPrompt's gate, narrowed by the prompt-mode filter above. The
+      // two ToolBuilder conditions are the same consts handed to the call below, so the recorded
+      // flag and the actual emission cannot drift; the third sits downstream of that call and has
+      // no ToolBuilder input to mirror.
+      const knowledgeBaseGuidanceInjected =
+        toolPromptAdmitted && knowledgeToolOffered && Boolean(knowledgeBaseGuidance);
       if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
           surfaces: [],
           dataLakeTags: [],
+          // Recorded only when the tool was offered: a forced-only turn never had a section to
+          // ship, and writing `false` there would pad the A/B's control arm with turns that were
+          // never in the experiment.
+          ...(knowledgeToolOffered ? { knowledgeBaseGuidanceInjected } : {}),
         });
       }
 
@@ -2788,6 +2811,14 @@ export class ChatCompletionProcess {
         // this reads the offered set for the same reason blog_draft and navigate_view do above.
         hasWebSearch: offeredToolNames.includes('web_search'),
         webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
+        // Same offered-set check that seeds `promptMeta.retrieval.mode` above, so the nudge covers
+        // the optional-path turns that fold measures. One caveat for a reader re-running that
+        // measurement: the seed splits this set by `forcedRetrievalEnabled`, so forced turns are
+        // nudged too and land in a different bucket. Whether the section actually shipped is
+        // recorded per turn as `retrieval.knowledgeBaseGuidanceInjected`, which is what makes an
+        // A/B driven by clearing the setting readable straight off the fold.
+        hasKnowledgeBase: knowledgeToolOffered,
+        knowledgeBaseGuidance,
         userTimezone,
         mcpTools: directMcpTools,
         sessionId,

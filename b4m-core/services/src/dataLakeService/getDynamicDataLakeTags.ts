@@ -4,6 +4,7 @@ import {
   getAccessibleDataLakes,
   toDataLakeConfig,
   type DataLakeMembershipScope,
+  type IAdminSettingsRepository,
   type IDataLakeAccessGrantRepository,
   type IDataLakeRepository,
   type IFallbackLakeSettingsRepository,
@@ -12,7 +13,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { isDatalakeTagWellFormed } from './createDataLake';
 import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
-import { grantedLakeIdsFor } from './resolveLakeReadAccess';
+import { grantedLakeReachFor, resolveEnforceReadGrants, type LakeGrantReach } from './resolveLakeReadAccess';
 
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
@@ -33,24 +34,33 @@ export interface DataLakeAccessContext {
      */
     organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>;
     /**
-     * Optional access-grant lookup, so a lake reached ONLY by an owner/curator grant (the
-     * transferred-owner case) grounds chat exactly as it browses. Absent means retrieval sees no
-     * grants at all - which is what made browse and retrieval disagree for a grant-held lake, so
-     * every retrieval host should wire it. Kept optional like every other adapter here: a host
-     * without a grant repo has no grants to miss.
-     *
-     * Stays in lockstep with the browse side's `grantedLakeIdsFor` call in listDataLakes - the
-     * same helper, the same default `includeReaders: false`, so retrieval remains a subset of
-     * browse (see resolveRetrievalLakeScope's header) rather than growing an arm browse lacks.
-     */
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
-    /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
      * IFallbackLakeSetting). Used only by getDataLakePrompts' registry-candidate branch; absent
      * means zero registry lakes ever contribute a prompt, matching every other optional adapter
      * here (degrade to "this lever does nothing" rather than throw).
      */
     fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
+    /**
+     * Persisted access grants, so a lake reached ONLY by a grant (a transferred or delegated
+     * owner, a curator, and under enforce a reader or an org principal) grounds as well as it
+     * browses - the same arm `listDataLakes`/`browsePublicDataLakes` already pass to the repo.
+     * Absent means retrieval sees no grants at all, which is what made browse and retrieval
+     * disagree for a grant-held lake, so every retrieval host should wire it. Kept optional like
+     * every other adapter here: a host without a grant repo has no grants to miss.
+     *
+     * Stays in lockstep with the browse side's `grantedLakeReachFor` call in listDataLakes - the
+     * same helper resolved against the same setting, so retrieval remains a subset of browse (see
+     * resolveRetrievalLakeScope's header) rather than growing an arm browse lacks.
+     */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
+    /**
+     * Reads the `EnforceLakeReadGrants` cutover flag. Named to match ToolContext/
+     * ChatCompletionContext, which already carry it, so every chat and tool surface satisfies this
+     * structurally. Absent means report-only, which here means the reader and org rungs stay out of
+     * the retrieval set (owner/curator grants resolve either way, matching `grantedLakeReachFor`'s
+     * own split).
+     */
+    adminSettings?: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
   };
   /**
    * The caller. Membership is resolved internally from `id` via `db.organizations` - there is
@@ -181,6 +191,13 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
  * pre-filter's `status: 'active'`, so a caller's own DRAFT lake remains browse-only. The
  * bypass is org-independent, matching browse: a creator who has since moved orgs still reaches
  * a gated lake they made in the old one, and only they or an admin could have put files in it.
+ *
+ * Persisted access GRANTS are honoured on the same terms browse honours them (`grantedLakeReachFor`),
+ * when a grant repo is wired: the grant row IS the authorization, so a granted lake bypasses the
+ * org and gate constraints and is restored past the in-memory filter exactly as an owner's own
+ * gated lake is. Nothing downstream changes - a lake's file-membership predicate is anchored to
+ * the lake's CREATOR, not the caller, so a granted lake's files match the moment the lake is in
+ * this set.
  */
 export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): Promise<{
   dataLakeTags: string[];
@@ -220,17 +237,16 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // members inside the try below, so an absent repo or a failed read leave it empty by
   // construction rather than by a reader's reasoning.
   const ownedDynamicIds = new Set<string>();
+  // Same role as ownedDynamicIds, for the grant rung: ids the caller reaches by a persisted grant
+  // rather than by the lake's own gate. Filled only from the resolved grant set, so an absent or
+  // failing grant repo leaves it empty by construction.
+  const grantedDynamicIds = new Set<string>();
   // Complete unless the read below throws. An absent `db.dataLakes` is NOT degraded: a deployment
   // with no dynamic-lake repo has no dynamic lakes to miss, so its registry-only answer is whole.
   let lakeViewComplete = true;
   // Same reason as ownedDynamicIds: createdByUserId survives only on the raw documents, and
   // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
   const creatorByDynamicId = new Map<string, string>();
-  // Lake ids the caller reaches by an ACTIVE owner/curator grant - the arm this resolver used not
-  // to have at all, which is what let a transferred-owner lake browse but never ground. Filled in
-  // place for the same reason as ownedDynamicIds: an absent grant repo or a failed read leaves it
-  // empty by construction.
-  const grantedDynamicIds = new Set<string>();
   if (context.db.dataLakes) {
     // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
     // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
@@ -254,24 +270,20 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     // grants). So the placement buys observability into where a failure originated, not a
     // stronger deny guarantee than returning [] outright would have given.
     const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
-    // Resolved BEFORE the lake read: a grant-held lake matches none of that query's tag/org/public
-    // arms, so its ids have to go IN as the query's grant arm rather than be filtered out of the
-    // result. Owner/curator only until the reader arm lands. Browse resolves `includeReaders` from
-    // db.settings (listDataLakes.ts:304); this site has no settings adapter, so it is pinned to
-    // false here and MUST be updated in the same PR that flips READ_GRANT_ENFORCEMENT_READY -
-    // otherwise browse widens to readers and retrieval does not.
-    if (context.db.dataLakeAccessGrants && userId) {
+    // The grant rung, resolved on the SAME terms as browse (`grantedLakeReachFor`) so the two halves
+    // of the access model cannot drift: owner/curator always, reader + org principals only under
+    // the enforced cutover. Failing closed to no grants rather than propagating - a grant lookup
+    // that cannot be read must narrow retrieval, never throw a whole chat turn away.
+    let reach: LakeGrantReach = { grantedLakeIds: [], orgGrantedLakes: {} };
+    if (userId && context.db.dataLakeAccessGrants) {
       try {
-        const ids = await grantedLakeIdsFor(userId, organizationIds, context.db.dataLakeAccessGrants, false);
-        for (const id of ids) grantedDynamicIds.add(id);
+        const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger);
+        reach = await grantedLakeReachFor(userId, organizationIds, context.db.dataLakeAccessGrants, includeReaders);
       } catch (err) {
         // Same fail-closed contract as the dataLakes read below: a failed grants read narrows the
         // view (the grant arm contributes nothing) and must SAY so, or a consumer would read the
         // resulting absence as proof of unreachability. See lakeViewComplete.
-        context.logger?.warn(
-          '[dataLakes] access-grant lookup failed; resolving lake access without the grant arm',
-          err
-        );
+        context.logger?.warn('[dataLakes] access-grant lookup failed; resolving lakes without the grant arm', err);
         lakeViewComplete = false;
       }
     }
@@ -281,7 +293,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         entitlementKeys,
         organizationIds,
         userId,
-        Array.from(grantedDynamicIds)
+        reach
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
       for (const dl of dbLakes) {
@@ -296,6 +308,12 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         for (const dl of dbLakes) {
           if (String(dl.createdByUserId) === userId) ownedDynamicIds.add(dl.id);
         }
+      }
+      // Intersected with what the query actually returned, so a stale grant naming a deleted or
+      // archived lake cannot put an id into the restoration set below.
+      const grantedIdSet = new Set([...reach.grantedLakeIds, ...Object.values(reach.orgGrantedLakes).flat()]);
+      for (const dl of dbLakes) {
+        if (grantedIdSet.has(dl.id)) grantedDynamicIds.add(dl.id);
       }
     } catch (err) {
       // Degrading to the static registry silently looks exactly like "this deployment has no
@@ -330,17 +348,15 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   const ownedGatedLakes = (dynamicDataLakes ?? []).filter(
     dl => ownedDynamicIds.has(dl.id) && !accessibleIds.has(dl.id) && isDatalakeTagWellFormed(dl)
   );
-  // The grant arm's own restoration, for the same reason the owner exemption above needs one: the
-  // in-memory pass is a pure tag/entitlement predicate, so it discards a lake whose ONLY claim is a
-  // grant row. The grant row IS the authorization (as at the browse gate - see resolveReadGrant), so
-  // it needs none of the org/gate constraints; what it does NOT get is a widening of the other arms,
-  // hence the intersection with the ids resolved above rather than a looser filter. Owned lakes are
-  // excluded so a lake that is both owned and granted is not restored twice.
+  // Same restoration, same reasons, for the grant rung: a grant IS the authorization, so a lake
+  // whose own gate the caller does not hold must survive the pure tag/entitlement predicate. The
+  // well-formedness guard is carried over verbatim - a privileged path may not re-admit a row
+  // whose meta-tag is not the one its own slug/org would mint.
   const grantedGatedLakes = (dynamicDataLakes ?? []).filter(
     dl =>
       grantedDynamicIds.has(dl.id) &&
-      !accessibleIds.has(dl.id) &&
       !ownedDynamicIds.has(dl.id) &&
+      !accessibleIds.has(dl.id) &&
       isDatalakeTagWellFormed(dl)
   );
   const resolvedLakes = [...accessibleLakes, ...ownedGatedLakes, ...grantedGatedLakes];

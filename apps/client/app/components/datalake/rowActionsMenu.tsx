@@ -2,6 +2,7 @@ import { Box, Dropdown, IconButton, Menu, MenuButton, MenuItem, Typography } fro
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import {
   MENU_ROW_ICON_SX,
+  MENU_ROW_RADIUS,
   menuListSx,
   menuRowSx,
   menuSurfaceSx,
@@ -76,7 +77,7 @@ export function RowMenuItem({
         '--ListItem-paddingRight': '4px',
         '--ListItem-paddingY': '0px',
         '--ListItem-minHeight': '32px',
-        '--ListItem-radius': '8px',
+        '--ListItem-radius': MENU_ROW_RADIUS,
         '--ListItem-gap': '8px',
       })}
     >

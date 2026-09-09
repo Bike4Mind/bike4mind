@@ -171,6 +171,48 @@ describe('notebook export', () => {
     expect(find.mock.calls.map(([, opts]) => opts?.skip)).toEqual([0, 100]);
   });
 
+  it('stores the export at an unguessable key, not the predictable filename', async () => {
+    let uploadedPath = '';
+    const { adapters } = makeAdapters({
+      fileStorageService: {
+        getFileContent: vi.fn().mockResolvedValue(null),
+        uploadFile: vi.fn(async (p: string) => {
+          uploadedPath = p;
+        }),
+        getSignedUrl: vi.fn().mockResolvedValue('https://example.test/export.json'),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    // A random uuid segment sits between `exports/` and the readable filename, so the object is no
+    // longer at the guessable `exports/notebooks-<userid8>-<date>.json` a sign endpoint could reach.
+    expect(uploadedPath).toMatch(/^exports\/[0-9a-f-]{36}\/notebooks-user-1-\d{4}-\d{2}-\d{2}\.json$/);
+    expect(uploadedPath).not.toMatch(/^exports\/notebooks-/);
+  });
+
+  it('draws a fresh random path segment per export (shape alone would pass a fixed placeholder)', async () => {
+    const paths: string[] = [];
+    const { adapters } = makeAdapters({
+      fileStorageService: {
+        getFileContent: vi.fn().mockResolvedValue(null),
+        uploadFile: vi.fn(async (p: string) => {
+          paths.push(p);
+        }),
+        getSignedUrl: vi.fn().mockResolvedValue('https://example.test/export.json'),
+      },
+    });
+
+    const service = new NotebookExportService(adapters);
+    await service.exportNotebooks('user-1', OPTIONS);
+    await service.exportNotebooks('user-1', OPTIONS);
+
+    // The uuid segment sits between `exports/` and the readable filename. A fixed placeholder
+    // (e.g. an all-zeros uuid) would satisfy the shape assertion above but repeat across exports.
+    const uuidSegment = (p: string) => p.split('/')[1];
+    expect(paths).toHaveLength(2);
+    expect(uuidSegment(paths[0])).not.toBe(uuidSegment(paths[1]));
+  });
+
   it('finds artifacts by their own id, not by _id', async () => {
     // Artifact ids are not ObjectId-castable, so the real collection throws on an `_id` query.
     const find = vi.fn(async (query: ArtifactQuery) => {

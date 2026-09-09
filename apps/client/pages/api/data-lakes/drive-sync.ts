@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
+import { isLakeIngestable } from '@bike4mind/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import {
   isValidDriveFolderId,
@@ -82,6 +83,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
 
     // Org owner/manager (or platform admin) only - not the lake creator (see the handler note).
     await verifyOrgAccess(req.user, lake.organizationId);
+
+    // Gated AFTER verifyOrgAccess so the status is not readable by a non-member, and before the
+    // credential capture so a refused connect costs no Drive calls. Without this the connect door
+    // would hand an archived lake an `enabled: true` connection - the poll would enqueue it forever
+    // (dropped every time by the ingest guard) and the UI would toast a sync that never happens.
+    if (!isLakeIngestable(lake.status)) {
+      throw new BadRequestError(`Cannot connect a Drive folder to a data lake in '${lake.status}' status`);
+    }
 
     const oauthRefreshToken = await captureOrgCredential(req.user.id);
 

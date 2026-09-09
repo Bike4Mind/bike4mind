@@ -29,7 +29,7 @@ import {
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
-import { partitionByVectorSearchReadiness } from './vectorSearchEligibility';
+import { isVectorSearchReady, partitionByVectorSearchReadiness } from './vectorSearchEligibility';
 import {
   buildRetrievalUnavailableReport,
   emptyRetrievalUnavailableReport,
@@ -163,6 +163,17 @@ export interface SemanticSearchScanAccounting {
    * `filesScanned + annFilesQueried` is the files actually searched by either route (still <=
    * `filesScoped`; ineligible/not-yet-ready files may be searched by neither if a budget stopped
    * the scan first).
+   *
+   * Counts the files ANN alone was responsible for - NOT every file an ANN query was issued for.
+   * That is what keeps the sum above honest: a ready file the saturation rebucket hands back to
+   * the scan path drops out of this count and turns up in `filesScanned` instead. So the three
+   * cases differ on purpose:
+   *   - Atlas, saturated: unranked ready files are deliberately not scanned, so they stay counted
+   *     here - the index covered them and they simply lost on rank.
+   *   - Atlas under-saturated, and self-host always: the rebucket moves those files, so this
+   *     narrows to the ones that returned hits.
+   *   - Alternate models: always only the files that returned hits. They have no scan fallback, so
+   *     an unranked file is searched by neither route (the caveat above).
    */
   annFilesQueried: number;
   /** Chunk hits returned by ANN retrieval across all ann-queried files and models, before minScore/scope filtering. */
@@ -816,20 +827,44 @@ async function rankChunksForFiles(args: {
   const canUseOpenSearch =
     !canUseAtlas && args.vectorSearchEnabled && selfHostOpenSearchEnabled() && !!args.vectorIndex;
 
+  // Why the ANN path did not engage, for the "flag on but nothing is using it" alert below. Each
+  // cause needs a different fix and none of them is visible from `annModelsQueried` alone, so the
+  // reason has to be captured here where it is actually known.
+  let annBlockedReason: 'no-backend' | 'index-not-queryable' | 'no-ready-files' | 'ready-files-within-lag' | null =
+    null;
+  // One clock for the readiness partition AND the within-lag diagnosis below, so the alarm can
+  // never disagree with the partition that produced it.
+  const annReadinessNow = new Date();
+  // A stamped file still inside VECTOR_SEARCH_READY_LAG_MS is a lake that JUST finished
+  // vectorizing, not an unrun backfill, and the two want opposite responses (wait vs backfill).
+  // `annEligible.length === 0` cannot separate them, so carry the count either way and report the
+  // distinct reason when the lag explains the whole file set.
+  const stampedWithinLagFiles = rankable.filter(
+    f => !!f.chunkEmbeddingModelStampedAt && !isVectorSearchReady(f, annReadinessNow)
+  ).length;
+  const noAnnReadyFilesReason = () =>
+    rankable.length > 0 && stampedWithinLagFiles === rankable.length ? 'ready-files-within-lag' : 'no-ready-files';
+
   if (canUseAtlas) {
     const indexStatus = await args.fabfilechunks.getAtlasIndexStatus!(embeddingModel);
     if (indexStatus?.queryable) {
-      const split = partitionByVectorSearchReadiness(rankable, new Date());
+      const split = partitionByVectorSearchReadiness(rankable, annReadinessNow);
       annEligible = split.annReady;
       scanEligible = split.scanOnly;
+      if (annEligible.length === 0) annBlockedReason = noAnnReadyFilesReason();
+    } else {
+      annBlockedReason = 'index-not-queryable';
     }
   } else if (canUseOpenSearch) {
-    // No mongot-style indexing-lag concept to check here - the readiness stamp still applies
-    // (same-model chunks must be fully vectorized+stamped), but "is it actually in the index yet"
-    // is instead covered below by the zero-raw-hits rebucket, same as Atlas's missedFiles case.
-    const split = partitionByVectorSearchReadiness(rankable, new Date());
+    // The readiness stamp still applies (same-model chunks must be fully vectorized+stamped), but
+    // it says nothing about whether the SEPARATE OpenSearch cluster actually holds the documents.
+    // That gap is covered below by the absence-keyed rebucket this path deliberately keeps.
+    const split = partitionByVectorSearchReadiness(rankable, annReadinessNow);
     annEligible = split.annReady;
     scanEligible = split.scanOnly;
+    if (annEligible.length === 0) annBlockedReason = noAnnReadyFilesReason();
+  } else if (args.vectorSearchEnabled) {
+    annBlockedReason = 'no-backend';
   }
 
   // Shared backend seam for the primary model AND every alternate model - this module never
@@ -886,20 +921,68 @@ async function rankChunksForFiles(args: {
     // Atlas: mongot's indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill,
     // or a re-embed mid-file can label chunks under the wrong model so mongot never indexes
     // them. On self-host OpenSearch: the file's chunks may simply predate the feature being
-    // enabled (see selfHostSearchIndex.ts - there is no backfill). Either way the file returns
-    // zero raw hits (not "nothing scored well", since both backends rank by similarity before
-    // minScore is applied) and, with no scan fallback, would silently contribute zero results.
-    // Rebucket per file rather than all-or-nothing, so one un-indexed file in a batch does not
-    // cost the rest their ANN path.
-    const missedFiles = annEligible.filter(f => !annResult.filesWithHits.has(f.id));
+    // enabled (see selfHostSearchIndex.ts - there is no backfill). Such a file returns zero raw
+    // hits and, with no scan fallback, would silently contribute zero results.
+    //
+    // But zero raw hits ALONE cannot mean "not indexed", because the query is bounded by
+    // similarity RANK (`limit: topK`), not by a score threshold. At most `topK` files can appear
+    // in `filesWithHits`, so in any file set larger than topK most ready files are absent from it
+    // for the entirely correct reason that they did not rank. Rebucketing on absence alone
+    // therefore rescans nearly every file and makes the ANN path's benefit `topK / fileCount` -
+    // it shrinks as a lake grows, which is backwards from the point of the index.
+    //
+    // Saturation separates the two cases. If the backend returned a full `topK`, it had at least
+    // that many indexed candidates and handed back its best: absence is a ranking outcome, and
+    // rescanning it would defeat the index. If it returned FEWER than asked, it exhausted what it
+    // has indexed and still came up short, so absence is real evidence of missing content and the
+    // per-file fallback is warranted. A corpus genuinely smaller than topK also lands here, and a
+    // full scan of something that small is the cheap, safe answer.
+    //
+    // Out-of-scope hits are subtracted first. A hit whose parent file is not in this query's set
+    // (deleted parent, index content from another lake) proves nothing about how deeply THIS file
+    // set is indexed, and counting it could report saturation on a response whose every usable hit
+    // was discarded - suppressing the rescue and returning nothing where the scan would have
+    // answered. Undercounting is the safe direction: it degrades to the old unconditional rebucket.
+    //
+    // Atlas only, deliberately. On self-host OpenSearch the ANN documents live in a separate
+    // cluster fed by a fail-open dual-write, with no backfill for files that predate the feature,
+    // so a stamped file can be permanently absent from the index and the readiness stamp cannot
+    // see it. `retrievalIndexModel` is not the missing residency signal either: it is written
+    // BEFORE the index call on purpose (see IFabFileChunk.retrievalIndexModel - a removal for an
+    // index holding nothing is a no-op, a missed one orphans documents), so it over-claims in
+    // exactly the indexing-failure case that matters. Absence-keyed rescue is therefore still
+    // load-bearing there and stays, leaving self-host at the old `topK / fileCount` ceiling until
+    // a signal that actually confirms residency exists. Atlas's analogue is transient rather than
+    // permanent - during a bulk backfill mongot's indexing lag can exceed
+    // VECTOR_SEARCH_READY_LAG_MS and the already-indexed files will saturate topK while the
+    // lagging ones wait - which self-heals within one lag window and is accepted.
+    const annUsableHits = annResult.hitsReturned - annResult.hitsSkippedUnknownFile;
+    const annSaturated = canUseAtlas && annUsableHits >= topK;
+    const missedFiles = annSaturated ? [] : annEligible.filter(f => !annResult.filesWithHits.has(f.id));
     if (missedFiles.length > 0) {
       logger?.warn?.('[semanticSearch] ANN vector search returned no hits for ready files, scanning them instead', {
         embeddingModel,
         backend: canUseAtlas ? 'atlas' : 'opensearch',
         fileCount: missedFiles.length,
+        hitsReturned: annResult.hitsReturned,
+        hitsUsable: annUsableHits,
+        limit: topK,
       });
       scanEligible = [...scanEligible, ...missedFiles];
       annEligible = annEligible.filter(f => annResult.filesWithHits.has(f.id));
+    } else if (annSaturated) {
+      // The whole point of the index: these ready files are NOT scanned. Logged because the
+      // failure this replaced was silent, and a regression here would be silent again - the
+      // count is how much scanning the ANN path actually avoided on this query.
+      const notRescanned = annEligible.filter(f => !annResult.filesWithHits.has(f.id)).length;
+      if (notRescanned > 0) {
+        logger?.debug?.('[semanticSearch] ANN saturated its limit; unranked ready files left off the scan path', {
+          embeddingModel,
+          backend: canUseAtlas ? 'atlas' : 'opensearch',
+          fileCount: notRescanned,
+          hitsReturned: annResult.hitsReturned,
+        });
+      }
     }
   }
 
@@ -912,7 +995,7 @@ async function rankChunksForFiles(args: {
     const isModelQueryable = canUseAtlas
       ? async (m: string) => !!(await args.fabfilechunks.getAtlasIndexStatus!(m))?.queryable
       : // Self-host has no per-model status port. openSearchChunkAdapter already fails closed on
-        // an unregistered model or a missing index (returns [] -> filesMissed, not a throw), and
+        // an unregistered model or a missing index (returns [] -> filesUnranked, not a throw), and
         // that "stay excluded" outcome is already correct - the only cost of an optimistic answer
         // here is one wasted embed per model, bounded by MAX_ALTERNATE_ANN_MODELS.
         async () => true;
@@ -1005,6 +1088,43 @@ async function rankChunksForFiles(args: {
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
 
+  // How this cutover failed once already: enabled, every index built, and not one chunk carrying an
+  // `embeddingModel`, so the ann path no-opped on every request and nothing anywhere said so. Zero
+  // is never normal once the caller opted in and there IS same-model content to rank, and the
+  // reason decides the fix - a missing backend, an unfinished index migration, or an unrun chunk
+  // `embeddingModel` backfill.
+  //
+  // Unlike the corpus diagnosis below this is NOT guarded on `mismatchReport.partial`: it is an
+  // operator-facing configuration alarm, and the point is that it fires while results still look
+  // perfectly healthy, because they do.
+  //
+  // Keyed on ANN having actually SERVED a file, not on a query having been issued or even having
+  // returned without throwing. `annModelsQueried` counts a query that threw (it WAS issued, which
+  // is what that metric reports), and `embedded && !failed` additionally counts one that came back
+  // empty; both of those leave retrieval entirely on the scan path, which is the state this alarm
+  // exists to report, so neither can be allowed to silence it. `filesWithHits.size > 0` is the
+  // same definition of "served" the mismatch accounting uses at `servedOutcomes` above.
+  // `annBlockedReason` is only ever set on a primary model that never queried, so whether any
+  // ALTERNATE model served something is the whole question here.
+  if (annBlockedReason && servedByAlternateAnn.size === 0 && rankable.length > 0) {
+    logger?.warn?.(
+      '[semanticSearch] vector search is enabled but ANN served nothing - retrieval is entirely brute-force scan',
+      {
+        embeddingModel,
+        reason: annBlockedReason,
+        backend: canUseAtlas ? 'atlas' : canUseOpenSearch ? 'opensearch' : 'none',
+        rankableFiles: rankable.length,
+        // `reason` only ever describes the PRIMARY model, so this separates "no ANN query ran at
+        // all" (0) from "one ran and served nothing" - different fixes, same scan-only symptom.
+        annModelsQueried: scan.annModelsQueried,
+        // Separates "just vectorized, wait one lag window" from "the backfill never ran" when the
+        // reason is no-ready-files, and shows the mixed case the distinct reason cannot express.
+        stampedWithinLagFiles,
+        chunksScanned: scan.chunksScanned,
+      }
+    );
+  }
+
   if (scan.truncated) {
     logger?.warn?.(
       `[semanticSearch] TRUNCATED scan: ranked ${scan.chunksScanned} chunks across ${scan.filesScanned}/${scan.filesMatching} files ` +
@@ -1056,7 +1176,7 @@ async function rankChunksForFiles(args: {
   );
   if (outcomes.length > 0) {
     logger?.debug?.(
-      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files/${o.filesMissed.length}missed`}`).join(', ')}`
+      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files/${o.filesUnranked.length}unranked`}`).join(', ')}`
     );
   }
 

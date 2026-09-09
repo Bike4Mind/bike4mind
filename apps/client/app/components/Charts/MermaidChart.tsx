@@ -33,7 +33,10 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
     mermaid.initialize({
       startOnLoad: true,
       theme: theme.palette.mode === 'dark' ? 'dark' : 'default',
-      securityLevel: 'loose', // Required for PNG export
+      // 'strict' sanitizes labels and disables click-handler/javascript: link injection.
+      // PNG export serializes the inline <svg> that render() returns (see handleExportPNG),
+      // which 'strict' leaves in place - only 'sandbox' (iframe-wrapped output) would break it.
+      securityLevel: 'strict',
     });
   }, [theme.palette.mode]);
 

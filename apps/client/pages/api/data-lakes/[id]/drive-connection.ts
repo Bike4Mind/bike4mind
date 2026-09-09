@@ -39,9 +39,35 @@ async function resolveOrgLake(req: Request): Promise<{ lakeId: string; organizat
 }
 
 /**
+ * The lake's connection regardless of `enabled`, scoped to the lake's org.
+ *
+ * Deliberately NOT findByDataLakeId (which filters `enabled: true`): archiving or soft-deleting a
+ * lake now DISABLES its connection rather than destroying it (disableDriveConnectionForLake), so an
+ * enabled-only lookup would report the connection absent while the row still holds the live Google
+ * grant and the globally-unique driveFolderId claim - the DELETE below would answer 204 without
+ * revoking anything, and the folder would stay unclaimable by anyone.
+ *
+ * findByDataLakeIdAny is deliberately global (server-side only). The tenant boundary is
+ * resolveOrgLake's verifyOrgAccess, which has already run; the comparison below is defence in depth
+ * against inconsistent data - both sides derive from the same lake - and is NOT what scopes the
+ * caller. A route that copies this finder needs the verifyOrgAccess, not just the comparison.
+ */
+async function findLakeConnection(lakeId: string, organizationId: string) {
+  const conn = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(lakeId);
+  if (conn && conn.organizationId !== organizationId) {
+    throw new NotFoundError('Drive connection not found');
+  }
+  return conn;
+}
+
+/**
  * GET    /api/data-lakes/:id/drive-connection -> { connection: SafeConnection | null }
  * DELETE /api/data-lakes/:id/drive-connection -> 204 (revokes the Google grant and releases the
  *        folder claim so it can be re-used)
+ *
+ * Both answer for a DISABLED connection too (an archived/soft-deleted lake's) - see
+ * findLakeConnection: `enabled` is a poll switch, not a disconnect, and only the DELETE here or the
+ * phase-2 purge actually revokes.
  *
  * Org owner/manager (or platform admin) only. The connect + ingest trigger lives in POST
  * /api/data-lakes/drive-sync; this route is the per-lake status + disconnect surface.
@@ -50,13 +76,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { lakeId, organizationId } = await resolveOrgLake(req);
-    const conn = await orgGoogleDriveConnectionRepository.findByDataLakeId(lakeId, organizationId);
+    const conn = await findLakeConnection(lakeId, organizationId);
     return res.json({ connection: conn ? toSafeConnection(conn) : null });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { lakeId, organizationId } = await resolveOrgLake(req);
-    const conn = await orgGoogleDriveConnectionRepository.findByDataLakeId(lakeId, organizationId);
+    const conn = await findLakeConnection(lakeId, organizationId);
     if (conn) {
       // Don't hard-delete under a live ingest: the running handler still holds the connection it
       // loaded and would keep creating FabFiles stamped with a driveConnectionId that no longer
