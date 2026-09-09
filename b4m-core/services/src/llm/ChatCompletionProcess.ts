@@ -2711,12 +2711,23 @@ export class ChatCompletionProcess {
       // and the knowledge tools write the same field later in the turn (mergeRetrievalSummary
       // keeps 'forced' and never lets this not-attempted seed erase a real outcome).
       const knowledgeToolOffered = offeredToolNames.includes('search_knowledge_base');
+      // Resolved here rather than inline at the buildToolPrompt call below so the seed can record
+      // whether the guidance section actually shipped. Read 2-arg on purpose: a cleared setting
+      // returns '' and the section drops out, which is its documented off switch.
+      const knowledgeBaseGuidance = getSettingsValue('KnowledgeBaseRetrievalPrompt', defaultAdminSettings);
+      // Mirrors ToolBuilder.buildToolPrompt's gate exactly. One const feeds both the seed and the
+      // call below so the recorded flag and the actual injection cannot drift apart.
+      const knowledgeBaseGuidanceInjected = knowledgeToolOffered && Boolean(knowledgeBaseGuidance);
       if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
           surfaces: [],
           dataLakeTags: [],
+          // Recorded only when the tool was offered: a forced-only turn never had a section to
+          // ship, and writing `false` there would pad the A/B's control arm with turns that were
+          // never in the experiment.
+          ...(knowledgeToolOffered ? { knowledgeBaseGuidanceInjected } : {}),
         });
       }
 
@@ -2789,15 +2800,13 @@ export class ChatCompletionProcess {
         hasWebSearch: offeredToolNames.includes('web_search'),
         webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
         // Same offered-set check that seeds `promptMeta.retrieval.mode` above, so the nudge covers
-        // the optional-path turns that fold measures. Two caveats a reader re-running that
-        // measurement needs: the seed splits this set by `forcedRetrievalEnabled`, so forced turns
-        // are nudged too and land in a different bucket; and the seed does NOT see the guidance
-        // string, so clearing the `KnowledgeBaseRetrievalPrompt` setting (the section's documented
-        // off switch) leaves those turns counted in `offeredTurns` with no nudge shipped. Nothing
-        // in promptMeta records that the section was injected - so an A/B driven by clearing the
-        // field cannot be read off the fold alone.
+        // the optional-path turns that fold measures. One caveat for a reader re-running that
+        // measurement: the seed splits this set by `forcedRetrievalEnabled`, so forced turns are
+        // nudged too and land in a different bucket. Whether the section actually shipped is
+        // recorded per turn as `retrieval.knowledgeBaseGuidanceInjected`, which is what makes an
+        // A/B driven by clearing the setting readable straight off the fold.
         hasKnowledgeBase: knowledgeToolOffered,
-        knowledgeBaseGuidance: getSettingsValue('KnowledgeBaseRetrievalPrompt', defaultAdminSettings),
+        knowledgeBaseGuidance,
         userTimezone,
         mcpTools: directMcpTools,
         sessionId,

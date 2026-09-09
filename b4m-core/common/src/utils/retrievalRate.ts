@@ -16,6 +16,16 @@ type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
  * write a retrieval summary through persistRunAsQuest but never pass the seed site and so would
  * otherwise land in the denominator with no offer behind them.
  */
+/**
+ * One arm of the guidance A/B. Same numerator as the headline rate (the model choosing to
+ * retrieve), over the subset of offered turns in that arm.
+ */
+export type GuidanceArm = {
+  turns: number;
+  retrievedTurns: number;
+  rate: number | null;
+};
+
 export type OptionalPathRetrievalRate = {
   /** Turns the model was offered retrieval on, with nothing forcing it. */
   offeredTurns: number;
@@ -23,6 +33,26 @@ export type OptionalPathRetrievalRate = {
   retrievedTurns: number;
   /** retrievedTurns / offeredTurns, or null when the denominator is empty - never a phantom 0. */
   rate: number | null;
+  /**
+   * The offered turns above, partitioned by whether the knowledge-base when-to-retrieve guidance
+   * section shipped on the turn. This is the A/B readout: compare `injected.rate` against
+   * `notInjected.rate`, where the second arm is produced by clearing the
+   * KnowledgeBaseRetrievalPrompt setting - the section's only off switch, and one that needs no
+   * deploy to throw.
+   *
+   * `unrecorded` is turns written before the flag existed, or by a path that never passed the
+   * seed. Reported as its own arm rather than folded into either side: crediting them to one arm
+   * would bias the exact comparison this exists to serve, and silently dropping them would make
+   * the arms not sum. The three arms always sum to `offeredTurns`.
+   *
+   * A zero `notInjected.turns` does not mean the section is always on - it means nobody has run
+   * the experiment. The arms describe traffic, not configuration.
+   */
+  guidance: {
+    injected: GuidanceArm;
+    notInjected: GuidanceArm;
+    unrecorded: GuidanceArm;
+  };
   /**
    * Turns where forced retrieval was ON but a rule suppressed it, leaving the model on the
    * optional path. Counted separately rather than folded into the numbers above: they reach the
@@ -62,6 +92,11 @@ const emptyRate = (): OptionalPathRetrievalRate => ({
   offeredTurns: 0,
   retrievedTurns: 0,
   rate: null,
+  guidance: {
+    injected: { turns: 0, retrievedTurns: 0, rate: null },
+    notInjected: { turns: 0, retrievedTurns: 0, rate: null },
+    unrecorded: { turns: 0, retrievedTurns: 0, rate: null },
+  },
   forcedSuppressed: {
     turns: 0,
     retrievedTurns: 0,
@@ -108,7 +143,10 @@ const modelRetrieved = (turn: RetrievalRateInput): boolean =>
  * RetrievalSummarySchema). `surfaces` names retrieval MECHANISMS, not lakes, so it carries no
  * identity out with it.
  */
-export type RetrievalRateInput = Pick<RetrievalSummary, 'attempted' | 'mode' | 'forcedSkipReason' | 'surfaces'>;
+export type RetrievalRateInput = Pick<
+  RetrievalSummary,
+  'attempted' | 'mode' | 'forcedSkipReason' | 'surfaces' | 'knowledgeBaseGuidanceInjected'
+>;
 
 /**
  * The projection a caller must select for the fold to read a complete turn, derived from the input
@@ -121,6 +159,7 @@ const RETRIEVAL_RATE_FIELD_SET: Record<keyof RetrievalRateInput, true> = {
   mode: true,
   forcedSkipReason: true,
   surfaces: true,
+  knowledgeBaseGuidanceInjected: true,
 };
 
 export const RETRIEVAL_RATE_FIELDS = Object.keys(RETRIEVAL_RATE_FIELD_SET) as (keyof RetrievalRateInput)[];
@@ -144,7 +183,18 @@ export function summarizeOptionalPathRetrieval(
 
     if (turn.mode === 'optional') {
       summary.offeredTurns += 1;
-      if (modelRetrieved(turn)) summary.retrievedTurns += 1;
+      const retrieved = modelRetrieved(turn);
+      if (retrieved) summary.retrievedTurns += 1;
+      // Explicit undefined check, not truthiness: `false` is a real arm (the section was gated
+      // off) and must not fall in with turns that never recorded the flag at all.
+      const arm =
+        turn.knowledgeBaseGuidanceInjected === undefined
+          ? summary.guidance.unrecorded
+          : turn.knowledgeBaseGuidanceInjected
+            ? summary.guidance.injected
+            : summary.guidance.notInjected;
+      arm.turns += 1;
+      if (retrieved) arm.retrievedTurns += 1;
       continue;
     }
 
@@ -165,6 +215,9 @@ export function summarizeOptionalPathRetrieval(
   }
 
   summary.rate = ratio(summary.retrievedTurns, summary.offeredTurns);
+  for (const arm of [summary.guidance.injected, summary.guidance.notInjected, summary.guidance.unrecorded]) {
+    arm.rate = ratio(arm.retrievedTurns, arm.turns);
+  }
   summary.forcedSuppressed.rate = ratio(summary.forcedSuppressed.retrievedTurns, summary.forcedSuppressed.turns);
   return summary;
 }
