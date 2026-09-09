@@ -5,7 +5,7 @@ import { ReadyState, useBaseWebsocket } from 'react-use-websocket';
 import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer } from '@bike4mind/common';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { isPublicPath } from '@client/app/contexts/ApiContext';
+import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { probeIdentity } from '@client/app/utils/sessionBootstrap';
 
 export { ReadyState };

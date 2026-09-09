@@ -183,9 +183,10 @@ describe('WebsocketProvider - refocus reconnect pulse', () => {
     });
 
     // The pulse dips the url to null for one commit (resetting react-use-websocket's own
-    // reconnectCount) then straight back to the real url, so both appear in the sequence.
+    // reconnectCount) then straight back to the per-connect ticket-url getter, so both the
+    // null and the getter appear in the sequence.
     expect(h.capturedUrls).toContain(null);
-    expect(h.capturedUrls[h.capturedUrls.length - 1]).toBe('wss://example/ws');
+    expect(typeof h.capturedUrls[h.capturedUrls.length - 1]).toBe('function');
   });
 
   it('does not pulse on refocus while still mid-backoff (budget not yet exhausted)', async () => {
@@ -279,12 +280,11 @@ describe('WebsocketProvider - reconnect recovery on a token change (no focus eve
     });
 
     // The pulse dips the url to null for one commit (resetting react-use-websocket's own
-    // reconnectCount) then straight back, carrying the fresh token in queryParams.
+    // reconnectCount) then straight back to the ticket-url getter. The fresh token now rides the
+    // single-use ticket the getter mints on the reconnect (authed by the current session), not a
+    // token queryParam, so there is no token in the URL to assert here.
     expect(h.capturedUrls).toContain(null);
-    expect(h.capturedUrls[h.capturedUrls.length - 1]).toBe('wss://example/ws');
-    expect((h.capturedOptions.current as unknown as { queryParams: { token: string } }).queryParams.token).toBe(
-      'tok-2'
-    );
+    expect(typeof h.capturedUrls[h.capturedUrls.length - 1]).toBe('function');
   });
 
   it('does not pulse on a genuine token change while the budget is not exhausted', async () => {
