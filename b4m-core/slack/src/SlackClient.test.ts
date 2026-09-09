@@ -38,8 +38,19 @@ describe('escapeSlackMrkdwn', () => {
 });
 
 describe('SlackClient constructor', () => {
-  it('sets a request timeout on the underlying WebClient, so a slow Slack API cannot block a caller indefinitely', () => {
+  it('sets no request timeout by default - unlimited, matching every pre-existing caller', () => {
+    // The timeout is opt-in per instance, not global to the class: ~30 call sites share
+    // SlackClient, most of which never asked for a ceiling and might legitimately need longer
+    // than a fixed default (e.g. a paginated Slack-export conversations.history call).
     new SlackClient('xoxb-test-token', logger);
+
+    expect(WebClientCtor).toHaveBeenCalledWith('xoxb-test-token', expect.objectContaining({ timeout: undefined }));
+  });
+
+  it('sets a request timeout on the underlying WebClient when a caller opts in via options.timeoutMs', () => {
+    // Used by notifySlackIndexingComplete.ts, the one caller posting inline from a
+    // time-budgeted Lambda, so a slow (not down) Slack API cannot block it indefinitely.
+    new SlackClient('xoxb-test-token', logger, { timeoutMs: 10_000 });
 
     expect(WebClientCtor).toHaveBeenCalledWith('xoxb-test-token', expect.objectContaining({ timeout: 10_000 }));
   });
