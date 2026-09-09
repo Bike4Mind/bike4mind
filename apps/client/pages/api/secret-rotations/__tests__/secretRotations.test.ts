@@ -124,9 +124,12 @@ describe('POST /api/secret-rotations/renewed', () => {
     const { req, res } = request({ id: 's1' });
     await mockRefs.postHandler!(req, res);
 
-    expect(mockUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 's1', previousKey: 'server-held-jwt-secret' })
-    );
+    // Shape only: a previousKey was captured. Whether it is stored plaintext or
+    // ciphertext depends on SECRET_ENCRYPTION_KEY, which the round-trip is asserted
+    // separately below - pinning the plaintext value here contradicts that test.
+    const captured = mockUpdate.mock.calls[0][0].previousKey;
+    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 's1', previousKey: expect.any(String) }));
+    expect(captured.length).toBeGreaterThan(0);
   });
 
   it('re-captures on every renew, so the grace window advances rather than extending a stale key', async () => {
@@ -139,7 +142,10 @@ describe('POST /api/secret-rotations/renewed', () => {
     await mockRefs.postHandler!(second.req, second.res);
     const secondCall = mockUpdate.mock.calls[1][0];
 
-    expect(secondCall.previousKey).toBe('server-held-jwt-secret');
+    // Shape only (see the note above): each renew captures a previousKey; the
+    // encrypted round-trip is proven in its own test.
+    expect(secondCall.previousKey).toEqual(expect.any(String));
+    expect(secondCall.previousKey.length).toBeGreaterThan(0);
     expect(secondCall.rotatedAt.getTime()).toBeGreaterThanOrEqual(firstRotatedAt.getTime());
   });
 

@@ -6,8 +6,19 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   },
 }));
 
-import { uploadBlogImage, generatePostIdFromTitle } from '../blogImageUpload';
+import { AxiosError } from 'axios';
+import { uploadBlogImage, generatePostIdFromTitle, getBlogUploadErrorMessage } from '../blogImageUpload';
 import { api } from '@client/app/contexts/ApiContext';
+
+function axiosErrorWith(data: unknown): AxiosError {
+  return new AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST', undefined, undefined, {
+    data,
+    status: 400,
+    statusText: 'Bad Request',
+    headers: {},
+    config: {} as never,
+  });
+}
 
 describe('blogImageUpload', () => {
   describe('generatePostIdFromTitle', () => {
@@ -136,6 +147,36 @@ describe('blogImageUpload', () => {
       global.fetch = vi.fn().mockResolvedValueOnce({ ok: false, status: 403 }) as never;
 
       await expect(uploadBlogImage(file)).rejects.toThrow('S3 upload failed with status 403');
+    });
+  });
+
+  describe('getBlogUploadErrorMessage', () => {
+    it('reads the server error envelope out of an AxiosError, not the generic axios message', () => {
+      const err = axiosErrorWith({ error: 'File exceeds the 5MB blog limit' });
+
+      expect(getBlogUploadErrorMessage(err, 'fallback')).toBe('File exceeds the 5MB blog limit');
+    });
+
+    it('falls back to the envelope message field when there is no error field', () => {
+      const err = axiosErrorWith({ message: 'Unsupported blog host' });
+
+      expect(getBlogUploadErrorMessage(err, 'fallback')).toBe('Unsupported blog host');
+    });
+
+    it('falls through to the axios message when the AxiosError carries no server text', () => {
+      // No server envelope: the axios branch finds nothing, so the generic axios message
+      // wins over the fallback (an AxiosError is still an Error). Only a non-Error hits the fallback.
+      const err = axiosErrorWith({});
+
+      expect(getBlogUploadErrorMessage(err, 'default message')).toBe('Request failed with status code 400');
+    });
+
+    it('uses a plain Error message when the failure is not an AxiosError', () => {
+      expect(getBlogUploadErrorMessage(new Error('boom'), 'fallback')).toBe('boom');
+    });
+
+    it('returns the fallback for a non-Error value', () => {
+      expect(getBlogUploadErrorMessage('nope', 'fallback')).toBe('fallback');
     });
   });
 });
