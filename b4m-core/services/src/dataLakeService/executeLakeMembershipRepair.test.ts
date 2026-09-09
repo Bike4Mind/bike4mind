@@ -23,6 +23,7 @@ const member = (fabFileId: string, serverTextHash: string | null = null) => ({
   serverTextHash,
   fileSize: 100,
   createdAt: new Date(AT[fabFileId] ?? '2026-01-01T00:00:00Z'),
+  userId: 'u1',
   arm: 'meta-tag' as const,
 });
 
@@ -118,6 +119,43 @@ describe('executeLakeMembershipRepair', () => {
     expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
   });
 
+  it('withholds a ruling whose group moved since the owner reviewed it', async () => {
+    // The sharp case for keep-newest, which is positional: the owner rules on [mid, old] electing to
+    // keep `mid`, a newer copy lands before the POST, and applying the ruling to [new, mid, old]
+    // removes `mid` - the copy they kept - and leaves the one they never saw.
+    const reviewed = group('d.pdf', 'differing', [member('mid'), member('old')]);
+    const moved = group('d.pdf', 'differing', [member('new'), member('mid'), member('old')]);
+
+    const outcome = await run(
+      [moved],
+      [{ fileName: 'd.pdf', decision: 'keep-newest', groupIdentity: groupIdentity(reviewed) }]
+    );
+
+    expect(outcome.removedFabFileIds).toEqual([]);
+    expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
+    expect(outcome.staleDecisions).toEqual([
+      {
+        fileName: 'd.pdf',
+        reviewedGroupIdentity: groupIdentity(reviewed),
+        currentGroupIdentity: groupIdentity(moved),
+      },
+    ]);
+  });
+
+  it('applies a ruling whose group identity still matches, and one that carries none at all', async () => {
+    // The other side of the gate: it withholds on mismatch, not on presence. A caller with no
+    // identity to offer is unchanged, which is what keeps the field optional.
+    const g = group('d.pdf', 'differing', [member('new'), member('old')]);
+
+    const matched = await run([g], [{ fileName: 'd.pdf', decision: 'keep-newest', groupIdentity: groupIdentity(g) }]);
+    expect(matched.removedFabFileIds).toEqual(['old']);
+    expect(matched.staleDecisions).toEqual([]);
+
+    const unqualified = await run([g], [{ fileName: 'd.pdf', decision: 'keep-newest' }]);
+    expect(unqualified.removedFabFileIds).toEqual(['old']);
+    expect(unqualified.staleDecisions).toEqual([]);
+  });
+
   it('ignores a decision for a group the plan already settled', async () => {
     // A settled group carries a prior decision that suppressed it. Its `outstandingRemovalFabFileIds`
     // says work was never carried out; acting on that here would let a tombstone remove membership
@@ -127,6 +165,7 @@ describe('executeLakeMembershipRepair', () => {
       dataLakeId: 'lake-1',
       fileName: 'kept.pdf',
       decision: 'keep-newest',
+      keptFabFileId: null,
       groupIdentity: '',
       decidedByUserId: 'u1',
       decidedAt: new Date('2026-02-15T00:00:00Z'),
@@ -186,7 +225,7 @@ describe('executeLakeMembershipRepair', () => {
   it('does nothing at all on an empty plan', async () => {
     const outcome = await run([]);
 
-    expect(outcome).toEqual({ removedFabFileIds: [], groupsActedOn: [], failures: [] });
+    expect(outcome).toEqual({ removedFabFileIds: [], groupsActedOn: [], failures: [], staleDecisions: [] });
     expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
   });
 });

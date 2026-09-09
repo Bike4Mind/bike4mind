@@ -1,4 +1,9 @@
-import { membersRemovedByDecision, type MembershipRepairPlan, type PlannedRepairGroup } from '@bike4mind/common';
+import {
+  membersRemovedByDecision,
+  type MembershipRepairPlan,
+  type PlannedRepairGroup,
+  type RepairDecision,
+} from '@bike4mind/common';
 import { removeFileFromDataLake, type RemoveFileFromDataLakeAdapters } from './removeFileFromDataLake';
 import type { MembershipActor } from './lakeMembership';
 
@@ -10,21 +15,42 @@ import type { MembershipActor } from './lakeMembership';
  * whether to touch a customer's membership is readable and testable in the pure module, and this
  * one only has to be right about HOW.
  *
- * Removal is membership only - `removeFileFromDataLake` pulls the lake's tags off the FabFile. The
- * file, its chunks, and its membership of any other lake are untouched, which is what makes the
- * operation recoverable and is asserted rather than assumed (see the tests).
+ * Removal is membership only - `removeFileFromDataLake` pulls the lake's tags off the FabFile; the
+ * file and its chunks survive, which is what makes the operation recoverable. Two qualifications
+ * that door spells out and this one inherits in bulk: a second lake sharing this lake's
+ * fileTagPrefix loses the shared tag, and outright loses a member it held by prefix alone; and each
+ * removal also mints a 30-minute restore row and recomputes stats, which can activate a draft lake.
+ * The membership-only property is pinned at `removeFileFromLake`'s single `pullTagsByFabFileId`, not
+ * by the tests here - they mock the callee, so what they assert is delegation.
  *
- * NOT gated here. Like `recordMembershipDecision`, the manage gate and the convergence kill switch
- * live on the route - the same arrangement `converge` uses, where the service plans and the handler
- * decides whether it may run. A caller reaching this without those is unauthorized and nothing here
- * will say so.
+ * NOT gated here, the same split `converge` uses: the service plans and the handler decides whether
+ * it may run. In practice this is not an ungated door - every removal reaches `removeFileFromLake`'s
+ * `resolveCanManageLake`, so an unauthorized caller is refused on the first member and every one
+ * after - but a route leaning on that gets N failure entries instead of one refusal.
+ *
+ * Two controls a route must supply that do NOT exist yet, stated because the natural assumption is
+ * that they do. The convergence kill switch cannot halt this: `isConvergenceHalted` returns early
+ * unless the work is convergence-origin and resolves a pause flag over queued embedding work, and a
+ * repair enqueues nothing. And nothing caps the wave - the planner truncates nothing, and
+ * `maxGroups`/`maxGroupMembers` are optional payload caps on the health report, not safety caps on a
+ * repair. Compare `converge`, which carries a hard `MAX_CONVERGENCE_WAVE`.
  */
 
 /** What the caller asked to happen beyond the plan's automatic arm, keyed by file name. */
 export interface MembershipRepairDecisionInput {
   fileName: string;
-  decision: Parameters<typeof membersRemovedByDecision>[1];
+  decision: RepairDecision;
   keptFabFileId?: string | null;
+  /**
+   * `groupIdentity` of the group the owner actually reviewed, so a ruling cannot land on a group
+   * that moved underneath it. Optional for a caller with none to offer, but the exposure is real
+   * rather than theoretical: a decision whose identity still matches settles its group, and settled
+   * groups are never acted on here - so the groups a live decision CAN reach are the ones with no
+   * prior ruling plus exactly the ones whose membership changed since review. `keep-newest` is
+   * positional, so on those a copy that arrived after review silently becomes the survivor and the
+   * copy the owner elected to keep is the one removed.
+   */
+  groupIdentity?: string;
 }
 
 export interface MembershipRepairOutcome {
@@ -37,6 +63,12 @@ export interface MembershipRepairOutcome {
    * a half-applied repair the owner can re-run is recoverable; an abandoned one silently is not.
    */
   failures: { fabFileId: string; fileName: string; error: string }[];
+  /**
+   * Decisions withheld because the group moved since it was reviewed. Reported, not dropped: the
+   * owner has to be re-asked, and a silent skip is indistinguishable from a repair that found
+   * nothing to do.
+   */
+  staleDecisions: { fileName: string; reviewedGroupIdentity: string; currentGroupIdentity: string }[];
 }
 
 /**
@@ -45,14 +77,32 @@ export interface MembershipRepairOutcome {
  * The plan's own `removeFabFileIds` is the ONLY source for the automatic arm - it is empty on every
  * `decide` group by construction (see `planMembershipRepair`), so an executor that read it for every
  * group in the plan would still be correct. A supplied decision is what turns a `decide` group into
- * removals, and it is resolved against the group as the PLAN saw it, not re-derived: the plan is the
- * thing the owner reviewed.
+ * removals, and it is resolved against the group as the PLAN saw it, not re-derived.
+ *
+ * That the plan is the thing the owner reviewed is a PRECONDITION, and the route cannot honour it:
+ * nothing persists a `MembershipRepairPlan`, so a POST has to re-plan and hands over a plan computed
+ * at request time. `groupIdentity` on the decision is what carries the reviewed group across that
+ * gap; a mismatch withholds the ruling rather than applying it to a group the owner never saw. The
+ * automatic arm is unaffected - a `collapse` group's removals come from the plan, never a decision.
  */
-function removalsForGroup(group: PlannedRepairGroup, byFileName: Map<string, MembershipRepairDecisionInput>): string[] {
-  if (group.action === 'collapse') return group.removeFabFileIds;
+function removalsForGroup(
+  group: PlannedRepairGroup,
+  byFileName: Map<string, MembershipRepairDecisionInput>
+): { removals: string[]; stale?: MembershipRepairOutcome['staleDecisions'][number] } {
+  if (group.action === 'collapse') return { removals: group.removeFabFileIds };
   const decision = byFileName.get(group.fileName);
-  if (!decision) return [];
-  return membersRemovedByDecision(group, decision.decision, decision.keptFabFileId);
+  if (!decision) return { removals: [] };
+  if (decision.groupIdentity && decision.groupIdentity !== group.groupIdentity) {
+    return {
+      removals: [],
+      stale: {
+        fileName: group.fileName,
+        reviewedGroupIdentity: decision.groupIdentity,
+        currentGroupIdentity: group.groupIdentity,
+      },
+    };
+  }
+  return { removals: membersRemovedByDecision(group, decision.decision, decision.keptFabFileId) };
 }
 
 /**
@@ -80,12 +130,15 @@ export async function executeLakeMembershipRepair(
   const removedFabFileIds: string[] = [];
   const groupsActedOn: MembershipRepairOutcome['groupsActedOn'] = [];
   const failures: MembershipRepairOutcome['failures'] = [];
+  const staleDecisions: MembershipRepairOutcome['staleDecisions'] = [];
 
   // Sequential, not a fan-out: every removal recomputes the lake's stats and can activate a draft
   // lake, so concurrent removals would race each other's recompute and persist a count from a
-  // partial view. The wave is bounded by the plan's own caps, so there is nothing to gain.
+  // partial view. Nothing bounds the wave here - the plan carries no cap - so a large plan is slow
+  // by construction, and the route is where that has to be capped.
   for (const group of [...plan.collapsible, ...plan.needsDecision]) {
-    const removals = removalsForGroup(group, byFileName);
+    const { removals, stale } = removalsForGroup(group, byFileName);
+    if (stale) staleDecisions.push(stale);
     if (removals.length === 0) continue;
 
     const removedHere: string[] = [];
@@ -103,16 +156,14 @@ export async function executeLakeMembershipRepair(
           fileName: group.fileName,
           error: err instanceof Error ? err.message : String(err),
         });
-        logger?.warn?.(
-          `[membershipRepair] lake ${dataLakeId}: removing ${fabFileId} from '${group.fileName}' failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        );
+        // Ids as fields and a static message, matching the sibling: a duplicate group is keyed by a
+        // customer-uploaded file name, which is often identifying and does not belong in log text.
+        logger?.warn?.('[dataLakes] membership repair could not remove a member', { dataLakeId, fabFileId, err });
       }
     }
 
     if (removedHere.length > 0) groupsActedOn.push({ fileName: group.fileName, removedFabFileIds: removedHere });
   }
 
-  return { removedFabFileIds, groupsActedOn, failures };
+  return { removedFabFileIds, groupsActedOn, failures, staleDecisions };
 }
