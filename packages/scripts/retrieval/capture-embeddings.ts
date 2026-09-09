@@ -40,10 +40,11 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { countCodePoints } from '@bike4mind/common';
+import { ApiKeyType, countCodePoints } from '@bike4mind/common';
 import { PROBE_QUESTIONS } from './corpus';
 import {
   assertOnePerInput,
+  chunkTokenCount,
   embedAll,
   findOversizedChunks,
   formatCapturePlan,
@@ -62,8 +63,16 @@ const HELP_TAG_PREFIX = 'help:';
 const SCRIPTS_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const argv = await yargs(hideBin(process.argv))
-  .option('lake', { type: 'string', default: 'system-help', describe: 'Data-lake slug to capture' })
-  .option('userId', { type: 'string', demandOption: true, describe: 'User whose effective API key is used' })
+  .option('lake', {
+    type: 'string',
+    default: 'system-help',
+    describe: 'Data-lake slug (org-less lakes only) or datalakeTag (any lake)',
+  })
+  .option('userId', {
+    type: 'string',
+    demandOption: true,
+    describe: 'User whose effective API key is used - and therefore WHO PAYS; pass your own id',
+  })
   .option('models', { type: 'string', demandOption: true, describe: 'Comma-separated embedding models' })
   .option('reuse-stored-vectors', {
     type: 'boolean',
@@ -87,8 +96,18 @@ await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage
 console.log(`Connected (stage: ${Resource.App.stage})`);
 
 // --- Resolve the corpus (read-only) ---
-const lake = await dataLakeRepository.findBySlug(argv.lake);
-if (!lake) throw new Error(`No "${argv.lake}" lake on this stage.`);
+// By slug first, then by datalakeTag. `findBySlug` with no org list only reaches an ORG-LESS lake
+// (its own docblock: the own-org arm is skipped when organizationIds is empty), so `system-help`
+// resolves and the org-owned production lake the runbook calls the confirmatory arm does not.
+// `datalakeTag` carries a globally-unique index, so it resolves either without an org.
+const lake =
+  (await dataLakeRepository.findBySlug(argv.lake)) ?? (await dataLakeRepository.findByDatalakeTag(argv.lake));
+if (!lake) {
+  throw new Error(
+    `No lake on this stage with slug or datalakeTag "${argv.lake}". An ORG-OWNED lake is not ` +
+      'resolvable by slug here - pass its datalakeTag instead.'
+  );
+}
 if (lake.status !== 'active') throw new Error(`Lake "${argv.lake}" is ${lake.status}, not active.`);
 
 // The LIFECYCLE-SWEEP reader: it returns every id the lake has ever held, with no archivedAt or
@@ -137,7 +156,7 @@ for (const fileId of fileIds) {
       vector: needStoredVectors ? ((chunk.vector as number[]) ?? []) : [],
       parentEmbeddingModel: anyChunkStamped ? chunk.embeddingModel : file.embeddingModel,
     });
-    tokenCounts.push(chunk.tokenCount ?? Math.ceil(text.length / 4));
+    tokenCounts.push(chunkTokenCount(chunk.tokenCount, text));
     capturedDocs.add(docId);
   }
 }
@@ -193,6 +212,18 @@ if (embedModels.length > 0 && !argv.yes) {
 }
 
 // --- Credentials, resolved the shipped way ---
+// `getEffectiveLLMApiKeys` resolves personal key -> platform demo key -> env, so --userId silently
+// decides WHOSE quota and money this spends. The preflight above prints dollars; it has to print the
+// payer too. Read from the same store the resolver reads (isActive, unexpired), not inferred.
+const personalKeys = await apiKeyRepository.findByUserIdAndTypes(argv.userId, [ApiKeyType.openai, ApiKeyType.voyageai]);
+const personalTypes = personalKeys.filter(k => !k.expiresAt || k.expiresAt > new Date()).map(k => k.type);
+console.log(
+  personalTypes.length > 0
+    ? `credential source    : PERSONAL key(s) of user ${argv.userId} (${personalTypes.join(', ')}). ` +
+        "A personal key WINS over the platform key, so this run spends THAT user's quota."
+    : `credential source    : platform key / env (user ${argv.userId} stores no active provider key).`
+);
+
 const keyTable = await apiKeyService.getEffectiveLLMApiKeys(argv.userId, {
   db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
   getSettingsByNames,

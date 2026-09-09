@@ -2,6 +2,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, getEmbeddingModelCost } from '@bike4mind/common';
 import {
   assertOnePerInput,
+  chunkTokenCount,
   embedAll,
   findOversizedChunks,
   formatCapturePlan,
@@ -213,6 +214,21 @@ describe('parseSupportedModels', () => {
 
   it('names the offending value instead of failing opaquely inside the factory later', () => {
     expect(() => parseSupportedModels([SMALL, 'text-embedding-4-enormous'])).toThrow(/text-embedding-4-enormous/);
+  });
+});
+
+describe('chunkTokenCount', () => {
+  it('uses the stored count when the chunk has one, including a legitimate zero', () => {
+    expect(chunkTokenCount(550, 'x'.repeat(2200))).toBe(550);
+    expect(chunkTokenCount(0, '')).toBe(0);
+  });
+
+  it('falls back on chars/3, the shipped estimate, so a firing over-quotes rather than under-quotes', () => {
+    // chars/4 (an earlier version of this line) would have quoted 550 for the same passage and fed
+    // that to the oversize guard too - optimistic in both places that must not be.
+    expect(chunkTokenCount(undefined, 'x'.repeat(2200))).toBe(734);
+    expect(chunkTokenCount(null, 'x'.repeat(2200))).toBe(734);
+    expect(chunkTokenCount(undefined, 'x'.repeat(2200))).toBeGreaterThan(2200 / 4);
   });
 });
 

@@ -73,6 +73,19 @@ function countBatches(tokenCounts: readonly number[]): number {
 }
 
 /**
+ * The token count to plan and guard one chunk with.
+ *
+ * `FabFileChunk.tokenCount` is declared required (packages/database/src/models/content/FabFileModel.ts),
+ * so the fallback is unreachable against real data - it covers a hand-built chunk only. It matches the
+ * shipped fallback in `calculateTokenCounts` (chars/3, OpenAIEmbeddingService), which deliberately
+ * OVERestimates: this number feeds both the spend quote and `findOversizedChunks`, so a firing must
+ * over-quote and over-report rather than under-quote either. It lives here with a test because it is a
+ * judgement that can silently corrupt a spend decision.
+ */
+export const chunkTokenCount = (tokenCount: number | null | undefined, text: string): number =>
+  tokenCount ?? Math.ceil(text.length / 3);
+
+/**
  * Chunks the provider will refuse, named so the operator can fix the right one.
  *
  * `generateEmbeddingBatch` validates the per-input ceiling before it issues a request, so no money
@@ -236,7 +249,7 @@ export function parseSupportedModels(models: readonly string[]): SupportedEmbedd
   if (unknown.length > 0) {
     throw new Error(`Unsupported embedding model(s): ${unknown.join(', ')}. See SupportedEmbeddingModelSchema.`);
   }
-  return models as SupportedEmbeddingModel[];
+  return [...models] as SupportedEmbeddingModel[];
 }
 
 /**
@@ -272,8 +285,15 @@ export type CapturableFileFields = {
  * retrievalUnavailable.ts) says such a file really does rank its embedded passages, because the read
  * filters `vector: {$exists, $ne: []}` per CHUNK. The corpus defer gate reads it the other way, and
  * can afford to. So `filesUnreachable` is an upper bound on what production withholds, and the band
- * is measured over a marginally narrower corpus. Every arm shares this filter, so the model+width
- * comparison is unaffected; only the absolute band carries it.
+ * is measured over a marginally narrower corpus.
+ *
+ * Sharing the filter across arms makes the drop comparison-neutral for a MEAN, which is not what the
+ * headline is: band width is `max - min`, an extreme, and the withheld stratum is not random -
+ * partially vectorized files skew long, and this comparison exists because model behaviour may
+ * interact with length. So the honest rider is narrower than "unaffected": the comparison is
+ * unbiased when `filesUnreachable` is 0, which every arm block prints. On the corpus this targets
+ * that count is 0 (the prod probe recorded zero missing vectors and zero paused or indexing files).
+ * Read the counter before reading the widths against each other.
  *
  * `opts` is empty in practice: a capture has no session, so there is no retrieval filter to apply and
  * that arm is a no-op today. The call stays because the shipped predicate makes it, and a filter that
