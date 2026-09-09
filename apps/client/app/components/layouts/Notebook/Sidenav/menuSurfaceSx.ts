@@ -25,6 +25,13 @@ type PxLength = `${number}px`;
  */
 const MENU_SURFACE_RADIUS: PxLength = '8px';
 
+/**
+ * The corner of a row ON a menu surface, which is NOT the surface's own corner - a 12px panel
+ * still wants 8px rows, and keeping the two separate is the point. Exported because a consumer
+ * setting Joy's row variables itself (datalake/rowActionsMenu) needs the same value.
+ */
+export const MENU_ROW_RADIUS: PxLength = '8px';
+
 /** The knobs the three list recipes share. */
 type MenuListOpts = {
   /** Row spacing: 4px for a Select's listbox, 2px for the denser action menus. */
@@ -66,8 +73,8 @@ export const menuSurfaceSx = (theme: Theme, radius: PxLength = MENU_SURFACE_RADI
  *
  * --ListItem-radius is pinned rather than left to Joy, which DERIVES a smaller child radius from
  * --List-radius and --List-padding (8/8 comes out at 4px) - the reason the menus disagreed about
- * their row corners. Rows stay 8px whatever the surface's corner is: a 12px panel still wants
- * 8px rows.
+ * their row corners. It stays MENU_ROW_RADIUS whatever the surface's corner is: a 12px panel
+ * still wants 8px rows.
  *
  * --List-radius is NOT merely that derivation's input. Joy paints a visible corner from it on
  * every surface these recipes land on - Menu.js:51 and Select.js:240 are both
@@ -83,7 +90,7 @@ export const menuListSx = ({ gap = '4px', radius = MENU_SURFACE_RADIUS }: MenuLi
   '--List-padding': MENU_INSET,
   '--List-radius': radius,
   '--List-gap': gap,
-  '--ListItem-radius': '8px',
+  '--ListItem-radius': MENU_ROW_RADIUS,
   ...scrollbarStyles,
 });
 
@@ -109,7 +116,9 @@ export const menuListSx = ({ gap = '4px', radius = MENU_SURFACE_RADIUS }: MenuLi
 export const selectListboxSx = (theme: Theme, opts?: MenuListOpts) => ({
   ...menuListSx(opts),
   '& [role="option"]': {
-    borderRadius: '8px',
+    // No borderRadius here: an Option is a StyledListItemButton, whose own
+    // `borderRadius: var(--ListItem-radius)` (ListItemButton.js:83) already takes the corner
+    // menuListSx pins above.
     transition: 'background 0.15s',
     '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
     '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
@@ -193,7 +202,7 @@ export const menuRowSx = (theme: Theme, danger = false) => {
     gap: '12px',
     px: '10px',
     height: '40px',
-    borderRadius: '8px',
+    borderRadius: MENU_ROW_RADIUS,
     cursor: 'pointer',
     color: danger ? theme.palette.danger[500] : theme.palette.sidenav?.navItemText,
     // Joy icons - and the Credits Bike4MindIcon, which fills with var(--Icon-color) - read
