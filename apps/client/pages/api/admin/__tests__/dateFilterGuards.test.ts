@@ -84,7 +84,12 @@ beforeEach(() => {
 });
 
 const cases: Array<{ name: string; handler: unknown; params: string[]; queried: () => unknown }> = [
-  { name: 'rate-limits', handler: rateLimitsHandler, params: ['dateFrom', 'dateTo'], queried: () => mocks.snapshotFind },
+  {
+    name: 'rate-limits',
+    handler: rateLimitsHandler,
+    params: ['dateFrom', 'dateTo'],
+    queried: () => mocks.snapshotFind,
+  },
   {
     name: 'slack-audit-logs',
     handler: slackAuditLogsHandler,

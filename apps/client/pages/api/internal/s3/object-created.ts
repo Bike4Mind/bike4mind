@@ -87,8 +87,11 @@ const handler = baseApi({ auth: false }).post(
     // with no bucket name keeps the historical behaviour (fab-file), so this cannot regress the
     // one path that already worked.
     const fabFileRecords: MinioS3Record[] = [];
-    const forHandler: Array<{ name: string; run: (e: S3Event, c: Context) => Promise<unknown>; record: MinioS3Record }> =
-      [];
+    const forHandler: Array<{
+      name: string;
+      run: (e: S3Event, c: Context) => Promise<unknown>;
+      record: MinioS3Record;
+    }> = [];
 
     for (const record of records) {
       const bucket = record.s3?.bucket?.name;

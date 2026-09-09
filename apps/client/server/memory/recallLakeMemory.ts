@@ -6,15 +6,14 @@ import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { embedMementoQuery } from './mementoQueryEmbedding';
 
 /**
- * How many lake beliefs to inject at most - the same k the user-memento recall settled on
- * (recallMementosV2). One merged card across the user's accessible lakes, so this is a shared budget.
- */
-const LAKE_RECALL_K = 8;
-
-/**
  * How far heat (ACT-R activation) may move a belief relative to topicality, matching the user-memento
  * recall. A lake decays far slower (LAKE_ACTIVATION), so months-old reference facts stay warm; the
  * query is still the primary axis and heat the tiebreak.
+ *
+ * Stays a coded constant while the belief budget (`opts.k`) became an admin setting: #2496 was a
+ * volume diagnosis - 8 beliefs is too little grounding for a document corpus - and this weight
+ * changes the ORDER of what fits the budget, not how much fits. Worth exposing once something
+ * measures the ranking as the limiter; nothing has.
  */
 const LAKE_ACTIVATION_WEIGHT = 0.025;
 
@@ -37,6 +36,17 @@ export interface RecallLakeMemoryOptions {
   query: string;
   /** The user's accessible lakes, each paired with its DEK owner. Resolved by the caller. */
   lakes: AccessibleLake[];
+  /**
+   * Most beliefs to return, a SHARED budget across `lakes` (one merged card). The
+   * `lakeMemoryRecallK` admin setting, resolved per turn in LakeMemoryFeature with a coded
+   * fallback. Required rather than defaulted: a default here would be a second copy of
+   * LAKE_RECALL_K_DEFAULT that could drift from the setting's own, which is the exact trap the
+   * hardcoded 8 this replaced represented.
+   *
+   * `recall` applies it as a pure cap AFTER the cosine floor (recall.ts: filter, then sort, then
+   * slice), so raising it admits more QUALIFYING beliefs and never a sub-floor one.
+   */
+  k: number;
   /**
    * Which of these source FabFile ids are currently retrievable for citation. A belief is surfaced
    * only if at least one of its source docs is reachable, so the card never leans on content the
@@ -117,7 +127,7 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
   if (citable.length === 0) return [];
 
   return recall(citable, opts.query, {
-    k: LAKE_RECALL_K,
+    k: opts.k,
     activationWeight: LAKE_ACTIVATION_WEIGHT,
     // The cosine floor is calibrated for the MEMENTO space, so it only applies when we actually scored
     // with an embedding; a lexical fallback uses an unrelated scale and no floor.

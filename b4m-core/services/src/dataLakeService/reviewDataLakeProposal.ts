@@ -6,7 +6,7 @@ import type {
   IDataLakeProposalRepository,
   IDataLakeRepository,
 } from '@bike4mind/common';
-import { DATALAKE_TAG_STRENGTH, FabFileSourceType } from '@bike4mind/common';
+import { DATALAKE_TAG_STRENGTH, FabFileSourceType, isLakeIngestable } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { resolveCanManageLake } from './authorizeLakeManage';
@@ -107,10 +107,10 @@ function asReviewerFacingAdmissionError(err: unknown): unknown {
   );
 }
 
-/** The same writability rule the upload and Slack doors apply: only a draft or active lake takes new files. */
+/** The same writability rule the upload and Slack doors apply. */
 function assertLakeTakesNewFiles(lake: IDataLakeDocument): void {
   assertLakeWritable(lake);
-  if (lake.status !== 'draft' && lake.status !== 'active') {
+  if (!isLakeIngestable(lake.status)) {
     throw new BadRequestError(`This data lake is ${lake.status} and cannot take new files`);
   }
 }

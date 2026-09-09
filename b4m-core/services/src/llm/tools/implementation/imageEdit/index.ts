@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import {
   ApiKeyType,
   ImageModels,
@@ -61,8 +62,7 @@ async function imageUrlToBase64(imageUrl: string): Promise<string> {
 // guard below is otherwise only reachable through the full `edit_image` toolFn, which
 // requires mocking an entire provider edit call.
 export async function getImageFromFileId(fileId: string, context: ToolContext): Promise<string> {
-  // Validate that fileId is a valid MongoDB ObjectId (24-char hex string) before querying
-  if (!/^[0-9a-fA-F]{24}$/.test(fileId)) {
+  if (!isObjectIdShaped(fileId)) {
     throw new Error(
       `Invalid file ID "${fileId}". Expected a MongoDB ObjectId (24-character hex string), not a filename. Please provide the file ID from the workbench, or use a full URL (https://...) to reference the image.`
     );
@@ -130,7 +130,7 @@ async function resolveImageInputUrl(input: string, context: ToolContext): Promis
   if (input.startsWith('http://') || input.startsWith('https://') || input.startsWith('data:')) {
     return input;
   }
-  if (/^[0-9a-fA-F]{24}$/.test(input)) {
+  if (isObjectIdShaped(input)) {
     return getImageFromFileId(input, context);
   }
   return getGeneratedImageUrl(input, context);

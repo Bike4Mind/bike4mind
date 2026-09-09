@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { google, drive_v3 } from 'googleapis';
+import { auth as googleAuth, drive as driveApi, drive_v3 } from '@googleapis/drive';
 
 export type DriveFile = {
   id: string;
@@ -74,9 +74,9 @@ const MAX_LIST_PAGES = 100;
  * concurrent multi-tenant syncs on one process would race and bleed tokens across tenants.
  */
 export function createDriveClient(accessToken: string): drive_v3.Drive {
-  const auth = new google.auth.OAuth2();
+  const auth = new googleAuth.OAuth2();
   auth.setCredentials({ access_token: accessToken });
-  return google.drive({ version: 'v3', auth });
+  return driveApi({ version: 'v3', auth });
 }
 
 /**

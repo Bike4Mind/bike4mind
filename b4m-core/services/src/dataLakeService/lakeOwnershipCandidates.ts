@@ -83,7 +83,15 @@ export interface LakeTransferAuthority {
  * read of the org's present-day roster with work emails attached. Org-admin rights count as
  * membership on their own: an appointed admin (`adminUserIds`) or team manager need not sit on the
  * org's `users[]` ACL, so requiring the ACL alone would close the succession path this rule exists
- * for. A platform admin is exempt (global superuser), and a personal lake has no org to belong to.
+ * for. A platform admin is exempt (global superuser).
+ *
+ * A PERSONAL (org-less) lake is not transferable by a non-admin at all. It has no membership
+ * relation to scope a recipient, so `listLakeOwnershipCandidates` offers nobody and the UI says the
+ * lake must be moved into an organization first. Letting the write path stay broader than the
+ * picker meant an org-less lake could be pushed onto any user id the caller happened to know, with
+ * no shared-org requirement and no acceptance step - and since #2495 an owner grant also carries the
+ * lake's `systemPrompt` into that user's system messages, so an unasked-for transfer became an
+ * injection channel. The gate now matches the offered option set; a platform admin stays exempt.
  *
  * Pure and sync over pre-fetched active grants, so the write path (`transferLakeOwnership`), the
  * candidate listing, and the access view's viewer-capability flag all decide from one rule instead of
@@ -99,7 +107,10 @@ export function resolveLakeTransferAuthority(
   const isOwner = isEffectiveOwner(lake, actor, grants);
   const lakeOrg = normalizeId(lake.organizationId);
   const isOrgAdminOfLake = !!lakeOrg && (actor.administeredOrgIds ?? []).includes(lakeOrg);
-  const inLakeOrg = !lakeOrg || isOrgAdminOfLake || (actor.organizationIds ?? []).includes(lakeOrg);
+  // Org-scoped by construction: an org-less lake is refused outright for a non-admin (see the doc
+  // comment), so the membership rule never gets to decide one. Carrying the `!!lakeOrg` here rather
+  // than in `allowed` keeps that refusal in ONE term instead of reading as two competing rules.
+  const inLakeOrg = !!lakeOrg && (isOrgAdminOfLake || (actor.organizationIds ?? []).includes(lakeOrg));
   return {
     allowed: !!actor.isAdmin || (inLakeOrg && (isOwner || isOrgAdminOfLake)),
     isOwner,
@@ -122,8 +133,9 @@ export interface ListLakeOwnershipCandidatesAdapters {
  * so listing candidates would mean a global user search - a user-enumeration surface this
  * manager-facing view should not open. It returns `scope: 'personal'` with no candidates, and the UI
  * says so; the complete path is to move the lake into an organization first (lake Settings ->
- * Visibility -> Organization). The API itself stays broader, so an org-less transfer remains possible
- * for a caller that already knows the target user id.
+ * Visibility -> Organization). The write path agrees rather than staying broader: an org-less lake is
+ * refused outright for a non-admin actor by `resolveLakeTransferAuthority`, so knowing a target user
+ * id is no longer enough to hand them a lake.
  *
  * Excluded from the list, both for reasons the picker would otherwise misrepresent:
  *  - current effective owners - transferring to them is a no-op;
@@ -159,6 +171,13 @@ export async function listLakeOwnershipCandidates(
 
   const grants = await loadActiveLakeGrants(lake, { db });
   const authority = resolveLakeTransferAuthority(lake, actor, grants);
+  // `!lakeOrg` is checked SEPARATELY from authority, and only a platform admin can reach it: for
+  // anyone else `allowed` is already false on an org-less lake. So a superuser sees the Transfer
+  // button (`meta.canTransferOwnership` follows `allowed`) and then the personal-lake alert telling
+  // them to move the lake into an organization, while the write path would in fact accept the
+  // transfer. That admin path is knowingly API-only - offering a picker here would mean a global
+  // user search, the enumeration surface this view refuses to open (see the doc comment). Read the
+  // alert as the rule for a non-admin, not for an admin.
   if (!authority.allowed || !lakeOrg) {
     return { scope, candidates: [] };
   }

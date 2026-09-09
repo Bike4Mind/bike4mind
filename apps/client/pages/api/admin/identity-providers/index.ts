@@ -10,7 +10,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
-      const idps = await identityProviderRepository.findAll();
+      // Presence flags, not values: the UI needs to distinguish a configured credential
+      // from a blank one, and the secrets themselves must never reach a response.
+      const idps = await identityProviderRepository.findAllWithSecretPresence();
       return res.json(idps);
     } catch (error) {
       console.error('Error fetching identity providers:', error);

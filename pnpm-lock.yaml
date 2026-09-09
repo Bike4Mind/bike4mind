@@ -39,6 +39,11 @@ overrides:
   deepmerge-ts@<8.0.0: ^8.0.1
   undici@>=7.0.0 <8.0.0: ^7.29.0
 
+patchedDependencies:
+  '@mui/joy@5.0.0-beta.52':
+    hash: 6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4
+    path: patches/@mui__joy@5.0.0-beta.52.patch
+
 importers:
 
   .:
@@ -272,6 +277,12 @@ importers:
       '@google-analytics/data':
         specifier: ^5.2.1
         version: 5.2.1
+      '@googleapis/calendar':
+        specifier: ^16.0.0
+        version: 16.0.0
+      '@googleapis/drive':
+        specifier: ^22.0.0
+        version: 22.0.0
       '@hookform/resolvers':
         specifier: ^5.4.0
         version: 5.4.0(react-hook-form@7.81.0(react@19.2.7))
@@ -310,7 +321,7 @@ importers:
         version: 5.18.0(@mui/material@5.18.0(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react@19.2.17)(react@19.2.7)
       '@mui/joy':
         specifier: ^5.0.0-beta.52
-        version: 5.0.0-beta.52(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 5.0.0-beta.52(patch_hash=6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4)(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@mui/material-nextjs':
         specifier: ^7.3.9
         version: 7.3.9(@emotion/cache@11.14.0)(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(next@16.2.11(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(@types/node@24.12.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
@@ -455,12 +466,6 @@ importers:
       framer-motion:
         specifier: ^11.5.4
         version: 11.18.2(@emotion/is-prop-valid@1.3.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      google-auth-library:
-        specifier: ^10.9.0
-        version: 10.9.0
-      googleapis:
-        specifier: ^173.0.0
-        version: 173.0.0
       handlebars:
         specifier: ^4.7.8
         version: 4.7.9
@@ -479,6 +484,9 @@ importers:
       idb-keyval:
         specifier: ^6.2.6
         version: 6.2.6
+      isolated-vm:
+        specifier: ^7.0.0
+        version: 7.0.0
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
@@ -897,6 +905,9 @@ importers:
 
   b4m-core/agents:
     dependencies:
+      '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
@@ -3264,6 +3275,14 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
+
+  '@googleapis/calendar@16.0.0':
+    resolution: {integrity: sha512-Z/8Jdf4hMvmMlBMhP0whZNPSixEpYv4mC5RJfrlvrnqpf/rV68MJ+8M9MmyqUt7/SQp2zRfVmEqkk+csB2Cgmg==}
+    engines: {node: '>=12.0.0'}
+
+  '@googleapis/drive@22.0.0':
+    resolution: {integrity: sha512-u21JQPR5mGKt8OqjsDndb+l5b44IXCKTum+P1Q1rlWmi2pUNZqcNeq7csx06xlwj+UeZv5/ZhhhAjziVZu86Dg==}
+    engines: {node: '>=12.0.0'}
 
   '@grpc/grpc-js@1.14.4':
     resolution: {integrity: sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ==}
@@ -8369,10 +8388,6 @@ packages:
   googleapis-common@8.0.2:
     resolution: {integrity: sha512-5MXeQzIZaqCH7B+HJWqhQm946VARpZep6acbWSr/fcgF2cQANq7allgX+i/G0EqF0WyUxB277gtWMzRYHMl9tg==}
     engines: {node: '>=18.0.0'}
-
-  googleapis@173.0.0:
-    resolution: {integrity: sha512-xEJJYLZ4qeenVyfzispNfRjCe9bsv7CzBv5zYFLvScOze9snJ8S9W6hjQ729CWPQt5mvn/JrcRaCHzQiukt0ng==}
-    engines: {node: '>=18'}
 
   gopd@1.2.0:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
@@ -14265,6 +14280,18 @@ snapshots:
       - supports-color
       - utf-8-validate
 
+  '@googleapis/calendar@16.0.0':
+    dependencies:
+      googleapis-common: 8.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@googleapis/drive@22.0.0':
+    dependencies:
+      googleapis-common: 8.0.2
+    transitivePeerDependencies:
+      - supports-color
+
   '@grpc/grpc-js@1.14.4':
     dependencies:
       '@grpc/proto-loader': 0.8.0
@@ -15249,7 +15276,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.17
 
-  '@mui/joy@5.0.0-beta.52(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@mui/joy@5.0.0-beta.52(patch_hash=6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4)(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
       '@babel/runtime': 7.29.7
       '@mui/base': 5.0.0-beta.40-1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -19945,7 +19972,7 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
-      gaxios: 7.1.3
+      gaxios: 7.2.0
       gcp-metadata: 8.1.2
       google-logging-utils: 1.1.3
       gtoken: 8.0.0
@@ -19993,13 +20020,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  googleapis@173.0.0:
-    dependencies:
-      google-auth-library: 10.9.0
-      googleapis-common: 8.0.2
-    transitivePeerDependencies:
-      - supports-color
-
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
@@ -20013,7 +20033,7 @@ snapshots:
 
   gtoken@8.0.0:
     dependencies:
-      gaxios: 7.1.3
+      gaxios: 7.2.0
       jws: 4.0.1
     transitivePeerDependencies:
       - supports-color

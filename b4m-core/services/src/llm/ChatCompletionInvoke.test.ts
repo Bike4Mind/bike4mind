@@ -91,4 +91,27 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     const invoke = makeInvoke();
     await expect(invoke.invoke({ body, userId: EDITOR_ID })).rejects.toThrow(/Invalid model/);
   });
+
+  // questStartParams - NOT the parsed request - is what dispatchQuest ships to the async worker, so
+  // a request field missing from that literal is silently dropped on every path except `wait: true`.
+  // promptMode is asserted alongside because the two must travel together: it is the sibling that
+  // already worked, so a failure here names the asymmetry rather than just "field missing".
+  it('carries skipAutoOffers and promptMode onto questStartParams, across the async boundary', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    // Unset, invoke() short-circuits into an error quest before questStartParams is ever built.
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({
+      body: { ...body, skipAutoOffers: true, promptMode: 'raw' as const },
+      userId: OWNER_ID,
+    });
+
+    expect((invoke as any).questStartParams).toEqual(
+      expect.objectContaining({ skipAutoOffers: true, promptMode: 'raw' })
+    );
+  });
 });

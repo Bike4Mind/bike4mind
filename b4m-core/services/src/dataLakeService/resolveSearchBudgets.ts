@@ -48,9 +48,14 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * a matched chunk to SERVE, and (#1955) how many passages and how relevant they must be for
  * `search_knowledge_base` specifically.
  *
- * Shared by every entrypoint (the search route, the chat KB tool, forced retrieval) so one
- * surface cannot end up scanning further than another. Uses the CACHED settings accessor, so
- * this costs no round-trip on a warm cache.
+ * Shared by every entrypoint (the search route, the chat KB tool, forced retrieval) so no surface
+ * derives its budget by hand. That guarantees one DERIVATION, not one number: the KB tool resolves
+ * through the scoped path below while the search route (data-lakes/semantic-search) still resolves
+ * platform-only, so once an org/owner override is written the two surfaces legitimately scan to
+ * different depths for the same caller. Widening the guarantee back to one number means giving the
+ * remaining platform-only callers a scope, not narrowing this resolver.
+ *
+ * Uses the CACHED settings accessor, so this costs no round-trip on a warm cache.
  *
  * The serve budget is DERIVED from the chunk-size policy (`DefaultChunkSize`, the same row the
  * chunker reads as its passage target) rather than being a lever of its own. Two independently-set

@@ -41,6 +41,8 @@ import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import ImageBrowserModal from '../Agent/ImageBrowserModal';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 
+import rehypeSanitize from 'rehype-sanitize';
+
 // Dynamic import to avoid SSR issues
 const MDEditor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false });
 
@@ -566,6 +568,8 @@ const ContentPreviewModal: React.FC<ContentPreviewModalProps> = ({
                     data-color-mode="light"
                     preview={isEditing ? 'edit' : 'preview'}
                     hideToolbar={!isEditing}
+                    // Raw HTML embedded in the markdown reaches the preview DOM; sanitize it.
+                    previewOptions={{ rehypePlugins: [[rehypeSanitize]] }}
                     data-testid="preview-content-input"
                   />
                 </Box>

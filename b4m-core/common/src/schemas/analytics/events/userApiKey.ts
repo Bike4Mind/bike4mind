@@ -31,6 +31,12 @@ export interface IUserApiKeyCreatedEvent extends IBaseEvent {
      */
     createdByUserId?: string;
     createdByUsername?: string;
+    /**
+     * Lake ids an admin-minted key was bound to for the manage-but-not-member session admission.
+     * A CEILING on what the key may admit, never a grant (see pages/api/sessions/create.ts), and
+     * invisible on the lake side - so this is where a lake's bindings are discoverable.
+     */
+    preauthorizedLakeIds?: string[];
   };
 }
 

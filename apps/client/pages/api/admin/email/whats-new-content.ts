@@ -3,7 +3,7 @@ import { ApiKeyScope, IModalDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { assertDateInRange } from '@server/utils/dateParam';
-import { marked } from 'marked';
+import { renderAndSanitize } from '@server/utils/marketingReportRenderer';
 import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
 /**
@@ -95,14 +95,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
     }
 
     if (modal.description) {
-      // Description is Markdown, convert to HTML
-      const descriptionHtml = marked.parse(modal.description, { async: false }) as string;
+      // Description is Markdown; render + sanitize (marked passes raw HTML through).
+      const descriptionHtml = renderAndSanitize(modal.description);
       html += `<div style="margin: 0; color: #444; line-height: 1.6;">${descriptionHtml}</div>`;
     }
 
     if (modal.textMessage) {
-      // textMessage is Markdown, convert to HTML
-      const textMessageHtml = marked.parse(modal.textMessage, { async: false }) as string;
+      // textMessage is Markdown; render + sanitize (marked passes raw HTML through).
+      const textMessageHtml = renderAndSanitize(modal.textMessage);
       html += `<div style="margin: 12px 0 0 0; color: #444; line-height: 1.6;">${textMessageHtml}</div>`;
     }
 

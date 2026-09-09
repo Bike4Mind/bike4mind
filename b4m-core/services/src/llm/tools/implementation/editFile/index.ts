@@ -1,4 +1,5 @@
 import { ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { z } from 'zod';
 import { NotFoundError } from '@bike4mind/utils';
@@ -99,8 +100,45 @@ export const editFileTool: ToolDefinition = {
       context.logger.info(`📝 Edit File Tool: Instruction: ${instruction}`);
 
       try {
-        // context.db's type doesn't expose fabFiles; reached via the cast below.
-        const fabFile = await (context.db as any).fabFiles?.findById(fileId);
+        // A curated kbScope is a read-only corpus: the agent owner chose which files this
+        // audience may READ, not which it may rewrite. ToolContext.kbScope carries the invariant
+        // that every db.fabfiles reader either rejects or restricts to scope.fileIds, and for a
+        // tool whose whole job is to rewrite a file, rejecting is the only honest half of that.
+        if (context.kbScope) {
+          throw new Error('edit_file is not available in a knowledge-base-scoped session');
+        }
+
+        // An absent repo is a host wiring fault, not a missing row - and answering it as
+        // not-found is exactly what let the dead `fabFiles` lookup below survive this tool's
+        // entire lifetime. Fail loudly rather than `?.` into the same silence.
+        const fabfiles = context.db.fabfiles;
+        if (!fabfiles) {
+          throw new Error('edit_file is unavailable: the file repository is not wired on this host');
+        }
+
+        // Same not-found answer a missing row gets, for the same reason: `fileId` is composed by
+        // the model, so a value Mongoose cannot cast to an `_id` is a bad argument rather than a
+        // fault. Without this the CastError reaches the catch below and the model is told
+        // "Failed to edit file: Cast to ObjectId failed for value ..." - our internals, and no
+        // hint that it should go and find the real id (#2530 fixed the same shape in
+        // knowledgeBaseRetrieve).
+        if (!isObjectIdShaped(fileId)) {
+          throw new NotFoundError(`File with ID ${fileId} not found`);
+        }
+
+        // `fabfiles`, lowercase, and no cast: this read used to be `(context.db as any).fabFiles`,
+        // a key no host that can reach this tool actually populates. The cast silenced the
+        // compiler and `?.` silenced the miss, so every edit - including one naming a real row -
+        // fell through to the not-found below. The tool had never edited a file.
+        //
+        // Owner-scoped, and NOT the bare `findById` that repairing the name would otherwise
+        // revive: `findById` matches on `_id` alone, so it would resolve any row in the
+        // collection and hand its full text back to the model as `result.original`. This is the
+        // same read knowledgeBaseRetrieve reaches for first; a row the caller does not own is
+        // answered as not-found, so a direct id probe leaks nothing - not even that it exists.
+        // Widening to shared or lake-visible files would mean mirroring that tool's tag,
+        // prefix, membership, share and group verification, not relaxing back to `findById`.
+        const fabFile = await fabfiles.findByIdAndUserId(fileId, context.userId);
         if (!fabFile) {
           throw new NotFoundError(`File with ID ${fileId} not found`);
         }

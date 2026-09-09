@@ -20,6 +20,94 @@ const offeredRetrieved = turn({
 });
 
 describe('summarizeOptionalPathRetrieval', () => {
+  describe('guidance A/B arms', () => {
+    const injectedRetrieved = turn({
+      mode: 'optional',
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      knowledgeBaseGuidanceInjected: true,
+    });
+    const injectedNoRetrieval = turn({ mode: 'optional', knowledgeBaseGuidanceInjected: true });
+    const clearedRetrieved = turn({
+      mode: 'optional',
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      knowledgeBaseGuidanceInjected: false,
+    });
+    const clearedNoRetrieval = turn({ mode: 'optional', knowledgeBaseGuidanceInjected: false });
+
+    it('splits the offered population into the two arms the A/B compares', () => {
+      const summary = summarizeOptionalPathRetrieval([
+        injectedRetrieved,
+        injectedRetrieved,
+        injectedRetrieved,
+        injectedNoRetrieval,
+        clearedRetrieved,
+        clearedNoRetrieval,
+        clearedNoRetrieval,
+        clearedNoRetrieval,
+      ]);
+      expect(summary.guidance.injected).toEqual({ turns: 4, retrievedTurns: 3, rate: 0.75 });
+      expect(summary.guidance.notInjected).toEqual({ turns: 4, retrievedTurns: 1, rate: 0.25 });
+      expect(summary.guidance.unrecorded).toEqual({ turns: 0, retrievedTurns: 0, rate: null });
+    });
+
+    it('keeps an explicit false in its own arm rather than with the unrecorded turns', () => {
+      // The distinction the whole field exists for: "the section was switched off" is the control
+      // arm, while "we never recorded it" is missing data. Collapsing them would let pre-field
+      // traffic masquerade as control turns and wash out the comparison.
+      const summary = summarizeOptionalPathRetrieval([clearedNoRetrieval, offeredNoRetrieval]);
+      expect(summary.guidance.notInjected.turns).toBe(1);
+      expect(summary.guidance.unrecorded.turns).toBe(1);
+    });
+
+    it('reports turns predating the flag as unrecorded, not as either arm', () => {
+      const summary = summarizeOptionalPathRetrieval([offeredRetrieved, offeredNoRetrieval]);
+      expect(summary.guidance.unrecorded).toEqual({ turns: 2, retrievedTurns: 1, rate: 0.5 });
+      expect(summary.guidance.injected.turns).toBe(0);
+      expect(summary.guidance.notInjected.turns).toBe(0);
+    });
+
+    it('always sums the three arms back to offeredTurns', () => {
+      const summary = summarizeOptionalPathRetrieval([
+        injectedRetrieved,
+        clearedNoRetrieval,
+        offeredRetrieved,
+        turn({ mode: 'forced', attempted: true, outcome: 'ok', surfaces: ['forced-retrieval'] }),
+        turn({ attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'] }),
+      ]);
+      const { injected, notInjected, unrecorded } = summary.guidance;
+      expect(injected.turns + notInjected.turns + unrecorded.turns).toBe(summary.offeredTurns);
+      expect(injected.retrievedTurns + notInjected.retrievedTurns + unrecorded.retrievedTurns).toBe(
+        summary.retrievedTurns
+      );
+    });
+
+    it('reports a null arm rate rather than a phantom zero when an arm is empty', () => {
+      const summary = summarizeOptionalPathRetrieval([injectedNoRetrieval]);
+      expect(summary.guidance.injected.rate).toBe(0);
+      expect(summary.guidance.notInjected.rate).toBeNull();
+    });
+
+    it('leaves forced turns out of both arms even when the flag is set', () => {
+      // A forced turn is never in the experiment. The seed only writes the flag on offered turns,
+      // but a forced turn that somehow carried one must still not enter the comparison.
+      const summary = summarizeOptionalPathRetrieval([
+        turn({
+          mode: 'forced',
+          attempted: true,
+          outcome: 'ok',
+          surfaces: ['forced-retrieval'],
+          knowledgeBaseGuidanceInjected: true,
+        }),
+      ]);
+      expect(summary.guidance.injected.turns).toBe(0);
+      expect(summary.forcedTurns).toBe(1);
+    });
+  });
+
   it('reports a null rate rather than a phantom zero when nothing is in the population', () => {
     const summary = summarizeOptionalPathRetrieval([]);
     expect(summary.rate).toBeNull();

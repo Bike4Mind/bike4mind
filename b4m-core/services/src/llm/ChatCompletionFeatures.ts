@@ -53,8 +53,10 @@ import {
   resolveHistoryFetchLimit,
   buildMemoryContext,
   buildLakeMemoryContext,
+  lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
   PROMPT_TEXT_MAX,
   type SupportedEmbeddingModel,
@@ -320,6 +322,18 @@ export interface IChatCompletionServiceOptions {
     query: string;
     dataLakeTags: string[];
     retrievalFilter?: RetrievalExclusionOptions;
+    /**
+     * Most beliefs to return, across all of `dataLakeTags`: the `lakeMemoryRecallK` admin setting,
+     * resolved per turn by the caller with a coded fallback.
+     *
+     * Required rather than optional so the in-repo chain (recallLakeMemoryForSession ->
+     * recallLakeMemory) is typechecked end to end - each hop re-declares it required, so dropping
+     * it anywhere along the way fails the build. That does NOT extend to an out-of-repo host:
+     * parameters are bivariant, so an implementation whose own signature omits `k` still satisfies
+     * this type and would silently keep whatever budget it hardcodes. No such host exists today
+     * (this is the only in-tree injection slot), but an added one needs forwarding by hand.
+     */
+    k: number;
   }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
   /**
    * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
@@ -420,6 +434,8 @@ export const QuestStartBodySchema = z.object({
   enableArtifacts: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /** See ChatCompletionInvokeParamsSchema.skipAutoOffers - must stay in sync with it. */
+  skipAutoOffers: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
   systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   enableAgents: z.boolean().optional(),
@@ -735,11 +751,20 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     // NonNullable, not RetrievalSummary['outcome']: the latter now includes undefined, so an
     // explicit `outcome: undefined` would type-check here and merge through verbatim, breaking
     // the present-iff-`attempted` contract. Same guard recordForcedSkip uses for forcedSkipReason.
-    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
+    // `injected` is passed only by the exits that COMPLETED a search, so an exit that broke or
+    // never searched leaves the volume absent (unknown) rather than recording a zero - see the
+    // presence contract on RetrievalSummarySchema.injected. No topScore from this surface: belief
+    // `relevance` is a different scale from the cosine similarities the other surfaces report.
+    const recordRetrieval = (
+      outcome: NonNullable<RetrievalSummary['outcome']>,
+      dataLakeTags: string[],
+      injected?: NonNullable<RetrievalSummary['injected']>
+    ) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        ...(injected ? { injected } : {}),
         // Both recorders run only under forced retrieval, so they can label the turn themselves.
         // Redundant with the seed in ChatCompletionProcess, which every path that constructs this
         // feature also reaches - the redundancy is for ORDERING, not for a second entry point: a
@@ -779,16 +804,20 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         return [];
       }
 
+      // Resolved AFTER the no-lakes exit above, so a turn with nothing in scope spends no settings
+      // read on a budget it will never use.
+      const beliefBudget = await this.resolveLakeRecallK();
       const beliefs = await this.chatCompletion.recallLakeMemory({
         userId: this.user.id,
         query,
         dataLakeTags,
         retrievalFilter: this.retrievalFilter,
+        k: beliefBudget,
       });
       if (beliefs.length === 0) {
         // A legitimate zero: recall ran to completion and found nothing. This is the case the
         // whole feature exists to make distinguishable from "never asked".
-        recordRetrieval('ok', dataLakeTags);
+        recordRetrieval('ok', dataLakeTags, { chunks: 0, chars: 0 });
         return [];
       }
 
@@ -796,14 +825,28 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // independent of whether the model then also called the knowledge tools.
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.context = quest.promptMeta.context ?? {};
-      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
-      recordRetrieval('ok', dataLakeTags);
+      // beliefBudget rides along so `beliefCount` is readable on its own: below the budget means that
+      // is all that qualified, AT the budget means the turn saturated it. Saturation is not proof the
+      // cap excluded anything - a lake holding exactly `k` qualifying beliefs reads identically, and
+      // nothing overfetches k+1 to tell those apart - but it is the signal that raising the budget is
+      // worth trying, which is the diagnosis behind #2496.
+      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, beliefBudget, dataLakeTags };
 
       this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
       // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
       // sanitizes + length-bounds each fact (uploaded-doc content is untrusted). Distinct from the
       // memento framing used above.
-      const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
+      // Sanitized once, up front, so the volume below counts the facts the render actually emits.
+      // `beliefs.length` would overcount (a fact that sanitizes to empty is dropped) and
+      // `context.length` would overcount `chars` by the framing preamble and the `- ` bullets -
+      // and `chars` is specified as retrieved CONTENT only, so it means the same thing here as on
+      // the cosine surfaces, which is what makes the merge's SUM meaningful.
+      const injectedFacts = lakeMemoryFacts(beliefs.map(b => b.fact));
+      const context = buildLakeMemoryContext(injectedFacts);
+      recordRetrieval('ok', dataLakeTags, {
+        chunks: injectedFacts.length,
+        chars: injectedFacts.reduce((total, fact) => total + fact.length, 0),
+      });
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
       // A retrieval that threw must not be byte-identical to one never attempted - record it
@@ -815,6 +858,34 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
           (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
       );
       return [];
+    }
+  }
+
+  /**
+   * The admin's configured `lakeMemoryRecallK`, or the coded default on anything unusable. Mirrors
+   * `resolveForcedRetrievalCharBudget` in KnowledgeRetrievalFeature below: same try/catch shape,
+   * same loud-fallback policy, resolved once per turn.
+   *
+   * `positiveIntOr`'s unusable-value branch is defense-in-depth, not a production-reachable path:
+   * `getSettingsValue` runs the setting's own schema (`.min(1)`, `.max(LAKE_RECALL_K_MAX)`) via
+   * `safeParse` before this sees the value, whatever wrote it. The genuinely reachable branch is
+   * the outer catch (a settings-read failure or outage), which must not cost the turn its card.
+   */
+  private async resolveLakeRecallK(): Promise<number> {
+    try {
+      const configured = await this.chatCompletion.db.adminSettings.getSettingsValue('lakeMemoryRecallK');
+      return positiveIntOr(
+        configured as string | number | null | undefined,
+        LAKE_RECALL_K_DEFAULT,
+        'lakeMemoryRecallK',
+        this.logger
+      );
+    } catch (err) {
+      this.logger.warn(
+        `🌊 Lake memory: failed to read lakeMemoryRecallK; falling back to ${LAKE_RECALL_K_DEFAULT}`,
+        err
+      );
+      return LAKE_RECALL_K_DEFAULT;
     }
   }
 }
@@ -1704,7 +1775,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    // `logger` is not optional in practice: getDynamicDataLakeAccess degrades closed on a failed
+    // grants or lakes read and reports it ONLY through this logger (setting lakeViewComplete false
+    // as the machine-readable half). Omitting it made every one of those catches silent on the main
+    // chat path, so "this user reaches no lakes" and "the grant read just failed" looked identical.
+    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys, logger: this.logger });
     // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
     // reaches this process after vetPreauthorizedLakeIds has established the two are the same
     // principal, and an unvetted path leaves the field unset.
@@ -2004,12 +2079,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // the audit spine and the per-turn summary name this surface identically.
     // Outer-scoped so the catch can report whichever lakes were resolved even when the scan threw.
     let attemptedDataLakeTags: string[] = [];
-    // NonNullable for the same reason as LakeMemoryFeature's recorder above.
-    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
+    // NonNullable for the same reason as LakeMemoryFeature's recorder above. `injected` follows the
+    // same presence contract as LakeMemoryFeature's recorder: supplied only by an exit that ran a
+    // search to completion, so a broken or never-searched exit leaves the volume unknown.
+    const recordRetrieval = (
+      outcome: NonNullable<RetrievalSummary['outcome']>,
+      dataLakeTags: string[],
+      injected?: NonNullable<RetrievalSummary['injected']>
+    ) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        ...(injected ? { injected } : {}),
         mode: 'forced',
         surfaces: ['forced-retrieval'],
         dataLakeTags,
@@ -2308,7 +2390,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // 'not_indexed' rather than 'ok' because reporting that as a topical zero would claim the
         // library was searched and came up empty, and rather than 'failed' because nothing threw:
         // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
-        recordRetrieval('not_indexed', dataLakeTags);
+        // No topScore: nothing was scored, so `topScore` is still its -1 sentinel and persisting
+        // that would read as a real (very poor) similarity rather than as an absent one.
+        recordRetrieval('not_indexed', dataLakeTags, { chunks: 0, chars: 0 });
         return this.noContextMessages('unavailable');
       }
       const scored = pool.sort(compareForcedRetrievalCandidates);
@@ -2371,14 +2455,34 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // The legitimate zero: the corpus WAS scanned and compared, nothing was similar enough.
         // 'ok' per RetrievalSummarySchema - this is the case the field exists to distinguish from
         // "never asked". Partial-scan hedging rides on promptMeta.warnings via reportCoverage above.
-        recordRetrieval('ok', dataLakeTags);
+        // The starve this field exists to record. `topScore` is the diagnostic that says how close
+        // the best candidate came to the floor; guarded on scoredCount because an unscored scan
+        // leaves the -1 sentinel. Not guarded on `topScore >= 0`, which would discard a genuinely
+        // negative cosine - a real near-miss, and the very diagnostic this exit is here to carry.
+        //
+        // This zero is true OF THIS SURFACE and can still be a grounded turn: the model may be offered
+        // the knowledge tools alongside forced retrieval and ground through retrieve_knowledge_content,
+        // which reports no volume to oppose it. Documented as a known hole on
+        // RetrievalSummarySchema.injected - do not resolve it by suppressing the zero here, which
+        // would erase the starve this exit exists to record; the fix is to instrument that tool.
+        recordRetrieval('ok', dataLakeTags, {
+          chunks: 0,
+          chars: 0,
+          ...(scoredCount > 0 ? { topScore } : {}),
+        });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
       }
       const partialCoverage = this.reportCoverage(quest, coverage, embeddingModel);
       // Recorded here, before the remaining awaits, so the success outcome is stamped the moment
       // grounding is decided rather than depending on the lake-prompt and audit steps below.
-      recordRetrieval('ok', dataLakeTags);
+      // `used` counts the injected chunk text only, never the headings, so `chars` means the same
+      // thing here as on the knowledge tools (see RetrievalSummarySchema.injected).
+      recordRetrieval('ok', dataLakeTags, {
+        chunks: sections.length,
+        chars: used,
+        ...(scoredCount > 0 ? { topScore } : {}),
+      });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {

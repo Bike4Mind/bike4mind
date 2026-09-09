@@ -33,6 +33,18 @@ const handler = baseApi()
 
       const params = createFabFileSchema.parse(req.body);
 
+      // NOTE: unlike the presign siblings (generate-presigned-url.ts) we do NOT reject executable
+      // upload types (html/xhtml/svg) here. Those siblings write to appFilesBucket, which IS routed
+      // onto the app origin (see infra/buckets.ts routeBucket) - active content served back from the
+      // app origin is stored-XSS, so the gate is required there. This route writes to fabFileBucket,
+      // which is routed onto no app origin (it has no routeBucket entry), so anything served from it
+      // loads on an isolated S3/CloudFront origin that cannot reach the app's cookies/storage. HTML
+      // and text are also normal knowledge-ingestion inputs the session file picker advertises
+      // (Session/FilePond.tsx), so gating them here breaks a legitimate path with no app-origin
+      // stored-XSS to prevent. The PUT presign is intentionally NOT ContentType-bound (see
+      // filesAPICalls.ts createFabFileOnServerWithUpload); the bucket's origin isolation is the
+      // boundary, not the declared type.
+
       // Same effective gate as the presign siblings (generate-presigned-url.ts,
       // generate-presigned-urls-batch.ts): when this create is bound to a data lake batch, the
       // feature must actually be on. Same 403 + FEATURE_DISABLED code, but not identical
