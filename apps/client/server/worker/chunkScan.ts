@@ -229,11 +229,21 @@ export const buildFabFileChunkScanFilter = (
       // rebuild really was requested. Reading the reason instead of the stamp recovers the file
       // without reintroducing the ambiguous double state.
       //
-      // It terminates: while the switch is on, the pause exclusion above drops the file anyway
-      // (`rechunkPaused` is in CHUNK_STALL_REASONS); once it clears, one run commits and clears
+      // It terminates by two independent doors. Once the switch clears, one run commits and clears
       // `chunkStallReason` unconditionally (fabFileService/chunk.ts), and a zero-chunk commit also
-      // stamps `noExtractableTextAt`, which this filter requires to be null. So the file leaves by
-      // two independent doors rather than being re-swept every pass.
+      // stamps `noExtractableTextAt`, which this filter requires to be null.
+      //
+      // While the switch is on the pause exclusion above usually drops the file (`rechunkPaused` is
+      // in CHUNK_STALL_REASONS) - but NOT unconditionally, and the exception is worth knowing before
+      // trusting this as a guarantee. That exclusion is "stalled AND not in a running lake", so a
+      // file in a lake overriding back to running is still selected. That is normally
+      // self-terminating: pickScopedLake stamps the running lake's id, the handler reads OFF and
+      // rebuilds. It loops only when an UNGRADED lake also holds the file, because pickScopedLake
+      // then deliberately stamps no id (so a running lake cannot rewrite a paused lake's passages),
+      // the handler falls back to the platform value and re-halts to a byte-identical state. Cost is
+      // one rescue-cap slot per pass until the switch lifts, and it is not new as a mechanism - a
+      // non-media `rechunkPaused` file in that same configuration has always looped this way, so
+      // this arm makes media consistent with it rather than introducing a class of bug.
       {
         $or: [
           { mimeType: { $not: /^(audio|image|video)\// } },
