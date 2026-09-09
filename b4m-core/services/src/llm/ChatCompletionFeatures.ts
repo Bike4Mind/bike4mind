@@ -46,6 +46,7 @@ import {
   OpenAIEmbeddingModel,
   ImageModerationIncident,
   ILakeAccessEventRepository,
+  IDataLakeAccessGrantRepository,
   IScopedSettingsRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
@@ -217,6 +218,12 @@ interface DatabaseAdapters {
    * `resolveSearchBudgets` falls back to the byte-identical platform path when this is absent.
    */
   scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+  /**
+   * Persisted lake access grants - the retrieval half of the grant model (see
+   * getDynamicDataLakeAccess). Optional so a lean host keeps today's no-grant retrieval; a host
+   * that has the repo and forgets to thread it silently loses grant reach.
+   */
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
 }
 export type featureNames =
   | 'slack'

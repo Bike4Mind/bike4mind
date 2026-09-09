@@ -18,8 +18,9 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
-// call is wired with the settings repo + a logger, so a persisted reader grant that WOULD change
-// access is emitted as a [lakeReadGrantCutover] diff line (report-only until EnforceLakeReadGrants).
+// call is wired with the settings repo + a logger, so a persisted reader grant resolves into the
+// read decision while EnforceLakeReadGrants is on, and is emitted as a [lakeReadGrantCutover] diff
+// line if an operator turns the setting back off (report-only).
 const readGateLogger = new Logger({ metadata: { handler: 'dataLakeReadGate' } });
 
 const handler = baseApi()

@@ -11,18 +11,26 @@ import type { LakeGrant } from './manageRule';
 export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
 
 /**
- * Source-level interlock for the ENFORCE transition. The `EnforceLakeReadGrants` admin setting gives
- * operators the report-only cutover + observability, but enforcement stays off until THIS constant is
- * flipped - so an admin toggling the setting before the feature is code-complete cannot activate a
- * half-wired gate (the exact "accidentally enabled" risk). Enforcement requires BOTH the setting ON
- * and this constant true; report-only logging is unaffected either way.
+ * Source-level interlock for the ENFORCE transition, now FLIPPED. It existed so an admin toggling
+ * `EnforceLakeReadGrants` before the feature was code-complete could not activate a half-wired gate;
+ * enforcement requires BOTH the setting ON and this constant true.
  *
- * Flip to `true` ONLY in the PR that lands the two remaining prerequisites: the member-management
- * WRITE path (the sole producer of reader/org grants - none exists today) AND the retrieval/grounding
- * read arm (so a reader who can open a lake can also ground on it). Flipping the setting without this
- * is intentionally a no-op, and logs a warning so the premature toggle is visible.
+ * Its stated exit criteria were two: the retrieval/grounding read arm, and the member-management
+ * WRITE path. The retrieval arm is now in place (`getDynamicDataLakeAccess` resolves grants on the
+ * same terms browse does), so a reader who can open a lake can also ground on it. The WRITE path is
+ * DELIBERATELY still outstanding - stated plainly rather than quietly dropped. Enforcing without it
+ * is safe by construction: the resolution is additive (`resolvedAllowed = legacy || readGrant`), so
+ * nobody loses access, and the only grant producers today are createDataLake (owner) and
+ * transferLakeOwnership (owner/curator), both user-principal. The live delta at the flip is
+ * therefore that transferred owners and curators regain grounding. The containment duty that
+ * docblock delegated to the missing writer is taken over at read time by `containedGrants` and the
+ * org-constrained repo arm; the writer must still refuse a cross-org row when it lands.
+ *
+ * Now vestigial - `resolveEnforceReadGrants` reduces to the setting alone - but retained as the
+ * auditable seam the cutover tests branch on, and as the kill switch if enforcement has to be
+ * backed out without a settings migration. The premature-toggle warn stays for the same reason.
  */
-export const READ_GRANT_ENFORCEMENT_READY = false;
+export const READ_GRANT_ENFORCEMENT_READY = true;
 
 /** Minimal diagnostic sink - a structural subset of the app Logger, so no dependency is added here. */
 export interface LakeAccessLogger {
@@ -44,14 +52,16 @@ export interface LakeAccessLogger {
  * of any role reaching a plain member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP
  * (`ctx.organizationIds`), distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
  *
- * Org membership never crosses orgs (epic decision 12) - enforced at grant-WRITE time, so an existing
- * row is honored unconditionally at read time.
+ * Org membership never crosses orgs (epic decision 12). This function does not see the lake, so the
+ * containment is applied by the caller BEFORE the rows reach here - `containedGrants` at the gate,
+ * and the org-constrained repo arm on the id-resolution path (see `grantedLakeReachFor`). A caller
+ * that hands over raw rows gets no containment, which is why both live in this file.
  *
- * MUST STAY IN SYNC WITH THE WRITE PATH: this arm honors an org-principal grant with no same-org
- * check, because the grant row IS the authorization. So whoever builds the member-management write
- * path (grant a reader / grant an org - no such producer exists yet; only createDataLake seeds an
- * owner and transferLakeOwnership demotes to curator) MUST reject an org-principal grant whose org is
- * not the lake's own org. Without that, decision 12 is only as strong as the writer.
+ * STILL MUST STAY IN SYNC WITH THE WRITE PATH: the read side now asserts decision 12 as defense in
+ * depth, but whoever builds the member-management write path (grant a reader / grant an org - no
+ * such producer exists yet; only createDataLake seeds an owner and transferLakeOwnership demotes to
+ * curator) MUST still reject an org-principal grant whose org is not the lake's own org, so a bad
+ * row is never persisted in the first place.
  */
 export function resolveReadGrant(
   ctx: Pick<AccessContext, 'userId' | 'organizationIds'>,
@@ -64,6 +74,25 @@ export function resolveReadGrant(
       : g.principalType === 'organization' && orgIds.includes(g.principalId)
   );
 }
+
+/**
+ * Decision 12 at read time: an ORG-principal grant is honored only on a lake belonging to that same
+ * org. An org-less (personal) lake keeps its org grants - there is no boundary to cross, and that is
+ * the "share my personal lake with my team" shape. USER-principal grants are untouched: they are
+ * meant to cross orgs (a transferred owner who has since moved).
+ *
+ * Defense in depth, not the primary guard - the write path is still expected to refuse such a row
+ * (see resolveReadGrant). It exists because enforcement ships before that writer does, so without it
+ * the containment property would rest on nothing.
+ */
+export const containedGrants = <T extends LakeGrant>(
+  lake: Pick<IDataLakeDocument, 'organizationId'>,
+  grants: readonly T[]
+): T[] => {
+  const lakeOrgId = lake.organizationId ? String(lake.organizationId) : '';
+  if (!lakeOrgId) return [...grants];
+  return grants.filter(g => g.principalType !== 'organization' || g.principalId === lakeOrgId);
+};
 
 /** The decomposed read decision: the legacy arm, the new read-grant arm, and what each would allow. */
 export interface LakeReadAccessDecision {
@@ -99,7 +128,9 @@ export function resolveLakeReadAccess(
   opts: { enforceReadGrants: boolean }
 ): LakeReadAccessDecision {
   const legacy = classifyLakeAccess(lake, ctx, grants);
-  const readGrantAllows = resolveReadGrant(ctx, grants);
+  // Only the read-grant arm is contained. `classifyLakeAccess` gets the raw rows: its grant use is
+  // the owner/curator MANAGE rung (canManageLake), which has its own org rules.
+  const readGrantAllows = resolveReadGrant(ctx, containedGrants(lake, grants));
   const resolvedAllowed = legacy.allowed || readGrantAllows;
   return {
     allowed: opts.enforceReadGrants ? resolvedAllowed : legacy.allowed,
@@ -151,26 +182,46 @@ export async function resolveEnforceReadGrants(
 type PrincipalGrantLookup = Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
 
 /**
- * Lake ids the caller can reach via an active grant - fed to findAccessible/findPublicLakes so a
- * transferred, delegated, or shared lake both lists AND discovers. Stays in lockstep with the single
- * read gate (#1673):
+ * Lake ids the caller can reach via an active grant, SPLIT BY PRINCIPAL because the two halves earn
+ * different bypasses in the datastore filters - see the field docs. Fed to findAccessible,
+ * findPublicLakes and findActiveByUserTagsAndEntitlements so a transferred, delegated or shared lake
+ * lists, discovers AND grounds.
+ */
+export interface LakeGrantReach {
+  /**
+   * USER-principal reach: an UNCONDITIONAL bypass of the org and gate constraints, the analog of the
+   * createdByUserId owner bypass. It is meant to cross orgs - a transferred owner who has since
+   * moved orgs still reaches the lake they own.
+   */
+  grantedLakeIds: string[];
+  /**
+   * ORG-principal reach: bypasses the GATE only. The org prerequisite still applies, which is
+   * decision 12 (org membership never crosses orgs) asserted in the datastore, where the lake's own
+   * org lives - the id path's counterpart to `containedGrants` at the gate.
+   */
+  orgGrantedLakeIds: string[];
+}
+
+/**
+ * Resolve both reach sets. Stays in lockstep with the single read gate (#1673):
  *  - USER owner/curator ALWAYS included: the gate admits them via `canManageLake`.
  *  - USER reader AND any ORG-principal grant (for an org the caller is a MEMBER of) included ONLY
  *    when `includeReaders` (the enforced read-time grant cutover), matching resolveReadGrant at the
  *    gate. In report-only the gate returns the legacy decision, so a lake reachable only by these
  *    would 404 on open - listing it would be incoherent, so it is excluded until enforce.
  * The org arm keys off MEMBERSHIP (`organizationIds`), distinct from the org-MANAGE rung (admin
- * rights); org membership never crosses orgs regardless (epic decision 12).
+ * rights).
  */
-export const grantedLakeIdsFor = async (
+export const grantedLakeReachFor = async (
   userId: string,
   organizationIds: string[],
   grants?: PrincipalGrantLookup,
   includeReaders = false
-): Promise<string[]> => {
-  if (!grants) return [];
+): Promise<LakeGrantReach> => {
+  if (!grants) return { grantedLakeIds: [], orgGrantedLakeIds: [] };
   const activeAsOf = new Date();
   const ids = new Set<string>();
+  const orgIds = new Set<string>();
 
   const userRows = await grants.listByPrincipal('user', userId, { activeAsOf });
   for (const row of userRows) {
@@ -186,8 +237,10 @@ export const grantedLakeIdsFor = async (
     const orgRowSets = await Promise.all(
       organizationIds.map(orgId => grants.listByPrincipal('organization', orgId, { activeAsOf }))
     );
-    for (const rows of orgRowSets) for (const row of rows) ids.add(row.dataLakeId);
+    for (const rows of orgRowSets) for (const row of rows) orgIds.add(row.dataLakeId);
   }
 
-  return Array.from(ids);
+  // A lake reached both ways needs only the stronger (unconditional) arm.
+  for (const id of ids) orgIds.delete(id);
+  return { grantedLakeIds: Array.from(ids), orgGrantedLakeIds: Array.from(orgIds) };
 };

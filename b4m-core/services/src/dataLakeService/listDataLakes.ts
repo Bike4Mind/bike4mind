@@ -12,7 +12,7 @@ import type {
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
-import { grantedLakeIdsFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
+import { grantedLakeReachFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
 
 /** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
 type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
@@ -71,8 +71,9 @@ interface ListDataLakesAdapters {
     dataLakeAccessGrants?: GrantLookup;
     /**
      * Optional settings repo for the read-time grant cutover flag (#1673). When present and
-     * EnforceLakeReadGrants is on, reader-granted lakes list too (in lockstep with the single gate).
-     * Absent OR a failed read -> report-only, so reader-granted lakes are NOT listed (legacy behavior).
+     * EnforceLakeReadGrants is on (the shipped default), reader- and org-granted lakes list too, in
+     * lockstep with the single gate. Absent OR a failed read -> report-only, so those lakes are NOT
+     * listed (legacy behavior).
      */
     settings?: SettingsLookup;
     /**
@@ -301,7 +302,7 @@ export const listDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -309,7 +310,11 @@ export const listDataLakes = async (
   );
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
-    dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
+    dynamicLakes = await db.dataLakes.findAccessible(ctx, {
+      statuses: ['draft', 'active'],
+      grantedLakeIds,
+      orgGrantedLakeIds,
+    });
   } catch {
     // DB may not have the collection yet - fall through to hardcoded
   }
@@ -413,7 +418,7 @@ export const listArchivedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -423,6 +428,7 @@ export const listArchivedDataLakes = async (
     statuses: ['archived'],
     includePublic: false,
     grantedLakeIds,
+    orgGrantedLakeIds,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
@@ -438,13 +444,18 @@ export const listDeletedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
     includeReaders
   );
-  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: ['deleted'],
+    includePublic: false,
+    grantedLakeIds,
+    orgGrantedLakeIds,
+  });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
 };

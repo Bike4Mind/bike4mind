@@ -1,5 +1,6 @@
 import {
   IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
   IScopedSettingsRepository,
   IUserDocument,
   IUserRepository,
@@ -66,6 +67,11 @@ interface ResearchTaskProcessAdapters {
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
     // `findMembershipOrgIds` off it).
     organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    // Optional, but wire it for the same reason as scopedSettings above: this `db` reaches
+    // ToolContext.db, and without it a grant-reached lake drops out of the research tools'
+    // retrieval while browse still shows it. Both methods, because the same object also reaches
+    // `createFabFile`, whose admission contract reads `listByLake` off it.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listByLake'>;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];

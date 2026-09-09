@@ -8,7 +8,7 @@ import type {
   PublicDataLakeSummary,
 } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
-import { grantedLakeIdsFor, resolveEnforceReadGrants } from './resolveLakeReadAccess';
+import { grantedLakeReachFor, resolveEnforceReadGrants } from './resolveLakeReadAccess';
 
 /**
  * The browsing caller: the full access context, not just an id. The catalog is per-caller (a
@@ -67,12 +67,10 @@ export const browsePublicDataLakes = async (
   { db }: BrowsePublicDataLakesAdapters
 ): Promise<BrowsePublicDataLakesResult> => {
   // Resolved before the catalog query so an explicitly granted public lake discovers on the same
-  // terms it lists on - the arm `listDataLakes` already passes to findAccessible. Both the flag
-  // read and the grant lookup cost one query per page on this load-more path; while the read-grant
-  // cutover is report-only the flag can only ever resolve false, and it is wired now so the arm
-  // lights up at cutover instead of needing a second pass here.
+  // terms it lists on - the arms `listDataLakes` already passes to findAccessible. Both the flag
+  // read and the grant lookup cost one query per page on this load-more path.
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
     actor.userId,
     actor.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -84,6 +82,7 @@ export const browsePublicDataLakes = async (
     limit: opts.limit,
     offset: opts.offset,
     grantedLakeIds,
+    orgGrantedLakeIds,
   });
 
   // Batch-resolve owners in one round-trip. Dedupe ids and drop blanks so a lake with a

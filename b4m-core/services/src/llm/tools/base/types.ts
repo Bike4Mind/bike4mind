@@ -18,6 +18,7 @@ import {
   IUsageEventRepository,
   IOrganizationRepository,
   ILakeAccessEventRepository,
+  IDataLakeAccessGrantRepository,
   IScopedSettingsRepository,
   ModelInfo,
 } from '@bike4mind/common';
@@ -145,6 +146,13 @@ export interface ToolContext {
      * so a lean tool harness that omits it keeps platform-only resolution rather than failing.
      */
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    /**
+     * Persisted lake access grants, so retrieval honours a grant-reached lake exactly as browse
+     * does (see getDynamicDataLakeAccess). Optional: a lean harness that omits it keeps today's
+     * no-grant retrieval, which narrows rather than widens - but a HOST that has the repo and
+     * forgets to thread it silently loses grant reach, so wire it wherever the full service db is.
+     */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side

@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AccessContext, IDataLakeDocument } from '@bike4mind/common';
 import { classifyLakeAccess } from './classifyLakeAccess';
 import {
+  containedGrants,
+  grantedLakeReachFor,
   resolveReadGrant,
   resolveLakeReadAccess,
   resolveEnforceReadGrants,
@@ -217,5 +219,97 @@ describe('resolveEnforceReadGrants - fail-safe flag read', () => {
     const logger = { warn: vi.fn() };
     expect(await resolveEnforceReadGrants(settings, logger)).toBe(false);
     expect(logger.warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('containedGrants - decision 12 asserted at read time', () => {
+  const orgGrant = (orgId: string) => grant('reader', orgId, 'organization');
+
+  it('drops an ORG grant naming an org that is not the lake own org', async () => {
+    const rows = [orgGrant('orgA')];
+    expect(containedGrants(lake({ organizationId: 'orgB' }), rows)).toEqual([]);
+    expect(containedGrants(lake({ organizationId: 'orgA' }), rows)).toEqual(rows);
+  });
+
+  it('honors an ORG grant on an org-less (personal) lake - there is no boundary to cross', () => {
+    const rows = [orgGrant('orgA')];
+    expect(containedGrants(lake({ organizationId: undefined }), rows)).toEqual(rows);
+    expect(containedGrants(lake({ organizationId: '' }), rows)).toEqual(rows);
+  });
+
+  it('never touches USER grants - those are meant to cross orgs (a transferred owner who moved)', () => {
+    const rows = [grant('owner', 'u1'), grant('reader', 'u2')];
+    expect(containedGrants(lake({ organizationId: 'orgB' }), rows)).toEqual(rows);
+  });
+});
+
+describe('resolveLakeReadAccess - the org read arm is contained to the lake own org', () => {
+  // The property the write path was supposed to hold (see resolveReadGrant): enforcement ships
+  // before that writer exists, so the gate asserts it itself. A member of orgA holding an orgA
+  // grant on a lake that belongs to orgB must not be admitted by the grant arm.
+  const memberOfBoth = ctx({ userId: 'u1', organizationIds: ['orgA', 'orgB'] });
+
+  it('denies a cross-org org grant, and admits the same grant on its own org lake', () => {
+    const crossOrg = resolveLakeReadAccess(
+      lake({ organizationId: 'orgB', requiredUserTag: 'TagIDoNotHold' }),
+      ctx({
+        userId: 'u1',
+        organizationIds: ['orgA'],
+      }),
+      [grant('reader', 'orgA', 'organization')],
+      { enforceReadGrants: true }
+    );
+    expect(crossOrg.readGrantAllows).toBe(false);
+    expect(crossOrg.allowed).toBe(false);
+
+    const sameOrg = resolveLakeReadAccess(
+      lake({ organizationId: 'orgA', requiredUserTag: 'TagIDoNotHold' }),
+      memberOfBoth,
+      [grant('reader', 'orgA', 'organization')],
+      { enforceReadGrants: true }
+    );
+    expect(sameOrg.readGrantAllows).toBe(true);
+    expect(sameOrg.allowed).toBe(true);
+  });
+});
+
+describe('grantedLakeReachFor - the two reach sets earn different bypasses', () => {
+  const rows = (...rs: { dataLakeId: string; role: string; principalType: string; principalId: string }[]) => rs;
+  const repo = (userRows: unknown[], orgRows: unknown[] = []) => ({
+    listByPrincipal: vi.fn(async (type: string) => (type === 'user' ? userRows : orgRows)) as never,
+  });
+
+  it('splits user rows from org rows, and holds reader/org back until enforce', async () => {
+    const grants = repo(
+      rows(
+        { dataLakeId: 'owned', role: 'owner', principalType: 'user', principalId: 'u1' },
+        { dataLakeId: 'read', role: 'reader', principalType: 'user', principalId: 'u1' }
+      ),
+      rows({ dataLakeId: 'shared', role: 'reader', principalType: 'organization', principalId: 'orgA' })
+    );
+
+    const reportOnly = await grantedLakeReachFor('u1', ['orgA'], grants, false);
+    expect(reportOnly).toEqual({ grantedLakeIds: ['owned'], orgGrantedLakeIds: [] });
+
+    const enforced = await grantedLakeReachFor('u1', ['orgA'], grants, true);
+    expect(enforced).toEqual({ grantedLakeIds: ['owned', 'read'], orgGrantedLakeIds: ['shared'] });
+  });
+
+  it('gives a lake reached both ways the stronger (unconditional) arm only', async () => {
+    // Otherwise the org arm's org prerequisite would be the binding one for a lake the caller
+    // also holds a user grant on, silently narrowing a bypass that is meant to cross orgs.
+    const grants = repo(
+      rows({ dataLakeId: 'both', role: 'owner', principalType: 'user', principalId: 'u1' }),
+      rows({ dataLakeId: 'both', role: 'reader', principalType: 'organization', principalId: 'orgA' })
+    );
+
+    expect(await grantedLakeReachFor('u1', ['orgA'], grants, true)).toEqual({
+      grantedLakeIds: ['both'],
+      orgGrantedLakeIds: [],
+    });
+  });
+
+  it('an unwired grant repo reaches nothing', async () => {
+    expect(await grantedLakeReachFor('u1', ['orgA'])).toEqual({ grantedLakeIds: [], orgGrantedLakeIds: [] });
   });
 });

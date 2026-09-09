@@ -367,17 +367,19 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
    * omit only for owner-agnostic lookups (then gateless org-less lakes match no one).
    *
-   * `opts.grantedLakeIds` is the explicit-grant arm, resolved by the caller exactly as
-   * `findAccessible`'s is (`grantedLakeIdsFor`): the grant row IS the authorization, so those
-   * ids bypass the org and requirement constraints. It is what keeps retrieval in step with
-   * browse - a transferred/delegated owner who can open a lake can also ground on it.
+   * `opts.grantedLakeIds` / `opts.orgGrantedLakeIds` are the explicit-grant arms, resolved by the
+   * caller exactly as `findAccessible`'s are (`grantedLakeReachFor`) and keeping retrieval in step
+   * with browse: a transferred/delegated owner who can open a lake can also ground on it. A
+   * USER-principal grant IS the authorization and bypasses the org and requirement constraints;
+   * an ORG-principal grant bypasses only the requirement, so it can never reach outside its own
+   * org (epic decision 12).
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: { grantedLakeIds?: string[] }
+    opts?: { grantedLakeIds?: string[]; orgGrantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
@@ -388,7 +390,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
+    opts?: {
+      statuses?: DataLakeStatus[];
+      includePublic?: boolean;
+      grantedLakeIds?: string[];
+      orgGrantedLakeIds?: string[];
+    }
   ): Promise<IDataLakeDocument[]>;
   /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
@@ -397,8 +404,9 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * `requiredEntitlement` after being published is hidden from callers who lack the gate but
    * still discoverable by the ones who hold it (plus its owner, its grant holders and admins).
    * Without that, an entitled user could open such a lake from their own lake list while discover
-   * insisted no such public lake existed. `grantedLakeIds` mirrors `findAccessible`'s grant arm
-   * and is resolved by the caller the same way (`grantedLakeIdsFor`). `total` is therefore
+   * insisted no such public lake existed. `grantedLakeIds`/`orgGrantedLakeIds` mirror
+   * `findAccessible`'s grant arms and are resolved by the caller the same way
+   * (`grantedLakeReachFor`). `total` is therefore
    * per-caller too. `search` matches name or description case-insensitively. Returns one page
    * plus the unpaged `total` for the UI.
    */
@@ -409,6 +417,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       limit?: number;
       offset?: number;
       grantedLakeIds?: string[];
+      orgGrantedLakeIds?: string[];
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */

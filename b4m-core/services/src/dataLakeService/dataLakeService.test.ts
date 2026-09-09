@@ -489,6 +489,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
       statuses: ['draft', 'active'],
       grantedLakeIds: [],
+      orgGrantedLakeIds: [],
     });
   });
 
@@ -3583,13 +3584,15 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
       limit: 10,
       offset: 20,
       grantedLakeIds: [],
+      orgGrantedLakeIds: [],
     });
   });
 
   it("resolves the caller's owner/curator grants and passes them to the repository", async () => {
     // The arm listDataLakes already feeds findAccessible: without it a transferred owner opens a
     // gated public lake from their lake list but cannot find it in discover. Reader and org rows
-    // stay out here because the read-grant cutover is still report-only (resolveEnforceReadGrants).
+    // stay out here because no settings adapter is wired, so resolveEnforceReadGrants reports
+    // report-only regardless of what the platform setting says.
     const db = {
       ...makeDb([publicLake()]),
       dataLakeAccessGrants: {

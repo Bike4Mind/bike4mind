@@ -186,7 +186,7 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
   it('grant arm reaches a private, cross-org, gated lake - and an empty list adds no arm', async () => {
     // The transferred-owner case: transferLakeOwnership moves ownership through grant rows and
     // leaves createdByUserId alone, so without this arm the new owner browses a lake they cannot
-    // ground on. Ids are pre-resolved by the caller (grantedLakeIdsFor); passed directly here to
+    // ground on. Ids are pre-resolved by the caller (grantedLakeReachFor); passed directly here to
     // keep the test at the repo boundary.
     const gated = await dataLakeRepository.create(
       baseLake({ slug: 'granted', createdByUserId: 'alice', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
@@ -204,6 +204,32 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     expect(
       await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob', { grantedLakeIds: [] })
     ).toEqual([]);
+  });
+
+  it('ORG grant arm lifts the gate but NOT the org prerequisite (decision 12)', async () => {
+    // The containment the grant WRITE path was meant to hold and does not exist yet: an org grant
+    // may not reach a lake outside its own org. Asserted in the datastore because that is where the
+    // lake's org lives - the id path cannot see it (see containedGrants for the gate's copy).
+    const inA = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-a', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+    const personal = await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'carol' }));
+
+    // Bob is a member of orgA only. The org arm reaches the orgA lake past its gate, and stops at
+    // the orgB one even though the id was granted.
+    const memberOfA = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'bob', {
+      orgGrantedLakeIds: [inA.id, inB.id, personal.id],
+    });
+    expect(memberOfA.map(l => l.slug).sort()).toEqual(['gated-in-a', 'personal']);
+
+    // The USER arm has no such constraint - it is meant to cross orgs.
+    const asUserGrant = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'bob', {
+      grantedLakeIds: [inB.id],
+    });
+    expect(asUserGrant.map(l => l.slug)).toEqual(['gated-in-b']);
   });
 
   it('grant arm stays bounded by status: a grant on a DRAFT lake does not retrieve it', async () => {
@@ -254,6 +280,24 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     expect(
       (await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { grantedLakeIds: [lake.id] })).map(l => l.slug)
     ).toEqual(['transferred']);
+  });
+
+  it('the ORG-grant arm lifts the gate but not the org prerequisite (decision 12)', async () => {
+    const inA = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-a', createdByUserId: 'alice', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', createdByUserId: 'alice', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+
+    const bobInA = ctx({ userId: 'bob', organizationIds: ['orgA'] });
+    expect(
+      (await dataLakeRepository.findAccessible(bobInA, { orgGrantedLakeIds: [inA.id, inB.id] })).map(l => l.slug)
+    ).toEqual(['gated-in-a']);
+    // Same ids on the USER arm, which is unconstrained by design.
+    expect(
+      (await dataLakeRepository.findAccessible(bobInA, { grantedLakeIds: [inA.id, inB.id] })).map(l => l.slug).sort()
+    ).toEqual(['gated-in-a', 'gated-in-b']);
   });
 
   it('a gateless ORG lake is visible to org members; a tag lake to tag holders; cross-org/non-holders excluded', async () => {
@@ -518,7 +562,7 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
 
     // Grant arm: both filters must honor an explicit grant, so a transferred/delegated owner
     // discovers the lake they can already open. Resolved by the caller in the real paths
-    // (grantedLakeIdsFor); passed directly here to keep this test at the repo boundary.
+    // (grantedLakeReachFor); passed directly here to keep this test at the repo boundary.
     const grantee = { userId: 'grantee', grantedLakeIds: [orgGated.id] };
 
     const cases: { ctx: AccessContext; grantedLakeIds?: string[] }[] = [
