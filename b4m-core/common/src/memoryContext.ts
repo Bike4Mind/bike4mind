@@ -41,13 +41,17 @@ const LAKE_FACT_MAX_CHARS = 500;
  * documents - in a shared lake, whoever can upload can influence them - so this is a security boundary,
  * not cosmetics: collapse newlines/control chars (a raw newline would let a fact escape its bullet and
  * inject free-form system lines) and bound the length.
+ *
+ * The `.trim()` runs LAST on purpose, and must stay there: trimming before the clip leaves a fact
+ * clipped at exactly LAKE_FACT_MAX_CHARS able to end in a space that a second pass would strip, and
+ * `lakeMemoryFacts` counts what this returns while `buildLakeMemoryContext` re-sanitizes to render it.
  */
 function sanitizeLakeFact(fact: string): string {
   return fact
     .replace(/[\r\n\t\v\f\u0085\u2028\u2029]+/g, ' ')
     .replace(/\s{2,}/g, ' ')
-    .trim()
-    .slice(0, LAKE_FACT_MAX_CHARS);
+    .slice(0, LAKE_FACT_MAX_CHARS)
+    .trim();
 }
 
 /**

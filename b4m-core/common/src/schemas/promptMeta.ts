@@ -441,8 +441,11 @@ export const RetrievalSummarySchema = z.object({
   /**
    * How much retrieved content actually reached the model this turn: `chunks` passages totalling
    * `chars` characters of retrieved CONTENT (headings and framing excluded, so the number means
-   * the same thing on every surface), plus `topScore`, the best similarity any compared passage
-   * scored.
+   * the same thing on every surface), plus `topScore`, the best similarity among the compared
+   * passages the reporting surface can SEE - which is not the same population on every surface.
+   * Forced retrieval scores every chunk itself and so reports true near-misses; knowledgeBaseSearch's
+   * semantic arm only ever sees `minScore` survivors, and reports no `topScore` at all on a starve,
+   * so a sub-floor near-miss there is invisible rather than recorded.
    *
    * PRESENCE CONTRACT: present if and only if at least one surface COMPLETED a search this turn.
    * `chunks: 0` is a RECORDED STARVE - the library was searched and nothing was injected, which is
@@ -455,6 +458,15 @@ export const RetrievalSummarySchema = z.object({
    * than claiming a zero - knowledgeBaseSearch's keyword arm on a hit is the case: it injects
    * file metadata and hands the model retrieve_knowledge_content, which injects the text and
    * reports no volume, so its zero would survive the merge as a starve that did not happen.
+   *
+   * KNOWN HOLE in that rule, while retrieve_knowledge_content stays uninstrumented: a recorded zero
+   * is not PROOF of a starve. Forced retrieval and the knowledge tools are not mutually exclusive
+   * (ChatCompletionProcess seeds on `forcedRetrievalEnabled || knowledgeToolOffered`), so the forced
+   * arm can complete empty, write its honest zero, and the model can then ground the same turn
+   * through retrieve_knowledge_content, which contributes no volume to oppose it. The zero is
+   * per-surface-truthful and turn-level-misleading. Any rollup counting starves should treat a zero
+   * as "nothing was injected by a surface that reports volume" and, until that tool reports its own,
+   * cross-check `functionCalls` before calling the turn ungrounded.
    *
    * Per SURFACE, not per turn: a surface that breaks contributes nothing while a surface that
    * completed alongside it still reports its own volume, so a turn CAN read 'failed' next to a

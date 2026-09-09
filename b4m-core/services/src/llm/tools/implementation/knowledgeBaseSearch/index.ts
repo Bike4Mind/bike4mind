@@ -377,6 +377,9 @@ async function emitSemanticCitables(
   // the serve budget, headings and framing excluded. That is the same thing forced retrieval's
   // `used` counts, which is what lets the two sum into one number.
   const injectedChars = ranked.reduce((sum, r) => sum + servedPassageText(r, maxChunkChars).text.length, 0);
+  // `ranked` is already minScore-filtered upstream, so this max is the best score among the SURVIVORS,
+  // never a sub-floor near-miss - and this site is not reached at all on a starve. Narrower than forced
+  // retrieval's topScore, which is a running max over every chunk it scored; see the schema.
   const topScores = ranked.map(r => r.score);
   await context.statusUpdate(
     // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type

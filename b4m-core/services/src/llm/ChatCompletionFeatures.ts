@@ -2399,6 +2399,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // the best candidate came to the floor; guarded on scoredCount because an unscored scan
         // leaves the -1 sentinel. Not guarded on `topScore >= 0`, which would discard a genuinely
         // negative cosine - a real near-miss, and the very diagnostic this exit is here to carry.
+        //
+        // This zero is true OF THIS SURFACE and can still be a grounded turn: the model may be offered
+        // the knowledge tools alongside forced retrieval and ground through retrieve_knowledge_content,
+        // which reports no volume to oppose it. Documented as a known hole on
+        // RetrievalSummarySchema.injected - do not resolve it by suppressing the zero here, which
+        // would erase the starve this exit exists to record; the fix is to instrument that tool.
         recordRetrieval('ok', dataLakeTags, {
           chunks: 0,
           chars: 0,
