@@ -1,13 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { assertLakeWriteAccess, assertCanWriteDataLakeTags, reconcileDataLakeFallbackTags } = vi.hoisted(() => ({
-  assertLakeWriteAccess: vi.fn(),
-  assertCanWriteDataLakeTags: vi.fn(),
-  reconcileDataLakeFallbackTags: vi.fn(),
-}));
+const { assertLakeWriteAccess, assertCanWriteDataLakeTags, reconcileDataLakeFallbackTags, DuplicateFabFileError } =
+  vi.hoisted(() => {
+    // Mirrors `fabFilesService.DuplicateFabFileError`'s real shape (createByUrl.ts) closely enough
+    // for `instanceof` to work here - this IS the class both the module under test and this file's
+    // tests reference, so they agree on identity without importing the real (heavy) services module.
+    class DuplicateFabFileError extends Error {
+      constructor(
+        public readonly existing: unknown,
+        public readonly fetchedTitle: string
+      ) {
+        super('Duplicate content already exists in this data lake');
+      }
+    }
+    return {
+      assertLakeWriteAccess: vi.fn(),
+      assertCanWriteDataLakeTags: vi.fn(),
+      reconcileDataLakeFallbackTags: vi.fn(),
+      DuplicateFabFileError,
+    };
+  });
 
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { assertLakeWriteAccess, assertCanWriteDataLakeTags, reconcileDataLakeFallbackTags },
+  fabFilesService: { DuplicateFabFileError },
 }));
 
 import { FabFileSourceType } from '@bike4mind/common';
@@ -219,8 +235,43 @@ describe('successful ingest', () => {
       // the prologue already authorized. Exact-match assertion, so a future field cannot go
       // unnoticed either.
       administeredOrgIds: ['org-2'],
+      // Scopes the dedup check to this lake - see the `duplicate content` describe block below.
+      datalakeTag: 'datalake:sales',
     });
-    expect(outcome).toEqual({ ok: true, lakeName: 'Sales', fileName: 'An Article', sourceUrl: LINK });
+    expect(outcome).toEqual({
+      ok: true,
+      lakeName: 'Sales',
+      fileName: 'An Article',
+      sourceUrl: LINK,
+      duplicate: false,
+    });
+  });
+});
+
+describe('duplicate content is skipped, not re-added', () => {
+  it('reports skip-not-replace, matching the FILE path wording, without creating anything new', async () => {
+    // createByUrl.ts throws this BEFORE any row is created when its checkDuplicate adapter (bound
+    // to findByContentHashesInDataLake, scoped to this lake's tag) finds a live match.
+    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' }, 'An Article'));
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({
+      ok: true,
+      lakeName: 'Sales',
+      fileName: 'An Article',
+      sourceUrl: LINK,
+      duplicate: true,
+    });
+  });
+
+  it('is reported as a SUCCESS, never folded into the refusal de-dup path', async () => {
+    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' }, 'An Article'));
+
+    const outcome = await run();
+
+    expect(outcome.ok).toBe(true);
+    expect(deps.logger.error).not.toHaveBeenCalled();
   });
 });
 
