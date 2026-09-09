@@ -19,8 +19,12 @@ export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
  *
  * Flip to `true` ONLY in the PR that lands the two remaining prerequisites: the member-management
  * WRITE path (the sole producer of reader/org grants - none exists today) AND the retrieval/grounding
- * read arm (so a reader who can open a lake can also ground on it). Flipping the setting without this
- * is intentionally a no-op, and logs a warning so the premature toggle is visible.
+ * read arm for READER and ORG-principal grants (so a reader who can open a lake can also ground on
+ * it). The owner/curator half of that retrieval arm is already live and NOT gated here - those
+ * grants have real producers (createDataLake, transferLakeOwnership), so `grantedLakeIdsFor`
+ * resolves them for browse and for `getDynamicDataLakeAccess` alike, whatever this flag says.
+ * Flipping the setting without this is intentionally a no-op, and logs a warning so the premature
+ * toggle is visible.
  */
 export const READ_GRANT_ENFORCEMENT_READY = false;
 

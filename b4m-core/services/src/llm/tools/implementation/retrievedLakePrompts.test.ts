@@ -83,4 +83,54 @@ describe('prependRetrievedLakePrompts', () => {
 
     expect(result).toBe('result text');
   });
+
+  /**
+   * Phase 3, regression case 1 (tool door): the session's pre-authorized lake ids ride the SAME
+   * field this tool already reads from context, forwarded verbatim into the injection call.
+   */
+  it('forwards sessionPreauthorizedLakeIds into the injection call', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'managed', name: 'Managed Lake', systemPrompt: 'Sales playbook.' },
+    ]);
+    const context = makeContext({ sessionPreauthorizedLakeIds: ['managed'] });
+    const result = await prependRetrievedLakePrompts(context, 'result text', ['datalake:managed'], new Set());
+
+    expect(getAccessibleDataLakePromptsMock).toHaveBeenCalledWith(context, {
+      restrictToDatalakeTags: ['datalake:managed'],
+      preauthorizedLakeIds: ['managed'],
+    });
+    expect(result).toContain('Sales playbook.');
+  });
+
+  it('records preauthorizedLakeIdsUsed for an injected id drawn from the pre-authorized set', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'managed', name: 'Managed Lake', systemPrompt: 'Sales playbook.' },
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    const context = makeContext({ sessionPreauthorizedLakeIds: ['managed'] });
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:managed', 'datalake:ordinary'], new Set());
+
+    expect(context.statusUpdate).toHaveBeenCalledWith({
+      promptMeta: {
+        retrieval: {
+          attempted: true,
+          surfaces: [],
+          dataLakeTags: [],
+          injectedLakePromptIds: ['managed', 'ordinary'],
+          preauthorizedLakeIdsUsed: ['managed'],
+        },
+      },
+    });
+  });
+
+  it('omits preauthorizedLakeIdsUsed when no injected id came from the pre-authorized set', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    const context = makeContext();
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:ordinary'], new Set());
+
+    const call = (context.statusUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect('preauthorizedLakeIdsUsed' in call.promptMeta.retrieval).toBe(false);
+  });
 });

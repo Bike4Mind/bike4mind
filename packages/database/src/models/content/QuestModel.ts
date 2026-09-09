@@ -84,6 +84,8 @@ const RetrievalSummarySchema = subSchema({
   // preserves the field's presence contract, since a materialized empty object would report
   // "unknown volume" as a recorded one.
   injected: { type: InjectedVolumeSchema, required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as injectedLakePromptIds above.
+  preauthorizedLakeIdsUsed: { type: [String], required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as

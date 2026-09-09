@@ -1,3 +1,4 @@
+import React from 'react';
 import { Box, List, ListItem, ListItemButton, Skeleton, Typography } from '@mui/joy';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -102,10 +103,13 @@ export interface LifecycleSectionLake {
   fileTagPrefix: string;
 }
 
-/** Sidebar accordion for archived/deleted lakes: tree-style rows with restore/delete actions.
+/** Sidebar accordion for a lifecycle list (archived/deleted/needs-attention): tree-style rows with
+ *  per-row actions. Generic over the row type so a caller's `renderActions`/`renderRowTrailing`
+ *  see their OWN lake shape - the needs-attention rows carry a status the base shape has no field
+ *  for, and widening the base would put it on rows that have none.
  *  `lakes` undefined -> still loading (header shows a chevron, body a skeleton). An empty list
  *  collapses to a single static row stating so, since there is nothing to open. */
-export function NavLifecycleSection({
+export function NavLifecycleSection<T extends LifecycleSectionLake>({
   label,
   open,
   onToggle,
@@ -114,16 +118,20 @@ export function NavLifecycleSection({
   lakes,
   hoverBg,
   renderActions,
+  renderRowTrailing,
 }: {
   label: string;
   open: boolean;
   onToggle: () => void;
   testid: string;
-  /** Right-hand text on the static row when the section has nothing in it, e.g. "No files". */
-  emptyLabel: string;
-  lakes: LifecycleSectionLake[] | undefined;
+  /** Right-hand text on the static row when the section has nothing in it, e.g. "No files".
+   *  Optional: a section its caller renders only when non-empty never reaches that row. */
+  emptyLabel?: string;
+  lakes: T[] | undefined;
   hoverBg: string;
-  renderActions: (lake: LifecycleSectionLake) => React.ReactNode;
+  renderActions: (lake: T) => React.ReactNode;
+  /** Optional per-row content between the name and the actions menu, e.g. a status chip. */
+  renderRowTrailing?: (lake: T) => React.ReactNode;
 }) {
   if (lakes?.length === 0) {
     return (
@@ -152,33 +160,41 @@ export function NavLifecycleSection({
           </Box>
         ) : (
           <List size="sm" sx={TREE_LIST_SX}>
-            {lakes.map(lake => (
-              <ListItem key={lake.id}>
-                <Box
-                  data-testid={`${testid}-card-${lake.id}`}
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    minHeight: '28px',
-                    width: '100%',
-                  }}
-                >
-                  <FolderOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
-                  <Typography
-                    noWrap
-                    sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}
+            {lakes.map(lake => {
+              const actions = renderActions(lake);
+              return (
+                <ListItem key={lake.id}>
+                  <Box
+                    data-testid={`${testid}-card-${lake.id}`}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      minHeight: '28px',
+                      width: '100%',
+                    }}
                   >
-                    {lake.name}
-                  </Typography>
-                  {/* Folded behind one trigger, sharing the tree's row-menu recipe, so a lifecycle
-                      row reads the same as a file row instead of exposing two coloured buttons. */}
-                  <RowActionsMenu testId={`${testid}-menu-btn-${lake.id}`} ariaLabel={`${label} lake actions`}>
-                    {renderActions(lake)}
-                  </RowActionsMenu>
-                </Box>
-              </ListItem>
-            ))}
+                    <FolderOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
+                    <Typography
+                      noWrap
+                      sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}
+                    >
+                      {lake.name}
+                    </Typography>
+                    {renderRowTrailing?.(lake)}
+                    {/* Folded behind one trigger, sharing the tree's row-menu recipe, so a lifecycle
+                      row reads the same as a file row instead of exposing two coloured buttons.
+                      Withheld when the row has no actions at all - a trigger opening an empty menu
+                      reads as a dead button (a purging lake is listed, but nothing may act on it). */}
+                    {React.Children.count(actions) > 0 && (
+                      <RowActionsMenu testId={`${testid}-menu-btn-${lake.id}`} ariaLabel={`${label} lake actions`}>
+                        {actions}
+                      </RowActionsMenu>
+                    )}
+                  </Box>
+                </ListItem>
+              );
+            })}
           </List>
         ))}
     </Box>

@@ -71,9 +71,9 @@ function mergeInjected(
  *   makes this first-writer-wins under the accumulator convention (`existing` is the earlier
  *   write), not last-writer-wins. Unlike the fields above it is NOT commutative when both sides
  *   carry a different reason.
- * - surfaces / dataLakeTags / injectedLakePromptIds: union, deduped. injectedLakePromptCount is
- *   derived from the merged ids, not merged independently, so a two-sided merge can never leave
- *   the two disagreeing.
+ * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
+ *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
+ *   independently, so a two-sided merge can never leave the two disagreeing.
  * - injected: chunks and chars SUM, topScore is the max. The only NON-IDEMPOTENT rule here, and
  *   safe only because every write site emits a delta once per completed search - merging the same
  *   delta twice would double the volume, so a new writer must not re-emit an accumulated value.
@@ -104,6 +104,10 @@ export function mergeRetrievalSummary(
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
       : undefined;
   const injected = mergeInjected(existing.injected, incoming.injected);
+  const preauthorizedLakeIdsUsed =
+    existing.preauthorizedLakeIdsUsed || incoming.preauthorizedLakeIdsUsed
+      ? [...new Set([...(existing.preauthorizedLakeIdsUsed ?? []), ...(incoming.preauthorizedLakeIdsUsed ?? [])])]
+      : undefined;
 
   // Keys are spread in only when defined: the shape is absent-or-fully-present on the Mongoose
   // side, and an explicit `undefined` would persist as a set-but-empty path.
@@ -116,5 +120,6 @@ export function mergeRetrievalSummary(
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),
     ...(injected ? { injected } : {}),
+    ...(preauthorizedLakeIdsUsed ? { preauthorizedLakeIdsUsed } : {}),
   };
 }

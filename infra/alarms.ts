@@ -126,6 +126,10 @@ export const deprecatedModelRequestAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
   : undefined;
 
+export const questProcessingFailureAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('QuestProcessingFailureAlarm')
+  : undefined;
+
 export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
@@ -1068,6 +1072,53 @@ if (isMonitoredStage) {
     },
   });
 
+  /**
+   * Alarm: taxonomy tag-apply skips
+   *
+   * Counts files whose optimistic-concurrency check LOST during a taxonomy apply - tags the user
+   * asked for that were never written. A single skip is benign and expected under load (two writers
+   * touched one file's tags), which is why this alarms on a SUSTAINED rate rather than on any skip
+   * at all: three consecutive hours with a non-zero sum. The expected steady state is zero, so a
+   * burst inside one hour stays quiet and a persistent contention problem does not.
+   *
+   * `Sum` over `Maximum` because the metric is deliberately dimensionless (matching the
+   * low-cardinality convention in applyTaxonomySuggestions) and its value is the per-call skip
+   * count - so the aggregate rate is the signal, and there is no per-lake breakdown to take a max
+   * over. Threshold is a starting point to tune once there is a baseline.
+   *
+   * This became worth watching when #2274 shipped PUT /api/data-lakes/:id/files/:fabFileId/tags, a
+   * second door mutating tags under the same `fileTagPrefix` a taxonomy apply merges into and
+   * documented as "last-writer-partially-wins, deliberately" - so the contention this counts is now
+   * reachable by ordinary use rather than by an unusual overlap. Until now nothing watched it, and
+   * the only other trace was a logger.warn nothing alarms on.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
+   * pages/api/data-lakes/batches/[batchId]/apply-taxonomy.ts.
+   * Namespace: Lumina5/DataLakeBatch / TaxonomyTagsApplySkipped
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeTaxonomyTagsApplySkippedSustained', {
+    name: `${$app.name}-${$app.stage}-data-lake-taxonomy-tags-apply-skipped-sustained`,
+    alarmDescription:
+      'Taxonomy tag applies have been losing their concurrency check for three hours running - tags users asked for are not being written',
+    comparisonOperator: 'GreaterThanThreshold',
+    // Three periods with the default all-must-breach rule, so this needs three CONSECUTIVE
+    // breaching hours. Left implicit rather than spelling out datapointsToAlarm, which no other
+    // alarm in this file sets.
+    evaluationPeriods: 3,
+    metricName: 'TaxonomyTagsApplySkipped',
+    namespace: 'Lumina5/DataLakeBatch',
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 0,
+    // No emission means no applies ran, which is not a problem. Steady state is zero either way.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    tags: {
+      Application: 'DataLakeBatch',
+      Severity: 'Low',
+    },
+  });
+
   // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
   // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
   // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future
@@ -1149,6 +1200,40 @@ if (isMonitoredStage) {
     tags: {
       Application: 'FeedbackDelivery',
       Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Quest processing failures
+   *
+   * Before this, a quest whose processing threw was only visible on the client (its own error
+   * reply, or the generic fallback) and in application logs - nothing paged or dashboarded, so
+   * detection was "a user complains". Staging measurement: every quest carrying the generic
+   * fallback reply was masking a distinct underlying error (one, an invalid API key, reached 172
+   * users before anyone noticed), so this alarms on the raw failure count rather than waiting for
+   * a single error class to dominate.
+   *
+   * Metric emitted by: apps/client/server/chatCompletion/internal/route.ts, in the
+   * processQuest(...).catch handler. Reads the Stage-only rollup datum (see the comment at that
+   * call site) - alarms match one exact dimension set, so the per-ErrorClass breakdown is a
+   * dashboard concern, not this alarm's.
+   */
+  new aws.cloudwatch.MetricAlarm('questProcessingFailures', {
+    name: `${$app.name}-${$app.stage}-quest-processing-failures`,
+    alarmDescription: 'Quest processing is failing on the internal ChatCompletion /process path',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ProcessingFailed',
+    namespace: 'Lumina5/Quests',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 5,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [questProcessingFailureAlarm!.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
     },
   });
 }

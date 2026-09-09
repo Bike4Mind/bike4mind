@@ -10,6 +10,7 @@ import { dispatch as researchEngineDispatch } from '@server/queueHandlers/resear
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
+import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
@@ -132,6 +133,21 @@ async function main() {
     });
   } else {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
+  }
+
+  // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
+  // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
+  // one rather than queueing work nothing will pick up.
+  const researchQueueUrl = Resource.dataLakeResearchQueue?.url;
+  if (researchQueueUrl) {
+    worker.registerQueueHandler('dataLakeResearchQueue', researchQueueUrl, dataLakeResearchRunDispatch, {
+      visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+      // 1, matching infra/queues.ts's hosted dlq.retry - the run row's claim already makes a
+      // redelivery a no-op, and an extra delivery on self-host would only add log noise.
+      maxReceiveCount: 1,
+    });
+  } else {
+    bootLogger.warn('dataLakeResearchQueue not configured; data-lake research runs will not run');
   }
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from

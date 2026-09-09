@@ -481,6 +481,18 @@ export const RetrievalSummarySchema = z.object({
       topScore: z.number().optional(),
     })
     .optional(),
+  /**
+   * Which of this turn's injected lake prompt ids were BOTH in the session's pre-authorized (manage-
+   * but-not-member admission) set AND injected on this turn - see unionPreauthorizedLakeAccess and
+   * pages/api/sessions/create.ts. A subset of injectedLakePromptIds, never a superset. Narrows the
+   * session's static `preauthorizedLakeIds` (what was ADMITTED) to what a given turn actually used.
+   *
+   * MEMBERSHIP, NOT CAUSATION. An admitted lake the caller could already reach - its creator, or a
+   * member of its org - injects through the ordinary trust arm and is listed here all the same, so a
+   * non-empty value does not prove the admission is what made the injection possible. Absent means no
+   * admitted id was among this turn's injections, including every turn on a session with none.
+   */
+  preauthorizedLakeIdsUsed: z.array(z.string()).optional(),
 });
 
 /**

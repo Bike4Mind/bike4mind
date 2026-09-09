@@ -153,6 +153,9 @@ describe('authorizeLakeForWrite - both gates honour the org-admin rung', () => {
     dataLakes: {
       findById: vi.fn().mockResolvedValue(null),
       findBySlug: vi.fn().mockResolvedValue(lake),
+      // Never actually called here: findBySlug above always hits, and assertLakeAccess's #2425
+      // grant-fallback arm only runs on a miss. Present only so this mock satisfies the type.
+      findBySlugAmongIds: vi.fn().mockResolvedValue(null),
       // Gate 2 re-resolves the lake by meta-tag rather than by slug.
       findByDatalakeTag: vi.fn().mockResolvedValue(lake),
       find: vi.fn().mockResolvedValue([]),

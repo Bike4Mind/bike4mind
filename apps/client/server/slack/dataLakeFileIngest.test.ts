@@ -411,7 +411,10 @@ describe('ingest', () => {
   });
 
   it('does not query dedup or create when every attachment was rejected', async () => {
-    const outcome = await run({ files: [attachment({ mimetype: 'application/octet-stream' })] });
+    // Unsupported by extension AND by claimed mimetype - a claimed-mimetype-only override (e.g.
+    // keeping the default 'notes.pdf' name) no longer rejects, since the gate resolves type from
+    // the extension first (#2025).
+    const outcome = await run({ files: [attachment({ name: 'app.exe', mimetype: 'application/octet-stream' })] });
 
     expect(outcome).toMatchObject({ ok: true, added: [], duplicates: [] });
     expect(findByContentHashesInDataLake).not.toHaveBeenCalled();
