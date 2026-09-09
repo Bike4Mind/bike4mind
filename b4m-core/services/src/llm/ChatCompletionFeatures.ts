@@ -434,6 +434,8 @@ export const QuestStartBodySchema = z.object({
   enableArtifacts: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /** See ChatCompletionInvokeParamsSchema.skipAutoOffers - must stay in sync with it. */
+  skipAutoOffers: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
   systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   enableAgents: z.boolean().optional(),

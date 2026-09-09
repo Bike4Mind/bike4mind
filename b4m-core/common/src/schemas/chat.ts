@@ -78,6 +78,22 @@ export const SimplifiedChatRequestSchema = z.object({
   // 'grounded' adds data-lake retrieval only; 'surface' adds the org/session prompts on top.
   // Retrieval itself comes from the session (forceKnowledgeRetrieval), not from this flag.
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  // Wire spelling is snake_case per api-contract/CONVENTIONS.md; transformToInternalFormat maps it
+  // to the camelCase `skipAutoOffers` of the flag it feeds. Exists so the offer can be suppressed
+  // WITHOUT a promptMode, which also strips every authored prompt including the abstention licence.
+  skip_auto_offers: z
+    .boolean()
+    .optional()
+    .describe(
+      'Suppress tools the server would otherwise attach on its own for this session (the ' +
+        'knowledge-base search offer, in-app view navigation, blog drafting/editing/publishing, ' +
+        'and skill invocation). Tools you request explicitly are unaffected. One system-prompt ' +
+        'block goes with them: withholding in-app view navigation also drops the view-registry ' +
+        'block that exists only to describe it. No other prompt content changes. This does not ' +
+        'switch off retrieval: a session with forced knowledge retrieval still retrieves, and ' +
+        'documents already attached to the session are still placed in the prompt directly. Any ' +
+        'promptMode suppresses these too, so false has no effect alongside one.'
+    ),
   // With wait, also return the per-source system prompt breakdown the completion was
   // assembled from (promptDetails), so callers can verify what fed the model instead of
   // inferring it from behavior.
