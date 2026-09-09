@@ -68,7 +68,10 @@ const handler = baseApi()
     if (questId && !quest) {
       throw new NotFoundError('Quest not found');
     }
-    await assertSessionAccess(sessionId ?? quest?.sessionId, userId);
+    // Write-level: this persists a rapid-reply row keyed on questId that surfaces in the session's
+    // history, so a read-only sharee (or any user on an isGlobalRead session) must not reach it -
+    // matching the update-level gate the main completion path uses (canUpdateShareable).
+    await assertSessionAccess(sessionId ?? quest?.sessionId, userId, 'write', req.user.groups ?? []);
     if (quest && sessionId && quest.sessionId !== sessionId) {
       throw new NotFoundError('Quest not found');
     }

@@ -28,6 +28,11 @@ const {
   mockTryIncrement,
   mockQuestFindById,
   mockGetSettingsValue,
+  mockGetAttachedAgents,
+  mockDetachAgent,
+  mockAgentFindAccessibleById,
+  mockAutoName,
+  mockGetOperationsModel,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindRotation: vi.fn(),
@@ -35,6 +40,11 @@ const {
   mockTryIncrement: vi.fn(),
   mockQuestFindById: vi.fn(),
   mockGetSettingsValue: vi.fn(),
+  mockGetAttachedAgents: vi.fn(),
+  mockDetachAgent: vi.fn(),
+  mockAgentFindAccessibleById: vi.fn(),
+  mockAutoName: vi.fn(),
+  mockGetOperationsModel: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', async orig => {
@@ -47,6 +57,15 @@ vi.mock('@bike4mind/database', async orig => {
     sessionRepository: {
       ...(actual.sessionRepository as object),
       findById: (...a: unknown[]) => mockSessionFindById(...a),
+      getAttachedAgents: (...a: unknown[]) => mockGetAttachedAgents(...a),
+      detachAgent: (...a: unknown[]) => mockDetachAgent(...a),
+    },
+    agentRepository: {
+      ...(actual.agentRepository as object),
+      shareable: {
+        ...((actual.agentRepository as { shareable?: object })?.shareable ?? {}),
+        findAccessibleById: (...a: unknown[]) => mockAgentFindAccessibleById(...a),
+      },
     },
     questRepository: {
       ...(actual.questRepository as object),
@@ -78,6 +97,22 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedVal
 vi.mock('@server/analytics/analyticsMiddleware', () => ({
   analyticsMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
+
+// auto-rename's positive control reaches the LLM chain past the guard; stub those two edges so an
+// owned-session request completes deterministically instead of hitting real model config.
+vi.mock('@client/services/operationsModelService', () => ({
+  OperationsModelService: { getOperationsModel: (...a: unknown[]) => mockGetOperationsModel(...a) },
+}));
+vi.mock('@bike4mind/services', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    sessionService: {
+      ...(actual.sessionService as object),
+      autoName: (...a: unknown[]) => mockAutoName(...a),
+    },
+  };
+});
 
 import agentsHandler from '../sessions/[id]/agents';
 import autoRenameHandler from '../sessions/[id]/auto-rename';
@@ -134,6 +169,13 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     mockQuestFindById.mockResolvedValue({ _id: 'quest-b', sessionId: SESSION_ID });
     // RapidReply feature off by default, so the owned-session positive control returns early.
     mockGetSettingsValue.mockResolvedValue(false);
+    // Downstream stubs for the owned-session positive controls (each route's business logic past
+    // the session guard). The denial cases never reach these - the guard 404s first.
+    mockGetAttachedAgents.mockResolvedValue([]);
+    mockDetachAgent.mockResolvedValue({ id: SESSION_ID, userId: USER_A, name: 'S' });
+    mockAgentFindAccessibleById.mockResolvedValue(null);
+    mockAutoName.mockResolvedValue({ id: SESSION_ID, userId: USER_A, name: 'Renamed' });
+    mockGetOperationsModel.mockResolvedValue({ modelId: 'op-model', llm: { complete: vi.fn() } });
   });
 
   // Assert the error BODY, not just the status: the POST agents route has a second
@@ -229,5 +271,45 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     await rapidReplyHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().reason).toBe('disabled');
+  });
+
+  // Positive controls for the remaining routes: a guard that denied everyone (e.g. `req.user!._id`
+  // instead of `.id`) passes every denial test above, so each route needs one owned-session case
+  // that reaches business logic past the guard.
+  it('GET /api/sessions/[id]/agents on the caller-owned session -> 200 (guard passes)', async () => {
+    mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_A, users: [] });
+    const { req, res } = fire('GET', `/api/sessions/${SESSION_ID}/agents`, undefined, { id: SESSION_ID });
+    await agentsHandler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().agents).toEqual([]);
+  });
+
+  it('POST /api/sessions/[id]/agents on the caller-owned session -> past the session guard (404 Agent not found)', async () => {
+    // Guard passes on the owned session; the 404 now comes from the agent lookup, not the session
+    // guard - a distinct error body proving the request reached business logic.
+    mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_A, users: [] });
+    const { req, res } = fire('POST', `/api/sessions/${SESSION_ID}/agents`, { agentId: 'agent-1' }, { id: SESSION_ID });
+    await agentsHandler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Agent not found');
+  });
+
+  it('DELETE /api/sessions/[id]/agents on the caller-owned session -> 200 (guard passes)', async () => {
+    mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_A, users: [] });
+    const { req, res } = fire(
+      'DELETE',
+      `/api/sessions/${SESSION_ID}/agents`,
+      { agentId: 'agent-1' },
+      { id: SESSION_ID }
+    );
+    await agentsHandler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('POST /api/sessions/[id]/auto-rename on the caller-owned session -> 200 (guard passes)', async () => {
+    mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_A, users: [] });
+    const { req, res } = fire('POST', `/api/sessions/${SESSION_ID}/auto-rename`, {}, { id: SESSION_ID });
+    await autoRenameHandler(req, res);
+    expect(res._getStatusCode()).toBe(200);
   });
 });

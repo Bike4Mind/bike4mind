@@ -45,7 +45,7 @@ async function sendProgress(
   status: ExportStatus,
   progress: number,
   detail?: string,
-  extras?: { downloadUrl?: string; filename?: string; errorMessage?: string }
+  extras?: { downloadUrl?: string; filename?: string; errorMessage?: string; droppedQuestCount?: number }
 ) {
   await sendToClient(userId, endpoint, {
     action: 'quest_export_progress',
@@ -324,13 +324,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // doctored subQuest.questId could otherwise pull another user's quest into this export. Gating
     // by the caller (not the plan owner) means a sharee sees their own quests, and never the owner's
     // quests in sessions the sharee cannot reach.
-    const chatItems =
-      questIds.length > 0
-        ? await filterReadableQuests(await Quest.find({ _id: { $in: questIds } }).lean(), userId)
-        : [];
-    const droppedQuestCount = questIds.length - chatItems.length;
+    // Fetch first, then filter by readability, so droppedQuestCount counts only quests that EXIST
+    // but the caller cannot read - not ids the $in never matched (deleted, or a stale subQuest.questId).
+    const foundQuests = questIds.length > 0 ? await Quest.find({ _id: { $in: questIds } }).lean() : [];
+    const chatItems = await filterReadableQuests(foundQuests, userId);
+    const droppedQuestCount = foundQuests.length - chatItems.length;
     if (droppedQuestCount > 0) {
-      Logger.globalInstance.info(`[questExport] Dropped ${droppedQuestCount} quest(s) not readable by the caller`);
+      logger.info(`[questExport] Dropped ${droppedQuestCount} quest(s) not readable by the caller`);
     }
     const chatItemMap = new Map<string, Record<string, unknown>>();
     for (const item of chatItems) {
@@ -542,10 +542,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       ResponseContentDisposition: `attachment; filename="${filename}"`,
     });
 
-    // Phase 4: Complete
+    // Phase 4: Complete. Surface droppedQuestCount so a sharee holding a partial export (owner-authored
+    // quests filtered out because their sessions were never shared) has a signal it is incomplete.
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'completed', 100, 'Export complete!', {
       downloadUrl,
       filename,
+      ...(droppedQuestCount > 0 ? { droppedQuestCount } : {}),
     });
 
     logger.info(

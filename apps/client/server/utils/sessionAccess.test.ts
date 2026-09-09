@@ -61,6 +61,14 @@ describe('sessionAccess', () => {
       expect(canAccessSession(session, userA)).toBe(true);
       expect(canAccessSession(session, userA, 'write')).toBe(false);
     });
+
+    it('grants write to a group-share carrying update, only to members of that group', () => {
+      // The write arm delegates to canUpdateShareable, so a group-share resolves against userGroups.
+      const session = { userId: userB, users: [], groups: [{ groupId: 'g1', permissions: ['update'] }] } as any;
+      expect(canAccessSession(session, userA, 'write', ['g1'])).toBe(true);
+      expect(canAccessSession(session, userA, 'write', ['g2'])).toBe(false);
+      expect(canAccessSession(session, userA, 'write')).toBe(false);
+    });
   });
 
   describe('assertSessionAccess', () => {

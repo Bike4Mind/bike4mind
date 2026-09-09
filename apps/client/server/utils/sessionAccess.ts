@@ -16,7 +16,13 @@
  */
 
 import { sessionRepository } from '@bike4mind/database';
-import { ISessionDocument, BadRequestError, NotFoundError, UnauthorizedError, Permission } from '@bike4mind/common';
+import {
+  ISessionDocument,
+  BadRequestError,
+  NotFoundError,
+  UnauthorizedError,
+  canUpdateShareable,
+} from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 /** Read routes accept a read-or-write grant; write routes require an update-level grant. */
@@ -29,24 +35,26 @@ function isValidObjectId(id: string): boolean {
 /**
  * May `userId` access `session` at the requested level?
  * - read:  owner, any direct user-share, isGlobalRead, or isGlobalWrite
- * - write: owner, a user-share carrying `update`, or isGlobalWrite
+ * - write: the house update predicate (`canUpdateShareable`: owner, or a user/group share carrying
+ *          `update`), with isGlobalWrite layered on top.
  *
- * Group-shares (session.groups) are a latent arm - nothing in the repo writes them yet; add a
- * groups check here, resolved against the caller's group ids, when session group-sharing ships.
+ * The write arm delegates to `canUpdateShareable` so it cannot drift from the same predicate the
+ * chat path uses (ChatCompletionInvoke.ts, sessions/[id]/chat/[messageId]); `isGlobalWrite` is the
+ * one documented session-only extension on top of it. `userGroups` are the caller's group ids
+ * (session group-shares are latent today - nothing writes them - so it defaults to none).
  */
 export function canAccessSession(
   session: Pick<ISessionDocument, 'userId' | 'users' | 'isGlobalRead' | 'isGlobalWrite'>,
   userId: string,
-  level: SessionAccessLevel = 'read'
+  level: SessionAccessLevel = 'read',
+  userGroups: readonly string[] = []
 ): boolean {
+  if (level === 'write') {
+    return canUpdateShareable(session, userId, userGroups) || !!session.isGlobalWrite;
+  }
   if (session.userId === userId) return true;
-  if (session.isGlobalWrite) return true;
-  if (level === 'read' && session.isGlobalRead) return true;
-  return (
-    session.users?.some(
-      u => u.userId === userId && (level === 'read' || (u.permissions?.includes(Permission.update) ?? false))
-    ) ?? false
-  );
+  if (session.isGlobalRead || session.isGlobalWrite) return true;
+  return session.users?.some(u => u.userId === userId) ?? false;
 }
 
 /**
@@ -60,7 +68,8 @@ export function canAccessSession(
 export async function assertSessionAccess(
   sessionId: string | undefined,
   userId: string | undefined,
-  level: SessionAccessLevel = 'read'
+  level: SessionAccessLevel = 'read',
+  userGroups: readonly string[] = []
 ): Promise<ISessionDocument> {
   if (!userId) {
     throw new UnauthorizedError('Unauthorized');
@@ -70,7 +79,7 @@ export async function assertSessionAccess(
   }
 
   const session = await sessionRepository.findById(sessionId);
-  if (!session || !canAccessSession(session, userId, level)) {
+  if (!session || !canAccessSession(session, userId, level, userGroups)) {
     throw new NotFoundError('Session not found');
   }
 

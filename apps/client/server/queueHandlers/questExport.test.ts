@@ -17,19 +17,27 @@ const h = vi.hoisted(() => {
   const OWNER_FILE_ID = 'file-owner';
   const OWNER_IMAGE_URL = 'https://test-bucket.s3.amazonaws.com/uploads/owner-fig.png';
   const OWNER_IMAGE_KEY = 'uploads/owner-fig.png';
+  // The quest lives in this session; filterReadableQuests keeps it only if the CALLER can read the
+  // session, so the collaborator is user-shared on it. (Session ids must be ObjectId-shaped.) The
+  // embedded image is then separately authorized against the OWNER - the behavior under test.
+  const SESSION_ID = '507f1f77bcf86cd799439011';
   return {
     OWNER_ID,
     COLLABORATOR_ID,
     OWNER_FILE_ID,
     OWNER_IMAGE_URL,
     OWNER_IMAGE_KEY,
+    SESSION_ID,
     findAccessibleById: vi.fn(async (user: { id?: string } | null, fileId: string) =>
       user?.id === OWNER_ID ? { id: fileId } : null
     ),
     findUserById: vi.fn(async (id: string) => ({ id, _id: id })),
+    sessionFindById: vi.fn(async (id: string) =>
+      id === SESSION_ID ? { _id: SESSION_ID, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] } : null
+    ),
     planFindById: vi.fn(),
     questFind: vi.fn(() => ({
-      lean: async () => [{ _id: 'q1', reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
+      lean: async () => [{ _id: 'q1', sessionId: SESSION_ID, reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
     })),
     fabFileFindOne: vi.fn(async ({ filePath }: { filePath: string }) =>
       filePath === OWNER_IMAGE_KEY ? { id: OWNER_FILE_ID, filePath, moderationStatus: 'clean' } : null
@@ -60,6 +68,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: { findOne: h.fabFileFindOne },
   fabFileRepository: { shareable: { findAccessibleById: h.findAccessibleById } },
   userRepository: { findById: h.findUserById },
+  sessionRepository: { findById: h.sessionFindById },
   apiKeyRepository: {},
   adminSettingsRepository: {},
 }));
