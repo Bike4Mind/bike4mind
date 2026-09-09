@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isDevelopment } from '@server/utils/config';
@@ -105,7 +106,7 @@ const convergenceAdapters = async () => {
   };
 };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // POST only. The GET is a preview that writes nothing and enqueues nothing; capping it would
   // throttle reading the plan, which is the thing an owner is supposed to do before running one.
@@ -129,6 +130,7 @@ const handler = baseApi()
     return res.json(dataLakeService.redactCrossLakeIdentities(report));
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query;
     const { limit, confirm } = ConvergeInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);

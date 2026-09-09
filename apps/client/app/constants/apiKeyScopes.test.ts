@@ -30,7 +30,7 @@ describe('apiKeyScopes catalog', () => {
    * The guard that makes "add an enum value, forget to register it" impossible:
    * an unregistered scope is one no mint route can ever issue, so no key can ever
    * hold it and every route requiring it is permanently 403 - how the `datalake:*`
-   * scopes shipped dead. Registering a new scope means adding it to one of the
+   * scopes once shipped dead. Registering a new scope means adding it to one of the
    * three lists, and choosing which one is the decision this test forces.
    */
   it('accounts for every ApiKeyScope in exactly one catalog', () => {

@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -22,7 +23,7 @@ import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePr
 // access is emitted as a [lakeReadGrantCutover] diff line (report-only until EnforceLakeReadGrants).
 const readGateLogger = new Logger({ metadata: { handler: 'dataLakeReadGate' } });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET /api/data-lakes/:id - get a single data lake (by ObjectId or slug)
   .get(async (req: Request, res) => {
@@ -75,6 +76,7 @@ const handler = baseApi()
   })
   // PUT /api/data-lakes/:id - update a data lake (metadata only; not lifecycle)
   .put(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const params = UpdateDataLakeRequestInput.parse(req.body);
     // This is the write boundary for a DB LAKE's preferred prompt, and one of two places that owns
@@ -113,6 +115,7 @@ const handler = baseApi()
   })
   // DELETE /api/data-lakes/:id - archive a data lake (reversible; full teardown)
   .delete(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(id, ctx, {

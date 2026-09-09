@@ -44,6 +44,28 @@ export enum ApiKeyScope {
    * that costs real money, so it is never implied by {@link OPTIHASHI_READ}.
    */
   OPTIHASHI_COMPUTE = 'optihashi:compute',
+  /**
+   * Read data lakes and their contents: list/browse lakes, search them, read a
+   * lake's health, spend, batches, and access view. Split from
+   * {@link DATALAKE_WRITE} so a key handed to an agent can look at a lake
+   * without being able to change one.
+   */
+  DATALAKE_READ = 'datalake:read',
+  /**
+   * Change what is IN a lake or how it behaves: create/update/archive a lake,
+   * attach, detach, retag, or purge its files, run converge/rechunk/research,
+   * and manage upload batches. Deliberately does NOT carry
+   * {@link DATALAKE_SHARE}: adding files to a lake is a different privilege
+   * from handing the lake to someone else.
+   */
+  DATALAKE_WRITE = 'datalake:write',
+  /**
+   * Change WHO can reach a lake: its visibility and its ownership (and the
+   * grant/revoke door). Never implied by {@link DATALAKE_WRITE} - re-sharing a
+   * lake widens the blast radius of every document already in it, which is not
+   * what a key minted to keep a lake's files current asked for.
+   */
+  DATALAKE_SHARE = 'datalake:share',
 }
 
 export enum ApiKeyStatus {

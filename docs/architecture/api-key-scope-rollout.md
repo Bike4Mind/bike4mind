@@ -45,6 +45,27 @@ or it rides into a preset users reasonably expect to be cheap.
 A scope authorizes; it never entitles. The feature's own entitlement check still runs
 and can refuse on its own.
 
+## Gating a route that serves both a read and a write
+
+`requiredScopes` is per ROUTE, not per method, so a file with a `.get` and a `.post`
+cannot ask for two different scopes at the door. Declare the weaker (read) gate there
+and assert the stronger one at the top of the mutating handler -
+`assertHearthWriteScope` for Hearth, `assertDataLakeWriteScope` /
+`assertDataLakeShareScope` (`apps/client/server/dataLakes/dataLakeScopes.ts`) for data
+lakes. Two rules that assert has to follow:
+
+- **Let a caller with no `apiKeyInfo` through.** That is a JWT/browser caller, for whom
+  the key gate never ran either.
+- **Consult `API_KEY_SCOPE_STAGING`**, via `decideScopeGate`. An in-handler assert that
+  ignored staging would reject exactly the grandfathered keys the staging window exists
+  to protect, and it would do so from inside a route whose door said it was in a grace
+  period.
+
+Do not list `admin:*` among a family's `requiredScopes` while it is rolling out. A route
+is in its grace period only while EVERY scope it accepts is staged, and `admin:*` can
+never be staged - one mention leaves the family with no grace period at all. Admin keys
+calling those routes are part of the same re-mint list as any other key.
+
 ## Staging the gate
 
 `API_KEY_SCOPE_STAGING` is a comma-separated list of scopes whose gates are still

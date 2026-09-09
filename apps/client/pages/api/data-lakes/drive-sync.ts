@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
@@ -61,7 +62,7 @@ async function captureOrgCredential(userId: string): Promise<string> {
  * is an org-administrative act, so this gates on org owner/manager (verifyOrgAccess), NOT merely the
  * lake's creator. The folder picker that supplies driveFolderId lands in the same PR's UI commit.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
     const { dataLakeId, driveFolderId, folderName } = Body.parse(req.body);

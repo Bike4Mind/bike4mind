@@ -7,6 +7,7 @@ import { ReActAgent, ReplSession, BudgetExceededError, makeCodeExecuteTool } fro
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
@@ -86,7 +87,7 @@ const DEFAULT_MAX_ITERATIONS = 25;
 // Lambda with a higher `timeout` (or move to async-job + polling).
 const HARD_TIMEOUT_MS = 55_000;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(
     // Cost-driven endpoint - each call can authorize up to
     // HARD_PER_REQUEST_COST_CAP_USD of LLM spend. Tighter limit than

@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import {
   dataLakeBatchRepository,
@@ -16,7 +17,7 @@ import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET: list batches the user still needs to see - either ingest is in flight, or the
   // background AI-tagging phase is running/awaiting review. These are independent
@@ -76,6 +77,7 @@ const handler = baseApi()
   })
   // POST: create a new batch
   .post(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const userId = req.user.id;
     const data = CreateBatchRequestInput.parse(req.body);
 
