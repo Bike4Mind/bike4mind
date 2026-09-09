@@ -525,7 +525,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // (fetched once, above) is used instead of the fabFile re-fetched for the chunkCount rollup.
       if (existingFabFile.sourceType === FabFileSourceType.SLACK) {
         try {
-          const claimedSlackNotification = await fabFileRepository.claimSlackIndexNotification(fabFileId);
+          const claimedSlackNotification = await fabFileRepository.claimIndexNotification(fabFileId, 'slack');
           if (claimedSlackNotification) {
             await notifySlackIndexingComplete(existingFabFile, logger).catch(err =>
               logger.error(`Error sending the Slack indexing-complete notification for ${fabFileId}: ${err}`)
