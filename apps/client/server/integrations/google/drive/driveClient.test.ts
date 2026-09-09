@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { drive_v3 } from 'googleapis';
+import type { drive_v3 } from '@googleapis/drive';
 import { listFolderChildren, getFolderAccess, isFolder, isValidDriveFolderId, FOLDER_MIME_TYPE } from './driveClient';
 
 /**

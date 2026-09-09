@@ -1,5 +1,5 @@
 import { Config } from '@server/utils/config';
-import { google } from 'googleapis';
+import { auth as googleAuth } from '@googleapis/drive';
 import dayjs from 'dayjs';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
@@ -9,7 +9,7 @@ const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
 const REDIRECT_URI = `${process.env.APP_URL}/google-drive/callback`;
 
-const oauth2Client = new google.auth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOGLE_CLIENT_SECRET, REDIRECT_URI);
+const oauth2Client = new googleAuth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOGLE_CLIENT_SECRET, REDIRECT_URI);
 
 export function getAuthUrl(): string {
   return oauth2Client.generateAuthUrl({
@@ -34,7 +34,7 @@ export async function refreshAccessToken(refreshToken: string) {
   // re-reads `refresh_token` off the client's mutable `credentials` AFTER the network await, so a
   // concurrent refresh for another user racing on the shared singleton can cross-write one user's
   // refresh token into another user's persisted record (same hazard createDriveClient avoids).
-  const client = new google.auth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOGLE_CLIENT_SECRET, REDIRECT_URI);
+  const client = new googleAuth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOGLE_CLIENT_SECRET, REDIRECT_URI);
   client.setCredentials({ refresh_token: refreshToken });
   const { credentials } = await client.refreshAccessToken();
   return credentials;
