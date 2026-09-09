@@ -25,6 +25,10 @@ import type { Logger } from '@bike4mind/observability';
 // `findExistingArtifactId` (app/utils/artifactPersistence.ts) matches positionally
 // so the rendered card adopts this row instead of minting a fresh id. The two
 // parsers are a known fork; consolidating them is a separate change.
+//
+// Not interchangeable with `createArtifactId` (@bike4mind/common) despite the matching shape: this
+// one takes its timestamp and index from the caller, which is what makes a repeated write
+// idempotent, while that one stamps `Date.now()`.
 import {
   checkHasDefaultExport,
   extractReactDependencies,

@@ -9,7 +9,9 @@
  *
  * Browse stays the wider of the two - see the difference list in ./index.ts (admin reach;
  * draft lakes). Retrieval is a subset in every case, never the reverse. Do not paper those
- * over here. An owner's own gated lake is no longer among them: the core resolver restores it.
+ * over here. An owner's own gated lake is no longer among them: the core resolver restores it, and
+ * so is a lake held by an owner/curator grant - the grant arm below is what keeps browse and
+ * retrieval agreeing on a transferred lake.
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';

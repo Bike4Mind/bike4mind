@@ -116,7 +116,26 @@ type HandlerDeclaration = {
  * as a call argument (`.replace(/x/, y)`), after `=>`, or on the right of an assignment.
  */
 const REGEX_LITERAL_PRECEDERS = new Set([
-  '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '~', '^',
+  '(',
+  ',',
+  '=',
+  ':',
+  '[',
+  '!',
+  '&',
+  '|',
+  '?',
+  '{',
+  '}',
+  ';',
+  '+',
+  '-',
+  '*',
+  '%',
+  '<',
+  '>',
+  '~',
+  '^',
 ]);
 
 /** Index just past the comment starting at `index`, or null when none starts there. */
@@ -291,7 +310,7 @@ function countDeclaredHandlerLines(source: string): number {
 }
 
 const handlerDeclarations = readdirSync(INFRA_DIR)
-  .filter((file) => file.endsWith('.ts'))
+  .filter(file => file.endsWith('.ts'))
   .flatMap(findHandlerDeclarations);
 
 describe('buildToolRuntimeAssets', () => {
@@ -335,10 +354,14 @@ describe('the infra handler scan', () => {
     // queue needs no test edit while a scan that desyncs - and therefore guards less than it
     // appears to - still fails loudly.
     const mismatched = readdirSync(INFRA_DIR)
-      .filter((file) => file.endsWith('.ts'))
-      .map((file) => {
+      .filter(file => file.endsWith('.ts'))
+      .map(file => {
         const source = readFileSync(path.join(INFRA_DIR, file), 'utf8');
-        return { file, scanned: scanHandlerDeclarations(source, file).length, declared: countDeclaredHandlerLines(source) };
+        return {
+          file,
+          scanned: scanHandlerDeclarations(source, file).length,
+          declared: countDeclaredHandlerLines(source),
+        };
       })
       .filter(({ scanned, declared }) => scanned !== declared)
       .map(({ file, scanned, declared }) => `${file}: scanned ${scanned}, declared ${declared}`);
@@ -352,18 +375,18 @@ describe('the infra handler scan', () => {
       "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
-    expect(scanHandlerDeclarations(source, 'synthetic.ts').map((declaration) => declaration.handler)).toEqual([
+    expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
       'apps/client/server/queueHandlers/agentExecutor.handler',
     ]);
   });
 
   it('does not lose declarations to a regex literal containing braces', () => {
     const source = [
-      "const isAccountId = (id: string) => /^\\d{12}$/.test(id);",
+      'const isAccountId = (id: string) => /^\\d{12}$/.test(id);',
       "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
-    expect(scanHandlerDeclarations(source, 'synthetic.ts').map((declaration) => declaration.handler)).toEqual([
+    expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
       'apps/client/server/queueHandlers/agentExecutor.handler',
     ]);
   });
@@ -374,7 +397,7 @@ describe('the infra handler scan', () => {
       "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
-    expect(scanHandlerDeclarations(source, 'synthetic.ts').map((declaration) => declaration.handler)).toEqual([
+    expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
       'apps/client/server/queueHandlers/agentExecutor.handler',
     ]);
   });
@@ -393,12 +416,12 @@ describe('Lambdas that can execute the premium tool set', () => {
 
   it('declares every handler as a resolvable module, or as an overlay re-export', () => {
     const unresolvable = handlerDeclarations
-      .filter((declaration) => !declaration.handler.startsWith(OVERLAY_HANDLER_PREFIX))
+      .filter(declaration => !declaration.handler.startsWith(OVERLAY_HANDLER_PREFIX))
       .filter(
-        (declaration) =>
+        declaration =>
           resolveSourceFile(path.join(REPO_ROOT, declaration.handler.split('.').slice(0, -1).join('.'))) === null
       )
-      .map((declaration) => `${declaration.infraFile}: ${declaration.handler}`);
+      .map(declaration => `${declaration.infraFile}: ${declaration.handler}`);
     expect(unresolvable.join('\n')).toBe('');
   });
 
@@ -410,14 +433,17 @@ describe('Lambdas that can execute the premium tool set', () => {
     // bundles therefore still need their own guard in the overlay repo. Checked at the time
     // of writing: none of the three overlay handlers reaches the tool map.
     const missing = handlerDeclarations
-      .filter((declaration) => {
+      .filter(declaration => {
         const entry = resolveSourceFile(path.join(REPO_ROOT, declaration.handler.split('.').slice(0, -1).join('.')));
         return entry !== null && reachesPremiumToolMap(entry);
       })
       // Deliberately not pinned to `copyFiles: toolRuntimeAssets()` exactly - a Lambda that
       // later needs an extra asset should be free to spread the list.
-      .filter((declaration) => !(declaration.config.includes('copyFiles:') && declaration.config.includes('toolRuntimeAssets()')))
-      .map((declaration) => `${declaration.infraFile}: ${declaration.handler}`);
+      .filter(
+        declaration =>
+          !(declaration.config.includes('copyFiles:') && declaration.config.includes('toolRuntimeAssets()'))
+      )
+      .map(declaration => `${declaration.infraFile}: ${declaration.handler}`);
 
     expect(missing.join('\n')).toBe('');
   });
@@ -426,11 +452,11 @@ describe('Lambdas that can execute the premium tool set', () => {
     // Pins the detector itself: if the marker import moves and reachability silently returns
     // false everywhere, the check above would pass vacuously.
     const toolCapable = handlerDeclarations
-      .filter((declaration) => {
+      .filter(declaration => {
         const entry = resolveSourceFile(path.join(REPO_ROOT, declaration.handler.split('.').slice(0, -1).join('.')));
         return entry !== null && reachesPremiumToolMap(entry);
       })
-      .map((declaration) => declaration.handler);
+      .map(declaration => declaration.handler);
 
     expect(toolCapable).toContain('apps/client/server/queueHandlers/agentExecutor.handler');
     expect(toolCapable).toContain('apps/client/server/queueHandlers/slackQuestProcessor.handler');

@@ -27,7 +27,7 @@ import { grantedLakeReachFor, resolveEnforceReadGrants, type LakeGrantReach } fr
  */
 export interface DataLakeAccessContext {
   db: {
-    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById'>;
     /**
      * Resolves the caller's org membership set (owner + `users[]` ACL) internally from
      * `user.id` - required so an absent resolver can't silently drop every org lake (#1674).
@@ -44,7 +44,13 @@ export interface DataLakeAccessContext {
      * Persisted access grants, so a lake reached ONLY by a grant (a transferred or delegated
      * owner, a curator, and under enforce a reader or an org principal) grounds as well as it
      * browses - the same arm `listDataLakes`/`browsePublicDataLakes` already pass to the repo.
-     * Absent means today's behavior: no grant ever widens retrieval.
+     * Absent means retrieval sees no grants at all, which is what made browse and retrieval
+     * disagree for a grant-held lake, so every retrieval host should wire it. Kept optional like
+     * every other adapter here: a host without a grant repo has no grants to miss.
+     *
+     * Stays in lockstep with the browse side's `grantedLakeReachFor` call in listDataLakes - the
+     * same helper resolved against the same setting, so retrieval remains a subset of browse (see
+     * resolveRetrievalLakeScope's header) rather than growing an arm browse lacks.
      */
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
     /**
@@ -274,7 +280,11 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger);
         reach = await grantedLakeReachFor(userId, organizationIds, context.db.dataLakeAccessGrants, includeReaders);
       } catch (err) {
+        // Same fail-closed contract as the dataLakes read below: a failed grants read narrows the
+        // view (the grant arm contributes nothing) and must SAY so, or a consumer would read the
+        // resulting absence as proof of unreachability. See lakeViewComplete.
         context.logger?.warn('[dataLakes] access-grant lookup failed; resolving lakes without the grant arm', err);
+        lakeViewComplete = false;
       }
     }
     try {

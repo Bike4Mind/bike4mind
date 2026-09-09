@@ -40,13 +40,13 @@ import {
   GenerateImageToolCallSchema,
   AudioGenerationToolCallSchema,
   ILatticeModel,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
   CitableSource,
   OpenAIEmbeddingModel,
   ImageModerationIncident,
   ILakeAccessEventRepository,
-  IDataLakeAccessGrantRepository,
   IScopedSettingsRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
@@ -56,6 +56,7 @@ import {
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   DATALAKE_TAG_PREFIX,
+  PROMPT_TEXT_MAX,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -82,15 +83,17 @@ import {
   type SupersessionReport,
 } from '../dataLakeService/supersession';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
-import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
+import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
   documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
+import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
@@ -192,8 +195,19 @@ interface DatabaseAdapters {
   };
   dataLakes?: Pick<
     IDataLakeRepository,
-    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
   >;
+  /**
+   * Access-grant lookup shared by two independent optional features:
+   * - the retrieval resolver's grant arm (getDynamicDataLakeAccess / `listByPrincipal`), so a
+   *   lake reached only by an owner/curator grant grounds a turn as it browses;
+   * - the per-turn manage re-check on a session's `preauthorizedLakeIds`
+   *   (filterStillManagedLakes / `listActiveByLakes`). REQUIRED in practice on any host that
+   *   creates pre-authorized sessions: without it the curator / org-grant / transferred-owner
+   *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+   * Optional here - absent means both features resolve lake access with no grant arm.
+   */
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
@@ -218,12 +232,6 @@ interface DatabaseAdapters {
    * `resolveSearchBudgets` falls back to the byte-identical platform path when this is absent.
    */
   scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
-  /**
-   * Persisted lake access grants - the retrieval half of the grant model (see
-   * getDynamicDataLakeAccess). Optional so a lean host keeps today's no-grant retrieval; a host
-   * that has the repo and forgets to thread it silently loses grant reach.
-   */
-  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
 }
 export type featureNames =
   | 'slack'
@@ -412,6 +420,8 @@ export const QuestStartBodySchema = z.object({
   enableArtifacts: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   enableAgents: z.boolean().optional(),
   enableLattice: z.boolean().optional(),
   promptMeta: PromptMetaZodSchema,
@@ -1522,7 +1532,11 @@ export class SessionPromptFeature implements ChatCompletionFeature {
     return [
       {
         role: 'system' as const,
-        content: systemPrompt,
+        // Session prompts are author-set (session settings), not model-generated, but this
+        // text still reaches the model unvetted at request time - defang line-initial markers
+        // so it can't forge a header/footer for another block. No deference header is added
+        // here: this channel's precedence relative to other sources is unchanged by this fix.
+        content: defangBlockMarkers(systemPrompt),
       },
     ];
   }
@@ -1649,18 +1663,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private citationStyle: 'named' | 'indexed';
   /** Generic retrieval exclusion applied to the candidate file listing (see RetrievalExclusionOptions). */
   private retrievalFilter: RetrievalExclusionOptions;
+  /**
+   * Lake ids this session was pre-authorized for (manager-but-not-member admission), already
+   * vetted against the authenticated principal by the caller - see ToolContext.sessionPreauthorizedLakeIds
+   * for the full contract. Absent/empty = no widening.
+   */
+  private preauthorizedLakeIds: string[];
 
   constructor(
     chatCompletion: ChatCompletionContext,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    preauthorizedLakeIds?: string[]
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
     this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
     this.citationStyle = citationStyle === 'indexed' ? 'indexed' : 'named';
     this.retrievalFilter = retrievalFilter ?? {};
+    this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -1682,7 +1704,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-    return getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
+    // reaches this process after vetPreauthorizedLakeIds has established the two are the same
+    // principal, and an unvetted path leaves the field unset.
+    return unionPreauthorizedLakeAccess(resolved, this.preauthorizedLakeIds, String(user.id), db);
   }
 
   /**
@@ -1804,8 +1830,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
       const prompts = await getAccessibleDataLakePrompts(
         { db, user, entitlementKeys, logger: this.logger },
-        { restrictToDatalakeTags: datalakeTags }
+        { restrictToDatalakeTags: datalakeTags, preauthorizedLakeIds: this.preauthorizedLakeIds }
       );
+      const preauthorizedSet = new Set(this.preauthorizedLakeIds);
+      const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
       quest.promptMeta = quest.promptMeta ?? {};
@@ -1814,6 +1842,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         surfaces: [],
         dataLakeTags: [],
         injectedLakePromptIds: prompts.map(p => p.id),
+        ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;
@@ -2289,6 +2318,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    content, hedged by whether the scan was complete.
       let used = 0;
       const sections: string[] = [];
+      // Fed the budget-sliced text below, so detection sees exactly what is injected.
+      const conflictPassages: RetrievalPassage[] = [];
       const sourceFileIds: string[] = [];
       const injectedChunkIds: string[] = [];
       const injectedScores: number[] = [];
@@ -2328,6 +2359,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})${datedClause}`
             : `### ${safeName} (ID: ${candidate.fabFileId})${datedClause}`;
         sections.push(`${heading}\n${text}`);
+        conflictPassages.push({ fabFileId: candidate.fabFileId, text });
         used += text.length;
       }
 
@@ -2439,6 +2471,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         'one is available to you, and otherwise say plainly that you can search this library but cannot count it, ' +
         'and that the total is shown on its page in the product. Never guess a number, and never suggest queries, ' +
         'consoles or other infrastructure steps for counting it.\n\n';
+      // Last of the column-0 notes, nearest the content it describes: the injected passages
+      // contradict each other, so the model must surface that rather than pick the top-ranked side.
+      const conflictNote = buildRetrievalConflictNote(conflictPassages);
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +
@@ -2450,7 +2485,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
-      // The header, capability and coverage notes are ours and stay OUTSIDE the block at column 0;
+      // The header, capability, coverage and conflict notes are ours and stay OUTSIDE the block at column 0;
       // only the retrieved sections go inside it. renderRetrievedContentBlock owns the same
       // `\n\n---\n\n` join this used to do inline, so the separator is unchanged.
       const retrievedContext: IMessage = {
@@ -2460,6 +2495,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           `${GROUNDED_NO_INVENTION_RULE}\n\n` +
           capabilityNote +
           coverageNote +
+          conflictNote +
           renderRetrievedContentBlock(sections),
       };
 

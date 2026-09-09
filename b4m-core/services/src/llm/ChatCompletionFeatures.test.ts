@@ -621,6 +621,99 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
   });
 });
 
+describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => {
+  // `grantee` holds the curator grant the re-check looks for; defaults to the ctx user, so a test
+  // naming someone else exercises revocation on an otherwise identical session.
+  const makeCtx = (findById: ReturnType<typeof vi.fn>, grantee: string = 'u1') => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'u1', tags: [] },
+    db: {
+      organizations: {
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: 'managed', principalType: 'user', principalId: grantee, role: 'curator' }]),
+      },
+      dataLakes: {
+        findActiveByUserTags: vi.fn().mockResolvedValue([]),
+        findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        findById,
+      },
+    },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+  });
+
+  const MANAGED_LAKE = {
+    id: 'managed',
+    name: 'Managed Lake',
+    slug: 'managed-lake',
+    datalakeTag: 'datalake:managed',
+    fileTagPrefix: 'managed:',
+    status: 'active',
+    createdByUserId: 'other-user',
+  };
+
+  // The knowledge tools' resolveSessionLakeAccess and this feature's forced-retrieval door are
+  // two separate call sites into the same union (unionPreauthorizedLakeAccess) - this pins that
+  // the forced-retrieval door actually wires its ctor arg through, not just the tool door.
+  it('unions a pre-authorized lake the ordinary resolver could not reach', async () => {
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
+    const ctx = makeCtx(findById);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['managed']
+    );
+
+    const access = await (
+      feature as unknown as { resolveDataLakeAccess: () => Promise<{ lakes: Array<{ id: string }> }> }
+    ).resolveDataLakeAccess();
+
+    expect(findById).toHaveBeenCalledWith('managed');
+    expect(access.lakes.map(l => l.id)).toEqual(['managed']);
+  });
+
+  // Same session record as above, only the grant's principal differs: the forced-retrieval door
+  // re-derives the manage gate per turn rather than trusting what the session was admitted with.
+  it('drops a pre-authorized lake once the caller no longer manages it', async () => {
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
+    const ctx = makeCtx(findById, 'someone-else');
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['managed']
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakes: Array<{ id: string }>; dataLakeTags: string[] }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakes).toEqual([]);
+    expect(access.dataLakeTags).not.toContain('datalake:managed');
+  });
+
+  it('does not touch findById when no lakes are pre-authorized', async () => {
+    const findById = vi.fn();
+    const ctx = makeCtx(findById);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess();
+
+    expect(findById).not.toHaveBeenCalled();
+  });
+});
+
 describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   const embeddingFactory = {
     createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
@@ -1516,7 +1609,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
   const makeCtx = (
     files: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>,
     lakes?: Array<Record<string, unknown>>,
-    opts: { dataLakesThrows?: boolean } = {}
+    opts: {
+      dataLakesThrows?: boolean;
+      activeGrants?: Array<{ dataLakeId: string; principalType: string; principalId: string; role: string }>;
+    } = {}
   ) => {
     const chunksByFile = Object.fromEntries(
       files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.fileName}`, vector: [1, 0] }]])
@@ -1535,7 +1631,20 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
         ...(lakes !== undefined || opts.dataLakesThrows
-          ? { dataLakes: { findActiveByUserTags: vi.fn(), findActiveByUserTagsAndEntitlements: findLakes } }
+          ? {
+              dataLakes: {
+                findActiveByUserTags: vi.fn(),
+                findActiveByUserTagsAndEntitlements: findLakes,
+                // getAccessibleDataLakePrompts' pre-authorized branch is guarded on findById, so an
+                // adapter without it skips the manage re-check and admits nothing at all.
+                findById: vi.fn((id: string) => Promise.resolve((lakes ?? []).find(l => String(l.id) === id) ?? null)),
+              },
+            }
+          : {}),
+        // Wiring the grant reader is what lets the re-check trust a rung other than the creator's -
+        // see filterStillManagedLakes, which blanks the creator when this is absent.
+        ...(opts.activeGrants
+          ? { dataLakeAccessGrants: { listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants) } }
           : {}),
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
@@ -1658,6 +1767,91 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     // feature touches promptMeta.retrieval here.
     expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
+  });
+
+  // The field measures MEMBERSHIP in the admitted set, not causation: a lake the caller could
+  // already reach is listed too. This case is the sharpest form of that - no grant reader is wired,
+  // so the per-turn re-check blanks the creator rung and admits NOTHING, yet the id is still
+  // recorded because the creator arm injected the prompt on its own. A reader who treats a non-empty
+  // value as proof the admission did work would be wrong here.
+  it('records preauthorizedLakeIdsUsed for an admitted lake the caller could already reach anyway', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toEqual(['lakeX']);
+  });
+
+  // The causation case the one above cannot show: the caller neither created the lake nor belongs
+  // to its org, so isTrustedForInjection is false and the ordinary arm injects nothing. Only the
+  // admission - re-derived here through a live curator grant - puts the prompt on the turn.
+  it('records preauthorizedLakeIdsUsed when ONLY the admission could have injected the prompt', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake({ createdByUserId: 'someone-else' })], {
+        activeGrants: [{ dataLakeId: 'lakeX', principalType: 'user', principalId: OWNER, role: 'curator' }],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+  });
+
+  // Same untrusted lake, same admission, but the curator grant is gone: the re-check refuses, the
+  // ordinary trust arm was never available, and nothing is injected. This is what pins the previous
+  // test to the admission rather than to some other arm firing incidentally.
+  it('injects nothing when the admitted lake is untrusted and the manage grant is gone', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake({ createdByUserId: 'someone-else' })], {
+        activeGrants: [],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+  });
+
+  it('leaves preauthorizedLakeIdsUsed absent when the injected lake was not pre-authorized', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
   });
 });
 
@@ -2674,5 +2868,126 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
     // its scan was incomplete rather than presenting a partial result as a complete one.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect((quest.promptMeta as { warnings?: string[] }).warnings?.join(' ')).toContain('stopped advancing');
+  });
+});
+
+/**
+ * Forced retrieval is the only always-on retrieval channel, so a corpus that disagrees with itself
+ * reaches the model here whether or not the model chose to search. The note is composed by
+ * retrievalConflictNote.ts (unit-tested there); this locks the WIRING and the column-0 placement.
+ */
+describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
+  const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+
+  const makeCtx = (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+    const files = [...new Set(chunks.map(c => c.fabFileId))].map(id => ({ id, fileName: `${id}.pdf`, tags: [] }));
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve(
+              chunks.map((c, i) => ({ id: `ch${i}`, fabFileId: c.fabFileId, text: c.text, vector: [1, 0] }))
+            )
+          ),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+    const ctx = makeCtx(chunks, hasMore);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'uptime'
+    );
+    return messages[0]?.content ?? '';
+  };
+
+  it('keeps the note at column 0, outside the untrusted block', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const note = content.indexOf(CONFLICT_NOTE);
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(note).toBeLessThan(content.indexOf(BEGIN));
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the section
+    // headings, so a looser assertion would pass on a note naming the wrong field entirely.
+    const noteText = content.slice(note, content.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement');
+    expect(noteText).toContain('across documents fileA, fileB.');
+    // The id the note names is the id the heading renders, so the model can resolve it.
+    expect(content).toContain('(ID: fileA)');
+  });
+
+  it('says nothing when the injected documents agree', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    expect(content).not.toContain(CONFLICT_NOTE);
+  });
+
+  it('renders after the capability note, nearest the content it describes', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    expect(content.indexOf('About this library:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
+  });
+
+  // The other column-0 note, which only a partial scan emits: `hasMore` is what makes coverage
+  // partial, and the note ordering is unasserted without a fixture that has it.
+  it('renders after the coverage note as well', async () => {
+    const content = await run(
+      [
+        { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+        { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+      ],
+      true
+    );
+
+    expect(content).toContain('Coverage note:');
+    expect(content.indexOf('Coverage note:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
+  });
+
+  // The note must describe the SERVED text, and this is the channel where that bites: the char
+  // budget saturates on most turns here, so detection fed the pre-clip text would routinely assert a
+  // conflict whose evidence the model was never shown. Candidates tie on score and sort by
+  // fabFileId, so fileA is injected whole and fileB's figure is what the budget cuts.
+  it('says nothing about a conflicting figure the char budget clipped away', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: `${'padding text. '.repeat(1000)} Uptime is 95%.` },
+    ]);
+
+    // Both halves matter: the first proves the padding actually reached the budget (without it the
+    // test passes on a fixture that was never clipped), the second that the surviving half is served.
+    expect(content).not.toContain('Uptime is 95%.');
+    expect(content).toContain('Uptime is 99.9%.');
+    expect(content).not.toContain(CONFLICT_NOTE);
   });
 });

@@ -50,7 +50,9 @@ const handler = baseApi({ auth: false })
           .json({ error: 'unauthorized_client', error_description: 'Invalid client credentials or redirect_uri' });
       }
 
-      const authCode = await oauthAuthorizationCodeRepository.findValidCode(code);
+      // Atomically claim the code so a leaked code can't be redeemed twice by
+      // concurrent requests. Any subsequent failure leaves it consumed (single-use).
+      const authCode = await oauthAuthorizationCodeRepository.consumeValidCode(code);
       if (!authCode) {
         return res
           .status(400)
@@ -72,9 +74,6 @@ const handler = baseApi({ auth: false })
             .json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' });
         }
       }
-
-      // prevent replay
-      await oauthAuthorizationCodeRepository.markUsed(authCode.id);
 
       const user = await userRepository.findById(authCode.userId);
       if (!user) {

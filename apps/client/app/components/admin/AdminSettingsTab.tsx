@@ -26,6 +26,7 @@ import {
 import React, { useCallback, useMemo, useState } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 
 import AdminLogoUpload from './AdminLogoUpload';
 import { McpServerName } from '@bike4mind/common';
@@ -559,6 +560,11 @@ const AdminSettingsTab: React.FC = () => {
 
         {/* Operations Model component for the AI category */}
         {category === 'AI' && <AdminOperationsModelSetting />}
+
+        {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
+            seven of the nine scope-capable settings are AI, and the panel lists all nine wherever
+            it renders. */}
+        {category === 'AI' && <ScopedOverridesByScope />}
 
         {/* Logo Upload for the Branding category - shown when there's no
             search or the search matches the logoSettings definition */}

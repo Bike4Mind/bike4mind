@@ -61,17 +61,22 @@ interface ResearchTaskProcessAdapters {
     // to it), not just what the new write-gate call needs.
     dataLakes: Pick<
       IDataLakeRepository,
-      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'
+      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById'
     >;
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
     // `findMembershipOrgIds` off it).
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
     // Optional, but wire it for the same reason as scopedSettings above: this `db` reaches
     // ToolContext.db, and without it a grant-reached lake drops out of the research tools'
-    // retrieval while browse still shows it. Both methods, because the same object also reaches
-    // `createFabFile`, whose admission contract reads `listByLake` off it.
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listByLake'>;
+    // retrieval while browse still shows it. All three methods, because the same object serves
+    // three readers: retrieval's grant arm (`listByPrincipal`), `createFabFile`'s admission
+    // contract (`listByLake`) and the per-turn manage re-check ToolContext.db requires
+    // (`listActiveByLakes`).
+    dataLakeAccessGrants?: Pick<
+      IDataLakeAccessGrantRepository,
+      'listByPrincipal' | 'listByLake' | 'listActiveByLakes'
+    >;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];

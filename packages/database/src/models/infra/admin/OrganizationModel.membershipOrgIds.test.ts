@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 import { Organization, organizationRepository } from './OrganizationModel';
 import { setupMongoTest } from '../../../__test__/utils';
 
@@ -98,5 +99,56 @@ describe('OrganizationRepository.search - users[] ACL membership arm', () => {
     const expected = [String(owned._id), String(viaAcl._id)].sort();
     expect((await searchByUser('u1')).sort()).toEqual(expected);
     expect((await organizationRepository.findMembershipOrgIds('u1')).sort()).toEqual(expected);
+  });
+});
+
+/**
+ * `orgAclRowConfersMembership` is the in-memory twin of `orgMembershipFilter`'s `$elemMatch`, used
+ * wherever the rule has to be answered without issuing the Mongo query: the admin appointment route
+ * and the picker that feeds it (#2005), and the access view's org-channel `holderCount`. Two
+ * expressions of one rule, so drift is the whole risk: this pins them equal per ROW SHAPE rather
+ * than testing the predicate against its own definition, which would pass happily while the filter
+ * said something else.
+ */
+describe('orgAclRowConfersMembership agrees with orgMembershipFilter, per row shape', () => {
+  setupMongoTest();
+
+  // 'write' and a missing `permissions` key cannot come from any app write path (writers hard-code
+  // ['read'], and the schema types the field as required), so those rows go in through the raw
+  // driver - the same reason the write-only search case above does. They are exactly the shapes the
+  // predicate is defensive about, so omitting them would skip the interesting half.
+  const insertRaw = async (name: string, row: Record<string, unknown>) => {
+    const result = await Organization.collection.insertOne({
+      name,
+      userId: 'someone-else',
+      users: [row],
+      groups: [],
+      isGlobalRead: false,
+      isGlobalWrite: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    return String(result.insertedId);
+  };
+
+  const shapes: { label: string; permissions?: string[] }[] = [
+    { label: 'read', permissions: ['read'] },
+    { label: 'write (legacy/out-of-band only)', permissions: ['write'] },
+    { label: 'read plus unrelated verbs', permissions: ['share', 'read'] },
+    { label: 'share only', permissions: ['share'] },
+    { label: 'every non-membership verb', permissions: ['create', 'update', 'delete', 'share'] },
+    { label: 'empty permissions array', permissions: [] },
+    { label: 'permissions key absent entirely', permissions: undefined },
+  ];
+
+  it.each(shapes)('$label: the predicate matches what the datastore admits', async ({ permissions }) => {
+    const row: Record<string, unknown> = { userId: 'u1' };
+    if (permissions !== undefined) row.permissions = permissions;
+    const orgId = await insertRaw('shape-org', row);
+
+    const datastoreSaysMember = (await organizationRepository.findMembershipOrgIds('u1')).includes(orgId);
+    const predicateSaysMember = orgAclRowConfersMembership({ permissions });
+
+    expect(predicateSaysMember).toBe(datastoreSaysMember);
   });
 });

@@ -26,6 +26,7 @@ import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import RestoreIcon from '@mui/icons-material/Restore';
+import ReplayIcon from '@mui/icons-material/Replay';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
@@ -53,8 +54,10 @@ import {
   useDataLakeFiles,
   useGetArchivedDataLakes,
   useGetDeletedDataLakes,
+  useGetTransitionalDataLakes,
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
+  useRetryLakeLifecycle,
   useUnarchiveDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
@@ -74,7 +77,7 @@ interface ManagerNavProps {
   lakesLoading: boolean;
   /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
-  /** Lake id -> its attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  /** Lake id -> its attention-worthy taxonomy batch, if any (see manager/taxonomySlot.ts). */
   taxonomyBatchByLakeId: Map<string, IDataLakeBatchSummary>;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */
@@ -120,15 +123,22 @@ export default function ManagerNav({
   const [showLakes, setShowLakes] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
+  // Open by default, unlike the other two: this section only exists when something is wrong, so
+  // there is nothing to spare the reader by keeping it shut.
+  const [showTransitional, setShowTransitional] = useState(true);
   const [purgeTarget, setPurgeTarget] = useState<{ id: string; name: string } | null>(null);
   const unarchiveLake = useUnarchiveDataLake();
   const restoreDeletedLake = useRestoreDeletedDataLake();
   const deleteLake = usePermanentDeleteDataLake();
   const cleanupLake = useCleanupDataLake();
+  const retryLifecycle = useRetryLakeLifecycle();
   // Fetched up front rather than on first expand: an empty section renders as a single "No
   // archived" row instead of an accordion, and that needs the count before anyone clicks.
   const { data: archivedLakes } = useGetArchivedDataLakes();
   const { data: deletedLakes } = useGetDeletedDataLakes();
+  // Server-side manage-scoped and cutoff-filtered, so a non-empty result IS the reason to render
+  // the section - see useGetTransitionalDataLakes.
+  const { data: transitionalLakes } = useGetTransitionalDataLakes();
 
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
   // Dep on .data, not the whole result: react-query returns a fresh result object on every
@@ -190,6 +200,11 @@ export default function ManagerNav({
     const q = searchQuery.toLowerCase();
     return list.filter(l => l.name.toLowerCase().includes(q));
   };
+
+  // Filtered ONCE, because the needs-attention section gates on non-empty: gating on the unfiltered
+  // list while rendering the filtered one puts a search query that matches no stranded lake into
+  // the empty-row branch that section is built never to reach.
+  const strandedLakes = filterByName(transitionalLakes);
 
   // Search is scoped to the current level: entering/leaving a lake or drilling a category
   // clears it, so a query typed to find a lake at root can't silently filter (and hide) that
@@ -436,9 +451,13 @@ export default function ManagerNav({
                                   />
                                 </Tooltip>
                               )}
-                              {/* Background AI-tag suggestion indicator - an independent clock
-                                  from ingest, so this can appear well after the lake's files
-                                  are already fully uploaded/searchable. */}
+                              {/* Background AI-tag suggestion gates (progress, review, failed) -
+                                  an independent clock from ingest, so these can appear well
+                                  after the lake's files are already fully uploaded/searchable.
+                                  Adding or removing a taxonomyStatus gate anywhere in this
+                                  block means revisiting SLOT_PRIORITY in
+                                  manager/taxonomySlot.ts, whose order is argued from which
+                                  statuses these gates render. */}
                               {(taxonomyBatch?.taxonomyStatus === 'queued' ||
                                 taxonomyBatch?.taxonomyStatus === 'analyzing') && (
                                 <Tooltip title="Suggesting tags with AI - usually ready in under a minute" size="sm">
@@ -517,6 +536,55 @@ export default function ManagerNav({
                   </List>
                 ))}
             </Box>
+
+            {/* Lakes a crashed or timed-out lifecycle call left mid-operation. Rendered ONLY when
+                non-empty: unlike Archived/Deleted this is not a standing view of the app, so a
+                steady-state "No stranded lakes" row would be noise on every healthy install. */}
+            {strandedLakes?.length ? (
+              <NavLifecycleSection
+                label="Needs attention"
+                open={showTransitional}
+                onToggle={() => setShowTransitional(v => !v)}
+                testid="datalake-transitional-section"
+                lakes={strandedLakes}
+                hoverBg={hoverBg}
+                renderRowTrailing={lake => {
+                  // The service deliberately lists a lake whose `updatedAt` is missing or
+                  // unparseable, so the `since` clause is dropped rather than rendering
+                  // "since Invalid Date" - the row's presence is the signal, not the stamp.
+                  const movedAt = new Date(lake.updatedAt).getTime();
+                  const since = Number.isNaN(movedAt) ? '' : ` since ${new Date(movedAt).toLocaleString()}`;
+                  return (
+                    <Tooltip title={`In '${lake.status}'${since}`} placement="top">
+                      <Chip
+                        size="sm"
+                        variant="soft"
+                        color="warning"
+                        sx={COUNT_CHIP_SX}
+                        data-testid={`datalake-transitional-status-${lake.id}`}
+                      >
+                        {lake.status}
+                      </Chip>
+                    </Tooltip>
+                  );
+                }}
+                // Withheld for a row the server named no retry action for (a purge, whose sweep is
+                // already accepted and irreversible, or a 'restoring' lake whose axis is not
+                // provable), which leaves that row status-only - the section drops its menu trigger
+                // rather than opening an empty one.
+                renderActions={lake => {
+                  const action = lake.retryAction;
+                  return action ? (
+                    <RowMenuItem
+                      testId={`datalake-retry-btn-${lake.id}`}
+                      icon={<ReplayIcon sx={{ fontSize: 16 }} />}
+                      label={`Retry ${action}`}
+                      onClick={() => retryLifecycle.mutate({ id: lake.id, action })}
+                    />
+                  ) : null;
+                }}
+              />
+            ) : null}
 
             {/* Archived (reversible) */}
             <NavLifecycleSection

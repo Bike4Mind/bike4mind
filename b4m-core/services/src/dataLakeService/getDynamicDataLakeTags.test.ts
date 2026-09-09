@@ -433,8 +433,10 @@ describe('lakeMembershipsFrom', () => {
  * `createdByUserId` on the original creator.
  *
  * The repo mock returns whatever the fixture lists, as everywhere else in this file: the datastore
- * arm itself is pinned in DataLakeModel.test.ts. What is asserted here is which grants the resolver
- * ASKS for (the includeReaders split) and what it does with the rows that come back.
+ * arm itself is pinned in DataLakeModel.test.ts, and its agreement with the browse query in
+ * packages/database/src/models/ai/DataLakeModel.grantScopeAgreement.test.ts. What is asserted here
+ * is which grants the resolver ASKS for (the includeReaders split) and what it does with the rows
+ * that come back.
  */
 describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
   const grantRow = (dataLakeId: string, role: 'owner' | 'curator' | 'reader', principalId = 'grantee') =>
@@ -482,6 +484,8 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
 
     expect(res.dataLakeTags).toEqual(['datalake:theirs']);
     expect(res.scopedTagPrefixes).toEqual(['theirs:']);
+    // A DB lake's prefix stays SCOPED - a grant is not a promotion into the ownership bypass.
+    expect(res.dataLakeTagPrefixes).toEqual([]);
     // The id reaches the datastore pre-filter too, not only the in-memory restoration.
     expect(ctxWithGrant.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith([], [], [], 'grantee', {
       grantedLakeIds: ['theirs'],
@@ -595,6 +599,15 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     expect(res.dataLakeTags).toEqual([]);
   });
 
+  it('restores a granted lake once, not twice, when the caller also created it', async () => {
+    const own = dbLake({ id: 'theirs', createdByUserId: 'grantee', requiredUserTag: 'TagIDoNotHold' });
+
+    const res = await getDynamicDataLakeAccess(grantCtx([own], [grantRow('theirs', 'owner')]));
+
+    expect(res.dataLakeTags).toEqual(['datalake:theirs']);
+    expect(res.scopedTagPrefixes).toEqual(['theirs:']);
+  });
+
   it('ignores a grant for a lake the query did not return', async () => {
     // A stale grant naming an archived/deleted lake must not conjure it into the resolved set.
     const res = await getDynamicDataLakeAccess(grantCtx([], [grantRow('long-gone', 'owner')]));
@@ -627,7 +640,9 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     });
 
     expect(res.dataLakeTags).toEqual(['datalake:open']);
-    expect(res.lakeViewComplete).toBe(true);
+    // Narrowed, and it SAYS so: a consumer must not read the absent grant arm as proof of
+    // unreachability. The rest of the view survives.
+    expect(res.lakeViewComplete).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/access-grant lookup failed/), expect.anything());
   });
 

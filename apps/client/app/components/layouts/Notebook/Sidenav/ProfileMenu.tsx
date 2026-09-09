@@ -261,10 +261,6 @@ const ProfileMenu = () => {
   const planLabel =
     selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
 
-  // menuSurfaceSx is shared with the Data Lake row menu. 12px is the flyout's radius; the
-  // main panel below tightens it to 8px.
-  const panelSx = (t2: typeof theme) => ({ ...menuSurfaceSx(t2), borderRadius: '12px' });
-
   return (
     <Box ref={rootRef} sx={{ position: 'relative' }}>
       {open && (
@@ -272,8 +268,7 @@ const ProfileMenu = () => {
           data-testid="profile-menu-panel"
           role="menu"
           sx={theme2 => ({
-            ...panelSx(theme2),
-            borderRadius: '8px',
+            ...menuSurfaceSx(theme2),
             position: 'absolute',
             bottom: 'calc(100% + 8px)',
             left: 0,
@@ -487,7 +482,9 @@ const ProfileMenu = () => {
                 data-testid="profile-menu-more-flyout"
                 role="menu"
                 sx={theme2 => ({
-                  ...panelSx(theme2),
+                  // 12px, one step softer than the main panel's 8px: the flyout floats clear of
+                  // the panel rather than reading as part of it.
+                  ...menuSurfaceSx(theme2, '12px'),
                   position: 'absolute',
                   left: 'calc(100% + 16px)',
                   bottom: 0,

@@ -26,6 +26,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { __marker: 'dataLakeRepository' },
+  dataLakeAccessGrantRepository: { __marker: 'dataLakeAccessGrantRepository' },
   organizationRepository: { __marker: 'organizationRepository', findMembershipOrgIds: mockFindMembershipOrgIds },
   dataLakeAccessGrantRepository: { __marker: 'dataLakeAccessGrantRepository' },
   adminSettingsRepository: { __marker: 'adminSettingsRepository' },
@@ -220,6 +221,7 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
         // The grant rung. Both adapters are optional on the resolver, so an unthreaded one is not
         // a type error - it just silently drops a grant-reached lake out of retrieval, which is
@@ -278,6 +280,7 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         adminSettings: adminSettingsRepository,
@@ -298,6 +301,7 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         adminSettings: adminSettingsRepository,

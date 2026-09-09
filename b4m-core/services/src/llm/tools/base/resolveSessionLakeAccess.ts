@@ -3,6 +3,7 @@ import {
   narrowLakeAccessToSession,
   type ResolvedLakeAccessSet,
 } from '../../../dataLakeService/narrowLakeAccessToSession';
+import { unionPreauthorizedLakeAccess } from '../../../dataLakeService/unionPreauthorizedLakeAccess';
 import type { ToolContext } from './types';
 
 const NO_LAKES: ResolvedLakeAccessSet = {
@@ -22,5 +23,15 @@ const NO_LAKES: ResolvedLakeAccessSet = {
  */
 export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   if (context.suppressLakeArms) return NO_LAKES;
-  return narrowLakeAccessToSession(await getDynamicDataLakeAccess(context), context.sessionRetrievalTags);
+  const resolved = await getDynamicDataLakeAccess(context);
+  // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds:
+  // vetPreauthorizedLakeIds blanks the field unless the session's own userId equals the acting
+  // user, and the identity-substituting worker paths never reach that call at all.
+  const unioned = await unionPreauthorizedLakeAccess(
+    resolved,
+    context.sessionPreauthorizedLakeIds,
+    context.userId,
+    context.db
+  );
+  return narrowLakeAccessToSession(unioned, context.sessionRetrievalTags);
 }
