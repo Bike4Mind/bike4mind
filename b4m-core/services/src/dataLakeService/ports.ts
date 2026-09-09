@@ -104,11 +104,13 @@ export type DriveConnectionEnablePort = (args: { dataLakeId: string }) => Promis
  * - A lost DISABLE is genuinely backstopped: the ingest-level status guard (driveLakeIngest.ts)
  *   refuses to sync a lake that is not draft/active, so the poll keeps enqueueing work that is always
  *   dropped. Wasteful, never incorrect.
- * - A lost ENABLE has no backstop - `findDueForPoll` is the only reader of the flag - so it is
- *   swallowed only because it is REPAIRABLE: the reconnect door re-stamps `enabled: true`
- *   (OrgGoogleDriveConnection.updateCredential), which is where a user goes when sync looks broken,
- *   and the per-lake GET reports `enabled` truthfully so the state is at least inspectable. Do not
- *   remove that re-stamp without making this direction fatal instead.
+ * - A lost ENABLE has no backstop - `findDueForPoll` is the only reader that ACTS on the flag (the
+ *   enabled-only finders and the per-lake GET read it too, but none of them resumes a poll) - so it
+ *   is swallowed only because it is REPAIRABLE: the reconnect door re-stamps `enabled: true`
+ *   (OrgGoogleDriveConnection.updateCredential), which is where a user goes when sync looks broken.
+ *   The GET does report `enabled` truthfully, but no UI reads it - the connection chip renders from
+ *   `status` alone - so this state is inspectable over the API, not in the product. Do not remove
+ *   that re-stamp without making this direction fatal instead.
  */
 export async function bestEffortSetDriveConnectionEnabled(
   port: DriveConnectionEnablePort | undefined,

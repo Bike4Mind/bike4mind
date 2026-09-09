@@ -141,7 +141,11 @@ class OrgGoogleDriveConnectionRepository
   extends BaseRepository<IOrgGoogleDriveConnectionDocument & IMongoDocument>
   implements IOrgGoogleDriveConnectionRepository
 {
-  /** All enabled connections for an org (excludes credentials). */
+  /**
+   * All ENABLED connections for an org (excludes credentials). `enabled: false` is a real state now
+   * that archiving/soft-deleting a lake disables its connection, so this silently omits those rows;
+   * a caller that must see them (admin/management views) wants findByOrganizationIdAny.
+   */
   async findByOrganizationId(organizationId: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument)[]> {
     return this.find({ organizationId, enabled: true });
   }
@@ -253,10 +257,10 @@ class OrgGoogleDriveConnectionRepository
    * `enabled` is re-stamped true as well: the lifecycle transitions disable a connection when their
    * lake is archived or soft-deleted and re-enable it on unarchive/restore, and a re-enable that was
    * lost (the write failed, or the transition's process died after settling the lake) has no other
-   * repair path - `findDueForPoll` is the only reader and nothing else writes it back. The reconnect
-   * door is where a user goes when sync looks broken, so it heals `enabled` the same way it heals
-   * `status`. Safe only because that door refuses a non-draft/active lake up front (drive-sync.ts);
-   * without that gate this would re-enable an archived lake's connection.
+   * repair path - `findDueForPoll` is the only reader that ACTS on it and nothing else writes it
+   * back. The reconnect door is where a user goes when sync looks broken, so it heals `enabled` the
+   * same way it heals `status`. Safe only because that door refuses a non-draft/active lake up front
+   * (drive-sync.ts); without that gate this would re-enable an archived lake's connection.
    */
   async updateCredential(
     id: string,
