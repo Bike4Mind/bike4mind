@@ -72,6 +72,10 @@ const USAGE_HINT = 'Try `@datalake help`.';
  * never reached the deterministic handler at all, so the phrasing (and the caller's routing
  * decision) must not conflate the two.
  */
+// Hardcoded English, consistent with every other reply string in this file (HELP_TEXT,
+// USAGE_HINT, formatIngestOutcome, etc.) - noted as a known i18n gap rather than fixed in
+// isolation here, since localizing one string while the rest of the file stays English would
+// be inconsistent, not fixed.
 export function formatBareDataLakeMentionHint(): string {
   return `Did you mean \`@datalake\`? ${USAGE_HINT}`;
 }
