@@ -14,6 +14,7 @@ import {
   type AdminSettingDoc,
   ABSTENTION_PROMPT,
   WEB_SEARCH_FRESHNESS_PROMPT,
+  KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -782,6 +783,58 @@ describe('WebSearchFreshnessPrompt default tells the model when to search', () =
 
   it('ships as the WebSearchFreshnessPrompt setting default (no drift between const and setting)', () => {
     expect(settingsMap.WebSearchFreshnessPrompt.defaultValue).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
+  });
+});
+
+describe('KnowledgeBaseRetrievalPrompt default tells the model when to retrieve', () => {
+  // Same shape of failure as the web-search nudge, measured the same way: search_knowledge_base
+  // was offered on 1,591 optional-path production turns over 30 days and called on 319 of them
+  // (20.1%), while its tool description covered only HOW to search and never WHEN. Two clauses
+  // carry the whole effect, so pin both.
+  it('directs the model to search before answering from its weights', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/search_knowledge_base/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/labels, not content/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a retrieval it did
+  // not need - the same failure global forced retrieval already showed on out-of-corpus questions,
+  // arriving by a different route.
+  it('names the cases that do NOT need a search', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/do not search when/i);
+  });
+
+  // A small attached corpus is INLINED rather than deferred to retrieval, and forced retrieval
+  // steps aside entirely on an attached-files turn. Without these two clauses the section sends
+  // the model searching for text already sitting in its context, and its opening paragraph asserts
+  // the documents are invisible - which on that path is simply false.
+  it('exempts content already placed in the conversation', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/from an attached document/i);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/unless its content has been placed in this conversation/i);
+  });
+
+  // On a forced turn that retrieved nothing, forcedRetrievalNoContextPrompt instructs the model to
+  // say the library does not cover the question. Without this clause the nudge invites a second
+  // identical search: a billed query embedding, and a chance to hedge out of a correct abstention.
+  it('forbids re-searching a library already searched this turn', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/already been searched on this turn/i);
+  });
+
+  // The abstention half. Without it a nudge to search converts a clean "I could not find that"
+  // into an ungrounded answer wearing the corpus's authority.
+  it('requires saying so when the corpus does not cover the question', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/does not turn up what was asked for/i);
+  });
+
+  // Naming retrieve_knowledge_content here would instruct the model to call a tool a session
+  // denylist can strip while search survives (ChatCompletionProcess warns on exactly that pair),
+  // and a model told to call a tool it was not given emits the call as leaked JSON text.
+  it('names no knowledge tool the gate does not guarantee', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/retrieve_knowledge_content/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/count_knowledge_base/);
+  });
+
+  it('ships as the KnowledgeBaseRetrievalPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.KnowledgeBaseRetrievalPrompt.defaultValue).toBe(KNOWLEDGE_BASE_RETRIEVAL_PROMPT);
   });
 });
 

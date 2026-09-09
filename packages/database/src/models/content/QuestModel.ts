@@ -75,6 +75,9 @@ const RetrievalSummarySchema = subSchema({
   // Optional because it is present iff `attempted`: the seeded not-attempted turn has no outcome.
   outcome: { type: String, required: false },
   mode: { type: String, required: false },
+  // Optional, and an explicit `false` is meaningful (the A/B control arm) rather than a blank -
+  // see the field's comment on the Zod side.
+  knowledgeBaseGuidanceInjected: { type: Boolean, required: false },
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
