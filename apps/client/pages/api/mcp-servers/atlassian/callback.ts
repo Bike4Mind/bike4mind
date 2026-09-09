@@ -109,6 +109,19 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
 
+  // Idempotency, deliberately ABOVE the browser-binding gate: the first callback burns the nonce
+  // cookie, so a refresh or Back through this handler (which sets no no-store) arrives with no
+  // cookie and would otherwise be reported as a session_mismatch failure for a link that is live.
+  // Safe at this position because the signature check above already proves the state is one we
+  // issued for this userId, and this branch exchanges nothing, mutates nothing and grants nothing -
+  // it only restates a connection the caller's own state names.
+  const existingUser = await userRepository.findById(userId);
+  if (existingUser?.atlassianConnect?.status === 'connected') {
+    console.log('✅ User already has valid Atlassian connection, skipping token exchange');
+    auditLogger.success({ isDuplicate: true });
+    return res.redirect('/profile?tab=integrations&atlassian=connected');
+  }
+
   // Browser-binding: the shared nonce cookie set at connect time must match the
   // (signed) hash in the state, proving the same browser is completing the flow.
   // Fails closed - a missing or mismatched cookie is rejected.
@@ -131,14 +144,6 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     console.error('❌ CSRF token timestamp is in the future');
     auditLogger.failure('csrf_token_future');
     return res.redirect('/profile?tab=integrations&atlassian=error');
-  }
-
-  // Idempotency check: avoid re-running token exchange if the callback fires more than once
-  const existingUser = await userRepository.findById(userId);
-  if (existingUser?.atlassianConnect?.status === 'connected') {
-    console.log('✅ User already has valid Atlassian connection, skipping token exchange');
-    auditLogger.success({ isDuplicate: true });
-    return res.redirect('/profile?tab=integrations&atlassian=connected');
   }
 
   const { clientId, clientSecret, redirectUri } = await getAtlassianOAuthConfig();
