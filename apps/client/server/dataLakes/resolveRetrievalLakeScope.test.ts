@@ -27,6 +27,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { __marker: 'dataLakeRepository' },
   organizationRepository: { __marker: 'organizationRepository', findMembershipOrgIds: mockFindMembershipOrgIds },
+  dataLakeAccessGrantRepository: { __marker: 'dataLakeAccessGrantRepository' },
+  adminSettingsRepository: { __marker: 'adminSettingsRepository' },
 }));
 vi.mock('@server/entitlements', () => ({
   getRequestEntitlements: mockGetRequestEntitlements,
@@ -38,7 +40,12 @@ import {
   resolveRetrievalLakeScopeForUser,
   withStaticRegistryBypass,
 } from './resolveRetrievalLakeScope';
-import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 
 type Scope = Parameters<typeof withStaticRegistryBypass>[0];
@@ -214,6 +221,11 @@ describe('resolveRetrievalLakeScope', () => {
       db: {
         dataLakes: dataLakeRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+        // The grant rung. Both adapters are optional on the resolver, so an unthreaded one is not
+        // a type error - it just silently drops a grant-reached lake out of retrieval, which is
+        // exactly the divergence this deep-equality assertion exists to catch.
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
       },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: ['optihashi:pro'],
@@ -267,6 +279,8 @@ describe('resolveRetrievalLakeScope', () => {
       db: {
         dataLakes: dataLakeRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
       },
       user: { id: 'u1', tags: [] },
       entitlementKeys: [],
@@ -285,6 +299,8 @@ describe('resolveRetrievalLakeScope', () => {
       db: {
         dataLakes: dataLakeRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
       },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: [],
