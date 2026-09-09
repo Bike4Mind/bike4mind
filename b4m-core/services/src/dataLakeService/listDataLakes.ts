@@ -22,7 +22,7 @@ import {
 } from '@bike4mind/common';
 import { canManageLake, canShredLakeMemory, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
-import { grantedLakeIdsFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
+import { grantedLakeReachFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
 
 /** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
 type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
@@ -106,8 +106,9 @@ interface ListDataLakesAdapters {
     dataLakeAccessGrants?: GrantLookup;
     /**
      * Optional settings repo for the read-time grant cutover flag (#1673). When present and
-     * EnforceLakeReadGrants is on, reader-granted lakes list too (in lockstep with the single gate).
-     * Absent OR a failed read -> report-only, so reader-granted lakes are NOT listed (legacy behavior).
+     * EnforceLakeReadGrants is on (the shipped default), reader- and org-granted lakes list too, in
+     * lockstep with the single gate. Absent OR a failed read -> report-only, so those lakes are NOT
+     * listed (legacy behavior).
      */
     settings?: SettingsLookup;
     /**
@@ -137,14 +138,14 @@ interface ListDataLakesAdapters {
  * `listDataLakes`-only options (#2425 P3 review): kept OUT of `ListDataLakesAdapters` on purpose,
  * even though it is a sibling of `db`/`logger` there, because that type is shared with
  * `listAllDataLakes`/`listArchivedDataLakes`/`listDeletedDataLakes` and none of them honor this
- * field - two of them even run their own `grantedLakeIdsFor` call, so a field that looked
+ * field - two of them even run their own `grantedLakeReachFor` call, so a field that looked
  * type-valid there but was silently dropped would be worse than not having the option at all.
  * Scoping it to a type only `listDataLakes` accepts keeps the field's type-checked surface equal
  * to its actual support.
  */
 interface ListDataLakesOptions extends ListDataLakesAdapters {
   /**
-   * Optional pre-resolved grant-id set: skips this function's own `grantedLakeIdsFor` call when
+   * Optional pre-resolved grant-id set: skips this function's own `grantedLakeReachFor` call when
    * the caller already ran the identical query. Only safe to pass when the caller never threads
    * `db.settings` above, so `resolveEnforceReadGrants` (and thus the `includeReaders` this
    * function would otherwise resolve to) is always `false` - enforced below with a thrown error
@@ -384,12 +385,19 @@ export const listDataLakes = async (
     );
   }
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds =
-    precomputedGrantedLakeIds ??
-    (await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders));
+  // The precomputed set carries the USER half only. That loses nothing: the guard above forces
+  // includeReaders=false whenever it is supplied, and the org arm is resolved only under
+  // includeReaders - so the recomputing branch would return an empty org half here too.
+  const { grantedLakeIds, orgGrantedLakes } = precomputedGrantedLakeIds
+    ? { grantedLakeIds: precomputedGrantedLakeIds, orgGrantedLakes: {} }
+    : await grantedLakeReachFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
-    dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
+    dynamicLakes = await db.dataLakes.findAccessible(ctx, {
+      statuses: ['draft', 'active'],
+      grantedLakeIds,
+      orgGrantedLakes,
+    });
   } catch {
     // DB may not have the collection yet - fall through to hardcoded
   }
@@ -517,7 +525,7 @@ export const listArchivedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -527,6 +535,7 @@ export const listArchivedDataLakes = async (
     statuses: ['archived'],
     includePublic: false,
     grantedLakeIds,
+    orgGrantedLakes,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
@@ -542,13 +551,18 @@ export const listDeletedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
     includeReaders
   );
-  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: ['deleted'],
+    includePublic: false,
+    grantedLakeIds,
+    orgGrantedLakes,
+  });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
 };
@@ -574,7 +588,7 @@ export const listTransitionalDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<TransitionalDataLakeSummary[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -584,6 +598,7 @@ export const listTransitionalDataLakes = async (
     statuses: [...DATA_LAKE_TRANSITIONAL_STATUSES],
     includePublic: false,
     grantedLakeIds,
+    orgGrantedLakes,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   const now = Date.now();
