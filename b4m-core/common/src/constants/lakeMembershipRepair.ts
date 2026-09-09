@@ -9,7 +9,13 @@
  * Nothing here mutates anything. A plan is a proposal.
  */
 
-import { byNewestFirst, type DuplicateBucket, type DuplicateGroup } from './lakeMembershipHealth';
+import {
+  byNewestFirst,
+  type DuplicateBucket,
+  type DuplicateGroup,
+  type MembershipScopeDisclosure,
+  type WireDuplicateGroup,
+} from './lakeMembershipHealth';
 import type { ILakeMembershipDecision } from '../types/entities/LakeMembershipDecisionTypes';
 
 /**
@@ -118,6 +124,41 @@ export interface MembershipRepairPlan {
 }
 
 /**
+ * The plan as GET /api/data-lakes/:id/membership-duplicates ships it (#2238): the groups a manager
+ * still has to answer, already stripped to the wire shape.
+ *
+ * Declared beside the plan rather than in the service that builds it (`loadMembershipRepairPlan`)
+ * for the same reason `LakeHealthApiResponse` is: the route, the service and the client hook all
+ * have to agree on it, and a shape declared in the service is one the client has to restate.
+ */
+export interface MembershipRepairPlanRead {
+  /**
+   * Groups still awaiting an answer, worst-understood first (see `summarizeLakeMembership`), capped.
+   * Includes groups whose identity is proven: nothing executes a repair plan automatically today, so
+   * from this door's point of view a collapsible group is simply one nobody has answered yet.
+   */
+  open: WireDuplicateGroup[];
+  /** Exact count of open groups even when `open` is capped, so no surface implies fewer. */
+  openGroupCount: number;
+  /**
+   * Groups a still-valid ruling answers, and which are therefore NOT offered. Reported so a surface
+   * can say what it is suppressing rather than presenting a settled lake as one with no history.
+   */
+  settledGroupCount: number;
+  /**
+   * Groups whose recorded ruling was never carried out - a `keep-newest`/`keep-specific` whose
+   * removal failed after the ruling was written (the decision door records first on purpose). These
+   * are counted here AND offered in `open`, because re-answering is the recovery: the ruling upserts
+   * over itself and the removal is retried.
+   */
+  stalledGroupCount: number;
+  /** The arm and principal every number above was computed over. */
+  scope: MembershipScopeDisclosure;
+  /** True when the lake exceeded the member scan bound, so `openGroupCount` is a lower bound. */
+  scanTruncated: boolean;
+}
+
+/**
  * A stable fingerprint of a group's membership, used as the tombstone key alongside the file name.
  *
  * Built from the member ids AND their fingerprints AND their sizes, sorted, so it is:
@@ -142,6 +183,28 @@ export function groupIdentity(group: Pick<DuplicateGroup, 'members'>): string {
     .sort()
     .join('|');
 }
+
+/**
+ * How many members of ONE group a ruling is computed over: the input set of the tombstone key above,
+ * NOT a payload size.
+ *
+ * Every door that stamps a `groupIdentity` or re-derives one to compare against must read the same
+ * number of members, newest-first, or the two strings cannot be equal. Two doors do: the repair-plan
+ * read caps each group's members at this (`summarizeLakeMembership`'s `maxGroupMembers`, which keeps
+ * the newest), and the admission decision door bounds its same-name sibling read by it
+ * (`findLakeMemberSiblingsByFileName`'s `limit`, which is newest-first for exactly this reason).
+ *
+ * Letting them differ is not a rounding error, it is two silent bugs. A `keep-both` stamped over the
+ * narrower set never matches the identity the plan recomputes, so the group routes to
+ * `needsDecision` on every render - the precise re-ask `keep-both` exists to prevent - and it cannot
+ * clear itself through the automatic arm either, since a group anyone has ruled on is barred from it.
+ * A `keep-newest` removes only the members the narrower door happened to see and reports that count
+ * as if it were the whole job.
+ *
+ * Deliberately not `MEMBERSHIP_GROUP_MEMBERS_RETURNED`, whose equal 200 bounds the health report's
+ * payload. Same number today, different contracts; a change to one must not silently move the other.
+ */
+export const DECIDABLE_GROUP_MEMBERS = 200;
 
 /** Worst-understood first: unverified, then differing. Collapsible groups are listed separately. */
 const DECISION_ORDER: Record<DuplicateBucket, number> = { unverified: 0, differing: 1, 'proven-identical': 2 };

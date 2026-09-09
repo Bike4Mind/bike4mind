@@ -105,6 +105,8 @@ export interface ToolBuilderConfig {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
+  sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -317,6 +319,12 @@ export interface BuildToolPromptArgs {
   hasContentTransform: boolean;
   hasChessEngine: boolean;
   hasCurrentDateTime: boolean;
+  hasWebSearch: boolean;
+  /**
+   * Resolved `WebSearchFreshnessPrompt` setting. Resolved by the caller, which owns the
+   * settings reader, so the injected text and its telemetry cannot disagree.
+   */
+  webSearchGuidance?: string;
   /**
    * User's IANA timezone (from the browser) when known, so the current-time
    * nudge can tell the model which timezone to pass to `current_datetime`.
@@ -702,6 +710,7 @@ export class ToolBuilder {
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
+        sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
@@ -918,6 +927,8 @@ export class ToolBuilder {
     hasContentTransform,
     hasChessEngine,
     hasCurrentDateTime,
+    hasWebSearch,
+    webSearchGuidance,
     userTimezone,
     mcpTools,
     sessionId,
@@ -1039,6 +1050,13 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
           `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
       );
+    }
+
+    // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
+    // date context tells the model what today is, but nothing otherwise tells it when its own
+    // knowledge is too old to answer from.
+    if (hasWebSearch && webSearchGuidance) {
+      sections.push(webSearchGuidance);
     }
 
     // 4. MCP integration guidance (if MCP tools are available)

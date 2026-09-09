@@ -93,6 +93,39 @@
           "message": {
             "type": "string"
           },
+          "tools": {
+            "type": "object",
+            "properties": {
+              "toolMode": {
+                "type": "string",
+                "enum": [
+                  "fast",
+                  "smart"
+                ]
+              },
+              "autoSelectedTools": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "effectiveTools": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "unrecognizedTools": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "effectiveTools"
+            ]
+          },
           "tracking_info": {
             "type": "object",
             "properties": {
@@ -191,7 +224,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Explicit tool ids to offer the model. A non-empty array enables tools on its own; no companion `toolMode` or `enableTools` is required. Merged with the auto-selected set under `toolMode: \"smart\"`, and ignored under `toolMode: \"fast\"`. This list ADDS to what is offered rather than restricting it - the server still offers tools of its own (for example knowledge retrieval when the session has reachable documents). Unrecognized ids are dropped rather than rejecting the request; the response reports the surviving set as `tools.effectiveTools` and the ids that are not tools in this deployment as `tools.unrecognizedTools`, since no endpoint enumerates the valid ids. `unrecognizedTools` is reported under every `toolMode` - it describes the ids, not what the mode did with them - so under `toolMode: \"fast\"` an id can be absent from `effectiveTools` (the mode discarded it) without being unrecognized. Both reported lists are deduplicated, and `unrecognizedTools` names at most the first 10 distinct ids."
           },
           "enableQuestMaster": {
             "type": "boolean"
@@ -215,6 +249,11 @@
           },
           "includeSystemPrompt": {
             "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string",
+            "maxLength": 16000,
+            "description": "System-prompt text for this request only, never persisted. Rendered as a defended block appended after every other system-prompt source, with prose instructing the model to defer to organization, session and data-lake guidance. Over the cap is a 422, never truncated."
           }
         },
         "required": [
@@ -1805,7 +1844,7 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "Request body failed schema validation.",
             "content": {
               "application/json": {
                 "schema": {

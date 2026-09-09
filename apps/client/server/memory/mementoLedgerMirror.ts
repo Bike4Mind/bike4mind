@@ -57,12 +57,17 @@ function bestDedupMatch(entries: DedupEntry[], embedding: number[]): DedupEntry 
 
 /** A batched append session for one principal's ledger. See `createLedgerAppendSession`. */
 export interface LedgerAppendSession {
+  /**
+   * Returns false when the write was REFUSED because this principal's memory was erased after the
+   * session opened (see appendMemoryEvent). A refusal is the correct outcome, not an error - callers
+   * should stop appending rather than retry.
+   */
   append(fact: {
     summary: string;
     evidenceTier: EvidenceTier;
     sources?: string[];
     embedding?: number[];
-  }): Promise<void>;
+  }): Promise<boolean>;
 }
 
 /**
@@ -95,8 +100,21 @@ export async function createLedgerAppendSession(params: {
   principal: Principal;
   /** DEK owner - the user whose key seals this principal's facts at rest. */
   ownerUserId: string;
+  /**
+   * When the caller's work began, for the crypto-shred fence (see appendMemoryEvent).
+   *
+   * Required, with NO default, for the same reason `appendMemoryEvent` refuses one: defaulting it to
+   * the moment the session opens silently disables the fence for every caller whose work began
+   * earlier, which is most of them. A lake extraction claims its lease and then awaits the key table,
+   * a cursor re-read and a member page; a memento job runs an LLM extraction and an embedding call.
+   * A shred landing in either window is stamped BEFORE a session-open default and would lift its own
+   * tombstone, so the erased fact lands anyway. Pass the instant the UNIT OF WORK started - a run's
+   * lease claim, a job's arrival, a request's arrival - not the instant you happen to write.
+   */
+  startedAt: Date;
 }): Promise<LedgerAppendSession> {
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
+  const startedAt = params.startedAt;
   const entries: DedupEntry[] = [];
   let profileLoaded = false;
 
@@ -130,7 +148,7 @@ export async function createLedgerAppendSession(params: {
   return {
     async append(fact) {
       const derivedSubject = resolveSubject({ fact: fact.summary });
-      if (!derivedSubject) return; // nothing to key on (content-free summary)
+      if (!derivedSubject) return true; // nothing to key on (content-free summary); not a refusal
 
       let match: DedupEntry | null = null;
       if (fact.embedding?.length) {
@@ -138,7 +156,7 @@ export async function createLedgerAppendSession(params: {
         match = bestDedupMatch(entries, fact.embedding);
       }
 
-      await appendMemoryEvent(
+      const sealed = await appendMemoryEvent(
         memoryLedgerRepository,
         keys,
         params.ownerUserId,
@@ -157,8 +175,11 @@ export async function createLedgerAppendSession(params: {
         // must be hashed here to land on the SAME stored HMAC and coalesce). No match -> a fresh
         // plaintext subject that needs hashing. Forcing `match !== null` would store a same-run new
         // subject as if already hashed and silently fork instead of coalescing.
-        { subjectIsHashed: match ? match.subjectIsHashed : false }
+        { subjectIsHashed: match ? match.subjectIsHashed : false, startedAt }
       );
+      // Refused by the shred fence. Return before touching the de-dup set: recording a belief that was
+      // never written would make later facts in this run coalesce onto a subject that does not exist.
+      if (!sealed) return false;
 
       // Keep the in-memory set current so a later fact in this run coalesces with this one, exactly as
       // the per-fact profile re-read used to. On a coalesce the assert's embedding wins (mirrors the
@@ -167,6 +188,7 @@ export async function createLedgerAppendSession(params: {
         if (match) match.embedding = fact.embedding;
         else entries.push({ subject: derivedSubject, subjectIsHashed: false, embedding: fact.embedding });
       }
+      return true;
     },
   };
 }
@@ -183,9 +205,19 @@ export async function appendFactToLedger(params: {
   evidenceTier: EvidenceTier;
   sources?: string[];
   embedding?: number[];
-}): Promise<void> {
-  const session = await createLedgerAppendSession({ principal: params.principal, ownerUserId: params.ownerUserId });
-  await session.append({
+  /**
+   * When the caller's work began - NOT when it calls this. A single-fact write still has a unit of
+   * work around it: the extraction that produced `summary` ran first, and a shred landing during it
+   * must refuse this write. See `createLedgerAppendSession`.
+   */
+  startedAt: Date;
+}): Promise<boolean> {
+  const session = await createLedgerAppendSession({
+    principal: params.principal,
+    ownerUserId: params.ownerUserId,
+    startedAt: params.startedAt,
+  });
+  return session.append({
     summary: params.summary,
     evidenceTier: params.evidenceTier,
     sources: params.sources,
@@ -207,7 +239,9 @@ export async function writeFactToLedger(params: {
   summary: string;
   sources?: string[];
   embedding?: number[];
-}): Promise<void> {
+  /** When the extraction that produced this fact began - see `appendFactToLedger`. */
+  startedAt: Date;
+}): Promise<boolean> {
   return appendFactToLedger({
     principal: { kind: 'user', id: params.userId },
     ownerUserId: params.userId,
@@ -215,5 +249,6 @@ export async function writeFactToLedger(params: {
     evidenceTier: 'engineering-proxy',
     sources: params.sources,
     embedding: params.embedding,
+    startedAt: params.startedAt,
   });
 }

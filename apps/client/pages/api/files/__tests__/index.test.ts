@@ -14,6 +14,7 @@ const mockRefs = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
   deleteManyArgs: undefined as unknown[] | undefined,
+  updateManyArgs: undefined as unknown[] | undefined,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -40,12 +41,17 @@ vi.mock('@bike4mind/database', () => {
     // chainable Query, so calling `.session()` on the return value throws in production
     // (see softDeletePlugin in b4m-core/db-core/src/utils/mongo.ts). Session must be
     // passed as an options argument instead.
-    static deleteMany = (filter: unknown, ...rest: unknown[]) => {
+    static deleteMany = (filter: any, ...rest: unknown[]) => {
       mockRefs.deleteManyArgs = [filter, ...rest];
-      // Only the CASL-scoped accessible filter should ever reach here - a wrong/widened filter
-      // (e.g. {}) resolves 0, which the test below can tell apart from the real filter.
-      const deletedCount = filter === accessibleFilter ? fabFileDocs.length : 0;
-      return Promise.resolve({ deletedCount });
+      // Only the owner-scoped arm of the CASL filter should ever reach here - a wrong/widened
+      // filter (e.g. {}, or the bare CASL scope, which also matches files shared IN) resolves 0,
+      // which the test below can tell apart from the real filter.
+      const isOwnedScope = Array.isArray(filter?.$and) && filter.$and[0] === accessibleFilter;
+      return Promise.resolve({ deletedCount: isOwnedScope ? fabFileDocs.length : 0 });
+    };
+    static updateMany = (filter: unknown, update: unknown, ...rest: unknown[]) => {
+      mockRefs.updateManyArgs = [filter, update, ...rest];
+      return Promise.resolve({ modifiedCount: 1 });
     };
   }
   class User {
@@ -145,6 +151,7 @@ function invokeDelete() {
 describe('DELETE /api/files', () => {
   beforeEach(() => {
     mockRefs.deleteManyArgs = undefined;
+    mockRefs.updateManyArgs = undefined;
   });
 
   // Regression for the TypeError that fired in production: FabFile.deleteMany() comes from the
@@ -157,11 +164,25 @@ describe('DELETE /api/files', () => {
 
     await mockRefs.deleteHandler!(req, res);
 
-    // Both the CASL-scoped filter and the session must reach deleteMany unchanged - checking only
-    // the session option would let a widened/wrong filter (e.g. {}, matching every user's files)
-    // pass unnoticed.
-    expect(mockRefs.deleteManyArgs?.[0]).toBe(accessibleFilter);
+    // Both the scoped filter and the session must reach deleteMany unchanged - checking only the
+    // session option would let a widened/wrong filter (e.g. {}, matching every user's files) pass
+    // unnoticed. The CASL scope is now one arm of an $and whose other arm pins ownership, so a
+    // delete grant on a file shared IN can no longer destroy the owner's document.
+    const deleteFilter = mockRefs.deleteManyArgs?.[0] as { $and: unknown[] };
+    expect(deleteFilter.$and[0]).toBe(accessibleFilter);
+    expect(deleteFilter.$and[1]).toEqual({ userId: 'user-1' });
     expect(mockRefs.deleteManyArgs?.[1]).toEqual({ session: { __fakeSession: true } });
+  });
+
+  it('unshares files owned by others rather than deleting them', async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    const [updateFilter, update] = (mockRefs.updateManyArgs ?? []) as [{ $and: unknown[] }, unknown];
+    expect(updateFilter.$and[0]).toBe(accessibleFilter);
+    expect(updateFilter.$and[1]).toEqual({ userId: { $ne: 'user-1' } });
+    expect(update).toEqual({ $pull: { users: { userId: 'user-1' } } });
   });
 
   it('completes the request without throwing', async () => {

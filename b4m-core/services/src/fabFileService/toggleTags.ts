@@ -52,6 +52,13 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
+  /**
+   * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
+   * does). It cannot be read off the user document, so omitting it drops the two org rungs of
+   * `canManageLake` from every gate below - making this door strictly narrower than the route gate
+   * in front of it. Same adapter, for the same reason, as `createFabFile`'s and `updateFabFile`'s.
+   */
+  administeredOrgIds?: string[];
 }
 
 const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
@@ -108,7 +115,7 @@ const matchingStoredNames = (storedNames: readonly string[], tag: string): strin
 export const toggleTags = async (
   userId: string,
   params: unknown,
-  { db, logger }: FabFileToggleTagsAdapters
+  { db, logger, administeredOrgIds }: FabFileToggleTagsAdapters
 ): Promise<ToggledFabFile[]> => {
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
 
@@ -128,7 +135,7 @@ export const toggleTags = async (
   if (!user) throw new Error('User not found');
 
   // Only get files that the user has update access to
-  const fabFiles = await db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+  const fabFiles = await db.fabFiles.shareable.findAllUpdateAccessByIds(user, ids);
 
   // Check if user has permission to update all requested files. Counted as a Set for the same
   // reason `tags` is deduped above: the reader returns distinct rows, so a file sent twice is not
@@ -138,11 +145,14 @@ export const toggleTags = async (
     throw new BadRequestError('Some files are not accessible or you do not have permission to edit them');
   }
 
-  const actor = { userId, isAdmin: !!user.isAdmin };
+  const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
   // Grant-aware manage gates below: consult each lake's active grants so a transferred lake's
   // superseded creator does not still pass. Batched + cached across both prefix-arm gate passes.
-  // (This file-tag door is file-owner-centric and does not resolve the org-admin rung; org admins
-  // manage lakes through the dedicated data-lake endpoints.)
+  // The org rungs fire only when the caller resolved `administeredOrgIds` for us - the route door
+  // does, so an org admin the route just authorized is not refused by `addFileToLake` one call
+  // later. This actor gates every hop `canManageLake` admits, not only the join above: the
+  // prefix-arm removal gate below and both `removeFileFromLake` calls widen the same way, so an
+  // org admin can now strip a file out of an org lake, not just add one.
   const grantResolver = makeLakeGrantResolver({ db });
 
   // A lake a file belongs to ONLY via its prefix arm (no meta-tag) is invisible to
@@ -482,7 +492,7 @@ export const toggleTags = async (
 
   // Re-read: the writes above are element-level, so the documents loaded earlier no longer
   // reflect what is stored.
-  const freshFiles = await db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+  const freshFiles = await db.fabFiles.shareable.findAllUpdateAccessByIds(user, ids);
 
   // Surfaces the trap: a content-prefix tag can join a file to a lake with no
   // `datalake:*` meta-tag ever applied, and the caller who reached for an ordinary tag has no way

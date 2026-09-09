@@ -1,7 +1,7 @@
-import type { drive_v3 } from 'googleapis';
+import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
-import { listFolderChildren, isFolder, type DriveFile } from './driveClient';
+import { listFolderChildren, isFolder, isDriveRateLimitError, type DriveFile } from './driveClient';
 
 const GOOGLE_DOC = 'application/vnd.google-apps.document';
 const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
@@ -47,9 +47,14 @@ export async function walkFolder(drive: drive_v3.Drive, rootFolderId: string): P
   return files;
 }
 
+/**
+ * `rate_limited` is the one RETRYABLE failure: Drive throttled us, so the file is fine and the
+ * caller must defer it rather than record it skipped. `unsupported`, `export_too_large` and
+ * `error` are all permanent for this file's current content.
+ */
 export type FetchedContent =
   | { ok: true; bytes: Buffer; mimeType: string }
-  | { ok: false; reason: 'unsupported' | 'export_too_large' | 'error'; detail?: string };
+  | { ok: false; reason: 'unsupported' | 'export_too_large' | 'error' | 'rate_limited'; detail?: string };
 
 /**
  * Fetch one Drive file's bytes for ingest:
@@ -57,8 +62,9 @@ export type FetchedContent =
  *   google-apps types (Forms, Drawings, ...) aren't ingestible and are reported `unsupported`.
  * - Native files -> `files.get?alt=media`, gated by `resolveSupportedMimeType`.
  *
- * Returns a discriminated result so the caller skips-and-counts rather than crashing the whole
- * walk on one bad file (an oversized Editors export, an unsupported type, a transient error).
+ * Returns a discriminated result so the caller skips-and-counts rather than crashing the whole walk
+ * on one bad file (an oversized Editors export, an unsupported type). A throttle is reported as its
+ * own `rate_limited` reason - see FetchedContent for why the caller must not conflate the two.
  */
 export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFile): Promise<FetchedContent> {
   try {
@@ -86,6 +92,11 @@ export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFi
     // Drive's ~10MB export hard cap surfaces as exportSizeLimitExceeded - skip, don't fail the run.
     if (/exportSizeLimitExceeded/i.test(detail)) {
       return { ok: false, reason: 'export_too_large', detail };
+    }
+    // Transient, and reported apart from `error` because the caller treats `error` as a permanent
+    // per-file skip - which for a throttle silently drops the file from the lake (#2394).
+    if (isDriveRateLimitError(e)) {
+      return { ok: false, reason: 'rate_limited', detail };
     }
     return { ok: false, reason: 'error', detail };
   }

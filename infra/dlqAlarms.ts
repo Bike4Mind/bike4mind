@@ -33,6 +33,7 @@ import {
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
+  dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
   driveLakeIngestQueueDLQ,
   videoGenerationDLQ,
@@ -229,6 +230,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeTaxonomyQueue',
     queue: dataLakeTaxonomyQueueDLQ,
+  },
+  {
+    label: 'data-lake-research',
+    displayName: 'Data Lake Research Run',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeResearchQueue',
+    queue: dataLakeResearchQueueDLQ,
   },
   {
     label: 'lake-memory',

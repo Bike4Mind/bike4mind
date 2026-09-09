@@ -13,7 +13,7 @@ const AuthSuccessPage = () => {
   const navigate = useNavigate();
   const router = useRouter();
   const search = useSearch({ strict: false });
-  const { setCurrentUser } = useUser();
+  const { currentUser, setCurrentUser } = useUser();
   const { setVerifiedSession } = useAccessToken();
   const hasProcessed = useRef(false);
 
@@ -33,6 +33,16 @@ const AuthSuccessPage = () => {
       }
 
       if (token && userId) {
+        // Refuse to silently replace a signed-in session with a DIFFERENT user
+        // from a URL token: navigating an already-authenticated browser to
+        // /auth/success#token=<other account> must not switch identity. A fresh
+        // login (no currentUser) or a re-login as the same user proceeds normally.
+        if (currentUser?.id && currentUser.id !== userId) {
+          console.warn('[auth/success] Ignoring URL token for a different user than the active session');
+          applyRedirect(router.history, (search as { redirectTo?: string }).redirectTo);
+          return;
+        }
+
         try {
           // Set the access token - reset any stale refresh promise first. The matching refresh
           // token never reaches the client: the SSO callback set it as an HttpOnly cookie, which

@@ -1,3 +1,4 @@
+import { sourceIdentityKeyFor, type SourceIdentityTier } from '@bike4mind/common';
 import { attributeFileToLakeIds, type AttributableLake } from './attributeAccessedLakes';
 import { toSingleLine } from './renderDataLakePromptBlock';
 
@@ -10,10 +11,9 @@ import { toSingleLine } from './renderDataLakePromptBlock';
  * versions of the same passage with nothing to say which one is current - the case where a
  * confidently wrong answer comes from a corpus that technically contained the right one.
  *
- * The identity key is deliberately PATH identity, not content identity. The case worth fixing is an
- * old generation plus a newer CORRECTED one, so their text differs by definition and a content-hash
- * corroboration would collapse only byte-identical duplicates - it would miss every interesting
- * case. Same source, different content is what a supersession looks like.
+ * The identity key is `sourceIdentityKeyFor` (common/constants/sourceIdentity.ts), shared with the
+ * membership report's duplicate grouping and the admission checkpoint's same-identity detection.
+ * Read that module for why the key is PATH identity and never a content hash.
  *
  * Because the weakest tier is a bare filename, this can be wrong: two genuinely different documents
  * named `README.md` in one lake, neither carrying a `relativePath`, collapse to one. That is
@@ -43,8 +43,11 @@ const SAMPLE_CAP = 5;
 /**
  * Which identity signal produced a group key, most to least trustworthy. Reported per collapse
  * because the weakest tier is the one that can be wrong (see the module comment).
+ *
+ * An alias, not a second declaration: the tiers are the shared `sourceIdentityKeyFor` derivation's,
+ * and this name is kept because the collapse's report field and its prose both read "supersession".
  */
-export type SupersessionTier = 'driveFileId' | 'relativePath' | 'fileName';
+export type SupersessionTier = SourceIdentityTier;
 
 /** The per-file facts the collapse reads. A subset of what `RankableFile` already carries. */
 export type SupersedableFile = {
@@ -81,28 +84,6 @@ export type SupersededEntry<T extends SupersedableFile = SupersedableFile> = {
   tier: SupersessionTier;
   supersededBy: string;
 };
-
-// NUL-joined: the lake id and the tier literal sit at fixed positions, so no value can forge a key
-// belonging to another lake or another tier. Within one tier the join is not injective if a NUL is
-// ever representable in a name (`a` + `b\0c` and `a\0b` + `c` agree), which costs nothing here -
-// same lake, same owner, and the outcome is at worst one wrong collapse of the kind the file-name
-// tier already permits.
-const SEP = '\0';
-
-/**
- * The group key for one file within one lake, first applicable tier wins. Null when the file has no
- * usable name at all, which means "groups only with itself".
- */
-function supersessionKeyFor(file: SupersedableFile, lakeId: string): { key: string; tier: SupersessionTier } | null {
-  if (file.driveFileId) {
-    return { key: [lakeId, 'driveFileId', file.driveFileId].join(SEP), tier: 'driveFileId' };
-  }
-  if (!file.fileName) return null;
-  if (file.relativePath) {
-    return { key: [lakeId, 'relativePath', file.relativePath, file.fileName].join(SEP), tier: 'relativePath' };
-  }
-  return { key: [lakeId, 'fileName', file.fileName].join(SEP), tier: 'fileName' };
-}
 
 /** Missing timestamps sort oldest, so an undated member never displaces a dated sibling. */
 const createdAtMillis = (file: SupersedableFile): number => {
@@ -147,7 +128,7 @@ export function partitionBySupersession<T extends SupersedableFile>(
 
   for (const file of files) {
     const lakeIds = attributeFileToLakeIds(file.fileTags ?? [], lakes, file.userId);
-    const identity = lakeIds.length === 1 ? supersessionKeyFor(file, lakeIds[0]) : null;
+    const identity = lakeIds.length === 1 ? sourceIdentityKeyFor(file, lakeIds[0]) : null;
     keyed.push({ file, identity });
     if (!identity) continue;
     const incumbent = winners.get(identity.key);

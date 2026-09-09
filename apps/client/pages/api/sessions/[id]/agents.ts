@@ -106,14 +106,9 @@ const handler = baseApi()
         throw new BadRequestError('Agent ID is required');
       }
 
-      // Verify the agent exists and the user has access (either owner or shared)
-      const agent = await agentRepository.findById(agentId);
+      // Object-level authz honoring owner + user-shares + group-shares
+      const agent = await agentRepository.shareable.findAccessibleById(req.user!, agentId);
       if (!agent) {
-        throw new NotFoundError('Agent not found');
-      }
-
-      const isSharedWithUser = agent.users?.some((u: { userId: string }) => u.userId === req.user!.id);
-      if (agent.userId !== req.user!.id && !isSharedWithUser) {
         throw new NotFoundError('Agent not found');
       }
 

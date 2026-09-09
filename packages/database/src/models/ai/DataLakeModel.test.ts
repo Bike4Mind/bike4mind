@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import type { AccessContext, IDataLake } from '@bike4mind/common';
+import type { AccessContext, DataLakeStatus, IDataLake } from '@bike4mind/common';
 import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { dataLakeRepository, dataLakeBatchRepository, DataLakeModel } from './DataLakeModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -182,6 +182,93 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
 
     expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice')).toEqual([]);
   });
+
+  it('grant arm reaches a private, cross-org, gated lake - and an empty list adds no arm', async () => {
+    // The transferred-owner case: transferLakeOwnership moves ownership through grant rows and
+    // leaves createdByUserId alone, so without this arm the new owner browses a lake they cannot
+    // ground on. Ids are pre-resolved by the caller (grantedLakeReachFor); passed directly here to
+    // keep the test at the repo boundary.
+    const gated = await dataLakeRepository.create(
+      baseLake({ slug: 'granted', createdByUserId: 'alice', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const priv = await dataLakeRepository.create(baseLake({ slug: 'private', createdByUserId: 'alice' }));
+
+    // Bob: no tags, no keys, a different org - reaches both only by grant.
+    const byGrant = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob', {
+      grantedLakeIds: [gated.id, priv.id],
+    });
+    expect(byGrant.map(l => l.slug).sort()).toEqual(['granted', 'private']);
+
+    // Without the arm, neither resolves.
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob')).toEqual([]);
+    expect(
+      await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob', { grantedLakeIds: [] })
+    ).toEqual([]);
+  });
+
+  it('ORG grant arm lifts the gate only inside the GRANTING org', async () => {
+    // The containment the grant WRITE path was meant to hold and does not exist yet: an org grant
+    // may not reach a lake outside its own org. Asserted in the datastore because that is where the
+    // lake's org lives - the id path cannot see it (see containedGrants for the gate's copy).
+    const inA = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-a', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+    const personal = await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'carol' }));
+
+    // Bob is a member of orgA only. The orgA arm reaches the orgA lake past its gate, and stops at
+    // the orgB one and the org-less one even though both ids were granted by orgA.
+    const memberOfA = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'bob', {
+      orgGrantedLakes: { orgA: [inA.id, inB.id, personal.id] },
+    });
+    expect(memberOfA.map(l => l.slug).sort()).toEqual(['gated-in-a']);
+
+    // The USER arm has no such constraint - it is meant to cross orgs.
+    const asUserGrant = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'bob', {
+      grantedLakeIds: [inB.id],
+    });
+    expect(asUserGrant.map(l => l.slug)).toEqual(['gated-in-b']);
+  });
+
+  it('an ORG grant does not reach a lake in the caller OTHER org (multi-org caller)', async () => {
+    // The whole point of keying reach by the GRANTING org. Bob belongs to orgA and orgB, so a bare
+    // "is the lake in any of my orgs" prerequisite passes for an orgA-issued grant on an orgB lake -
+    // and on the retrieval path there is no second gate behind this filter.
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(
+      await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA', 'orgB'], 'bob', {
+        orgGrantedLakes: { orgA: [inB.id] },
+      })
+    ).toEqual([]);
+
+    // The same lake granted by its OWN org does resolve, so this is containment and not a dead arm.
+    expect(
+      (
+        await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA', 'orgB'], 'bob', {
+          orgGrantedLakes: { orgB: [inB.id] },
+        })
+      ).map(l => l.slug)
+    ).toEqual(['gated-in-b']);
+  });
+
+  it('grant arm stays bounded by status: a grant on a DRAFT lake does not retrieve it', async () => {
+    // The arm is nested under the same `status: 'active'` conjunct as every other arm, so a grant
+    // widens the gate and never the status - matching the owner bypass above.
+    const draft = await dataLakeRepository.create(
+      baseLake({ slug: 'draft-granted', createdByUserId: 'alice', status: 'draft' })
+    );
+
+    expect(
+      await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob', {
+        grantedLakeIds: [draft.id],
+      })
+    ).toEqual([]);
+  });
 });
 
 describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/management path)', () => {
@@ -217,6 +304,63 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     expect(
       (await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { grantedLakeIds: [lake.id] })).map(l => l.slug)
     ).toEqual(['transferred']);
+  });
+
+  it('the ORG-grant arm lifts the gate only inside the GRANTING org, for a caller in both orgs', async () => {
+    const inA = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-a', createdByUserId: 'alice', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', createdByUserId: 'alice', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+    const personal = await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'alice' }));
+
+    const bobInA = ctx({ userId: 'bob', organizationIds: ['orgA'] });
+    expect(
+      (await dataLakeRepository.findAccessible(bobInA, { orgGrantedLakes: { orgA: [inA.id, inB.id] } })).map(
+        l => l.slug
+      )
+    ).toEqual(['gated-in-a']);
+
+    // Bob in BOTH orgs: the orgA grant still stops at the orgA lake. Membership in orgB is not what
+    // the orgA grant entitles him to.
+    const bobInBoth = ctx({ userId: 'bob', organizationIds: ['orgA', 'orgB'] });
+    expect(
+      (await dataLakeRepository.findAccessible(bobInBoth, { orgGrantedLakes: { orgA: [inA.id, inB.id] } })).map(
+        l => l.slug
+      )
+    ).toEqual(['gated-in-a']);
+
+    // An org-less (personal) lake matches no org arm - the same rule the grant writer applies.
+    expect(await dataLakeRepository.findAccessible(bobInBoth, { orgGrantedLakes: { orgA: [personal.id] } })).toEqual(
+      []
+    );
+
+    // Same ids on the USER arm, which is unconstrained by design.
+    expect(
+      (await dataLakeRepository.findAccessible(bobInA, { grantedLakeIds: [inA.id, inB.id] })).map(l => l.slug).sort()
+    ).toEqual(['gated-in-a', 'gated-in-b']);
+  });
+
+  it('the ORG-grant arm is dropped in the archived/deleted MANAGEMENT views', async () => {
+    // Those views pass includePublic:false because restore/cleanup are owner/admin-only. An org
+    // grant carries no role through the reach, so a reader-level one must not surface someone
+    // else's lake there.
+    const archived = await dataLakeRepository.create(
+      baseLake({
+        slug: 'archived-in-a',
+        createdByUserId: 'alice',
+        organizationId: 'orgA',
+        requiredUserTag: 'TagBobLacks',
+        status: 'archived',
+      })
+    );
+    const bobInA = ctx({ userId: 'bob', organizationIds: ['orgA'] });
+    const opts = { statuses: ['archived'] as DataLakeStatus[], orgGrantedLakes: { orgA: [archived.id] } };
+
+    expect(await dataLakeRepository.findAccessible(bobInA, { ...opts, includePublic: false })).toEqual([]);
+    // The arm is live in the browse/read view, so this is a view distinction and not a dead arm.
+    expect((await dataLakeRepository.findAccessible(bobInA, opts)).map(l => l.slug)).toEqual(['archived-in-a']);
   });
 
   it('a gateless ORG lake is visible to org members; a tag lake to tag holders; cross-org/non-holders excluded', async () => {
@@ -469,6 +613,31 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     expect(admin.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'gated']);
   });
 
+  it('honors an ORG grant on a public lake only inside the GRANTING org', async () => {
+    // A public lake is not exempt from its own gate, and an org grant must not be the thing that
+    // lifts it for a member of some other org - the same containment findAccessible applies.
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'pub-gated-in-b', isPublic: true, organizationId: 'orgB', requiredUserTag: 'Opti' })
+    );
+    const inBoth = viewer({ userId: 'bob', organizationIds: ['orgA', 'orgB'] });
+
+    expect((await dataLakeRepository.findPublicLakes(inBoth, { orgGrantedLakes: { orgA: [inB.id] } })).lakes).toEqual(
+      []
+    );
+    expect(
+      (await dataLakeRepository.findPublicLakes(inBoth, { orgGrantedLakes: { orgB: [inB.id] } })).lakes.map(l => l.slug)
+    ).toEqual(['pub-gated-in-b']);
+
+    // And the org-less arm of the same rule: no org can be the granting org of a lake that has
+    // none, matching the writer's refusal to issue such a row.
+    const orgLess = await dataLakeRepository.create(
+      baseLake({ slug: 'pub-gated-org-less', isPublic: true, requiredUserTag: 'Opti' })
+    );
+    expect(
+      (await dataLakeRepository.findPublicLakes(inBoth, { orgGrantedLakes: { orgA: [orgLess.id] } })).lakes
+    ).toEqual([]);
+  });
+
   it('agrees with findAccessible on which public lakes a caller can see', async () => {
     await seedMixed();
     await dataLakeRepository.create(baseLake({ slug: 'ent-gated', isPublic: true, requiredEntitlement: 'medlib:pro' }));
@@ -481,7 +650,7 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
 
     // Grant arm: both filters must honor an explicit grant, so a transferred/delegated owner
     // discovers the lake they can already open. Resolved by the caller in the real paths
-    // (grantedLakeIdsFor); passed directly here to keep this test at the repo boundary.
+    // (grantedLakeReachFor); passed directly here to keep this test at the repo boundary.
     const grantee = { userId: 'grantee', grantedLakeIds: [orgGated.id] };
 
     const cases: { ctx: AccessContext; grantedLakeIds?: string[] }[] = [
@@ -706,6 +875,80 @@ describe('DataLakeRepository.findBySlug', () => {
     const resolved = await dataLakeRepository.findBySlug('shared-slug', ['org-b', 'org-a']);
     expect(resolved?.organizationId).toBe('org-a');
   });
+
+  // #2425 review: null and '' are both stored as "org-less" but are distinct index keys, so two
+  // org-less lakes CAN share a slug - this had no tie-break at all before this fix.
+  it('resolves org-less lakes deterministically when organizationId is null vs empty string', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'orgless-tie', organizationId: '', createdByUserId: 'someone' }));
+    await dataLakeRepository.create(baseLake({ slug: 'orgless-tie', createdByUserId: 'someone-else' }));
+
+    const resolved = await dataLakeRepository.findBySlug('orgless-tie');
+
+    // Both are legitimately org-less; the assertion is determinism (same winner every call),
+    // not which one - repeat to catch a naive unsorted `$in` returning either at random.
+    for (let i = 0; i < 3; i++) {
+      expect((await dataLakeRepository.findBySlug('orgless-tie'))?.createdByUserId).toBe(resolved?.createdByUserId);
+    }
+  });
+});
+
+describe('DataLakeRepository.findBySlugAmongIds', () => {
+  setupMongoTest();
+
+  // #2425: a lake scoped to an org the caller does NOT belong to is invisible to `findBySlug`'s
+  // own-org and org-less arms. A real owner/curator grant on it (e.g. after a cross-org
+  // transferLakeOwnership) is still legitimate access, so `assertLakeAccess` resolves the
+  // caller's granted lake ids itself and retries here, with this method taking the id set as an
+  // already-resolved argument rather than a thunk (#2425 review - keeps the "when to pay for the
+  // extra grants query" decision in the service layer, not hidden inside this repository method).
+  it('resolves a foreign-org lake by slug when the given id set includes it', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake', [created.id]);
+
+    expect(resolved?.id).toBe(created.id);
+  });
+
+  it('returns null when the given id set is empty - no enumeration widening', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake-2', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake-2', []);
+
+    expect(resolved).toBeNull();
+  });
+
+  it('returns null when no id in the given set matches the slug - no enumeration widening', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake-3', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake-3', [
+      new mongoose.Types.ObjectId().toString(),
+    ]);
+
+    expect(resolved).toBeNull();
+  });
+
+  it('resolves the lowest lake id when two granted lakes across different orgs share a slug', async () => {
+    // Mirrors the own-org arm's N5 test above: input order deliberately reversed from the
+    // expected winner so a naive "first in ids" bug (rather than the sort) would fail.
+    const second = await dataLakeRepository.create(
+      baseLake({ slug: 'shared-grant-slug', organizationId: 'org-b', createdByUserId: 'org-b-owner' })
+    );
+    const first = await dataLakeRepository.create(
+      baseLake({ slug: 'shared-grant-slug', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+    const [lower, higher] = [first.id, second.id].sort();
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('shared-grant-slug', [second.id, first.id]);
+
+    expect(resolved?.id).toBe(lower);
+    expect(resolved?.id).not.toBe(higher);
+  });
 });
 
 describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)', () => {
@@ -835,6 +1078,113 @@ describe('DataLakeRepository - lake-memory extraction lease + continuation curso
     await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
     expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
   });
+
+  describe('fence-guarded cursor write', () => {
+    it('advances the cursor while the fence still matches the snapshot', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('refuses the write once a purge has moved the fence', async () => {
+      // The race the guard exists for: the extraction snapshotted an unpurged fence, a purge landed and
+      // cleared the cursor, and the unguarded write would reinstate it - sending the next build past
+      // documents whose beliefs the purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, new Date('2026-03-01T00:00:00Z'));
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(false);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('accepts the write when the snapshot carries the SAME earlier purge', async () => {
+      // A lake purged before the run started is a normal build, not a race. Comparing against a
+      // hardcoded null instead of the snapshot would lock out exactly these lakes.
+      const lake = await makeLake();
+      const purgedAt = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, purgedAt);
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', purgedAt)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('reports false for a lake that no longer exists', async () => {
+      expect(
+        await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(new mongoose.Types.ObjectId().toString(), 'd', null)
+      ).toBe(false);
+    });
+
+    it('reports true when re-writing the cursor value it already holds', async () => {
+      // `matchedCount`, not `modifiedCount`: mongo may elide a self-valued $set, so a modified-count
+      // guard would report a lost race on a write that in fact succeeded.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+    });
+  });
+
+  describe('purge fence', () => {
+    it('stamps the fence and clears the continuation cursor in one write', async () => {
+      // Both halves matter: the stamp stops an in-flight run, and the cleared cursor is what makes
+      // the NEXT build start from the beginning instead of resuming past documents whose facts the
+      // purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+
+      const at = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, at);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(at.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('moves the fence forward on a later purge', async () => {
+      const lake = await makeLake();
+      const first = new Date('2026-03-01T00:00:00Z');
+      const second = new Date('2026-03-02T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, first);
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, second);
+
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryPurgedAt?.getTime()).toBe(second.getTime());
+    });
+
+    it('never moves the fence backwards, so a late write cannot undo a newer purge', async () => {
+      // The write is `$max`, not `$set`. Two purges racing on one lake would otherwise let the later
+      // WRITE land the earlier TIMESTAMP, and the field is the honest answer to "when was this last
+      // purged". The cursor clear is unconditional either way - it is not part of the comparison.
+      const lake = await makeLake();
+      const newer = new Date('2026-03-02T00:00:00Z');
+      const older = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, newer);
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-7');
+
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, older);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(newer.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('reads back a never-purged lake as existing with no stamp', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: true, purgedAt: null });
+    });
+
+    it('reports a deleted lake as absent, which the extractor treats as a purge', async () => {
+      // A vanished document and a never-purged one both have no stamp, and they mean opposite things
+      // to a running extraction: the deletion sweep shreds the profile before it deletes the record,
+      // so `exists: false` has to stop the run rather than read as "nothing has happened".
+      const lake = await makeLake();
+      await dataLakeRepository.delete(lake.id);
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: false, purgedAt: null });
+    });
+
+    it('reports a fence read for an id that never existed as absent, not a throw', async () => {
+      const gone = new mongoose.Types.ObjectId().toString();
+      expect(await dataLakeRepository.getLakeMemoryFence(gone)).toEqual({ exists: false, purgedAt: null });
+    });
+  });
 });
 
 describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {
@@ -918,6 +1268,56 @@ describe('DataLakeBatchRepository.updateIfActive - guarded multi-field transitio
     await dataLakeBatchRepository.updateIfActive(batch.id, { status: 'uploading', failedFiles: 7 });
     const fresh = await dataLakeBatchRepository.findById(batch.id);
     expect(fresh?.failedFiles).toBe(0);
+  });
+});
+
+describe('DataLakeBatchRepository.setTotalFilesIfActive - re-plan plus the write-off (#2394)', () => {
+  setupMongoTest();
+
+  const activeBatch = () =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 500 } as never);
+
+  // The field has to exist in BOTH the entity type and the Mongoose schema or the $set is dropped on
+  // write with no error, leaving the narrowed total behind and nothing recording what it wrote off.
+  // Asserting on a re-read, not the returned doc, is the point: only the re-read proves it persisted.
+  it('persists the deferred count alongside the narrowed total', async () => {
+    const batch = await activeBatch();
+
+    const settled = await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 3, 497);
+    expect(settled?.totalFiles).toBe(3);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.totalFiles).toBe(3);
+    expect(fresh?.deferredFiles).toBe(497);
+  });
+
+  // The mid-chain RAISE omits the argument, and must not stamp a zero over a count a settle wrote (or,
+  // symmetrically, claim a write-off it did not make).
+  it('leaves the deferred count untouched when the caller omits it', async () => {
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 3, 497);
+
+    await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 600);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.totalFiles).toBe(600);
+    expect(fresh?.deferredFiles).toBe(497);
+  });
+
+  it('defaults the deferred count to zero on a batch no chain ever wrote off', async () => {
+    const batch = await activeBatch();
+    expect((await dataLakeBatchRepository.findById(batch.id))?.deferredFiles).toBe(0);
+  });
+
+  it('is a no-op on a terminal batch, so a settled batch cannot be re-planned', async () => {
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const settled = await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 3, 497);
+    expect(settled).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.totalFiles).toBe(500);
+    expect(fresh?.deferredFiles).toBe(0);
   });
 });
 

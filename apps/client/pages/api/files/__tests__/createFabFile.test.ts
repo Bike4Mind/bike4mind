@@ -9,6 +9,10 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   findOverrides: vi.fn(),
+  listByLake: vi.fn(),
+  // The acting principal's org-admin set, as a test input rather than a Mongo read. The gates that
+  // consume it are the real ones.
+  administeredOrgIds: [] as string[],
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
@@ -29,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: { findOverrides: h.findOverrides },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
-  dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+  dataLakeAccessGrantRepository: { listByLake: h.listByLake },
   FabFile: { create: h.fabFileCreate },
   User: { findById: h.userFindById },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -44,7 +48,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
     isAdmin: !!req.user.isAdmin,
     userTags: [],
     entitlementKeys: [],
-    administeredOrgIds: [],
+    administeredOrgIds: h.administeredOrgIds,
   })),
 }));
 
@@ -73,10 +77,10 @@ const makeRes = () => {
   return { res, json };
 };
 
-const req = (body: unknown) =>
+const req = (body: unknown, userId = 'u1') =>
   ({
     method: 'POST',
-    user: { id: 'u1', isAdmin: false },
+    user: { id: userId, isAdmin: false },
     ability: {},
     body,
     logger: { error: vi.fn(), warn: vi.fn() },
@@ -84,12 +88,22 @@ const req = (body: unknown) =>
 
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
 
+const runAs = (userId: string, body: unknown, res: unknown) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, userId), res);
+
 const body = (overrides: Record<string, unknown> = {}) => ({
   fileName: 'report.txt',
   mimeType: 'text/plain',
   fileSize: 10,
   type: KnowledgeType.FILE,
   ...overrides,
+});
+
+// File-scoped so every describe below starts from "no grants, administers nothing" - the two
+// inputs that decide whether the lake gates fall back to the creator rung alone.
+beforeEach(() => {
+  h.listByLake.mockResolvedValue([]);
+  h.administeredOrgIds = [];
 });
 
 const tagNamesOf = (callIndex = 0) => {
@@ -225,6 +239,64 @@ describe('POST /api/files/createFabFile - batch ownership (IDOR guard)', () => {
     const { res } = makeRes();
 
     await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The write authorization at this door, run for real: the route's prologue gate AND the re-gate
+ * inside `fabFilesService.createFabFile` both have to admit the caller. The service builds its own
+ * actor and loads its own grants from the adapters it is handed, so a `db` without
+ * `dataLakeAccessGrants` or a missing `administeredOrgIds` refuses a caller the prologue accepted
+ * one function call earlier.
+ */
+describe('POST /api/files/createFabFile - lake write authorization beyond the creator', () => {
+  // Created by someone else and scoped to an org, so neither the creator nor the admin rung can be
+  // what admits the caller.
+  const ORG_LAKE = { ...LAKE, createdByUserId: 'someone-else', organizationId: 'org-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.listByLake.mockResolvedValue([]);
+    h.administeredOrgIds = [];
+    h.findByDatalakeTag.mockResolvedValue(ORG_LAKE);
+    h.userFindById.mockResolvedValue({ id: 'u2', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('admits an org admin of the lake org who holds no grant and did not create it', async () => {
+    h.administeredOrgIds = ['org-1'];
+    const { res } = makeRes();
+
+    await runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits a curator grant holder', async () => {
+    h.listByLake.mockResolvedValue([{ principalType: 'user', principalId: 'u2', role: 'curator' }]);
+    const { res } = makeRes();
+
+    await runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits a transferred owner - an owner grant supersedes the creator', async () => {
+    h.listByLake.mockResolvedValue([{ principalType: 'user', principalId: 'u2', role: 'owner' }]);
+    const { res } = makeRes();
+
+    await runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a caller with no manage rung at all', async () => {
+    const { res } = makeRes();
+
+    await expect(runAs('u2', body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 });

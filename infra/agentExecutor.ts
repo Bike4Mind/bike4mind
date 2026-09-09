@@ -96,13 +96,15 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
 
 export const agentExecutor = new sst.aws.Function('AgentExecutor', {
   ...SHARED_AGENT_EXECUTOR_CONFIG,
-  versioning: true,
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        provisioned: $app.stage === 'production' ? 3 : 1,
-        reserved: 10,
-      }
-    : undefined,
+  // Deliberately no provisioned concurrency, and so no `versioning`. Provisioned concurrency can
+  // only be allocated to a numbered version or an alias, never to $LATEST - and every invoke of
+  // this function passes a bare name with no Qualifier, which resolves to $LATEST. The allocation
+  // was therefore unreachable on every stage while still billing for warm capacity, and each
+  // aborted apply left an orphaned ProvisionedConcurrencyConfig that counts against the `reserved`
+  // below - so the orphans eventually saturate it and the NEXT deploy fails at the concurrency
+  // step, burying whatever the real failure was. Fixing cold starts here takes an alias plus a
+  // Qualifier on the invoke; re-adding this flag on its own would only recreate the leak.
+  concurrency: ['production', 'dev'].includes($app.stage) ? { reserved: 10 } : undefined,
 });
 
 // Subscribe to the continuation queue for Lambda self-dispatch resume

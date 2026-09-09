@@ -117,6 +117,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   organizationId: 'audited',
   isPublic: 'audited',
   auditQueryTextEnabled: 'audited',
+  lakeMemoryEnabled: 'audited',
   status: 'audited',
   // Immutable by design (it anchors the membership prefix arm), so this is a tripwire rather than
   // an expected row: if it ever moves, the audit says so instead of the change passing unseen.
@@ -133,6 +134,9 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   filesArchivedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',
   lakeMemoryCursor: 'excluded',
+  // The purge itself is audited as its own event (LAKE_MEMORY_PURGED); a config row for the fence
+  // stamp would duplicate it.
+  lakeMemoryPurgedAt: 'excluded',
   // Derived, not configuration: a detector's output and its timestamp. An owner changing them is not
   // a config change, and auditing them would put document excerpts in the config history.
   inconsistencyReport: 'excluded',

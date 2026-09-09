@@ -6,8 +6,7 @@ import { selectClasses } from '@mui/joy/Select';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
-import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useCopySessionMarkdown } from './useCopySessionMarkdown';
 
@@ -75,41 +74,12 @@ const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({ testIdPrefix, act
             'data-testid': `${testIdPrefix}-layout-listbox`,
             sx: theme => ({
               ...menuSurfaceSx(theme),
-              borderRadius: '8px',
+              ...selectListboxSx(theme),
               // minWidth, not width: Joy's Select popper writes an inline width on this
               // element from the anchor's own box, and an inline style beats any class.
               minWidth: 180,
               maxHeight: 360,
               overflowY: 'auto',
-              // The app's own 4px thumb (sidenav, Data Lake tree) rather than the platform
-              // bar, which lands a chunky light-grey rail on the dark menu.
-              ...scrollbarStyles,
-              '--List-padding': '8px',
-              '--List-radius': '8px',
-              '--List-gap': '4px',
-              '--ListItem-radius': '8px',
-              // Same hover and selected grounds as the app's other menus instead of Joy's
-              // default primary fill. Joy paints its hover from --variant-plainHoverBg, so
-              // pointing the variable at the colour is what actually wins - a bare :hover
-              // rule does not.
-              '& [role="option"]': {
-                borderRadius: '8px',
-                transition: 'background 0.15s',
-                '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-                '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-                '&[aria-selected="true"]': {
-                  backgroundColor: theme.palette.notebooklist.focusedBackground,
-                  fontWeight: 600,
-                  // Joy tints a selected Option with the primary palette; the row is already
-                  // marked by its ground, so the text stays ordinary ink.
-                  color: 'inherit',
-                  '&:hover': { backgroundColor: theme.palette.notebooklist.focusedBackground },
-                },
-                '&:focus-visible': {
-                  outline: `2px solid ${theme.palette.primary[500]}`,
-                  outlineOffset: '-2px',
-                },
-              },
             }),
           },
         }}

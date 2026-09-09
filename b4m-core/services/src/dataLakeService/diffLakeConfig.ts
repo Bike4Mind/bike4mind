@@ -16,7 +16,7 @@ import {
 
 /** The audited fields whose stored value is a boolean. Their absent form is `false` (every read
  * path defaults them off), so a write of `false` onto a never-set field is not a change. */
-const BOOLEAN_FIELDS = new Set<LakeConfigChangeField>(['isPublic', 'auditQueryTextEnabled']);
+const BOOLEAN_FIELDS = new Set<LakeConfigChangeField>(['isPublic', 'auditQueryTextEnabled', 'lakeMemoryEnabled']);
 
 const FINGERPRINTED = new Set<LakeConfigChangeField>(LAKE_CONFIG_FINGERPRINTED_FIELDS);
 

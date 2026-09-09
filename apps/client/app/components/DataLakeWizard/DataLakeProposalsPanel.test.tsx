@@ -48,9 +48,20 @@ describe('DataLakeProposalsPanel', () => {
     renderPanel();
 
     expect(screen.getByTestId('datalake-proposal-source')).toHaveAttribute('href', 'https://example.com/report');
-    expect(screen.getByTestId('datalake-proposal-provenance').textContent).toContain('research_run');
+    // The producer is a machine token on the row; it renders into an English sentence here, so a
+    // reviewer reads "a research run" rather than "research_run".
+    expect(screen.getByTestId('datalake-proposal-provenance').textContent).toContain('Found by a research run');
     expect(screen.getByTestId('datalake-proposal-provenance').textContent).toContain('quarterly filings');
     expect(screen.getByTestId('datalake-proposal-tag')).toHaveTextContent('finance');
+  });
+
+  // `producer` is free-form by design, so an unmapped one must still say something rather than
+  // rendering blank.
+  it('falls back to the raw producer token for a producer it has no name for', () => {
+    renderPanel({
+      proposals: [proposal({ provenance: { producer: 'some_future_crawler', retrievedAt: new Date() } })],
+    });
+    expect(screen.getByTestId('datalake-proposal-provenance').textContent).toContain('Found by some_future_crawler');
   });
 
   it('frames the excerpt as source text that has not been reviewed', () => {
