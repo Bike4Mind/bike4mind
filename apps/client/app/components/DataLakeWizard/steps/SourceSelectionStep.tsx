@@ -308,8 +308,14 @@ export default function SourceSelectionStep() {
         </Box>
 
         {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
-            does not, so the selection is parked and connected on commit (#1916). */}
-        {targetLake ? <DriveConnectAction lake={targetLake} /> : <DrivePendingConnectAction />}
+            does not, so the selection is parked and connected on commit (#1916). Drive connect is
+            an org-lake capability server-side; a personal target lake has no working connect
+            action to offer, so render nothing rather than a button that can only ever fail. */}
+        {targetLake ? (
+          targetLake.organizationId && <DriveConnectAction lake={targetLake} />
+        ) : (
+          <DrivePendingConnectAction />
+        )}
       </Stack>
 
       {/* Once files are in hand: what was picked up, plus the two opt-in steps. Both default

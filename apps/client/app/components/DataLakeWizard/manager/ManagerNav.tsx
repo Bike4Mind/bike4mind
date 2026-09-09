@@ -665,29 +665,32 @@ export default function ManagerNav({
 /**
  * Purge-time notice that the lake has a Drive folder attached, so the user learns the purge also
  * ends that sync. It does NOT tell them to disconnect first: the phase-2 purge sweep releases the
- * connection itself (releaseDriveConnectionForLake), dropping the org's stored credential and
- * freeing the folder to be connected again - so the copy has to stay in step with that teardown.
+ * connection itself (releaseDriveConnectionForLake), removing this lake's access to the folder and
+ * freeing it to be connected again - so the copy has to stay in step with that teardown. That
+ * release runs from a queue worker after the request that accepts the purge returns, so it is
+ * contingent on the sweep completing rather than guaranteed by the purge click itself; a sweep that
+ * exhausts into the DLQ leaves the lake (and its connection row) sitting in `purging` until retried.
  *
- * Renders nothing when the lake has no connection, including the personal-lake 404 the hook maps to
- * null; a read that genuinely fails (403 for a non-manager, 5xx, network) renders the unknown case.
+ * Renders nothing when the lake has no connection, including a personal lake (the route resolves
+ * `connection: null` for those, never 404); a read that genuinely fails (lake gone, or a 404 for a
+ * caller who lacks org owner/manager access) renders the unknown case.
  */
 function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
   // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
-  // the user opens, so skipping a personal lake's guaranteed 404 there is worth it. This warning
+  // the user opens, so skipping a personal lake's guaranteed null there is worth it. This warning
   // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
   // populate would trade one wasted request for silently withholding the notice on a lake that
-  // does have a connection. A rare 404 on a purge dialog is the cheaper tradeoff.
+  // does have a connection. A rare failed read on a purge dialog is the cheaper tradeoff.
   const { data: connection, isError, isLoading } = useLakeDriveConnection(lakeId);
 
   // A FAILED read is not "no connection": staying silent would name a folder sync the user is about
-  // to end on some purges and not others, for no reason they can see. The hook maps the
-  // personal-lake 404 to `connection: null`, so this fires only on a real failure.
+  // to end on some purges and not others, for no reason they can see.
   if (isError) {
     return (
       <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-unknown">
-        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake. Purging still disconnects
-        whichever folder it syncs and leaves that folder free to connect elsewhere - your files in Google Drive are not
-        touched - so this only means the folder cannot be named here.
+        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake, so we can&rsquo;t show its name
+        here. If one is connected, purging stops the sync and frees the folder to be connected to another lake. Nothing
+        in Google Drive is deleted.
       </Typography>
     );
   }
@@ -696,9 +699,9 @@ function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
   const folder = connection.folderName || connection.driveFolderId;
   return (
     <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-warning">
-      This lake syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging ends that sync and drops the stored Drive
-      credential; your files in Google Drive are not touched, and the folder can be connected to another lake
-      afterwards.
+      This lake syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging stops that sync and removes this
+      lake&rsquo;s access to the folder. Nothing in Google Drive is deleted, and the folder can be connected to another
+      lake afterwards.
     </Typography>
   );
 }

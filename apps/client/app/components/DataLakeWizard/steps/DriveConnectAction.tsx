@@ -51,9 +51,10 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   }
 
   if (isError) {
-    // The status query 404s for a personal lake and 403s for a non-manager - either way there is no
-    // working connect action to offer, so disable it with guidance rather than render an enabled
-    // button that can only ever fail.
+    // Every caller gates this component on org scope + manage rights already (see
+    // SourceSelectionStep and SelectedLakeHeader), so this fires only on a genuine failure - the
+    // lake vanished, or access was revoked between render and fetch. No working connect action to
+    // offer either way, so disable it with guidance rather than render a button that can only fail.
     return (
       <Tooltip title="Google Drive connect is available to organization owners/managers on an organization data lake.">
         <span>

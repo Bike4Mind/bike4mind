@@ -62,27 +62,23 @@ export function useDisconnectGoogleDrive() {
   });
 }
 
-/** The current Drive connection feeding a lake (null when none). Org owner/manager only, server-side. */
+/**
+ * The current Drive connection feeding a lake (null when none, including a personal lake - the
+ * route resolves 200 with a null connection for those rather than 404). `isError` is therefore a
+ * genuine failure: the lake doesn't exist, or the caller lacks org owner/manager access.
+ */
 export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
   return useQuery({
     queryKey: lakeDriveConnectionKey(dataLakeId),
-    // `enabled` lets a caller skip a request it already knows the answer to: the route resolves the
-    // lake's ORGANIZATION, so a personal lake always 404s. Passing false there keeps a pointless
-    // round trip off every personal lake, instead of firing it and mapping the 404 below.
+    // `enabled` lets a caller skip a request it already knows the answer to: a lake with no
+    // `organizationId` always resolves `connection: null`, so a caller that already has that field
+    // can skip the round trip entirely rather than firing it for a known answer.
     enabled: !!dataLakeId && enabled,
     queryFn: async () => {
-      try {
-        const response = await api.get<{ connection: LakeDriveConnection | null }>(
-          `/api/data-lakes/${dataLakeId}/drive-connection`
-        );
-        return response.data.connection;
-      } catch (error) {
-        // The route 404s when the lake has no organization (a personal lake), which is "no
-        // connection", not a failure. Leaving it to reject puts every personal lake into `isError`,
-        // and callers that distinguish the two - PurgeDriveWarning - then warn about an unknown.
-        if ((error as { response?: { status?: number } })?.response?.status === 404) return null;
-        throw error;
-      }
+      const response = await api.get<{ connection: LakeDriveConnection | null }>(
+        `/api/data-lakes/${dataLakeId}/drive-connection`
+      );
+      return response.data.connection;
     },
   });
 }

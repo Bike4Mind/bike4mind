@@ -47,6 +47,7 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
       fileTagPrefix: lake.fileTagPrefix,
       requiredUserTag: lake.requiredUserTag,
       requiredEntitlement: lake.requiredEntitlement,
+      organizationId: lake.organizationId,
     });
     setFiles(files);
     // Preview is opt-in elsewhere, but a drop can carry a whole traversed folder the user

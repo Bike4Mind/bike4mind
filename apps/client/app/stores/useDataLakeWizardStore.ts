@@ -155,6 +155,8 @@ export interface WizardTargetLake {
   fileTagPrefix: string;
   requiredUserTag?: string;
   requiredEntitlement?: string;
+  /** Drive connect is an org-lake capability; absent (personal lake) disables that action. */
+  organizationId?: string;
 }
 
 interface DataLakeWizardStore {

@@ -1106,12 +1106,14 @@ describe('DataLakeManagerPanel - purge confirmation', () => {
     useLakeDriveConnection.mockReturnValue({ data: undefined, isError: true, isLoading: false });
     await openPurgeDialog();
 
-    expect(screen.getByTestId('datalake-purge-drive-unknown')).toBeInTheDocument();
+    const notice = screen.getByTestId('datalake-purge-drive-unknown');
+    // Pins the reversed-teardown wording so a revert back to "leaves it stranded" fails loudly.
+    expect(notice).toHaveTextContent(/nothing in google drive is deleted/i);
     expect(screen.queryByTestId('datalake-purge-drive-warning')).not.toBeInTheDocument();
   });
 
   it('stays quiet for a lake with no connection, so an ordinary purge is not nagged', async () => {
-    // A 404 (personal lake, or genuinely no connection) resolves to null and must NOT read as an error.
+    // A personal lake (or any lake with genuinely no connection) resolves to null and must NOT read as an error.
     useLakeDriveConnection.mockReturnValue({ data: null, isError: false, isLoading: false });
     await openPurgeDialog();
 

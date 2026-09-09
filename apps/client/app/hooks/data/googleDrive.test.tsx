@@ -35,11 +35,12 @@ describe('useLakeDriveConnection', () => {
     expect(result.current.data).toEqual(connection);
   });
 
-  // The route 404s whenever the lake has no organization, i.e. every personal lake. Rejecting there
-  // put those lakes into isError, and PurgeDriveWarning then showed its "couldn't check" notice on
-  // every ordinary personal-lake purge - about a connection a personal lake cannot even have.
-  it('maps a 404 to null rather than an error', async () => {
-    get.mockRejectedValue(axiosError(404));
+  // A personal lake has no organization to hold a connection, so the route resolves 200 with a
+  // null connection rather than 404 - the server tells "no connection" apart from "can't tell",
+  // so PurgeDriveWarning doesn't show its "couldn't check" notice on an ordinary personal-lake
+  // purge, about a connection a personal lake cannot even have.
+  it('treats a 200 with a null connection as success, not an error', async () => {
+    get.mockResolvedValue({ data: { connection: null } });
 
     const { result } = renderLakeDriveConnection('personal_lake');
 
@@ -48,8 +49,8 @@ describe('useLakeDriveConnection', () => {
     expect(result.current.isError).toBe(false);
   });
 
-  it('still errors on a non-404 failure', async () => {
-    get.mockRejectedValue(axiosError(403));
+  it('errors on a genuine failure (lake not found, or caller lacks org access)', async () => {
+    get.mockRejectedValue(axiosError(404));
 
     const { result } = renderLakeDriveConnection('other_org_lake');
 
