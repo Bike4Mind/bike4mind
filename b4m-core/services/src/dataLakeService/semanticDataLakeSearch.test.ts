@@ -1218,7 +1218,7 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
    * since that is the only part of the log that tells an operator which of three fixes applies.
    */
   describe('flag-on-but-idle alarm', () => {
-    const ALARM = 'no ANN query ran';
+    const ALARM = 'ANN served nothing';
 
     it('reports no-ready-files when the index is queryable but nothing passed the readiness gate', async () => {
       const logger = makeLogger();
@@ -1319,6 +1319,42 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       );
     });
 
+    it('still fires when an alternate model queried successfully but returned zero hits', async () => {
+      const ALT_MODEL = 'text-embedding-3-small';
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [
+          annFile('primary-unstamped', { chunkEmbeddingModelStampedAt: undefined }),
+          annFile('alt', { embeddingModel: ALT_MODEL }),
+        ],
+        scanChunks: chunkRows('primary-unstamped', 2),
+        // Queryable index, successful query, no hits - the shape a lake takes when its chunk
+        // labels are missing while FabFile.embeddingModel is populated. Nothing threw, so this is
+        // NOT the failure case above.
+        queryableModels: ['text-embedding-ada-002', ALT_MODEL],
+      });
+
+      const result = await semanticDataLakeSearch(
+        { ...baseParams(), vectorSearchEnabled: true, logger: logger as never },
+        {
+          db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+        } as never
+      );
+
+      // `embedded && !failed` is true for this outcome, so keying the alarm on a query having
+      // merely SUCCEEDED silences it in the exact production state it exists to catch: retrieval
+      // is 100% scan and every result came from the scan path. Only "served a file" can gate it.
+      expect(result.scan.annModelsQueried).toBe(1);
+      expect(result.scan.annHits).toBe(0);
+      expect(result.scan.chunksScanned).toBe(2);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(ALARM),
+        // annModelsQueried in the payload is what tells an operator this was "ran and served
+        // nothing" rather than "never ran" - the reason field only describes the primary model.
+        expect.objectContaining({ reason: 'no-ready-files', annModelsQueried: 1, rankableFiles: 1 })
+      );
+    });
+
     it('reports index-not-queryable when the index migrator has not finished', async () => {
       const logger = makeLogger();
       const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
@@ -1331,9 +1367,11 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
         db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
       } as never);
 
+      // Carried on EVERY arm, not just the no-ready-files one: an operator reading the alarm
+      // should never have to know which arm fired to know whether the lag explains it.
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining(ALARM),
-        expect.objectContaining({ reason: 'index-not-queryable' })
+        expect.objectContaining({ reason: 'index-not-queryable', rankableFiles: 1, stampedWithinLagFiles: 0 })
       );
     });
 
@@ -1352,7 +1390,13 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
 
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining(ALARM),
-        expect.objectContaining({ reason: 'no-backend', backend: 'none' })
+        expect.objectContaining({
+          reason: 'no-backend',
+          backend: 'none',
+          rankableFiles: 1,
+          stampedWithinLagFiles: 0,
+          annModelsQueried: 0,
+        })
       );
     });
 
@@ -1485,6 +1529,61 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
 
     expect(result.scan.chunksScanned).toBe(3);
     expect(result.results.map(r => r.fileId)).toEqual(['ready', 'ready']);
+  });
+
+  it('subtracts out-of-scope hits in the MIXED shape, where they are what pushes the count to the limit', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('ready'), annFile('other')],
+      scanChunks: chunkRows('other', 3),
+      // 3 raw hits against topK 3 reads as saturated on the raw count alone, but one belongs to a
+      // file outside this query's scope, so only 2 are usable: the backend came up SHORT of what
+      // it could rank, which is what makes `other`'s absence real evidence rather than a rank
+      // outcome. The all-out-of-scope case above cannot distinguish this from an empty response.
+      annHits: [
+        { id: 'ready-c0', fabFileId: 'ready', text: 'ann hit', score: 0.95 },
+        { id: 'ready-c1', fabFileId: 'ready', text: 'ann hit', score: 0.94 },
+        { id: 'ghost-c0', fabFileId: 'not-in-scope', text: 'orphan hit', score: 0.99 },
+      ],
+    });
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), vectorSearchEnabled: true, topK: 3, logger: logger as never },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.chunksScanned).toBe(3);
+    expect(result.results.map(r => r.fileId)).toContain('other');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('returned no hits for ready files'),
+      expect.objectContaining({ fileCount: 1, hitsReturned: 3, hitsUsable: 2, limit: 3 })
+    );
+  });
+
+  it('stays quiet about saturation when every ready file actually ranked - nothing was left off', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('a'), annFile('b')],
+      annHits: [
+        { id: 'a-c0', fabFileId: 'a', text: 'ann hit', score: 0.95 },
+        { id: 'b-c0', fabFileId: 'b', text: 'ann hit', score: 0.94 },
+      ],
+    });
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), vectorSearchEnabled: true, topK: 2, logger: logger as never },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.chunksScanned).toBe(0);
+    expect(result.scan.annFilesQueried).toBe(2);
+    // The debug line reports scanning the index AVOIDED, so a saturated query that left nothing
+    // off must not emit it - otherwise a healthy lake logs a zero on every request.
+    expect(logger.debug).not.toHaveBeenCalledWith(expect.stringContaining('saturated its limit'), expect.anything());
   });
 
   describe('mixed-embeddingModel lake (alternate-model ANN cutover)', () => {

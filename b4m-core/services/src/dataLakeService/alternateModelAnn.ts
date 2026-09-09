@@ -167,8 +167,13 @@ export interface AlternateAnnOutcome {
   hitsSkippedUnknownFile: number;
   /** Files this model's ANN query actually returned a raw hit for - NOT to be reported as excluded. */
   filesWithHits: Set<string>;
-  /** ANN-ready but zero raw hits: still excluded, never scanned (this model has no scan fallback). */
-  filesMissed: string[];
+  /**
+   * ANN-ready but zero raw hits: still excluded, never scanned (this model has no scan fallback).
+   * Named for what it can actually prove - bare absence from a rank-bounded response, so on a
+   * saturated query it also contains files that merely lost on rank. Diagnostic only; read the
+   * note in runAlternateModelAnn before acting on it.
+   */
+  filesUnranked: string[];
   /** The query embed under this model succeeded, i.e. a billable provider call was made. */
   embedded: boolean;
   /** Embed failed, or embed succeeded but the ANN query itself failed - either way, no usable results from this model. */
@@ -181,7 +186,7 @@ const EMPTY_OUTCOME = (model: string, embedded: boolean): AlternateAnnOutcome =>
   hitsReturned: 0,
   hitsSkippedUnknownFile: 0,
   filesWithHits: new Set(),
-  filesMissed: [],
+  filesUnranked: [],
   embedded,
   failed: true,
 });
@@ -216,16 +221,19 @@ export async function runAlternateModelAnn(args: {
     // its rebucket now requires the query to have come back UNDER-saturated before it reads
     // absence as missing content (see semanticDataLakeSearch.ts's `annSaturated`). The looser
     // signal is kept here because it is diagnostic only - nothing rebuckets on it, so an absence
-    // that merely means "did not rank" costs an over-reported `filesMissed`, not a wasted scan.
+    // that merely means "did not rank" costs an over-reported count, not a wasted scan. Mirroring
+    // the saturation rule would mean teaching this module which backend is live (the primary's
+    // rule is Atlas-only), which it deliberately does not know - so the honest fix is the name:
+    // `unranked`, not `missed`, so the number cannot be read as a broken index.
     // Anything that starts ACTING on this list has to adopt the saturation rule first.
-    const filesMissed = candidate.annReady.map(f => f.id).filter(id => !result.filesWithHits.has(id));
+    const filesUnranked = candidate.annReady.map(f => f.id).filter(id => !result.filesWithHits.has(id));
     return {
       model: candidate.model,
       results: result.results,
       hitsReturned: result.hitsReturned,
       hitsSkippedUnknownFile: result.hitsSkippedUnknownFile,
       filesWithHits: result.filesWithHits,
-      filesMissed,
+      filesUnranked,
       embedded: true,
       failed: false,
     };

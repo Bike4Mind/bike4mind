@@ -164,12 +164,16 @@ export interface SemanticSearchScanAccounting {
    * `filesScoped`; ineligible/not-yet-ready files may be searched by neither if a budget stopped
    * the scan first).
    *
-   * The two models' contributions are counted differently, on purpose. The primary model counts
-   * every file it QUERIED, because a file it queried and left unranked was still covered by the
-   * index (that is what the saturation rebucket above decides). An alternate model counts only the
-   * files that RETURNED hits, because it never rebuckets: its unranked files are excluded from the
-   * search entirely rather than covered by anything, so counting them as searched would overstate
-   * coverage.
+   * Counts the files ANN alone was responsible for - NOT every file an ANN query was issued for.
+   * That is what keeps the sum above honest: a ready file the saturation rebucket hands back to
+   * the scan path drops out of this count and turns up in `filesScanned` instead. So the three
+   * cases differ on purpose:
+   *   - Atlas, saturated: unranked ready files are deliberately not scanned, so they stay counted
+   *     here - the index covered them and they simply lost on rank.
+   *   - Atlas under-saturated, and self-host always: the rebucket moves those files, so this
+   *     narrows to the ones that returned hits.
+   *   - Alternate models: always only the files that returned hits. They have no scan fallback, so
+   *     an unranked file is searched by neither route (the caveat above).
    */
   annFilesQueried: number;
   /** Chunk hits returned by ANN retrieval across all ann-queried files and models, before minScore/scope filtering. */
@@ -991,7 +995,7 @@ async function rankChunksForFiles(args: {
     const isModelQueryable = canUseAtlas
       ? async (m: string) => !!(await args.fabfilechunks.getAtlasIndexStatus!(m))?.queryable
       : // Self-host has no per-model status port. openSearchChunkAdapter already fails closed on
-        // an unregistered model or a missing index (returns [] -> filesMissed, not a throw), and
+        // an unregistered model or a missing index (returns [] -> filesUnranked, not a throw), and
         // that "stay excluded" outcome is already correct - the only cost of an optimistic answer
         // here is one wasted embed per model, bounded by MAX_ALTERNATE_ANN_MODELS.
         async () => true;
@@ -1094,19 +1098,25 @@ async function rankChunksForFiles(args: {
   // operator-facing configuration alarm, and the point is that it fires while results still look
   // perfectly healthy, because they do.
   //
-  // Keyed on a model whose query actually SUCCEEDED, not on `annModelsQueried`: a model whose ANN
-  // call threw still counts there (the query was issued, which is what that metric reports) but it
-  // served nothing, so it must not silence this. `annBlockedReason` is only ever set on a primary
-  // model that never queried, so the alternate models are the whole question here.
-  const annQuerySucceeded = outcomes.some(o => o.embedded && !o.failed);
-  if (annBlockedReason && !annQuerySucceeded && rankable.length > 0) {
+  // Keyed on ANN having actually SERVED a file, not on a query having been issued or even having
+  // returned without throwing. `annModelsQueried` counts a query that threw (it WAS issued, which
+  // is what that metric reports), and `embedded && !failed` additionally counts one that came back
+  // empty; both of those leave retrieval entirely on the scan path, which is the state this alarm
+  // exists to report, so neither can be allowed to silence it. `filesWithHits.size > 0` is the
+  // same definition of "served" the mismatch accounting uses at `servedOutcomes` above.
+  // `annBlockedReason` is only ever set on a primary model that never queried, so whether any
+  // ALTERNATE model served something is the whole question here.
+  if (annBlockedReason && servedByAlternateAnn.size === 0 && rankable.length > 0) {
     logger?.warn?.(
-      '[semanticSearch] vector search is enabled but no ANN query ran - retrieval is entirely brute-force scan',
+      '[semanticSearch] vector search is enabled but ANN served nothing - retrieval is entirely brute-force scan',
       {
         embeddingModel,
         reason: annBlockedReason,
         backend: canUseAtlas ? 'atlas' : canUseOpenSearch ? 'opensearch' : 'none',
         rankableFiles: rankable.length,
+        // `reason` only ever describes the PRIMARY model, so this separates "no ANN query ran at
+        // all" (0) from "one ran and served nothing" - different fixes, same scan-only symptom.
+        annModelsQueried: scan.annModelsQueried,
         // Separates "just vectorized, wait one lag window" from "the backfill never ran" when the
         // reason is no-ready-files, and shows the mixed case the distinct reason cannot express.
         stampedWithinLagFiles,
@@ -1166,7 +1176,7 @@ async function rankChunksForFiles(args: {
   );
   if (outcomes.length > 0) {
     logger?.debug?.(
-      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files/${o.filesMissed.length}missed`}`).join(', ')}`
+      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files/${o.filesUnranked.length}unranked`}`).join(', ')}`
     );
   }
 
