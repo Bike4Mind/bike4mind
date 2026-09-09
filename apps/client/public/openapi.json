@@ -191,7 +191,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Explicit tool ids to offer the model. A non-empty array enables tools on its own; no companion `toolMode` or `enableTools` is required. Merged with the auto-selected set under `toolMode: \"smart\"`, and ignored under `toolMode: \"fast\"`. This list ADDS to what is offered rather than restricting it - the server still offers tools of its own (for example knowledge retrieval when the session has reachable documents). Unrecognized ids are dropped rather than rejecting the request; the response reports the surviving set as `tools.effectiveTools` and the dropped ids as `tools.ignoredTools`, since no endpoint enumerates the valid ids."
           },
           "enableQuestMaster": {
             "type": "boolean"

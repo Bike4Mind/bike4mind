@@ -74,6 +74,24 @@ const handler = nextRouteForContract(chatContract, {
   // Pre-compute tool recommendations once (used by both transform and response metadata)
   const recommendations = simplifiedRequest.toolMode === 'smart' ? recommendTools(simplifiedRequest.message) : [];
 
+  // Split the caller's explicit tool ids into what this deployment recognizes and what it does
+  // not. Computed here rather than inside the transform for the same reason `recommendations`
+  // is - both the invoked body and the response metadata need it. No public endpoint enumerates
+  // the valid ids, so a dropped id has to be reported back or a typo is indistinguishable from
+  // a tool that does not exist here.
+  // Set membership, not Array.includes: `tools` has no length bound of its own, so a payload
+  // mixing many known with many unknown ids makes a linear scan quadratic (~1s of blocked event
+  // loop at the 1MB body cap, before any billing or model call - a free amplification).
+  const requestedTools = filterKnownTools(simplifiedRequest.tools);
+  const recognized = new Set<string>(requestedTools);
+  const ignoredTools = (simplifiedRequest.tools ?? []).filter(id => !recognized.has(id));
+  if (ignoredTools.length > 0) {
+    // Cap what reaches the log line: `tools` carries no length bound of its own.
+    req.logger.warn(
+      `POST /api/chat dropped ${ignoredTools.length} unrecognized tool id(s): ${ignoredTools.slice(0, 10).join(', ')}`
+    );
+  }
+
   // Billing target is an explicit, opt-in choice - never an automatic consequence of the
   // caller's home-org field. When the request names an organizationId we validate the caller
   // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
@@ -87,20 +105,18 @@ const handler = nextRouteForContract(chatContract, {
     { ...simplifiedRequest, model, sessionId },
     req.user.id,
     organizationId,
-    recommendations
+    recommendations,
+    requestedTools
   );
 
-  // Build tool metadata for response (reuses pre-computed recommendations)
-  const toolMeta =
-    simplifiedRequest.toolMode === 'smart'
-      ? {
-          toolMode: 'smart' as const,
-          autoSelectedTools: recommendations.map(r => r.tool),
-          effectiveTools: internalRequest.tools ?? [],
-        }
-      : simplifiedRequest.toolMode === 'fast'
-        ? { toolMode: 'fast' as const, effectiveTools: [] }
-        : undefined;
+  // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift
+  // from what was actually sent to the service layer.
+  const toolMeta = buildToolMeta({
+    toolMode: simplifiedRequest.toolMode,
+    effectiveTools: internalRequest.tools,
+    autoSelectedTools: recommendations.map(r => r.tool),
+    ignoredTools,
+  });
 
   // Shared options for ChatCompletionInvoke and ChatCompletionProcess
   const chatCompletionOptions = {
@@ -230,6 +246,39 @@ const handler = nextRouteForContract(chatContract, {
 });
 
 /**
+ * The tool decision this layer made, echoed back as the response's `tools` field so a caller can
+ * see what was offered - and what was thrown away. `toolMode` is absent when the caller named
+ * tools without sending a mode; `ignoredTools` is present only when some id was unrecognized.
+ *
+ * Undefined only when the layer made no decision AND had nothing to report: the enableTools path,
+ * where the service layer resolves the set.
+ */
+function buildToolMeta({
+  toolMode,
+  effectiveTools,
+  autoSelectedTools,
+  ignoredTools,
+}: {
+  toolMode: 'fast' | 'smart' | undefined;
+  effectiveTools: B4MLLMTools[] | undefined;
+  autoSelectedTools: B4MLLMTools[];
+  ignoredTools: string[];
+}) {
+  const ignored = ignoredTools.length > 0 ? { ignoredTools } : {};
+
+  if (toolMode === 'smart') {
+    return { toolMode, autoSelectedTools, effectiveTools: effectiveTools ?? [], ...ignored };
+  }
+  if (toolMode === 'fast') {
+    return { toolMode, effectiveTools: [], ...ignored };
+  }
+  if (effectiveTools?.length || ignoredTools.length > 0) {
+    return { effectiveTools: effectiveTools ?? [], ...ignored };
+  }
+  return undefined;
+}
+
+/**
  * Get session ID - either from request or user's most recent notebook
  */
 async function getSessionId(requestedSessionId: string | undefined, userId: string): Promise<string> {
@@ -256,22 +305,33 @@ function transformToInternalFormat(
   request: SimplifiedChatRequest & { sessionId: string; model: string },
   userId: string,
   organizationId?: string,
-  recommendations: ReturnType<typeof recommendTools> = []
+  recommendations: ReturnType<typeof recommendTools> = [],
+  // Already filtered to known ids by the caller (unknowns are dropped there so the wire
+  // schema stays OpenAPI-representable, and so they can be reported back on the response).
+  requestedTools: B4MLLMTools[] = []
 ) {
-  // Compute effective tools for smart mode using pre-computed recommendations
+  // Compute effective tools. `tools` is a top-level field with nothing marking it conditional on
+  // toolMode, so a named tool is honored on its own rather than silently dropped; 'fast' ignores
+  // it. What lands here seeds `resolveEnabledTools`, which is a union plus a denylist - so this
+  // list adds to the offered set and never restricts it.
   let effectiveTools: B4MLLMTools[] | undefined;
   if (request.toolMode === 'smart') {
-    // Drop unknown tool ids here (moved off the wire schema so it stays representable).
-    const manualTools = filterKnownTools(request.tools);
-    effectiveTools = mergeTools(recommendations, manualTools);
+    effectiveTools = mergeTools(recommendations, requestedTools);
   } else if (request.toolMode === 'fast') {
     effectiveTools = [];
+  } else if (requestedTools.length > 0) {
+    effectiveTools = requestedTools;
   }
-  // When toolMode is unset, don't set effectiveTools - let service layer handle via enableTools
+  // With no toolMode and no named tools, leave effectiveTools unset - the service
+  // layer resolves the set from enableTools.
 
   // For capability flags: smart mode is still "tools enabled" even with no auto-selected tools
   const isToolsEnabled =
-    request.toolMode === 'smart' ? true : request.toolMode === 'fast' ? false : !!request.enableTools;
+    request.toolMode === 'smart'
+      ? true
+      : request.toolMode === 'fast'
+        ? false
+        : !!request.enableTools || requestedTools.length > 0;
 
   // Determine capability defaults: legacy enableTools=true defaults to true,
   // toolMode='smart' defaults to false (conservative - just tools, no QuestMaster etc.)

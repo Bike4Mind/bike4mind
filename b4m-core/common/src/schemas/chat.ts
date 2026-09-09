@@ -38,14 +38,31 @@ export const SimplifiedChatRequestSchema = z.object({
   fileIds: z.array(z.string()).prefault([]),
   // New synchronous option - wait for completion before returning
   wait: z.boolean().prefault(false),
-  // Enable full tool access for agent requests (e.g., voice agent_request portal)
+  // Enable full tool access for agent requests (e.g., voice agent_request portal). A `tools`
+  // array sent alongside is added to the offered set (it used to be dropped), and the
+  // full-capability defaults below still apply.
   enableTools: z.boolean().prefault(false),
-  // Tool selection mode: 'fast' = no tools (pure chat), 'smart' = auto-select tools based on prompt
-  // When set, overrides enableTools. When not set, falls back to enableTools behavior.
+  // Tool selection mode: 'fast' = no tools from the request, 'smart' = auto-select tools based on
+  // prompt. When set, overrides enableTools. When not set, a non-empty `tools` array both enables
+  // tools and supplies the set; absent that too, it falls back to enableTools behavior.
   toolMode: z.enum(['fast', 'smart']).optional(),
-  // Explicit tool ids (combined with auto-selected in smart mode). Unknown ids are
-  // filtered by the handler (filterKnownTools), not here - see the rule above.
-  tools: z.array(z.string()).optional(),
+  // Explicit tool ids (combined with auto-selected in smart mode). Non-empty is itself
+  // intent to enable tools, so no companion toolMode/enableTools is required - the array
+  // used to be dropped in silence without one. Unknown ids are filtered by the handler
+  // (filterKnownTools), not here - see the rule above.
+  tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Explicit tool ids to offer the model. A non-empty array enables tools on its own; no ' +
+        'companion `toolMode` or `enableTools` is required. Merged with the auto-selected set ' +
+        'under `toolMode: "smart"`, and ignored under `toolMode: "fast"`. This list ADDS to what ' +
+        'is offered rather than restricting it - the server still offers tools of its own (for ' +
+        'example knowledge retrieval when the session has reachable documents). Unrecognized ids ' +
+        'are dropped rather than rejecting the request; the response reports the surviving set as ' +
+        '`tools.effectiveTools` and the dropped ids as `tools.ignoredTools`, since no endpoint ' +
+        'enumerates the valid ids.'
+    ),
   // Explicit overrides - when enableTools is true, these default to true but can be
   // individually disabled (e.g., voice agent_request disables QuestMaster so replies
   // aren't cleared and replaced with a plan document)
