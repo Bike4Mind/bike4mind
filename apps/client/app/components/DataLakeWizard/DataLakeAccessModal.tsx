@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Modal,
@@ -315,6 +316,18 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
  *  (it would be filtered out of every active read the moment it landed). */
 const tomorrowInputDate = (): string => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 
+/** The `YYYY-MM-DD` a date input wants, from a grant row's stored expiry. */
+const inputDate = (d: Date | string): string => new Date(d).toISOString().slice(0, 10);
+
+/**
+ * The three expiry intents `grantLakeAccess` distinguishes, made explicit in the form because the
+ * server cannot infer them: `keep` OMITS `expiresAt` (any existing expiry survives), `never` sends
+ * `null` (which CLEARS one), and `on` sends the chosen date. Collapsing `keep` and `never` into one
+ * empty field is what made an expiry unremovable - and defaulting to `never` instead would make
+ * every routine re-role silently clear one, so the default has to stay `keep`.
+ */
+type ExpiryMode = 'keep' | 'never' | 'on';
+
 /**
  * Grant one principal access to this lake.
  *
@@ -330,6 +343,8 @@ const tomorrowInputDate = (): string => new Date(Date.now() + 86_400_000).toISOS
  *
  * A user is named by EMAIL, which is the only identifier a manager sharing outside their own org
  * has, and the only one the server can resolve to a real account before writing a row.
+ *
+ * Expiry is a three-way choice rather than one optional date - see `ExpiryMode`.
  */
 function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () => void }) {
   const grant = useGrantLakeAccess();
@@ -337,9 +352,23 @@ function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () 
   const [principalType, setPrincipalType] = useState<DataLakePrincipalType>('user');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Exclude<DataLakeAccessRole, 'owner'>>('reader');
+  const [expiryMode, setExpiryMode] = useState<ExpiryMode>('keep');
   const [expiresOn, setExpiresOn] = useState('');
 
-  const canSubmit = principalType === 'organization' ? !!ownOrg?.value : email.trim().length > 0;
+  const hasPrincipal = principalType === 'organization' ? !!ownOrg?.value : email.trim().length > 0;
+  // An `on` mode with no date would fall through to omitting the key - i.e. silently act as `keep`.
+  const canSubmit = hasPrincipal && (expiryMode !== 'on' || !!expiresOn);
+
+  // The row this submit would overwrite, where the form can identify it. An ORGANIZATION principal
+  // is addressed by the id the view already carries, so its grant is knowable and its current
+  // expiry can be shown and seeded. A `user` principal is addressed by EMAIL and the view resolves
+  // names through `userDisplayName`, which deliberately never falls back to an address - so there
+  // is nothing here to match a typed email against, and the form cannot know whether one already
+  // holds a grant. Hence the standing note below rather than a guess.
+  const existingGrant =
+    principalType === 'organization' && ownOrg?.value
+      ? view.grants.find(g => g.principalType === 'organization' && g.principalId === ownOrg.value)
+      : undefined;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -350,7 +379,12 @@ function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () 
         ...(principalType === 'organization' ? { principalId: ownOrg!.value } : { principalEmail: email.trim() }),
         role,
         // End of the chosen day, so a grant dated today does not lapse the instant it is written.
-        ...(expiresOn ? { expiresAt: `${expiresOn}T23:59:59.999Z` } : {}),
+        // `keep` omits the key entirely; the other two are explicit, null included.
+        ...(expiryMode === 'on' && expiresOn
+          ? { expiresAt: `${expiresOn}T23:59:59.999Z` }
+          : expiryMode === 'never'
+            ? { expiresAt: null }
+            : {}),
       });
       onClose();
     } catch {
@@ -421,14 +455,54 @@ function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () 
             </FormControl>
 
             <FormControl>
-              <FormLabel>Expires (optional)</FormLabel>
-              <Input
-                type="date"
-                value={expiresOn}
-                onChange={e => setExpiresOn(e.target.value)}
-                slotProps={{ input: { min: tomorrowInputDate(), 'data-testid': 'datalake-grant-expiry-input' } }}
-              />
+              <FormLabel>Expiry</FormLabel>
+              <Select
+                value={expiryMode}
+                onChange={(_e, value) => {
+                  if (!value) return;
+                  setExpiryMode(value);
+                  // Seed the picker from the row being overwritten where one is knowable, so
+                  // choosing a date starts from the expiry in force rather than blank.
+                  if (value === 'on' && !expiresOn && existingGrant?.expiresAt) {
+                    setExpiresOn(inputDate(existingGrant.expiresAt));
+                  }
+                }}
+                slotProps={{ button: { 'data-testid': 'datalake-grant-expiry-mode-select' } }}
+              >
+                <Option value="keep" data-testid="datalake-grant-expiry-keep">
+                  Keep any existing expiry
+                </Option>
+                <Option value="never" data-testid="datalake-grant-expiry-never">
+                  Never expires
+                </Option>
+                <Option value="on" data-testid="datalake-grant-expiry-on">
+                  Expires on a date
+                </Option>
+              </Select>
+              <FormHelperText data-testid="datalake-grant-expiry-help">
+                {expiryMode === 'keep'
+                  ? existingGrant
+                    ? existingGrant.expiresAt
+                      ? `Leaves the current expiry of ${fmtDate(existingGrant.expiresAt)} in place.`
+                      : 'This grant does not expire today, and will keep not expiring.'
+                    : 'A new grant never expires. Re-granting someone who already has access leaves their current expiry untouched - choose one of the other options to change it.'
+                  : expiryMode === 'never'
+                    ? 'Removes any expiry this principal currently has, making the grant permanent.'
+                    : 'Access ends at the end of the chosen day.'}
+              </FormHelperText>
             </FormControl>
+
+            {expiryMode === 'on' && (
+              <FormControl>
+                <FormLabel>Expires on</FormLabel>
+                <Input
+                  type="date"
+                  value={expiresOn}
+                  onChange={e => setExpiresOn(e.target.value)}
+                  slotProps={{ input: { min: tomorrowInputDate(), 'data-testid': 'datalake-grant-expiry-input' } }}
+                />
+              </FormControl>
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>

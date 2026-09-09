@@ -424,10 +424,86 @@ describe('DataLakeAccessModal grant writes', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
     await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-on'));
     fireEvent.change(screen.getByTestId('datalake-grant-expiry-input'), { target: { value: '2027-03-04' } });
     await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
 
     expect(grantMutate).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: '2027-03-04T23:59:59.999Z' }));
+  });
+
+  it('omits expiresAt by default, so a re-grant leaves an existing expiry alone', async () => {
+    // The key must be ABSENT, not null: `grantLakeAccess` reads absent as "leave it" and null as
+    // "clear it", so sending null here would silently make every routine re-role permanent.
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
+    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+
+    expect(grantMutate).toHaveBeenCalledWith(expect.not.objectContaining({ expiresAt: expect.anything() }));
+  });
+
+  it('sends expiresAt: null for "Never expires", which is what CLEARS an existing expiry', async () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-never'));
+    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+
+    expect(grantMutate).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: null }));
+  });
+
+  it('cannot submit a date mode with no date, which would silently act as "keep"', async () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-on'));
+
+    expect(screen.getByTestId('datalake-grant-confirm-btn')).toBeDisabled();
+    expect(grantMutate).not.toHaveBeenCalled();
+  });
+
+  it("shows an org grant's current expiry, and seeds the picker from it", async () => {
+    // Knowable only for an ORGANIZATION principal: it is addressed by the id the view already
+    // carries. A user is addressed by email, and the view never exposes one.
+    viewState = loaded({
+      ...fullView,
+      grants: [
+        {
+          principalType: 'organization',
+          principalId: 'orgA',
+          principalName: 'Acme',
+          role: 'reader',
+          grantedByUserId: 'u1',
+          grantedAt: new Date('2026-08-01T00:00:00.000Z'),
+          expiresAt: new Date('2027-03-04T23:59:59.999Z'),
+          status: 'active',
+        },
+      ],
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-org'));
+
+    expect(screen.getByTestId('datalake-grant-expiry-help')).toHaveTextContent(/current expiry of/i);
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await userEvent.click(screen.getByTestId('datalake-grant-expiry-on'));
+    expect(screen.getByTestId('datalake-grant-expiry-input')).toHaveValue('2027-03-04');
+  });
+
+  it('says what an empty expiry means when the form cannot know the current one', async () => {
+    // The two meanings of "no date chosen" are the bug this note exists for: a new grant never
+    // expires, a re-grant keeps whatever it has.
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+
+    expect(screen.getByTestId('datalake-grant-expiry-help')).toHaveTextContent(/A new grant never expires/i);
+    expect(screen.getByTestId('datalake-grant-expiry-help')).toHaveTextContent(
+      /leaves their current expiry untouched/i
+    );
   });
 
   it('disables Revoke while one is in flight, so a double click cannot send a second DELETE', () => {
