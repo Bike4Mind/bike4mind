@@ -259,5 +259,12 @@ export { wrapAgentToolsForRepl } from './rlm/wrapAgentToolsForRepl';
 export type { WrapOpts, WrapResult } from './rlm/wrapAgentToolsForRepl';
 
 // Production-shape sub-LLM: backed by any ICompletionBackend
+export {
+  recordReplSandboxUnavailable,
+  REPL_SANDBOX_NAMESPACE,
+  SANDBOX_UNAVAILABLE_METRIC,
+} from './rlm/replSandboxMetrics';
+export type { ReplSandboxCaller } from './rlm/replSandboxMetrics';
+
 export { buildBackendSubAgentQuery } from './rlm/backendSubAgent';
 export type { BackendSubAgentDeps } from './rlm/backendSubAgent';

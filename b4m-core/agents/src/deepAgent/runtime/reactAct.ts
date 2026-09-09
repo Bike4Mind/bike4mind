@@ -4,6 +4,7 @@ import type { Logger } from '@bike4mind/observability';
 import { ReActAgent } from '../../ReActAgent';
 import { ReplSession } from '../../rlm/ReplSession';
 import { makeCodeExecuteTool } from '../../rlm/codeExecuteTool';
+import { recordReplSandboxUnavailable } from '../../rlm/replSandboxMetrics';
 import type { AgentResult } from '../../types';
 import { buildActQuery, buildActSystemPrompt } from './prompts';
 import { resolveToolbeltProfile } from './toolbelts';
@@ -166,6 +167,9 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
           agentId: ctx.charter.identity.agentId,
           error: e instanceof Error ? e.message : String(e),
         });
+        // The wake still answers, so nothing downstream reports the lost
+        // capability. Alarmed in infra/alarms.ts.
+        await recordReplSandboxUnavailable('wake', config.logger);
       }
     }
 

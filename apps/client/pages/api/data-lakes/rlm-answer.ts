@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
-import { ReActAgent, ReplSession, BudgetExceededError, makeCodeExecuteTool } from '@bike4mind/agents';
+import {
+  ReActAgent,
+  ReplSession,
+  BudgetExceededError,
+  makeCodeExecuteTool,
+  recordReplSandboxUnavailable,
+} from '@bike4mind/agents';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -224,6 +230,9 @@ const handler = baseApi()
           e instanceof Error ? e.message : String(e)
         }`
       );
+      // A 503 reads as an ordinary transient upstream, but a missing native
+      // addon is total for the build. Alarmed in infra/alarms.ts.
+      await recordReplSandboxUnavailable('rlm-answer', req.logger);
       return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
     }
 

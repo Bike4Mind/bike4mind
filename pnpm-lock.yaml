@@ -891,6 +891,9 @@ importers:
 
   b4m-core/agents:
     dependencies:
+      '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common

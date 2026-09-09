@@ -7,13 +7,20 @@ import type { ActContext } from './types';
 import { resolveToolbeltProfile, DEFAULT_TOOLBELT_ROLE } from './toolbelts';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockReplSessionCtor, mockMakeCodeExecuteTool, mockAgentRun, mockSessionDispose } = vi.hoisted(() => ({
+const {
+  mockReplSessionCtor,
+  mockMakeCodeExecuteTool,
+  mockAgentRun,
+  mockSessionDispose,
+  mockRecordReplSandboxUnavailable,
+} = vi.hoisted(() => ({
   // Captures the options the wake path asks for. Which executor it picks is the
   // security posture of the whole deep-agent runtime, so it has to be observable.
   mockReplSessionCtor: vi.fn(),
   mockMakeCodeExecuteTool: vi.fn(() => ({ toolSchema: { name: 'code_execute' } })),
   mockAgentRun: vi.fn(),
   mockSessionDispose: vi.fn(),
+  mockRecordReplSandboxUnavailable: vi.fn(),
 }));
 
 // Spread the real modules rather than replacing them: these files export more
@@ -32,6 +39,10 @@ vi.mock('../../rlm/ReplSession', async importOriginal => ({
 vi.mock('../../rlm/codeExecuteTool', async importOriginal => ({
   ...(await importOriginal<typeof import('../../rlm/codeExecuteTool')>()),
   makeCodeExecuteTool: mockMakeCodeExecuteTool,
+}));
+vi.mock('../../rlm/replSandboxMetrics', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../rlm/replSandboxMetrics')>()),
+  recordReplSandboxUnavailable: mockRecordReplSandboxUnavailable,
 }));
 vi.mock('../../ReActAgent', async importOriginal => ({
   ...(await importOriginal<typeof import('../../ReActAgent')>()),
@@ -230,6 +241,15 @@ describe('createReActRunAct sandbox wiring', () => {
     expect(mockReplSessionCtor).toHaveBeenCalledTimes(1);
     const starting = logger.info.mock.calls.find(c => String(c[0]).includes('starting'));
     expect(starting?.[1]).toMatchObject({ codeExecute: false, tools: [] });
+    // The wake still answers, so the run itself reports nothing amiss. The
+    // metric is what makes a build-wide loss of the sandbox alarmable.
+    expect(mockRecordReplSandboxUnavailable).toHaveBeenCalledWith('wake', logger);
+  });
+
+  it('emits nothing when the sandbox builds, so the alarm tracks the degrade and not traffic', async () => {
+    await runAct();
+
+    expect(mockRecordReplSandboxUnavailable).not.toHaveBeenCalled();
   });
 
   // An isolate is an OS-level resource (its own V8 heap, plus host-side

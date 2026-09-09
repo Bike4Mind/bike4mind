@@ -7,6 +7,7 @@ const {
   mockGetEffectiveLLMApiKeys,
   mockAgentRun,
   mockReplSessionCtor,
+  mockRecordReplSandboxUnavailable,
 } = vi.hoisted(() => ({
   mockResolveAccessibleLakes: vi.fn(),
   mockBuildDataLakeTools: vi.fn(),
@@ -15,6 +16,7 @@ const {
   // Captures the options the route asks for. The executor it picks is the
   // whole security posture of this endpoint, so it has to be observable.
   mockReplSessionCtor: vi.fn(),
+  mockRecordReplSandboxUnavailable: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -53,6 +55,7 @@ vi.mock('@bike4mind/agents', () => ({
   },
   BudgetExceededError: class extends Error {},
   makeCodeExecuteTool: vi.fn(() => ({ name: 'code_execute' })),
+  recordReplSandboxUnavailable: mockRecordReplSandboxUnavailable,
 }));
 
 import handler from '../rlm-answer';
@@ -218,5 +221,14 @@ describe('POST /api/data-lakes/rlm-answer - REPL sandbox posture', () => {
     expect(mockAgentRun).not.toHaveBeenCalled();
     // The reason must not leak the internal error text to the caller.
     expect(JSON.stringify(res.body)).not.toContain('native build');
+    // A 503 reads as transient to everything upstream, so the metric is the
+    // only thing that distinguishes "the addon is missing from this build".
+    expect(mockRecordReplSandboxUnavailable).toHaveBeenCalledWith('rlm-answer', expect.anything());
+  });
+
+  it('emits nothing on the happy path, so the alarm tracks the degrade and not traffic', async () => {
+    await call({ authorization: 'Bearer caller.jwt.token' });
+
+    expect(mockRecordReplSandboxUnavailable).not.toHaveBeenCalled();
   });
 });
