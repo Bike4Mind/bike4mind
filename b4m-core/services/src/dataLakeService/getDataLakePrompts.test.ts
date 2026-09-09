@@ -1,7 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DATA_LAKES, type DataLakeConfig, type IDataLakeDocument } from '@bike4mind/common';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from './getDataLakePrompts';
+import { grantedLakeReachFor } from './resolveLakeReadAccess';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
+
+/**
+ * A spy that KEEPS the real implementation - every other test in this file depends on the helper
+ * actually reading the grant rows. It exists so one test can assert the literal arguments this
+ * call site passes, which is the only way the `includeReaders = false` + no-org-ids floor is
+ * pinned: threading `organizationIds` alone changes no observable behaviour (`grantedLakeReachFor`
+ * reads them only under `includeReaders`), so no outcome assertion can catch that pre-wiring.
+ */
+vi.mock('./resolveLakeReadAccess', async importOriginal => {
+  const actual = await importOriginal<typeof import('./resolveLakeReadAccess')>();
+  return { ...actual, grantedLakeReachFor: vi.fn(actual.grantedLakeReachFor) };
+});
 
 const OWNER = 'user-owner';
 const ORG = 'org-alpha';
@@ -329,6 +342,18 @@ describe('getAccessibleDataLakePrompts', () => {
       await getAccessibleDataLakePrompts(ctx);
       expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, expect.anything());
       expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The floor itself, asserted at the call boundary rather than through its consequences. The
+     * reader half is observable (the reader test above fails on a flip), but the org-ids half is
+     * NOT: `grantedLakeReachFor` consults `organizationIds` only under `includeReaders`, so threading
+     * them today changes nothing any outcome assertion could see - and leaves exactly the pre-wired
+     * state the comment at the call site says it prevents. This is the assertion that catches it.
+     */
+    it('resolves the grant arm with no org ids and readers off (the permanent injection floor)', async () => {
+      await getAccessibleDataLakePrompts(asCurator('curator'));
+      expect(grantedLakeReachFor).toHaveBeenCalledWith(CURATOR, [], expect.anything(), false);
     });
 
     it('drops a granted lake whose datalakeTag is malformed, as retrieval does', async () => {

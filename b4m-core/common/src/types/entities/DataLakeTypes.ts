@@ -540,10 +540,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * USER-principal grant IS the authorization and bypasses the org and requirement constraints;
    * `orgGrantedLakes` is keyed by the GRANTING org and bypasses only the requirement, so an org
    * grant can never reach a lake outside the org that issued it. Empty/absent adds no arm and
-   * cannot widen anything. Not every retrieval caller supplies them: getDataLakePrompts.ts
-   * deliberately omits them, since folding grants into the injection-trust decision is a separate
-   * piece of work (#1673) - an org-less transferred lake is denied by that trust gate regardless,
-   * so wiring the arm there today would be dead code.
+   * cannot widen anything.
+   *
+   * Callers do NOT all resolve the same grant set. Retrieval and browse pass the full reach from
+   * `grantedLakeReachFor`; getDataLakePrompts.ts (the injection path) supplies only
+   * `grantedLakeIds` since #2495, resolved with `includeReaders = false` and NO membership org ids
+   * - owner/curator USER grants alone, so `orgGrantedLakes` is always empty there. That narrowing
+   * is a permanent security floor, not a cutover lag: a reader's read access must never become
+   * authority to write instructions into another user's system prompt. So a lake present in these
+   * arms on the retrieval side may legitimately be absent from them on the injection side, and the
+   * two must not be assumed to move together.
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],

@@ -191,16 +191,19 @@ export async function getAccessibleDataLakePrompts(
   // lake matches none of that query's tag/org/public arms, so its ids have to go IN as the query's
   // grant arm rather than be filtered out of the result.
   //
-  // Uses the same helper as the retrieval resolver, so this side can never fall BEHIND retrieval
-  // again - a lake retrieval grounds on but injection distrusts is exactly the gap #2495 closes.
+  // Uses the same helper as the retrieval resolver, so the two sides resolve a grant row the same
+  // way - a lake retrieval grounds on but injection distrusts is exactly the gap #2495 closes.
+  // Sharing the helper is not by itself a lockstep guarantee: the two call sites already pass
+  // different arguments, and today's agreement rests on both pinning `includeReaders = false`.
+  // That agreement is MEANT to break at the cutover, in the deny direction only - see below.
   //
   // But `includeReaders: false` here is a PERMANENT security floor, NOT the cutover default it is
   // at the other call sites. When READ_GRANT_ENFORCEMENT_READY flips, `getDynamicDataLakeAccess`
   // and browse widen to reader/org-principal grants and THIS SITE MUST NOT FOLLOW: a READER's read
   // access must not become authority to write instructions into another user's system prompt
   // (injection lands in the system prompt, a higher-trust position than the retrieved content
-  // `renderRetrievedContentBlock` sanitizes precisely because it is untrusted). A test pins the
-  // argument, so the flip fails loudly here rather than widening quietly.
+  // `renderRetrievedContentBlock` sanitizes precisely because it is untrusted). A test asserts this
+  // call's arguments literally, so the flip fails loudly here rather than widening quietly.
   //
   // The membership org ids are deliberately NOT passed: `grantedLakeReachFor` reads them only under
   // `includeReaders`, so threading them would leave the org-principal arm pre-wired and let a
