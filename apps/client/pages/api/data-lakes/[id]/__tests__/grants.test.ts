@@ -138,6 +138,58 @@ describe('/api/data-lakes/[id]/grants', () => {
     );
   });
 
+  /**
+   * API-key attribution, asserted at the ROUTE because that is the only place it exists: the actor
+   * is built here and `lakeConfigAuditPrincipal` is not mocked, so this exercises the real helper.
+   *
+   * Silent failure mode: delete the `auditPrincipal` line from either handler and every other suite
+   * stays green while key-driven ACCESS changes - the most audit-relevant write on a lake - are
+   * recorded as the owning human's own edit, permanently, in append-only rows.
+   */
+  it.each([
+    {
+      door: 'POST',
+      req: {
+        method: 'POST',
+        query: { id: 'lake1' },
+        body: { principalType: 'user', principalEmail: 'a@b.co', role: 'reader' },
+      },
+      service: () => h.grantLakeAccess,
+    },
+    {
+      door: 'DELETE',
+      req: { method: 'DELETE', query: { id: 'lake1', principalType: 'user', principalId: 'u2' } },
+      service: () => h.revokeLakeAccess,
+    },
+  ])('$door attaches the KEY as the audit principal for an API-key caller', async ({ req, service }) => {
+    const { res } = makeRes();
+    await call({ ...req, user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }, res);
+    expect(service()).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'u1' },
+      }),
+      'lake-oid-1',
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('attaches NO audit principal for a session write, leaving the service derivation alone', async () => {
+    const { res } = makeRes();
+    await call(
+      {
+        method: 'POST',
+        query: { id: 'lake1' },
+        body: { principalType: 'user', principalEmail: 'a@b.co', role: 'reader' },
+        user: { id: 'u1' },
+        apiKeyInfo: undefined,
+      },
+      res
+    );
+    const actor = h.grantLakeAccess.mock.calls[0][0] as { auditPrincipal?: unknown };
+    expect(actor.auditPrincipal).toBeUndefined();
+  });
+
   it('does not reach the service when the caller cannot see the lake', async () => {
     // assertLakeAccess denies with a not-found-style error, so existence is never disclosed.
     h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));

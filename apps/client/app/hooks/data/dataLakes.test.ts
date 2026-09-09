@@ -77,6 +77,8 @@ import {
   useCreateDataLake,
   useReanalyzeTaxonomy,
   useDismissTaxonomy,
+  useGrantLakeAccess,
+  useRevokeLakeAccess,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -1450,10 +1452,12 @@ describe('server refusal text reaches the toast', () => {
 
   // One entry per door, each with the kind of refusal that door actually sends. `invoke` carries
   // the hook's own mutate signature - they differ (an id, an object, a tag array, nothing).
+  // `verb` names the axios method the door uses, because the mock to reject is not the same one.
   const doors: {
     name: string;
     refusal: string;
     status?: number;
+    verb?: 'post' | 'delete';
     mount: () => { result: { current: { mutateAsync: (arg: never) => Promise<unknown> } } };
     arg: unknown;
   }[] = [
@@ -1511,12 +1515,28 @@ describe('server refusal text reaches the toast', () => {
       mount: () => mountHook(() => useRechunkDataLake('lake1')) as never,
       arg: undefined,
     },
+    {
+      // Every refusal on the sharing door is the actionable kind, and "no account was found" is the
+      // one a manager most needs: the alternative reading of a 400 here is that they mistyped.
+      name: 'useGrantLakeAccess',
+      refusal: 'No account was found for that email address',
+      mount: () => mountHook(() => useGrantLakeAccess()) as never,
+      arg: { id: 'lake1', principalType: 'user', principalEmail: 'a@b.co', role: 'reader' },
+    },
+    {
+      name: 'useRevokeLakeAccess',
+      refusal: 'This is an ownership grant; use transfer ownership to change it',
+      verb: 'delete',
+      mount: () => mountHook(() => useRevokeLakeAccess()) as never,
+      arg: { id: 'lake1', principalType: 'user', principalId: 'u2' },
+    },
   ];
 
-  it.each(doors)('$name toasts the server sentence, not the status line', async ({ refusal, mount, arg }) => {
+  it.each(doors)('$name toasts the server sentence, not the status line', async ({ refusal, verb, mount, arg }) => {
     (toast.error as ReturnType<typeof vi.fn>).mockReset();
     apiPost.mockReset();
-    apiPost.mockRejectedValueOnce(axiosRefusal(400, refusal));
+    apiDelete.mockReset();
+    (verb === 'delete' ? apiDelete : apiPost).mockRejectedValueOnce(axiosRefusal(400, refusal));
 
     const { result } = mount();
     await act(async () => {
