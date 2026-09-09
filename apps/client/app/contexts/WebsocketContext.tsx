@@ -116,8 +116,16 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // URL validation guards against build-time env vars that were undefined
   const shouldConnect = !forceDisconnected && !!accessToken && isValidWebsocketUrl(url);
 
-  const { sendJsonMessage, readyState } = useBaseWebsocket(shouldConnect ? url : null, {
-    queryParams: { token: accessToken as string },
+  // Mint a fresh single-use connect ticket per (re)connect and carry it in the
+  // URL instead of the session JWT, so the long-lived credential never lands in
+  // proxy/CDN/access logs. `getUrl` re-invokes this on every reconnect and
+  // retries on its own backoff if the mint throws.
+  const getWebsocketUrl = useCallback(async () => {
+    const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket');
+    return `${url}?ticket=${encodeURIComponent(data.ticket)}`;
+  }, [url]);
+
+  const { sendJsonMessage, readyState } = useBaseWebsocket(shouldConnect ? getWebsocketUrl : null, {
     shouldReconnect: () => !didUnmount.current,
     retryOnError: true,
     share: true,

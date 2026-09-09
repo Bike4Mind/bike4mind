@@ -10,19 +10,23 @@ vi.unmock('@/app/contexts/WebsocketContext');
 // Shared, hoisted so the vi.mock factories below can reference them.
 const h = vi.hoisted(() => ({
   capturedOptions: { current: null as unknown as Record<string, (arg: unknown) => void> },
-  capturedUrls: [] as (string | null)[],
+  capturedUrls: [] as (string | (() => Promise<string>) | null)[],
+  capturedUrl: { current: null as unknown as string | (() => Promise<string>) | null },
   readyState: 1 as number, // ReadyState.OPEN
   probeIdentity: vi.fn(),
   queryClient: {} as unknown,
+  apiGet: vi.fn(),
+  apiPost: vi.fn(),
   accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
 }));
 
 // Capture the url + options react-use-websocket is called with on every render (esp.
-// onOpen/onClose, and whether url dips to null - the reconnect-pulse signal) and return a
-// stable stub instead of opening a real socket.
+// onOpen/onClose, whether url dips to null - the reconnect-pulse signal - and the per-connect
+// url getter) and return a stable stub instead of opening a real socket.
 vi.mock('react-use-websocket', () => ({
   ReadyState: { UNINSTANTIATED: -1, CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
-  useBaseWebsocket: (url: string | null, options: Record<string, (arg: unknown) => void>) => {
+  useBaseWebsocket: (url: string | (() => Promise<string>) | null, options: Record<string, (arg: unknown) => void>) => {
+    h.capturedUrl.current = url;
     h.capturedOptions.current = options;
     h.capturedUrls.push(url);
     return { sendJsonMessage: vi.fn(), readyState: h.readyState, lastJsonMessage: null };
@@ -43,6 +47,7 @@ vi.mock('@client/app/utils/sessionBootstrap', () => ({
 
 // isPublicPath treats only /login as public.
 vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: h.apiGet, post: h.apiPost },
   isPublicPath: (p: string) => p === '/login',
 }));
 
@@ -329,5 +334,32 @@ describe('WebsocketProvider - reconnect recovery on a token change (no focus eve
     });
 
     expect(h.capturedUrls).not.toContain(null);
+  });
+});
+
+describe('WebsocketProvider - connect URL carries a single-use ticket, never the JWT', () => {
+  beforeEach(() => {
+    h.apiPost.mockReset();
+    h.apiPost.mockResolvedValue({ data: { ticket: 'ticket-abc' } });
+    h.capturedUrl.current = null;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+  });
+
+  const mountAndGetUrlGetter = () => {
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    return h.capturedUrl.current;
+  };
+
+  it('passes a url getter (not a static url) so a fresh ticket is minted per connect', () => {
+    expect(typeof mountAndGetUrlGetter()).toBe('function');
+  });
+
+  it('mints a ticket and returns a URL carrying ?ticket= and no token=', async () => {
+    const getUrl = mountAndGetUrlGetter() as () => Promise<string>;
+    const resolved = await getUrl();
+    expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket');
+    expect(resolved).toBe('wss://example/ws?ticket=ticket-abc');
+    expect(resolved).not.toContain('token=');
   });
 });
