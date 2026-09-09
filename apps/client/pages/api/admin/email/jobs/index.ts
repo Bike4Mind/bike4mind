@@ -3,6 +3,7 @@ import { EmailJobStatus, EmailJobOverallStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
+import { assertParseableDate } from '@server/utils/dateParam';
 
 const RecipientFilterSchema = z
   .object({
@@ -37,6 +38,9 @@ const handler = baseApi()
       startDate?: string;
       endDate?: string;
     };
+
+    assertParseableDate('startDate', startDate);
+    assertParseableDate('endDate', endDate);
 
     const result = await emailJobRepository.listJobs({
       page: parseInt(page, 10),
