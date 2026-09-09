@@ -9,7 +9,8 @@
     "./migrate/migrationManager": "./migrate/migrationManager.ts",
     "./help/types": "./help/types.ts",
     "./help/utils": "./help/utils.ts",
-    "./help/loadHelpArticles": "./help/loadHelpArticles.ts"
+    "./help/loadHelpArticles": "./help/loadHelpArticles.ts",
+    "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
   "scripts": {
     "test": "vitest run",
