@@ -13,7 +13,8 @@
 import { organizationRepository } from '@bike4mind/database/infra';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
-import { IUserDocument } from '@bike4mind/common';
+import { resolveActiveOrg } from './resolveActiveOrg';
+import type { Request } from 'express';
 
 /**
  * Verify user has update access to the organization
@@ -58,67 +59,39 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
- * Verify the user may bill an organization's credit pool.
+ * Resolve the organization to bill for an AI action from a client-supplied value, rejecting any org
+ * the caller is not a member of. This is the trust boundary for the LLM/media routes, which
+ * otherwise pass `req.body.organizationId` through to the debit unverified.
  *
- * Broader than `verifyOrgAccess` (owner/manager/admin only): any member may spend
- * the org's credits, so this also accepts membership via the authoritative `users[]`
- * ACL (see the OrganizationModel schema comment - `users[]` is the membership source
- * of truth; `userDetails[]` is only a per-member credit side-table). Returns the same
- * NotFoundError for missing and unauthorized orgs to prevent enumeration.
- *
- * @throws BadRequestError if orgId is malformed
- * @throws NotFoundError if the org does not exist or the caller is not a member
- */
-export async function assertOrgBillingAccess(user: { id: string; isAdmin: boolean }, orgId: string) {
-  if (!orgId || !isValidObjectId(orgId)) {
-    throw new BadRequestError('Invalid organization ID');
-  }
-
-  const org = await organizationRepository.findById(orgId);
-  if (!org) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  if (user.isAdmin) {
-    return org;
-  }
-
-  const isOwner = org.userId === user.id;
-  const isManager = org.managerId === user.id;
-  const isMember = org.users?.some(u => u.userId === user.id) ?? false;
-
-  if (!isOwner && !isManager && !isMember) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  return org;
-}
-
-/**
- * Resolve the organization to bill for an AI action from a client-supplied value,
- * rejecting any org the caller is not a member of. This is the trust boundary for
- * the LLM/media routes, which otherwise pass `req.body.organizationId` through to the
- * debit unverified.
- *
- * - `undefined`  -> the caller's own organization (their `organizationId`, trusted), or null
  * - `null`       -> personal account (no org billing)
- * - an org id    -> billed only if it is the caller's own org or one they are a member of;
- *                   a non-member gets NotFoundError (see `assertOrgBillingAccess`)
+ * - `undefined`  -> the caller's own organization (their `organizationId`), or null if they have none
+ * - an org id    -> the client-supplied billing target
+ *
+ * The resolved org (own-org fallback included) is validated through `resolveActiveOrg` - the ONE
+ * place a route turns a client-supplied active org into a trusted scope - so billing authorization
+ * can't drift from data-lake scoping (both must use the same shareable ACL gate), and a stale
+ * `organizationId` (e.g. a since-revoked member's, before revokeAccess clears it) can't silently
+ * keep billing an org the caller no longer belongs to. `resolveActiveOrg` throws ForbiddenError /
+ * NotFoundError for a non-member or missing org.
  */
 export async function resolveBillingOrgId(
-  user: Pick<IUserDocument, 'id' | 'isAdmin' | 'organizationId'>,
+  // Accept any authenticated request shape: the LLM/media routes type `req` with a narrowed `Params`
+  // generic that a bare `Request` would reject, and only `req.user` is needed here (and by the gate).
+  req: Pick<Request, 'user'>,
   requestedOrgId: string | null | undefined
 ): Promise<string | null> {
-  const ownOrgId = user.organizationId?.toString() ?? null;
-
-  if (requestedOrgId === undefined) {
-    return ownOrgId;
-  }
-  // personal (null) or the caller's own org carry no cross-tenant risk
-  if (requestedOrgId === null || requestedOrgId === ownOrgId) {
-    return requestedOrgId;
+  // Explicit personal (null) carries no cross-tenant risk and skips org billing entirely.
+  if (requestedOrgId === null) {
+    return null;
   }
 
-  await assertOrgBillingAccess(user, requestedOrgId);
-  return requestedOrgId;
+  // undefined -> fall back to the caller's own org; anything else is the client-supplied target.
+  const orgId = requestedOrgId ?? req.user?.organizationId?.toString() ?? null;
+  if (orgId === null) {
+    return null;
+  }
+
+  // The caller always hands us a full express request (these are authenticated routes); the cast
+  // just bridges `Pick<Request, 'user'>` back to the `Request` the shared gate is typed against.
+  return (await resolveActiveOrg(req as Request, orgId)) ?? null;
 }

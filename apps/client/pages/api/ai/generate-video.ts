@@ -40,7 +40,7 @@ const handler = baseApi().post(async (req: GenerateVideoRequest, res) => {
 
     // Resolve the billing org from the client-supplied value, rejecting any org the caller is
     // not a member of. null = personal account, undefined = fall back to the caller's own org.
-    const effectiveOrgId = await resolveBillingOrgId(req.user, invokeParams.organizationId);
+    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
     const invokeBody: GenerateVideoInvokeParams = {
       ...invokeParams,

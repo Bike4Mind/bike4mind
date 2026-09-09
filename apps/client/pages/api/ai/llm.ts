@@ -101,7 +101,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // Resolve the billing org from the client-supplied value, rejecting any org the caller is
     // not a member of (a bare body value would otherwise let A bill B's credit pool).
     // null = personal account, undefined = fall back to the caller's own org.
-    const effectiveOrgId = await resolveBillingOrgId(req.user, invokeParams.organizationId);
+    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
     const quest = await chatCompletion.invoke({
       body: {

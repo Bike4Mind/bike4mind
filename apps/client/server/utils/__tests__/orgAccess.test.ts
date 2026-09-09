@@ -1,19 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { ForbiddenError } from '@bike4mind/common';
 
 const mockFindById = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
 }));
 
-import { verifyOrgAccess, assertOrgBillingAccess, resolveBillingOrgId } from '../orgAccess';
+// resolveBillingOrgId delegates the membership decision to the canonical org gate; mock it so this
+// suite verifies only the tri-state routing and that the gate is consulted (the gate itself has its
+// own tests in resolveActiveOrg.test.ts).
+const mockResolveActiveOrg = vi.fn();
+vi.mock('../resolveActiveOrg', () => ({
+  resolveActiveOrg: (...a: unknown[]) => mockResolveActiveOrg(...a),
+}));
+
+import { verifyOrgAccess, resolveBillingOrgId } from '../orgAccess';
 
 // Valid 24-hex ObjectId strings (pass Types.ObjectId round-trip validation).
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const MANAGER = '650000000000000000000222';
 const STRANGER = '650000000000000000000333';
-const MEMBER = '650000000000000000000444';
 const OTHER_ORG = '650000000000000000000def';
 
 const org = { id: ORG, userId: OWNER, managerId: MANAGER };
@@ -61,73 +69,43 @@ describe('verifyOrgAccess', () => {
   });
 });
 
-// `users[]` is the authoritative membership ACL (see OrganizationModel schema comment).
-const orgWithMember = { id: ORG, userId: OWNER, managerId: MANAGER, users: [{ userId: MEMBER }] };
-
-describe('assertOrgBillingAccess', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindById.mockResolvedValue(orgWithMember);
-  });
-
-  it('rejects an invalid ObjectId without touching the DB', async () => {
-    await expect(assertOrgBillingAccess({ id: OWNER, isAdmin: false }, 'nope')).rejects.toBeInstanceOf(BadRequestError);
-    expect(mockFindById).not.toHaveBeenCalled();
-  });
-
-  it('grants a plain member (via users[]), unlike verifyOrgAccess', async () => {
-    const result = await assertOrgBillingAccess({ id: MEMBER, isAdmin: false }, ORG);
-    expect(result).toBe(orgWithMember);
-  });
-
-  it('grants owner and manager', async () => {
-    await expect(assertOrgBillingAccess({ id: OWNER, isAdmin: false }, ORG)).resolves.toBe(orgWithMember);
-    await expect(assertOrgBillingAccess({ id: MANAGER, isAdmin: false }, ORG)).resolves.toBe(orgWithMember);
-  });
-
-  it('404s a non-member (same error as missing, to prevent enumeration)', async () => {
-    await expect(assertOrgBillingAccess({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
-  });
-
-  it('404s when the org does not exist', async () => {
-    mockFindById.mockResolvedValue(null);
-    await expect(assertOrgBillingAccess({ id: MEMBER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
-  });
-});
-
 describe('resolveBillingOrgId', () => {
-  const user = { id: MEMBER, isAdmin: false, organizationId: ORG };
+  const asReq = (user: Record<string, unknown>) => ({ user }) as never;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFindById.mockResolvedValue(orgWithMember);
   });
 
-  it('returns the caller own org when the request omits an org (undefined), without a DB check', async () => {
-    await expect(resolveBillingOrgId(user, undefined)).resolves.toBe(ORG);
-    expect(mockFindById).not.toHaveBeenCalled();
+  it('returns null (personal) for an explicit null request, without consulting the gate', async () => {
+    await expect(resolveBillingOrgId(asReq({ id: OWNER, organizationId: ORG }), null)).resolves.toBeNull();
+    expect(mockResolveActiveOrg).not.toHaveBeenCalled();
   });
 
-  it('returns null (personal) when the request explicitly passes null, without a DB check', async () => {
-    await expect(resolveBillingOrgId(user, null)).resolves.toBeNull();
-    expect(mockFindById).not.toHaveBeenCalled();
+  it('returns null when no org is supplied and the caller has no home org', async () => {
+    await expect(resolveBillingOrgId(asReq({ id: STRANGER, organizationId: null }), undefined)).resolves.toBeNull();
+    expect(mockResolveActiveOrg).not.toHaveBeenCalled();
   });
 
-  it('short-circuits the caller own org id without a membership DB read', async () => {
-    await expect(resolveBillingOrgId(user, ORG)).resolves.toBe(ORG);
-    expect(mockFindById).not.toHaveBeenCalled();
+  it('validates the caller home org through the canonical gate when the request omits one', async () => {
+    mockResolveActiveOrg.mockResolvedValue(ORG);
+    const req = asReq({ id: OWNER, organizationId: ORG });
+    await expect(resolveBillingOrgId(req, undefined)).resolves.toBe(ORG);
+    expect(mockResolveActiveOrg).toHaveBeenCalledWith(req, ORG);
   });
 
-  it('verifies membership for any other client-supplied org, rejecting a non-member', async () => {
-    // stranger tries to bill an org they do not belong to
-    const stranger = { id: STRANGER, isAdmin: false, organizationId: null };
-    await expect(resolveBillingOrgId(stranger, OTHER_ORG)).rejects.toBeInstanceOf(NotFoundError);
-    expect(mockFindById).toHaveBeenCalledWith(OTHER_ORG);
+  it('validates a client-supplied org through the canonical gate', async () => {
+    mockResolveActiveOrg.mockResolvedValue(OTHER_ORG);
+    const req = asReq({ id: OWNER, organizationId: ORG });
+    await expect(resolveBillingOrgId(req, OTHER_ORG)).resolves.toBe(OTHER_ORG);
+    expect(mockResolveActiveOrg).toHaveBeenCalledWith(req, OTHER_ORG);
   });
 
-  it('allows a valid member to bill an org other than their own after a membership check', async () => {
-    const user2 = { id: MEMBER, isAdmin: false, organizationId: null };
-    await expect(resolveBillingOrgId(user2, ORG)).resolves.toBe(ORG);
-    expect(mockFindById).toHaveBeenCalledWith(ORG);
+  it('propagates the gate rejection - even a stale home-org field cannot silently keep billing', async () => {
+    // A since-revoked member whose organizationId still points at the org: the gate rejects, and the
+    // billing path must surface that rather than trusting the stale field.
+    mockResolveActiveOrg.mockRejectedValue(new ForbiddenError('not a member'));
+    await expect(resolveBillingOrgId(asReq({ id: STRANGER, organizationId: ORG }), undefined)).rejects.toBeInstanceOf(
+      ForbiddenError
+    );
   });
 });
