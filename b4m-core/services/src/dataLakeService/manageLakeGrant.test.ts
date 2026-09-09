@@ -117,6 +117,19 @@ describe('grantLakeAccess', () => {
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
+  it('refuses re-roling an existing owner grant down, which would un-transfer the lake', async () => {
+    // The requested role is a legal 'curator', so only the check against the EXISTING row catches
+    // this. Without it a curator could demote the owner through the routine sharing door.
+    const { adapters, upsertGrant } = makeAdapters({
+      grants: curatorGrants,
+      existing: grantRow({ principalId: 'theOwner', role: 'owner' }),
+    });
+    await expect(
+      grantLakeAccess(curator, 'lake1', { principalType: 'user', principalId: 'theOwner', role: 'curator' }, adapters)
+    ).rejects.toThrow(/transfer ownership/i);
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
   it('refuses an org grant naming another org', async () => {
     const { adapters, upsertGrant } = makeAdapters();
     await expect(

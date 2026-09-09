@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
-import { refuseGrantRevoke, refuseGrantWrite } from './lakeGrantWriteRule';
+import { refuseGrantWrite, refuseOwnerGrantChange } from './lakeGrantWriteRule';
 
 const lake = (organizationId?: string): Pick<IDataLakeDocument, 'organizationId'> =>
   ({ organizationId }) as Pick<IDataLakeDocument, 'organizationId'>;
@@ -73,13 +73,16 @@ describe('refuseGrantWrite', () => {
   });
 });
 
-describe('refuseGrantRevoke', () => {
-  it('refuses revoking an ownership grant, which would silently un-transfer the lake', () => {
-    expect(refuseGrantRevoke({ role: 'owner' })).toMatch(/transfer ownership/i);
+describe('refuseOwnerGrantChange', () => {
+  it('refuses touching an ownership grant, which would silently un-transfer the lake', () => {
+    // Covers BOTH doors: a revoke, and a re-role down to curator that refuseGrantWrite cannot see
+    // because the role it is handed is a perfectly legal 'curator'.
+    expect(refuseOwnerGrantChange({ role: 'owner' })).toMatch(/transfer ownership/i);
   });
 
-  it('admits revoking a curator or reader', () => {
-    expect(refuseGrantRevoke({ role: 'curator' })).toBeNull();
-    expect(refuseGrantRevoke({ role: 'reader' })).toBeNull();
+  it('admits touching a curator or reader row, and a principal with no row at all', () => {
+    expect(refuseOwnerGrantChange({ role: 'curator' })).toBeNull();
+    expect(refuseOwnerGrantChange({ role: 'reader' })).toBeNull();
+    expect(refuseOwnerGrantChange(null)).toBeNull();
   });
 });

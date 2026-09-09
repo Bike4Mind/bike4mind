@@ -61,16 +61,20 @@ export function refuseGrantWrite(
 }
 
 /**
- * The refusal rule for a revoke: an `owner`-role grant is the lake's ownership, so dropping it here
- * would silently un-transfer the lake and leave it falling back to `createdByUserId` - a change of
- * owner made through a door that never named one. Ownership moves by transfer, or not at all.
+ * The refusal rule for touching a grant that ALREADY EXISTS, applied by both doors.
  *
- * Takes the EXISTING row rather than the request, because the caller cannot know a grant's role
- * before loading it; a request for a principal with no grant is a no-op, not a refusal.
+ * An `owner`-role row is the lake's ownership. Revoking it, or re-roling it down to curator/reader,
+ * both un-transfer the lake - `resolveEffectiveOwnerIds` falls back to `createdByUserId` or to
+ * whatever other owner grant remains - through a door that never named a successor. `refuseGrantWrite`
+ * cannot catch the re-role case: it sees only the REQUESTED role, which is a perfectly legal
+ * `curator`. So the check has to be made against the row being overwritten, which the caller can only
+ * know after loading it.
+ *
+ * A principal with no existing grant is not a refusal - there is nothing to protect.
  */
-export function refuseGrantRevoke(existing: Pick<LakeGrantWriteInput, 'role'>): string | null {
-  if (existing.role === 'owner') {
-    return 'This is an ownership grant; transfer ownership instead of revoking it';
+export function refuseOwnerGrantChange(existing: Pick<LakeGrantWriteInput, 'role'> | null): string | null {
+  if (existing?.role === 'owner') {
+    return 'This is an ownership grant; use transfer ownership to change it';
   }
   return null;
 }

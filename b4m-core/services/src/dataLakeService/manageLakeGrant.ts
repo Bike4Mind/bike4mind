@@ -11,7 +11,7 @@ import { canManageLake, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { grantChange } from './diffLakeConfig';
-import { refuseGrantRevoke, refuseGrantWrite } from './lakeGrantWriteRule';
+import { refuseGrantWrite, refuseOwnerGrantChange } from './lakeGrantWriteRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
@@ -128,6 +128,12 @@ export async function grantLakeAccess(
   // The persisted row, not the ACTIVE grant set: a lapsed grant is still the row being overwritten,
   // so it is the honest `before` for the audit and for the caller's result.
   const existing = await db.dataLakeAccessGrants.findGrant(lake.id, input.principalType, principalId);
+  // Checked against the ROW, not the request: refuseGrantWrite sees only the requested role, so a
+  // re-role of the owner down to curator would sail past it and quietly un-transfer the lake.
+  const ownerRefusal = refuseOwnerGrantChange(existing);
+  if (ownerRefusal) {
+    throw new BadRequestError(ownerRefusal);
+  }
 
   await db.dataLakeAccessGrants.upsertGrant({
     dataLakeId: lake.id,
@@ -174,7 +180,7 @@ export async function revokeLakeAccess(
   const existing = await db.dataLakeAccessGrants.findGrant(lake.id, input.principalType, input.principalId);
   if (!existing) return { revoked: false };
 
-  const refusal = refuseGrantRevoke(existing);
+  const refusal = refuseOwnerGrantChange(existing);
   if (refusal) {
     throw new BadRequestError(refusal);
   }
