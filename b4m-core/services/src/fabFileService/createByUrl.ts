@@ -1,4 +1,5 @@
 import {
+  DuplicateFabFileError,
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
@@ -13,29 +14,12 @@ import { fetchAndParseURL } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createFabFile, CreateFabFileAdapters } from './create';
 
-/**
- * Thrown by `createFabFileByUrl` when the adapter-supplied `checkDuplicate` finds a live match
- * for the fetched content's hash, BEFORE any row is created - so a caller that dedupes never
- * strands a row the way a create-then-check ordering would. A thrown error rather than a
- * changed return type: every other caller (the web URL door, the proposal-admission door)
- * never supplies `checkDuplicate` and so can never see this thrown, keeping their contract
- * exactly as it was before this existed.
- */
-export class DuplicateFabFileError extends Error {
-  constructor(
-    /** The already-live FabFile this fetch's content hash matches. */
-    public readonly existing: IFabFileDocument,
-    /** The title `fetchAndParseURL` resolved for THIS attempt - what the caller should name the skip. */
-    public readonly fetchedTitle: string
-  ) {
-    // Generic on purpose: this class is thrown for ANY `checkDuplicate` caller, not only the Slack
-    // data-lake path - a "data lake" specific message here would misdescribe a future caller that
-    // dedupes against something else. Callers that need lake-specific wording build it themselves
-    // (see `dataLakeLinkIngest.ts`'s catch, which never reads this message).
-    super('Duplicate content already exists');
-    this.name = 'DuplicateFabFileError';
-  }
-}
+// Re-exported for backward compatibility - callers importing `DuplicateFabFileError` from here
+// (directly, or via `fabFilesService`) keep working. Canonical definition now lives in
+// `@bike4mind/common` (see there for why): thrown here, but caught across a package boundary in
+// `apps/client`, so it needs one module identity rather than a per-caller `instanceof` that can
+// miss across module realms.
+export { DuplicateFabFileError };
 
 const createFabFileByUrlSchema = z.object({
   url: z
