@@ -1,7 +1,56 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Logger } from '@bike4mind/observability';
 import type { AgentResult } from '../../types';
-import { agentResultToActResult } from './reactAct';
+import type { Charter, DriveVector } from '../schemas';
+import { agentResultToActResult, createReActRunAct } from './reactAct';
+import type { ActContext } from './types';
 import { resolveToolbeltProfile, DEFAULT_TOOLBELT_ROLE } from './toolbelts';
+
+// Hoisted so the vi.mock factories (hoisted above imports) can reference them.
+const {
+  mockReplSessionCtor,
+  mockMakeCodeExecuteTool,
+  mockAgentRun,
+  mockSessionDispose,
+  mockRecordReplSandboxUnavailable,
+} = vi.hoisted(() => ({
+  // Captures the options the wake path asks for. Which executor it picks is the
+  // security posture of the whole deep-agent runtime, so it has to be observable.
+  mockReplSessionCtor: vi.fn(),
+  mockMakeCodeExecuteTool: vi.fn(() => ({ toolSchema: { name: 'code_execute' } })),
+  mockAgentRun: vi.fn(),
+  mockSessionDispose: vi.fn(),
+  mockRecordReplSandboxUnavailable: vi.fn(),
+}));
+
+// Spread the real modules rather than replacing them: these files export more
+// than the one symbol each (registry helpers, BudgetExceededError, ...) and a
+// bare factory would break any of them reached transitively.
+vi.mock('../../rlm/ReplSession', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../rlm/ReplSession')>()),
+  ReplSession: class {
+    constructor(opts: unknown) {
+      mockReplSessionCtor(opts);
+    }
+    setTools = vi.fn();
+    dispose = mockSessionDispose;
+  },
+}));
+vi.mock('../../rlm/codeExecuteTool', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../rlm/codeExecuteTool')>()),
+  makeCodeExecuteTool: mockMakeCodeExecuteTool,
+}));
+vi.mock('../../rlm/replSandboxMetrics', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../rlm/replSandboxMetrics')>()),
+  recordReplSandboxUnavailable: mockRecordReplSandboxUnavailable,
+}));
+vi.mock('../../ReActAgent', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../ReActAgent')>()),
+  ReActAgent: class {
+    on = vi.fn();
+    run = mockAgentRun;
+  },
+}));
 
 function agentResult(overrides: Partial<AgentResult> = {}): AgentResult {
   return {
@@ -78,5 +127,158 @@ describe('resolveToolbeltProfile', () => {
     // Default is a capable general web toolbelt (web-safe tools only).
     expect(profile.enabledToolNames).toContain('web_search');
     expect(profile.enabledToolNames).not.toContain('bash_execute');
+  });
+});
+
+// --- createReActRunAct: the wake path's sandbox wiring -----------------------
+// The `rlm-answer` route has the same pair of tests. Mirrored here because the
+// invariant is one identifier wide: flipping 'isolated' to 'in-process-unsafe'
+// compiles fine and would put LLM-authored code in the wake runtime's own realm,
+// next to the platform credentials this process holds.
+
+const NEUTRAL: DriveVector = {
+  curiosity: 0.5,
+  progress: 0.5,
+  social: 0.5,
+  novelty: 0.5,
+  caution: 0.5,
+  aesthetic: 0.5,
+};
+const ISO = '2026-06-08T12:00:00.000Z';
+
+function makeCharter(): Charter {
+  return {
+    identity: {
+      agentId: 'agent-1',
+      ownerUserId: 'owner-1',
+      name: 'Reproducer',
+      role: 'paper-repro',
+      instantiatedAt: ISO,
+      schemaVersion: 1,
+    },
+    goal: { description: 'Reproduce the target paper', successCriteria: [], deadlineKind: 'none' },
+    drives: { ...NEUTRAL },
+    subgoals: [],
+    semanticMemory: [],
+    currentTier: 'engineering-proxy',
+    openQuestions: [],
+    blockers: [],
+    sizeBudgetBytes: 8192,
+    version: 1,
+    updatedAt: ISO,
+  };
+}
+
+function makeLogger() {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+}
+
+function actContext(): ActContext {
+  return {
+    charter: makeCharter(),
+    policy: { actionKind: 'ideate', rationale: 'novelty low' },
+    drives: { ...NEUTRAL },
+  } as ActContext;
+}
+
+describe('createReActRunAct sandbox wiring', () => {
+  let logger: ReturnType<typeof makeLogger>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    logger = makeLogger();
+    mockMakeCodeExecuteTool.mockReturnValue({ toolSchema: { name: 'code_execute' } });
+    mockAgentRun.mockResolvedValue({
+      finalAnswer: 'done',
+      steps: [],
+      completionInfo: {
+        totalTokens: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        iterations: 1,
+        toolCalls: 0,
+        reachedMaxIterations: false,
+      },
+    });
+  });
+
+  function runAct() {
+    return createReActRunAct({
+      llm: {} as never,
+      model: 'global.anthropic.claude-sonnet-4-6',
+      logger: logger as unknown as Logger,
+      buildTools: async () => [],
+    })(actContext());
+  }
+
+  it('runs guest code in an isolated-vm isolate, never a shared-realm backend', async () => {
+    await runAct();
+
+    expect(mockReplSessionCtor).toHaveBeenCalledTimes(1);
+    // The literal 25_000 rather than an import of WAKE_PER_CALL_REPL_TIMEOUT_MS:
+    // importing the constant would assert it equals itself and move with any
+    // edit. A wake step has to stay under the 55s request cap to be observable
+    // at all, so the number is the invariant and belongs written out here.
+    expect(mockReplSessionCtor.mock.calls[0][0]).toMatchObject({
+      executor: 'isolated',
+      perCallTimeoutMs: 25_000,
+    });
+    expect(mockMakeCodeExecuteTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops code_execute but still completes the wake when the sandbox cannot be constructed', async () => {
+    // A missing native addon is the realistic cause. Dropping the tool costs the
+    // agent a capability; running it unsandboxed would cost the platform its
+    // secrets - so this must fail closed, not fall back to another backend.
+    mockReplSessionCtor.mockImplementationOnce(() => {
+      throw new Error('No native build was found for isolated-vm');
+    });
+
+    const result = await runAct();
+
+    expect(result.observations).toEqual([{ kind: 'final_answer', summary: 'done' }]);
+    expect(mockMakeCodeExecuteTool).not.toHaveBeenCalled();
+    expect(mockReplSessionCtor).toHaveBeenCalledTimes(1);
+    const starting = logger.info.mock.calls.find(c => String(c[0]).includes('starting'));
+    expect(starting?.[1]).toMatchObject({ codeExecute: false, tools: [] });
+    // The wake still answers, so the run itself reports nothing amiss. The
+    // metric is what makes a build-wide loss of the sandbox alarmable.
+    expect(mockRecordReplSandboxUnavailable).toHaveBeenCalledWith('wake', logger);
+  });
+
+  it('emits nothing when the sandbox builds, so the alarm tracks the degrade and not traffic', async () => {
+    await runAct();
+
+    expect(mockRecordReplSandboxUnavailable).not.toHaveBeenCalled();
+  });
+
+  // An isolate is an OS-level resource (its own V8 heap, plus host-side
+  // Reference handles that the guest isolate's own disposal does not reclaim).
+  // The wake runtime is long-lived, so a leak here accumulates per wake rather
+  // than being cleaned up by process exit.
+  it('disposes the isolate when the wake completes', async () => {
+    await runAct();
+
+    expect(mockSessionDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes the isolate even when the agent run throws', async () => {
+    mockAgentRun.mockRejectedValueOnce(new Error('llm exploded mid-trajectory'));
+
+    await expect(runAct()).rejects.toThrow('llm exploded mid-trajectory');
+
+    // The failure path is the one that matters: a wake that throws is exactly
+    // when nobody is around to clean up after it.
+    expect(mockSessionDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not attempt disposal when the sandbox was never constructed', async () => {
+    mockReplSessionCtor.mockImplementationOnce(() => {
+      throw new Error('No native build was found for isolated-vm');
+    });
+
+    await runAct();
+
+    expect(mockSessionDispose).not.toHaveBeenCalled();
   });
 });

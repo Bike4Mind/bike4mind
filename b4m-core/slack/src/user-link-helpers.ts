@@ -88,11 +88,12 @@ export function buildUserLinkRedirectUri(
  * Uses shared jwtStateStore utilities with algorithm pinning and OIDC claims
  * Token expires in 10 minutes
  */
-export function generateUserLinkStateToken(userId: string): string {
+export function generateUserLinkStateToken(userId: string, nonceHash?: string): string {
   const { jwtStateStore } = getSlackDeps();
   return jwtStateStore.createStateToken<{ userId: string }>(
     { audience: USER_LINK_AUDIENCE, expiresIn: '10m' },
-    { userId }
+    { userId },
+    nonceHash
   );
 }
 
@@ -111,9 +112,16 @@ export interface VerifyStateError {
  * Verify and decode a JWT state token
  * Uses shared jwtStateStore utilities with audience validation
  */
-export function verifyUserLinkStateToken(state: string): VerifyStateResult | VerifyStateError {
+export function verifyUserLinkStateToken(
+  state: string,
+  expectedNonceHash?: string | null
+): VerifyStateResult | VerifyStateError {
   const { jwtStateStore } = getSlackDeps();
-  const result = jwtStateStore.verifyStateToken<UserLinkStatePayload>(state, { audience: USER_LINK_AUDIENCE });
+  const result = jwtStateStore.verifyStateToken<UserLinkStatePayload>(
+    state,
+    { audience: USER_LINK_AUDIENCE },
+    expectedNonceHash
+  );
 
   if (result.valid) {
     return { valid: true, payload: result.payload };

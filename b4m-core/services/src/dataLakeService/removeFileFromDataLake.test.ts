@@ -111,6 +111,14 @@ describe('removeFileFromDataLake', () => {
       expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'f1' })
     );
     expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
-    expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
+    // false, and this is the point of reporting it: the removal stood but nothing recorded how to
+    // undo it, so a caller offering "undo" here would offer something that cannot work.
+    expect(result).toEqual({
+      success: true,
+      fileCount: 0,
+      totalSizeBytes: 0,
+      totalChunkedChars: 0,
+      restoreTokenMinted: false,
+    });
   });
 });

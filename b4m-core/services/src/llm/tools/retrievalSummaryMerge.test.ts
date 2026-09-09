@@ -161,6 +161,97 @@ describe('mergeRetrievalSummary', () => {
     });
   });
 
+  describe('injected volume', () => {
+    it('sums chunks and chars across two surfaces and keeps the best score', () => {
+      const merged = mergeRetrievalSummary(
+        base({ surfaces: ['forced-retrieval'], injected: { chunks: 3, chars: 900, topScore: 0.71 } }),
+        base({ surfaces: ['knowledgeBaseSearch'], injected: { chunks: 2, chars: 400, topScore: 0.88 } })
+      );
+      // Total volume the model received this turn - not the last writer's slice of it.
+      expect(merged?.injected).toEqual({ chunks: 5, chars: 1300, topScore: 0.88 });
+    });
+
+    it('stays absent when neither side reports a volume', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      // Absent must survive the merge: it means unknown, and a merge that manufactured a zero
+      // would report a starve on a turn nobody measured.
+      expect(merged?.injected).toBeUndefined();
+      expect(merged && 'injected' in merged).toBe(false);
+    });
+
+    it('passes a one-sided volume through in either argument order', () => {
+      const volume = { chunks: 4, chars: 1200, topScore: 0.6 };
+      // The 'failed'-surface case: a side with nothing to report must not erase what the other
+      // side measured, and must not be able to zero it either.
+      expect(mergeRetrievalSummary(base({ injected: volume }), base())?.injected).toEqual(volume);
+      expect(mergeRetrievalSummary(base(), base({ injected: volume }))?.injected).toEqual(volume);
+    });
+
+    it('preserves a recorded zero rather than collapsing it into absence', () => {
+      const merged = mergeRetrievalSummary(base({ injected: { chunks: 0, chars: 0 } }), base());
+      expect(merged?.injected).toEqual({ chunks: 0, chars: 0 });
+    });
+
+    it("does not let an absent score clobber the other side's", () => {
+      // Lake memory reports no topScore at all. If absence defaulted to 0 it would win any Math.max
+      // against a real negative cosine, and lose to a real positive one it should not be ranked
+      // against in the first place.
+      const merged = mergeRetrievalSummary(
+        base({ injected: { chunks: 1, chars: 100, topScore: -0.2 } }),
+        base({ injected: { chunks: 2, chars: 200 } })
+      );
+      expect(merged?.injected).toEqual({ chunks: 3, chars: 300, topScore: -0.2 });
+    });
+
+    it('omits topScore entirely when neither side has one', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injected: { chunks: 1, chars: 100 } }),
+        base({ injected: { chunks: 0, chars: 0 } })
+      );
+      expect(merged?.injected).toEqual({ chunks: 1, chars: 100 });
+      // Explicit-undefined would persist as a set-but-empty Mongoose path.
+      expect(merged?.injected && 'topScore' in merged.injected).toBe(false);
+    });
+
+    it('keeps volume alongside a worse outcome from another surface', () => {
+      const merged = mergeRetrievalSummary(
+        base({ outcome: 'ok', surfaces: ['forced-retrieval'], injected: { chunks: 12, chars: 4000 } }),
+        base({ outcome: 'failed', surfaces: ['knowledgeBaseSearch'] })
+      );
+      // outcome is worst-of, injected is sum-of-completions: the two can disagree in tone on a
+      // multi-surface turn, and both are true.
+      expect(merged?.outcome).toBe('failed');
+      expect(merged?.injected).toEqual({ chunks: 12, chars: 4000 });
+    });
+  });
+
+  describe('knowledgeBaseGuidanceInjected', () => {
+    it('preserves an explicit false through a merge that never asserts the field', () => {
+      // The regression this pins: `false || undefined` is undefined, so a boolean-OR merge would
+      // drop the A/B's control arm into the unrecorded bucket and quietly bias the comparison.
+      const merged = mergeRetrievalSummary(base({ knowledgeBaseGuidanceInjected: false }), base());
+      expect(merged?.knowledgeBaseGuidanceInjected).toBe(false);
+    });
+
+    it('preserves a true through a later tool-arm write', () => {
+      const merged = mergeRetrievalSummary(
+        base({ knowledgeBaseGuidanceInjected: true }),
+        base({ attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'] })
+      );
+      expect(merged?.knowledgeBaseGuidanceInjected).toBe(true);
+    });
+
+    it('stays absent when neither side recorded it', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'knowledgeBaseGuidanceInjected' in merged).toBe(false);
+    });
+
+    it('takes the incoming value when the existing side never recorded it', () => {
+      const merged = mergeRetrievalSummary(base(), base({ knowledgeBaseGuidanceInjected: false }));
+      expect(merged?.knowledgeBaseGuidanceInjected).toBe(false);
+    });
+  });
+
   describe('preauthorizedLakeIdsUsed', () => {
     it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
       const merged = mergeRetrievalSummary(

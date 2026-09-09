@@ -22,6 +22,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useKnowledgeModal } from '@client/app/components/Knowledge/KnowledgeModal';
+import { sanitizeHtmlStrict } from '@client/app/utils/htmlSanitizer';
 
 interface EmailAttachment {
   filename: string;
@@ -338,7 +339,7 @@ const EmailInboxTabContent = () => {
               ) : selectedEmail?.bodyText ? (
                 <Typography level="body-sm">{selectedEmail.bodyText}</Typography>
               ) : selectedEmail?.bodyHtml ? (
-                <Box dangerouslySetInnerHTML={{ __html: selectedEmail.bodyHtml }} />
+                <Box dangerouslySetInnerHTML={{ __html: sanitizeHtmlStrict(selectedEmail.bodyHtml) }} />
               ) : (
                 <Typography level="body-sm" sx={{ fontStyle: 'italic', color: 'text.tertiary' }}>
                   No email body content available

@@ -11,7 +11,7 @@ import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 import type { LakeGrant } from './manageRule';
 import { classifyLakeAccess } from './classifyLakeAccess';
 import {
-  grantedLakeIdsFor,
+  grantedLakeReachFor,
   resolveEnforceReadGrants,
   resolveLakeReadAccess,
   type LakeAccessLogger,
@@ -177,7 +177,14 @@ const resolveGrantHeldLakeBySlug = async (
   dataLakes: Pick<IDataLakeRepository, 'findBySlugAmongIds'>
 ): Promise<IDataLakeDocument | null> => {
   if (!dataLakeAccessGrants) return null;
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], dataLakeAccessGrants, false);
+  // Owner/curator only (includeReaders=false), so the reach's org half is always empty here - the
+  // user half is the whole set this slug retry may consider.
+  const { grantedLakeIds } = await grantedLakeReachFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    dataLakeAccessGrants,
+    false
+  );
   if (grantedLakeIds.length === 0) return null;
   return dataLakes.findBySlugAmongIds(slug, grantedLakeIds);
 };

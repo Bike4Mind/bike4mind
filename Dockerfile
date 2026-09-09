@@ -32,6 +32,9 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
 COPY apps ./apps
 COPY b4m-core ./b4m-core
 COPY packages ./packages
+# pnpm hashes every patchedDependencies entry during install, so a missing patches/
+# fails the install with ENOENT rather than silently skipping the patch.
+COPY patches ./patches
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 
 # ── Builder: build all @bike4mind/* packages, then the Next app (shim active) ─

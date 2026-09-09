@@ -42,7 +42,7 @@ describe('REPL substrate integration surface', () => {
       const sessionKey = `tavern-agent-${agentId}`;
 
       // Heartbeat 1: agent runs code that stores a fact
-      const session1 = getOrCreateReplSession({ sessionId: sessionKey });
+      const session1 = getOrCreateReplSession({ sessionId: sessionKey, executor: 'in-process-unsafe' });
       const tool1 = makeCodeExecuteTool({ session: session1 });
       const r1 = await tool1.toolFn({
         code: 'remembered_fact = "Alice prefers tea"; console.log("stored");',
@@ -50,7 +50,7 @@ describe('REPL substrate integration surface', () => {
       expect(r1).toContain('stored');
 
       // Heartbeat 2: same agent, fresh tool instance, but same session lookup
-      const session2 = getOrCreateReplSession({ sessionId: sessionKey });
+      const session2 = getOrCreateReplSession({ sessionId: sessionKey, executor: 'in-process-unsafe' });
       expect(session2).toBe(session1); // Registry returned the same instance
       const tool2 = makeCodeExecuteTool({ session: session2 });
       const r2 = await tool2.toolFn({
@@ -62,7 +62,7 @@ describe('REPL substrate integration surface', () => {
     it('disposing a session drops the persisted state — fresh start on next heartbeat', async () => {
       const sessionKey = 'tavern-agent-charlie';
 
-      const s1 = getOrCreateReplSession({ sessionId: sessionKey });
+      const s1 = getOrCreateReplSession({ sessionId: sessionKey, executor: 'in-process-unsafe' });
       const t1 = makeCodeExecuteTool({ session: s1 });
       await t1.toolFn({ code: 'inventory = ["potion", "rope"];' });
 
@@ -70,7 +70,7 @@ describe('REPL substrate integration surface', () => {
       disposeReplSession(sessionKey);
 
       // Fresh heartbeat after retire
-      const s2 = getOrCreateReplSession({ sessionId: sessionKey });
+      const s2 = getOrCreateReplSession({ sessionId: sessionKey, executor: 'in-process-unsafe' });
       expect(s2).not.toBe(s1);
       const t2 = makeCodeExecuteTool({ session: s2 });
       const r = await t2.toolFn({ code: 'console.log(typeof inventory);' });
@@ -78,8 +78,8 @@ describe('REPL substrate integration surface', () => {
     });
 
     it('different agents have isolated sessions', async () => {
-      const sBob = getOrCreateReplSession({ sessionId: 'tavern-agent-bob' });
-      const sAlice = getOrCreateReplSession({ sessionId: 'tavern-agent-alice' });
+      const sBob = getOrCreateReplSession({ sessionId: 'tavern-agent-bob', executor: 'in-process-unsafe' });
+      const sAlice = getOrCreateReplSession({ sessionId: 'tavern-agent-alice', executor: 'in-process-unsafe' });
 
       const tBob = makeCodeExecuteTool({ session: sBob });
       const tAlice = makeCodeExecuteTool({ session: sAlice });
@@ -132,7 +132,7 @@ describe('REPL substrate integration surface', () => {
 
   describe('tool slot-in shape (matches ICompletionOptionTools used by tavern)', () => {
     it('returns the contract ReActAgent expects: { toolFn, toolSchema: { name, description, parameters } }', () => {
-      const session = getOrCreateReplSession({ sessionId: 'shape-test' });
+      const session = getOrCreateReplSession({ sessionId: 'shape-test', executor: 'in-process-unsafe' });
       const tool = makeCodeExecuteTool({ session });
       expect(tool.toolSchema.name).toBe('code_execute');
       expect(typeof tool.toolSchema.description).toBe('string');
@@ -145,7 +145,7 @@ describe('REPL substrate integration surface', () => {
     });
 
     it('toolFn returns a string observation (matches what ReActAgent accumulates)', async () => {
-      const session = getOrCreateReplSession({ sessionId: 'string-test' });
+      const session = getOrCreateReplSession({ sessionId: 'string-test', executor: 'in-process-unsafe' });
       const tool = makeCodeExecuteTool({ session });
       const result = await tool.toolFn({ code: 'console.log("hi");' });
       expect(typeof result).toBe('string');

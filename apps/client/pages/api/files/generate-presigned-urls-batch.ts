@@ -9,6 +9,7 @@ import {
   KnowledgeType,
   type IDataLakeBatchFile,
   type IDataLakeDocument,
+  isLakeIngestable,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -54,9 +55,7 @@ const handler = baseApi().post(async (req: Request, res) => {
     dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
-    // Same rule as the batch-create door: only a draft (first batch) or active lake takes new
-    // files, so an archived/deleting one cannot be topped up through this entrance either.
-    if (dataLake.status !== 'draft' && dataLake.status !== 'active') {
+    if (!isLakeIngestable(dataLake.status)) {
       return res.status(400).json({ error: `Cannot upload into a data lake in '${dataLake.status}' status` });
     }
   }

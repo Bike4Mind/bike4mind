@@ -1,4 +1,5 @@
 import { ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
@@ -149,6 +150,25 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
           // Path A: direct file_id lookup
           if (file_id) {
+            // The model composes this id from conversation text, so it is routinely not an id at
+            // all - a filename token, an arXiv number. Mongoose casts `_id` and throws a CastError
+            // on those, and the catch below would then report a bad tool argument as a retrieval
+            // OUTAGE. Check the shape first and answer it as the single-file miss it is: same
+            // message and same 'ok' outcome as an out-of-scope or genuinely-missing id, which also
+            // tightens the existence-oracle invariant the branches below are careful about -
+            // "not even well-formed" is no longer distinguishable from "not found".
+            if (!isObjectIdShaped(file_id)) {
+              context.logger.log('📖 Knowledge Retrieve: file_id is not an ObjectId, answering as not-found', {
+                file_id,
+              });
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+                },
+              } as any);
+              return notFoundMsg(file_id);
+            }
+
             if (scope) {
               // Positive membership assertion BEFORE any DB lookup: an out-of-scope id never
               // touches the database, and the owner/shared access machinery below (including
@@ -611,12 +631,26 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           return prependRetrievedLakePrompts(context, result, datalakeTags, injectedLakeTags);
         } catch (error) {
           context.logger.error('❌ Knowledge Retrieve: Error during retrieval:', error);
+          // Backstop for the shape guard above, so the classification survives a future code path
+          // that hands another model-supplied id to Mongoose: a cast failure ON THE MODEL'S OWN
+          // file_id is a bad argument, not an outage, and must not spend the one telemetry field
+          // operators would page on. Matched by `value` rather than by name alone so a cast of a
+          // SERVER-side id (a corrupt row, a chunk read) still reports `failed`. Either way the
+          // throw is logged above, so both stay greppable.
+          const cast = error as { name?: string; value?: unknown };
+          const malformedFileId = file_id !== undefined && cast?.name === 'CastError' && cast.value === file_id;
           // A retrieval that threw must not be byte-identical to one never attempted (#1867).
           await context.statusUpdate({
             promptMeta: {
-              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+              retrieval: {
+                attempted: true,
+                outcome: malformedFileId ? 'ok' : 'failed',
+                surfaces: ['knowledgeBaseRetrieve'],
+                dataLakeTags: [],
+              },
             },
           } as any);
+          if (malformedFileId) return notFoundMsg(file_id);
           return 'An error occurred while retrieving document content. Please try again.';
         }
       },
@@ -630,7 +664,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             file_id: {
               type: 'string',
               description:
-                'The file ID to retrieve (from search_knowledge_base results). Most efficient for single-document retrieval.',
+                'The file ID to retrieve: the 24-character hex id shown as "(ID: ...)" in search_knowledge_base results. Not a filename, a title, or any identifier appearing in document text. Most efficient for single-document retrieval.',
             },
             tags: {
               type: 'array',

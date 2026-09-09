@@ -85,7 +85,7 @@ describe('resolveAccessibleLakes', () => {
   // an owner or curator grant was missing from every browse surface - articles, tag-counts, the
   // rlm-answer gate, and the file-access check in pages/api/files/[id] - while the read gate
   // admitted it. Non-admin only: listAllDataLakes never calls resolveEnforceReadGrants or
-  // grantedLakeIdsFor, so an admin already sees every draft/active lake with or without either
+  // grantedLakeReachFor, so an admin already sees every draft/active lake with or without either
   // adapter - passing them would just discard a wasted grant read (see the admin case below).
   it('threads the grants and settings adapters on the non-admin path', async () => {
     await resolveAccessibleLakes(asReq({ id: 'u1', tags: [] }));

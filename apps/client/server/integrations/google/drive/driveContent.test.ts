@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { drive_v3 } from 'googleapis';
+import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { walkFolder, fetchDriveFileContent } from './driveContent';
 import { FOLDER_MIME_TYPE, isDriveRateLimitError } from './driveClient';

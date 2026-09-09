@@ -215,7 +215,9 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
   // Resolved ONCE and handed to listDataLakes below as its precomputed set, rather than each
   // independently running the identical listByPrincipal query - listDataLakes' own includeReaders
   // is always false here too, since we deliberately never thread a settings adapter (see below).
-  const grantedLakeIdsArray = await dataLakeService.grantedLakeIdsFor(
+  // `false` keeps this to the USER owner/curator half, where the reach's org map is always empty -
+  // so the flat id list below is the whole set, and is what listDataLakes' precomputed option takes.
+  const { grantedLakeIds: grantedLakeIdsArray } = await dataLakeService.grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     params.deps.dataLakeAccessGrants,

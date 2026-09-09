@@ -8,9 +8,9 @@ const { ingestSlackFilesIntoLake, ingestSlackLinkIntoLake, buildSlackAccessConte
   ingestSlackLinkIntoLake: vi.fn(),
   buildSlackAccessContext: vi.fn(),
 }));
-const { listDataLakes, grantedLakeIdsFor } = vi.hoisted(() => ({
+const { listDataLakes, grantedLakeReachFor } = vi.hoisted(() => ({
   listDataLakes: vi.fn(),
-  grantedLakeIdsFor: vi.fn(),
+  grantedLakeReachFor: vi.fn(),
 }));
 
 vi.mock('@bike4mind/slack', () => ({
@@ -19,7 +19,7 @@ vi.mock('@bike4mind/slack', () => ({
   // neutralizes a Slack mrkdwn-injected fileName (e.g. "<!channel>") before it is interpolated.
   escapeSlackMrkdwn: (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeIdsFor } }));
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeReachFor } }));
 // Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
 // dispatch and reply composition only. Each path's own behavior has its own test file.
 vi.mock('./dataLakeIngestAuthz', () => ({ buildSlackAccessContext }));
@@ -52,7 +52,7 @@ const baseParams = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   buildSlackAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, userTags: [], entitlementKeys: [] });
-  grantedLakeIdsFor.mockResolvedValue([]);
+  grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: [], orgGrantedLakes: {} });
 });
 
 describe('handleDataLakeCommand', () => {
@@ -297,7 +297,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'granted-lake', slug: 'granted-only', name: 'Granted Only', canManage: true, organizationId: 'org-z' },
         ];
         listDataLakes.mockResolvedValue(catalog);
-        grantedLakeIdsFor.mockResolvedValue(['granted-lake']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['granted-lake'], orgGrantedLakes: {} });
 
         // Mirrors `add` by calling the SAME production ranking function `list` itself uses
         // (`slugTier`, exported from handleDataLakeCommand.ts) rather than a hand-rolled copy of
@@ -344,7 +344,7 @@ describe('handleDataLakeCommand', () => {
         listDataLakes.mockResolvedValue([
           { id: 'lake-1', slug: 'granted', name: 'Granted Lake', canManage: true, organizationId: 'org-b' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-1']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-1'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -356,7 +356,7 @@ describe('handleDataLakeCommand', () => {
         listDataLakes.mockResolvedValue([
           { id: 'lake-1', slug: 'ungranted', name: 'Ungranted Lake', canManage: true, organizationId: 'org-b' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue([]);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: [], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -370,7 +370,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'lake-own', slug: 'notes', name: 'Own Org Notes', canManage: true, organizationId: 'org-a' },
           { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-foreign']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-foreign'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -386,7 +386,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'lake-personal', slug: 'notes', name: 'Personal Notes', canManage: true },
           { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-foreign']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-foreign'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -401,7 +401,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'lake-b', slug: 'shared-grant', name: 'From Org B', canManage: true, organizationId: 'org-b' },
           { id: 'lake-a', slug: 'shared-grant', name: 'From Org A', canManage: true, organizationId: 'org-a-foreign' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-b', 'lake-a']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-b', 'lake-a'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 

@@ -26,7 +26,6 @@ import ImageMaskerFlux from './ImageMaskerFlux';
 import { ImageModerationPlaceholder } from './ImageModerationPlaceholder';
 import { SendMessageOptions } from '@client/app/utils/llm';
 import { blackAlpha, whiteAlpha } from '@client/app/utils/themes/colors';
-import { openInNewTab } from '@client/app/utils/externalLinks';
 
 // Add FabAPI interface
 interface FabAPI {
@@ -305,10 +304,18 @@ const ImageContainer: FC<ImageContainerProps> = ({
       } catch (clipboardError) {
         console.error('Clipboard API failed:', clipboardError);
 
-        // Fallback - open in new tab
+        // Fallback - force a download. Opening the blob URL via window.open would load it as a
+        // same-origin document (the app CSP allows blob: in script-src), so image bytes that are
+        // actually HTML/SVG would execute on the app origin.
         const url = URL.createObjectURL(blob);
-        openInNewTab(url);
-        toast.success('Image opened in a new tab. Right-click and select "Copy Image" to copy it.');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = getAssetFilename(freshUrl, blob);
+        a.click();
+        // Revoke on a later tick: a synchronous revoke can abort the download before the browser
+        // has read the blob.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        toast.success('Clipboard unavailable - image downloaded instead.');
       }
     } catch (error) {
       console.error('Failed to copy image: ', error);
