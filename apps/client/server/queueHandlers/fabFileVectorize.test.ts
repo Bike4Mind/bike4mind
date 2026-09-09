@@ -46,6 +46,8 @@ const h = vi.hoisted(() => ({
   organizationFindById: vi.fn(async () => null),
   recordOperationalUsage: vi.fn(async () => undefined),
   spendNotifier: vi.fn(async () => undefined),
+  notifySlackIndexingComplete: vi.fn(async () => undefined),
+  claimSlackIndexNotification: vi.fn(async () => true),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -76,6 +78,7 @@ vi.mock('@bike4mind/database', () => ({
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
     advanceVectorizeProgress: h.advanceVectorizeProgress,
+    claimSlackIndexNotification: h.claimSlackIndexNotification,
   },
   organizationRepository: { findById: h.organizationFindById },
   usageEventRepository: {},
@@ -109,6 +112,12 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+// #2027: its own dedicated unit tests (notifySlackIndexingComplete.test.ts) cover the resolution
+// chain and every skip case - mocked here so this suite's already-heavy @bike4mind/common mock
+// (no FabFileSourceType) doesn't have to grow just to satisfy a transitive import.
+vi.mock('@server/queueHandlers/notifySlackIndexingComplete', () => ({
+  notifySlackIndexingComplete: (...a: unknown[]) => h.notifySlackIndexingComplete(...a),
+}));
 vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
@@ -569,6 +578,10 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
+    h.claimSlackIndexNotification.mockResolvedValue(true);
+    // `vi.clearAllMocks()` above resets call history but NOT a mockRejectedValue/mockResolvedValue
+    // set by an earlier test - reset explicitly so one test's rejection can't leak into the next.
+    h.notifySlackIndexingComplete.mockResolvedValue(undefined);
   });
 
   it('a rejecting sendToClient does not prevent the batch claim/increment from completing', async () => {
@@ -577,6 +590,43 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('#2027: notifies Slack on completion, and a rejection does not prevent the batch claim/increment', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.notifySlackIndexingComplete.mockRejectedValue(new Error('slack unreachable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimSlackIndexNotification).toHaveBeenCalledWith('ff1');
+    expect(h.notifySlackIndexingComplete).toHaveBeenCalledWith(unvectorizedFile('batch-1'), mockLogger);
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('#2027: skips the Slack notification, without failing, when the claim is already taken (redelivery)', async () => {
+    // Proves "at most once": a redelivered or concurrent completion message for the same file
+    // must not post the reply a second time, even though the rest of completion still proceeds.
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.claimSlackIndexNotification.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimSlackIndexNotification).toHaveBeenCalledWith('ff1');
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('#2027: a rejecting claim does not prevent the batch claim/increment from completing', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.claimSlackIndexNotification.mockRejectedValue(new Error('db unreachable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
   });
