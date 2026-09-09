@@ -165,6 +165,26 @@ export function isDataLakeCommand(parsed: ParsedAgentCommand): boolean {
 }
 
 /**
+ * Matches the literal word "datalake" at the start of the message (after optional Slack user
+ * mentions), with no `@` - e.g. "datalake list". Anchored the same way as
+ * `DATA_LAKE_MENTION_PATTERN` so a leading `@datalake` can never match this pattern too (a literal
+ * `@` immediately before "datalake" fails the no-`@` requirement here), and an unrelated sentence
+ * that merely mentions the product by name elsewhere in the message is never treated as an attempt
+ * to invoke it. Deliberately just the word - no fuzzy misspelling matching.
+ */
+const BARE_DATA_LAKE_MENTION_PATTERN = /^(?:<@[^>]+>\s*)*datalake\b/i;
+
+/**
+ * True when a message names "datalake" without the `@` that would route it to the deterministic
+ * handler - e.g. `datalake list` - so the caller can reply with a usage hint instead of letting it
+ * fall through to the general LLM assistant path. Never true for a real `@datalake` command: the
+ * anchoring means a leading `@datalake` can only ever match `DATA_LAKE_MENTION_PATTERN`, not this.
+ */
+export function looksLikeBareDataLakeMention(parsed: ParsedAgentCommand): boolean {
+  return BARE_DATA_LAKE_MENTION_PATTERN.test(parsed.rawText.trim());
+}
+
+/**
  * Parse the `@datalake` subcommand grammar (v1):
  *   @datalake add [to <lake>] <link>
  *   @datalake add <link> [to <lake>]
