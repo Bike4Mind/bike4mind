@@ -20,6 +20,9 @@ const h = vi.hoisted(() => ({
   buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({
     vectorizeEnqueueFailedAt: { $lt: cutoff },
   })),
+  // A getter, so a test can make the RESOURCE READ itself fault - which is the thing that used to be
+  // swallowed once per candidate. Defaults to the working url.
+  queueResourceThrows: false,
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -67,7 +70,14 @@ vi.mock('@bike4mind/services', () => ({
       }),
   },
 }));
-vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
+vi.mock('sst', () => ({
+  Resource: {
+    get fabFileChunkQueue() {
+      if (h.queueResourceThrows) throw new Error('Resource "fabFileChunkQueue" is not linked');
+      return { url: 'http://elasticmq/fabFileChunkQueue' };
+    },
+  },
+}));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 // Only the filters are stubbed; buildChunkRescueMessage stays real so the payload shape this
 // sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
@@ -274,8 +284,29 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
 
   beforeEach(() => {
     vi.clearAllMocks();
+    h.queueResourceThrows = false;
     h.sendToQueue.mockResolvedValue(undefined);
     withCandidates([]);
+  });
+
+  it('lets an unlinked queue fail the pass ONCE rather than per candidate', async () => {
+    // The resource read used to sit inside the per-file `try`, so a config fault was caught once per
+    // candidate: up to CHUNK_SCAN_BATCH identical error lines a minute on the 60s tick, `sent` stuck
+    // at 0, and the summary log gated on `sent > 0` so nothing aggregate fired. A hard misconfiguration
+    // was indistinguishable from ordinary SQS throttling. Hoisted above the fan-out, it escapes to the
+    // driver's catch.
+    h.queueResourceThrows = true;
+    withCandidates([
+      { _id: 'ff1', userId: 'u1' },
+      { _id: 'ff2', userId: 'u2' },
+      { _id: 'ff3', userId: 'u3' },
+    ]);
+
+    await expect(runRescue()).rejects.toThrow(/not linked/);
+
+    // Not once per file, which is the whole point.
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('runs regardless of auto-chunk', async () => {

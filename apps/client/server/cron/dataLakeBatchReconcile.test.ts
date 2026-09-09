@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  queueResourceThrows: false,
   findStuck: vi.fn(),
   reconcile: vi.fn(),
   findStuckTaxonomy: vi.fn(),
@@ -61,7 +62,15 @@ vi.mock('@bike4mind/observability', () => {
 });
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%', STAGE: 'dev' } }));
 vi.mock('sst', () => ({
-  Resource: { App: { stage: 'dev' }, fabFileChunkQueue: { url: 'http://sqs/fabFileChunkQueue' } },
+  Resource: {
+    App: { stage: 'dev' },
+    // A getter, so a test can fault the RESOURCE READ itself - the thing that used to be swallowed
+    // once per candidate. Defaults to the working url.
+    get fabFileChunkQueue() {
+      if (h.queueResourceThrows) throw new Error('Resource "fabFileChunkQueue" is not linked');
+      return { url: 'http://sqs/fabFileChunkQueue' };
+    },
+  },
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/worker/chunkRescueSweep', () => ({
@@ -88,6 +97,7 @@ const TIMEOUT = 180 * 60 * 1000;
 
 describe('dataLakeBatchReconcile cron handler', () => {
   beforeEach(() => {
+    h.queueResourceThrows = false;
     vi.clearAllMocks();
     h.recordRun.mockResolvedValue(undefined);
     h.recordForced.mockResolvedValue(undefined);
@@ -100,6 +110,10 @@ describe('dataLakeBatchReconcile cron handler', () => {
     // that makes sendToQueue reject leaks that into every test after it in file order.
     h.getSettingsValue.mockResolvedValue(false);
     h.sendToQueue.mockResolvedValue(undefined);
+    // Same reason as sendToQueue above, and the same leak: a test that makes the un-chunked sweep
+    // reject otherwise leaves that rejection in place for every test after it in file order, which
+    // shows up as a stray 'un-chunked rescue sweep failed' line in an unrelated test's log assertions.
+    h.runSweep.mockResolvedValue({ enqueued: 0, failed: 0 });
     h.fabFileFind.mockReturnValue({
       select: () => ({ limit: () => ({ lean: async () => [] }) }),
     });
@@ -241,6 +255,30 @@ describe('dataLakeBatchReconcile cron handler', () => {
       h.findStuck.mockResolvedValue([]);
       h.reconcile.mockResolvedValue([]);
       routeFind([]);
+    });
+
+    it('lets an unlinked queue fail the sweep ONCE rather than per candidate', async () => {
+      // The resource read used to sit inside the per-file `try`, so a config fault was caught once per
+      // candidate and `sent` stayed 0 - a hard misconfiguration arriving as a run of ordinary-looking
+      // send failures. Hoisted above the fan-out, it escapes the sweep instead. MUST STAY IN SYNC with
+      // the self-host twin's identical case in chunkRescueSweep.test.ts.
+      h.queueResourceThrows = true;
+      routeFind([
+        { _id: 'ff1', userId: 'u1' },
+        { _id: 'ff2', userId: 'u2' },
+        { _id: 'ff3', userId: 'u3' },
+      ]);
+
+      const res = await handler();
+
+      // ONE aggregate line from the sweep's own `.catch`, not one per candidate. That is the whole
+      // point: three identical per-file lines made a config fault look like ordinary send failures.
+      expect(h.loggerError).toHaveBeenCalledTimes(1);
+      expect(h.loggerError).toHaveBeenCalledWith(expect.stringContaining('stranded-vectorize rescue sweep failed'));
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      // The run still heartbeats and reports, so the rest of the cron is unaffected.
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(0);
+      expect(h.recordRun).toHaveBeenCalled();
     });
 
     it('re-enqueues files whose vectorize hand-off was stranded, regardless of auto-chunk', async () => {
