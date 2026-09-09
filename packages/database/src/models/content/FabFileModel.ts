@@ -2717,7 +2717,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from
-    // the client-supplied byte hash in `contentHash`.
+    // `contentHash` - which is NOT one consistent hash domain: the attachment door hashes the raw
+    // uploaded buffer, while the URL door (#2027) hashes extracted text, and both write the same
+    // field. A file added once as an attachment and once as a link is therefore not caught as a
+    // duplicate by `contentHash` alone.
     serverTextHash: { type: String },
     batchId: { type: String },
     relativePath: { type: String },
