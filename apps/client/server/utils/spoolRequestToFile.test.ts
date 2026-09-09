@@ -37,6 +37,17 @@ describe('spoolRequestToFile', () => {
     expect(existsSync(leaked!)).toBe(false);
   });
 
+  it('keeps a traversing filename inside the temp directory', async () => {
+    // Today's callers pass literals, so this is defence in depth for the next one.
+    const spooled = await spoolRequestToFile(bodyOf('x'), 1024, { filename: '../../escaped.zip' });
+    try {
+      expect(spooled.path.endsWith('/escaped.zip')).toBe(true);
+      expect(spooled.path).not.toContain('..');
+    } finally {
+      await spooled.cleanup();
+    }
+  });
+
   it('cleanup removes the file and is safe to call twice', async () => {
     const spooled = await spoolRequestToFile(bodyOf('data'), 1024);
     await spooled.cleanup();
