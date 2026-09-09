@@ -706,6 +706,80 @@ describe('DataLakeRepository.findBySlug', () => {
     const resolved = await dataLakeRepository.findBySlug('shared-slug', ['org-b', 'org-a']);
     expect(resolved?.organizationId).toBe('org-a');
   });
+
+  // #2425 review: null and '' are both stored as "org-less" but are distinct index keys, so two
+  // org-less lakes CAN share a slug - this had no tie-break at all before this fix.
+  it('resolves org-less lakes deterministically when organizationId is null vs empty string', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'orgless-tie', organizationId: '', createdByUserId: 'someone' }));
+    await dataLakeRepository.create(baseLake({ slug: 'orgless-tie', createdByUserId: 'someone-else' }));
+
+    const resolved = await dataLakeRepository.findBySlug('orgless-tie');
+
+    // Both are legitimately org-less; the assertion is determinism (same winner every call),
+    // not which one - repeat to catch a naive unsorted `$in` returning either at random.
+    for (let i = 0; i < 3; i++) {
+      expect((await dataLakeRepository.findBySlug('orgless-tie'))?.createdByUserId).toBe(resolved?.createdByUserId);
+    }
+  });
+});
+
+describe('DataLakeRepository.findBySlugAmongIds', () => {
+  setupMongoTest();
+
+  // #2425: a lake scoped to an org the caller does NOT belong to is invisible to `findBySlug`'s
+  // own-org and org-less arms. A real owner/curator grant on it (e.g. after a cross-org
+  // transferLakeOwnership) is still legitimate access, so `assertLakeAccess` resolves the
+  // caller's granted lake ids itself and retries here, with this method taking the id set as an
+  // already-resolved argument rather than a thunk (#2425 review - keeps the "when to pay for the
+  // extra grants query" decision in the service layer, not hidden inside this repository method).
+  it('resolves a foreign-org lake by slug when the given id set includes it', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake', [created.id]);
+
+    expect(resolved?.id).toBe(created.id);
+  });
+
+  it('returns null when the given id set is empty - no enumeration widening', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake-2', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake-2', []);
+
+    expect(resolved).toBeNull();
+  });
+
+  it('returns null when no id in the given set matches the slug - no enumeration widening', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'foreign-org-lake-3', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('foreign-org-lake-3', [
+      new mongoose.Types.ObjectId().toString(),
+    ]);
+
+    expect(resolved).toBeNull();
+  });
+
+  it('resolves the lowest lake id when two granted lakes across different orgs share a slug', async () => {
+    // Mirrors the own-org arm's N5 test above: input order deliberately reversed from the
+    // expected winner so a naive "first in ids" bug (rather than the sort) would fail.
+    const second = await dataLakeRepository.create(
+      baseLake({ slug: 'shared-grant-slug', organizationId: 'org-b', createdByUserId: 'org-b-owner' })
+    );
+    const first = await dataLakeRepository.create(
+      baseLake({ slug: 'shared-grant-slug', organizationId: 'org-a', createdByUserId: 'org-a-owner' })
+    );
+    const [lower, higher] = [first.id, second.id].sort();
+
+    const resolved = await dataLakeRepository.findBySlugAmongIds('shared-grant-slug', [second.id, first.id]);
+
+    expect(resolved?.id).toBe(lower);
+    expect(resolved?.id).not.toBe(higher);
+  });
 });
 
 describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)', () => {
@@ -835,6 +909,113 @@ describe('DataLakeRepository - lake-memory extraction lease + continuation curso
     await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
     expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
   });
+
+  describe('fence-guarded cursor write', () => {
+    it('advances the cursor while the fence still matches the snapshot', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('refuses the write once a purge has moved the fence', async () => {
+      // The race the guard exists for: the extraction snapshotted an unpurged fence, a purge landed and
+      // cleared the cursor, and the unguarded write would reinstate it - sending the next build past
+      // documents whose beliefs the purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, new Date('2026-03-01T00:00:00Z'));
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(false);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('accepts the write when the snapshot carries the SAME earlier purge', async () => {
+      // A lake purged before the run started is a normal build, not a race. Comparing against a
+      // hardcoded null instead of the snapshot would lock out exactly these lakes.
+      const lake = await makeLake();
+      const purgedAt = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, purgedAt);
+
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', purgedAt)).toBe(true);
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+    });
+
+    it('reports false for a lake that no longer exists', async () => {
+      expect(
+        await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(new mongoose.Types.ObjectId().toString(), 'd', null)
+      ).toBe(false);
+    });
+
+    it('reports true when re-writing the cursor value it already holds', async () => {
+      // `matchedCount`, not `modifiedCount`: mongo may elide a self-valued $set, so a modified-count
+      // guard would report a lost race on a write that in fact succeeded.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+      expect(await dataLakeRepository.setLakeMemoryCursorIfFenceUnmoved(lake.id, 'doc-42', null)).toBe(true);
+    });
+  });
+
+  describe('purge fence', () => {
+    it('stamps the fence and clears the continuation cursor in one write', async () => {
+      // Both halves matter: the stamp stops an in-flight run, and the cleared cursor is what makes
+      // the NEXT build start from the beginning instead of resuming past documents whose facts the
+      // purge destroyed.
+      const lake = await makeLake();
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+
+      const at = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, at);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(at.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('moves the fence forward on a later purge', async () => {
+      const lake = await makeLake();
+      const first = new Date('2026-03-01T00:00:00Z');
+      const second = new Date('2026-03-02T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, first);
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, second);
+
+      expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryPurgedAt?.getTime()).toBe(second.getTime());
+    });
+
+    it('never moves the fence backwards, so a late write cannot undo a newer purge', async () => {
+      // The write is `$max`, not `$set`. Two purges racing on one lake would otherwise let the later
+      // WRITE land the earlier TIMESTAMP, and the field is the honest answer to "when was this last
+      // purged". The cursor clear is unconditional either way - it is not part of the comparison.
+      const lake = await makeLake();
+      const newer = new Date('2026-03-02T00:00:00Z');
+      const older = new Date('2026-03-01T00:00:00Z');
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, newer);
+      await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-7');
+
+      await dataLakeRepository.stampLakeMemoryPurge(lake.id, older);
+
+      const after = await dataLakeRepository.findById(lake.id);
+      expect(after?.lakeMemoryPurgedAt?.getTime()).toBe(newer.getTime());
+      expect(after?.lakeMemoryCursor ?? null).toBeNull();
+    });
+
+    it('reads back a never-purged lake as existing with no stamp', async () => {
+      const lake = await makeLake();
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: true, purgedAt: null });
+    });
+
+    it('reports a deleted lake as absent, which the extractor treats as a purge', async () => {
+      // A vanished document and a never-purged one both have no stamp, and they mean opposite things
+      // to a running extraction: the deletion sweep shreds the profile before it deletes the record,
+      // so `exists: false` has to stop the run rather than read as "nothing has happened".
+      const lake = await makeLake();
+      await dataLakeRepository.delete(lake.id);
+      expect(await dataLakeRepository.getLakeMemoryFence(lake.id)).toEqual({ exists: false, purgedAt: null });
+    });
+
+    it('reports a fence read for an id that never existed as absent, not a throw', async () => {
+      const gone = new mongoose.Types.ObjectId().toString();
+      expect(await dataLakeRepository.getLakeMemoryFence(gone)).toEqual({ exists: false, purgedAt: null });
+    });
+  });
 });
 
 describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {
@@ -918,6 +1099,56 @@ describe('DataLakeBatchRepository.updateIfActive - guarded multi-field transitio
     await dataLakeBatchRepository.updateIfActive(batch.id, { status: 'uploading', failedFiles: 7 });
     const fresh = await dataLakeBatchRepository.findById(batch.id);
     expect(fresh?.failedFiles).toBe(0);
+  });
+});
+
+describe('DataLakeBatchRepository.setTotalFilesIfActive - re-plan plus the write-off (#2394)', () => {
+  setupMongoTest();
+
+  const activeBatch = () =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 500 } as never);
+
+  // The field has to exist in BOTH the entity type and the Mongoose schema or the $set is dropped on
+  // write with no error, leaving the narrowed total behind and nothing recording what it wrote off.
+  // Asserting on a re-read, not the returned doc, is the point: only the re-read proves it persisted.
+  it('persists the deferred count alongside the narrowed total', async () => {
+    const batch = await activeBatch();
+
+    const settled = await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 3, 497);
+    expect(settled?.totalFiles).toBe(3);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.totalFiles).toBe(3);
+    expect(fresh?.deferredFiles).toBe(497);
+  });
+
+  // The mid-chain RAISE omits the argument, and must not stamp a zero over a count a settle wrote (or,
+  // symmetrically, claim a write-off it did not make).
+  it('leaves the deferred count untouched when the caller omits it', async () => {
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 3, 497);
+
+    await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 600);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.totalFiles).toBe(600);
+    expect(fresh?.deferredFiles).toBe(497);
+  });
+
+  it('defaults the deferred count to zero on a batch no chain ever wrote off', async () => {
+    const batch = await activeBatch();
+    expect((await dataLakeBatchRepository.findById(batch.id))?.deferredFiles).toBe(0);
+  });
+
+  it('is a no-op on a terminal batch, so a settled batch cannot be re-planned', async () => {
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const settled = await dataLakeBatchRepository.setTotalFilesIfActive(batch.id, 3, 497);
+    expect(settled).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.totalFiles).toBe(500);
+    expect(fresh?.deferredFiles).toBe(0);
   });
 });
 

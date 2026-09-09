@@ -25,8 +25,11 @@ export interface TestLakeScopeDialogProps {
   /** The lake whose settings modal opened this dialog - checked by default. */
   anchorLakeId: string;
   onClose: () => void;
-  /** One `datalakeTag` per checked lake, the exact shape `retrievalTags` expects. */
-  onConfirm: (retrievalTags: string[]) => void;
+  /**
+   * `retrievalTags`: one `datalakeTag` per checked lake. `preauthorizedLakeIds`: the ids of the
+   * checked lakes this caller may ADMIT (see below) - a subset, frequently empty.
+   */
+  onConfirm: (scope: { retrievalTags: string[]; preauthorizedLakeIds: string[] }) => void;
   confirming?: boolean;
 }
 
@@ -66,6 +69,17 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
   // error branch.
   const selectedTags = useMemo(
     () => (lakes ?? []).filter(l => selected.has(l.id)).map(l => l.datalakeTag),
+    [lakes, selected]
+  );
+
+  // The manage-but-not-member admission: without it a maintainer who is neither the lake's creator
+  // nor in its org tests the lake and gets an empty retrieval, which is the bug this dialog exists
+  // to expose. Filtered on `canPreauthorize`, NOT `canManage` - the latter includes the
+  // platform-admin rung, which /api/sessions/create refuses with a 403, so sending it would turn a
+  // degraded-but-working button into a hard failure. Ids the caller cannot admit are simply omitted;
+  // the route re-authorizes every id it does receive, so this filter is an affordance, not the gate.
+  const preauthorizedLakeIds = useMemo(
+    () => (lakes ?? []).filter(l => selected.has(l.id) && l.canPreauthorize).map(l => l.id),
     [lakes, selected]
   );
 
@@ -142,7 +156,7 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
           <Button
             loading={confirming}
             disabled={selectedTags.length === 0 || isError}
-            onClick={() => onConfirm(selectedTags)}
+            onClick={() => onConfirm({ retrievalTags: selectedTags, preauthorizedLakeIds })}
             data-testid="test-lake-scope-confirm-btn"
           >
             Start test chat

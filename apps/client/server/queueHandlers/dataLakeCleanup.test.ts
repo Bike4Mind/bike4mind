@@ -12,12 +12,21 @@ const h = vi.hoisted(() => ({
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   releaseDriveConnectionForLake: vi.fn(),
+  stampLakeMemoryPurge: vi.fn(),
+  shredPrincipalMemory: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
+  dataLakeRepository: {
+    releasePurgingToDeleted: h.releasePurgingToDeleted,
+    stampLakeMemoryPurge: h.stampLakeMemoryPurge,
+  },
+  memoryLedgerRepository: {},
+  memoryPrincipalKeyRepository: {},
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: {},
+  dataLakeResearchConfigRepository: {},
+  dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
@@ -30,6 +39,8 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpen
 vi.mock('@server/integrations/google/drive/common', () => ({
   releaseDriveConnectionForLake: h.releaseDriveConnectionForLake,
 }));
+vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));
+vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 
 import { dispatch } from './dataLakeCleanup';
 
@@ -57,6 +68,10 @@ describe('dataLakeCleanup consumer', () => {
           // so an unwired repo is a silent no-op that typechecks forever. This is the only place
           // that can tell "swept" from "never ran".
           lakeMembershipDecisions: expect.anything(),
+          // And the research slice (#1682), reached through `?.` for the same reason: a saved config
+          // targeting a purged lake could only ever fail, and its run history has no reader left.
+          dataLakeResearchConfigs: expect.anything(),
+          dataLakeResearchRuns: expect.anything(),
         }),
         logger,
       })
@@ -108,6 +123,46 @@ describe('dataLakeCleanup consumer', () => {
     await dispatch(makeEvent(payload), {} as never, logger);
     await h.cleanup.mock.calls[0][2].releaseDriveConnection({ dataLakeId: 'lake1' });
     expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('folder claim'), expect.anything());
+  });
+
+  it('shreds the lake memory profile and raises the purge fence, in that order', async () => {
+    // Two halves of one erase. The shred destroys the DEK; the fence is what stops an extraction
+    // ALREADY in flight from re-appending facts under a fresh key. `exists: false` is not enough on
+    // its own here: the lake record survives until the last step of the sweep, several unbounded
+    // chunked deletes later, so without the stamp the run keeps writing for that whole window.
+    h.cleanup.mockResolvedValue(undefined);
+    h.shredPrincipalMemory.mockResolvedValue(3);
+    h.stampLakeMemoryPurge.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+
+    await h.cleanup.mock.calls[0][2].shredMemory({ datalakeTag: 'datalake:acme', ownerUserId: 'owner1' });
+
+    expect(h.shredPrincipalMemory).toHaveBeenCalled();
+    // The fence lives on the lake DOCUMENT, so it is keyed by `_id` - and the port is only handed
+    // the tag, which makes passing the wrong identifier the easy mistake to make here.
+    expect(h.stampLakeMemoryPurge).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(h.shredPrincipalMemory.mock.invocationCallOrder[0]).toBeLessThan(
+      h.stampLakeMemoryPurge.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('does not fail the sweep when the fence stamp itself fails', async () => {
+    // Ordered shred-first on purpose: by the time the stamp runs the irreversible half has already
+    // succeeded, so rethrowing here would DLQ a purge that really did destroy the profile.
+    h.cleanup.mockResolvedValue(undefined);
+    h.shredPrincipalMemory.mockResolvedValue(3);
+    h.stampLakeMemoryPurge.mockRejectedValue(new Error('mongo down'));
+    await dispatch(makeEvent(payload), {} as never, logger);
+
+    await expect(
+      h.cleanup.mock.calls[0][2].shredMemory({ datalakeTag: 'datalake:acme', ownerUserId: 'owner1' })
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not raise the purge fence'),
+      expect.objectContaining({ dataLakeId: 'lake1' })
+    );
+    // Still logged as shredded, because it WAS shredded - that log is the retention artifact.
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('crypto-shredded'), expect.anything());
   });
 
   it('releases an accepted purge its own guard refused, and says so at ERROR (#1744)', async () => {

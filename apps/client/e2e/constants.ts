@@ -9,6 +9,14 @@ export const MODEL_SEARCH_DEBOUNCE_MS = 600;
  */
 export const MONITORED_MODELS = ['Claude 4.7 Opus', 'GPT-5.5'] as const;
 
+/**
+ * Spec-user key for the second account the notebook-export-bytes suite imports as. The round trip
+ * has to cross an ownership boundary, so the suite needs two users; notebook-export-bytes.setup.ts
+ * creates this one and the spec switches to it mid-test. Shared here rather than exported from the
+ * setup file, which registers a setup test on import.
+ */
+export const NOTEBOOK_EXPORT_IMPORTER_KEY = 'notebookExportBytesImporter';
+
 /** Centralized timeout constants for E2E tests (in milliseconds). */
 export const TIMEOUTS = {
   /** Short UI transitions and state settling */

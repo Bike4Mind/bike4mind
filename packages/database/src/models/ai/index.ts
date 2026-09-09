@@ -13,6 +13,8 @@ export * from './EmbeddingCacheModel';
 export * from './LakeAccessEventModel';
 export * from './DataLakeSpendNotificationModel';
 export * from './DataLakeProposalModel';
+export * from './DataLakeResearchConfigModel';
+export * from './DataLakeResearchRunModel';
 export * from './LakeAccessQueryTextModel';
 export * from './LakeConfigChangeEventModel';
 export * from './LakeMembershipDecisionModel';

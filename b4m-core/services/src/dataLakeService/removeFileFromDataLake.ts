@@ -12,7 +12,7 @@ import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 /** How long a removal's restore record stays live - see `lakeMembershipRemovals` below. */
 const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
 
-interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
+export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
   // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared
   // rather than merely spread at the route because the type is the only place the requirement is
   // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`

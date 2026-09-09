@@ -73,6 +73,38 @@ describe('resolveIngestSpendScope', () => {
     expect(scope).toEqual({});
   });
 
+  it('meters a prefix-only static-registry member, which carries neither a batchId nor a meta-tag', async () => {
+    // The population Rebuild Passages newly selects: a registry lake's prefix arm is most of the
+    // lake, and those files carry no `datalake:*` tag at all. Matching the meta-tag alone left them
+    // resolving to null - no throughput window, no period budget and no ledger row - so widening
+    // the rebuild scope without this would have put most of the wave outside the gate.
+    const db = deps();
+    const scope = await resolveIngestSpendScope(
+      { id: 'f1', userId: 'user1', tags: [{ name: 'opti:pumps' }] },
+      db as never
+    );
+    expect(scope).toEqual({});
+    expect(scope).not.toBeNull();
+  });
+
+  it('reads the prefix arm off the registry, so a non-member with a namespaced tag is still not lake work', async () => {
+    const db = deps();
+    const scope = await resolveIngestSpendScope(
+      { id: 'f1', userId: 'user1', tags: [{ name: 'personal:pumps' }] },
+      db as never
+    );
+    expect(scope).toBeNull();
+  });
+
+  it('prefers the DB-backed lake over a registry prefix match, keeping the run and lake meters', async () => {
+    const db = deps({ lakes: [lake('lake1', { fileTagPrefix: 'opti:' })] });
+    const scope = await resolveIngestSpendScope(
+      { id: 'f1', userId: 'user1', tags: [{ name: 'opti:pumps' }] },
+      db as never
+    );
+    expect(scope).toEqual({ dataLakeId: 'lake1' });
+  });
+
   it('prefers the DB-backed lake when a file carries both a static and a real lake tag', async () => {
     const db = deps({ byTag: lake('lake1') });
     const scope = await resolveIngestSpendScope(

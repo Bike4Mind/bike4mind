@@ -1,10 +1,11 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { extractLakeMemoryForBatch } from '@server/dataLakes/extractLakeMemory';
 import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
-import { adminSettingsRepository } from '@bike4mind/database';
+import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import { z, ZodError } from 'zod';
+import type { Logger } from '@bike4mind/observability';
 
 const LakeMemoryPayload = z.object({
   batchId: z.string(),
@@ -14,7 +15,38 @@ const LakeMemoryPayload = z.object({
   // the chain length (LAKE_MEMORY_MAX_CONTINUATION_SLICES) so a huge lake cannot chain unbounded. Absent
   // on the finalize enqueue, so it defaults to 0.
   slice: z.number().int().nonnegative().default(0),
+  /**
+   * Start this chain from the top of the lake, discarding any parked continuation cursor. Set only by
+   * the manual build door; continuations below re-enqueue without it and so resume normally.
+   */
+  restart: z.boolean().default(false),
 });
+
+/**
+ * Drop a continuation cursor left by an earlier slice when the chain ends for a reason that will never
+ * produce another run.
+ *
+ * A parked cursor is not inert bookkeeping: the health state reads `building` from a lease OR a
+ * non-null cursor, precisely so the gap between two slices of a live chain still reads as busy. When a
+ * chain instead STOPS here - the kill-switch flipped, or the lake opted out - nothing will ever clear
+ * that cursor, so the lake reads `building` forever and a UI that hides its build control while
+ * building leaves no way out. Clearing costs only a full re-scan next time, which the ledger's
+ * semantic de-dup already makes safe and cheap.
+ *
+ * Best-effort: this runs after the drop decision, so a failure must not resurrect work the flag just
+ * stopped. The next build clears the cursor itself, so a missed clear self-heals.
+ */
+async function clearParkedCursor(dataLakeId: string, why: string, logger: Logger): Promise<void> {
+  try {
+    await dataLakeRepository.setLakeMemoryCursor(dataLakeId, null);
+  } catch (err) {
+    logger.warn(
+      `[lakeMemory] could not clear the continuation cursor after ${why}; the lake may read as ` +
+        `building until its next build: ${err instanceof Error ? err.message : String(err)}`,
+      { dataLakeId }
+    );
+  }
+}
 
 /**
  * Background lake-memory extraction for a data-lake batch (#1440 producer), triggered once by
@@ -43,12 +75,43 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.info('[lakeMemory] EnableLakeMemory is off; dropping queued extraction', {
         dataLakeId: payload.dataLakeId,
       });
+      await clearParkedCursor(payload.dataLakeId, 'the platform flag went off', logger);
+      return;
+    }
+
+    // Per-lake re-check, same shape and the same reason as the platform-flag check above: a manager
+    // can disable a lake's memory mid-chain (up to 20 further slices), and without this the chain keeps
+    // billing LLM work for a lake that no longer wants it. Deliberately NOT `.catch(() => false)` for
+    // the same reason as the flag check - a failed lookup is not a resolved false; let it throw so SQS
+    // retries this attempt instead of silently dropping real work over a transient Mongo blip.
+    const lake = await dataLakeRepository.findById(payload.dataLakeId);
+    if (!lake) {
+      // Distinct from an opt-out, and worth its own line: a lake that no longer exists is a deleted
+      // lake, not a manager's choice, and reporting the two identically sent an operator looking for
+      // a setting nobody had changed. No cursor to clear either - the document is gone.
+      logger.info('[lakeMemory] lake no longer exists; dropping queued extraction', {
+        dataLakeId: payload.dataLakeId,
+      });
+      return;
+    }
+    if (!lake.lakeMemoryEnabled) {
+      logger.info('[lakeMemory] lake memory disabled for this lake; dropping queued extraction', {
+        dataLakeId: payload.dataLakeId,
+        lakeMemoryEnabled: lake.lakeMemoryEnabled ?? null,
+      });
+      await clearParkedCursor(payload.dataLakeId, 'this lake opted out', logger);
       return;
     }
 
     const { hasMore } = await extractLakeMemoryForBatch(
       // Real Lambda clock, so the deadline guard accounts for cold start and time already spent.
-      { dataLakeId: payload.dataLakeId, getRemainingTimeInMillis: () => context.getRemainingTimeInMillis() },
+      // Optional-chained for the same reason as `dataLakeResearchRun`: a Context shim without the
+      // method must degrade to "no deadline", not to a TypeError mid-batch.
+      {
+        dataLakeId: payload.dataLakeId,
+        restart: payload.restart,
+        getRemainingTimeInMillis: () => context?.getRemainingTimeInMillis?.() ?? Number.MAX_SAFE_INTEGER,
+      },
       logger
     );
 

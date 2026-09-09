@@ -197,4 +197,201 @@ describe('MemoryLedgerRepository', () => {
     const n = await memoryLedgerRepository.markSourceShredded('user', 'u1', 'u1', 'doc-9');
     expect(n).toBe(0);
   });
+
+  describe('aggregateLakeMemoryCoverage', () => {
+    it('reports factCount, sourceDocumentCount and lastBuiltAt for a lake with a surviving chain', async () => {
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:acme',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'L0',
+          subject: 'fact-a',
+          sources: ['doc-1'],
+          at: '2026-09-01T00:00:00.000Z',
+        })
+      );
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:acme',
+          ownerUserId: 'owner1',
+          seq: 1,
+          hash: 'L1',
+          prevHash: 'L0',
+          subject: 'fact-b',
+          sources: ['doc-1', 'doc-2'],
+          at: '2026-09-02T00:00:00.000Z',
+        })
+      );
+
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:acme', 'owner1');
+      expect(coverage.factCount).toBe(2);
+      expect(coverage.sourceDocumentCount).toBe(2); // doc-1 and doc-2, deduplicated across events
+      expect(coverage.lastBuiltAt).toBe('2026-09-02T00:00:00.000Z');
+    });
+
+    it('reports zero coverage for a lake whose ledger is entirely shredded (a purged lake has no profile)', async () => {
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:purged',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'P0',
+          subject: 'fact-a',
+          sources: ['doc-1'],
+        })
+      );
+      await memoryLedgerRepository.markShredded('lake', 'lake:purged', 'owner1');
+
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:purged', 'owner1');
+      expect(coverage).toEqual({ lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 });
+    });
+
+    it('reports zero coverage for a lake with no ledger events at all', async () => {
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:none', 'owner1');
+      expect(coverage).toEqual({ lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 });
+    });
+
+    it('excludes a shredded event from the count while a surviving event on the same principal still counts', async () => {
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:mixed',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'M0',
+          subject: 'fact-shredded',
+          sources: ['doc-shredded'],
+          at: '2026-09-01T00:00:00.000Z',
+          shredded: true,
+        })
+      );
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:mixed',
+          ownerUserId: 'owner1',
+          seq: 1,
+          hash: 'M1',
+          prevHash: 'M0',
+          subject: 'fact-surviving',
+          sources: ['doc-surviving'],
+          at: '2026-09-02T00:00:00.000Z',
+        })
+      );
+
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:mixed', 'owner1');
+      expect(coverage.factCount).toBe(1);
+      expect(coverage.sourceDocumentCount).toBe(1);
+      expect(coverage.lastBuiltAt).toBe('2026-09-02T00:00:00.000Z');
+    });
+
+    it('does not let an unrelated principalId or principalKind leak into the aggregate', async () => {
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:target',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'T0',
+          subject: 'fact-target',
+          sources: ['doc-target'],
+          at: '2026-09-01T00:00:00.000Z',
+        })
+      );
+      // A different lake principal - must not contribute to lake:target's aggregate.
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:other',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'O0',
+          subject: 'fact-other',
+          sources: ['doc-other'],
+          at: '2026-09-05T00:00:00.000Z',
+        })
+      );
+      // Same principalId, but a different principalKind - must not contribute either.
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'user',
+          principalId: 'lake:target',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'U0',
+          subject: 'fact-user',
+          sources: ['doc-user'],
+          at: '2026-09-06T00:00:00.000Z',
+        })
+      );
+
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:target', 'owner1');
+      expect(coverage.factCount).toBe(1);
+      expect(coverage.sourceDocumentCount).toBe(1);
+      expect(coverage.lastBuiltAt).toBe('2026-09-01T00:00:00.000Z');
+    });
+  });
+
+  describe('distinctSurvivingPrincipalIds', () => {
+    it('returns only principalIds of the given kind that have at least one non-shredded event', async () => {
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({ principalKind: 'lake', principalId: 'lake:has-facts', ownerUserId: 'owner1', seq: 0, hash: 'A0' })
+      );
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:all-shredded',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'B0',
+        })
+      );
+      await memoryLedgerRepository.markShredded('lake', 'lake:all-shredded', 'owner1');
+      // A different principalKind must not leak into the 'lake' result.
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({ principalKind: 'user', principalId: 'lake:has-facts', ownerUserId: 'owner1', seq: 0, hash: 'C0' })
+      );
+
+      const ids = await memoryLedgerRepository.distinctSurvivingPrincipalIds('lake');
+      expect(ids).toEqual(['lake:has-facts']);
+    });
+
+    it('returns empty when every lake chain has been fully shredded', async () => {
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({ principalKind: 'lake', principalId: 'lake:purged', ownerUserId: 'owner1', seq: 0, hash: 'D0' })
+      );
+      await memoryLedgerRepository.markShredded('lake', 'lake:purged', 'owner1');
+
+      expect(await memoryLedgerRepository.distinctSurvivingPrincipalIds('lake')).toEqual([]);
+    });
+
+    it('lists a principalId once even when multiple surviving events share it', async () => {
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:multi-event',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'E0',
+        })
+      );
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:multi-event',
+          ownerUserId: 'owner1',
+          seq: 1,
+          hash: 'E1',
+          prevHash: 'E0',
+        })
+      );
+
+      const ids = await memoryLedgerRepository.distinctSurvivingPrincipalIds('lake');
+      expect(ids).toEqual(['lake:multi-event']);
+    });
+  });
 });
