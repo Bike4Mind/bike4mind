@@ -12,7 +12,7 @@ import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
 import { resolveAccessibleLakes } from '@server/dataLakes';
-import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
+import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS, SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**
  * POST /api/data-lakes/rlm-answer
@@ -197,6 +197,21 @@ const handler = baseApi()
         // (`run_error: TIMEOUT`, no answer) instead of costing the agent one step
         // it can see in an observation and route around.
         perCallTimeoutMs: PER_CALL_REPL_TIMEOUT_MS,
+        // The dispatch bound a tool gets is `min(toolTimeoutMs, run time
+        // left)`, so it shrinks as the run proceeds and crosses under
+        // SUB_LLM_HTTP_TIMEOUT_MS about 7s in. Past that point the dispatcher
+        // would abandon the await while the provider call is still
+        // generating: the reservation settles after `getUsage()` has been
+        // snapshotted below and the session disposed, so the spend is booked
+        // where nobody reads it, and the guest sees a call that never settled
+        // with budget left to retry it. Two provider calls, one recorded.
+        //
+        // Only `subAgentQuery` carries a floor. The read tools also bound
+        // themselves (TOOL_HTTP_TIMEOUT_MS), but an abandoned lookup costs a
+        // wasted fetch and still surfaces as an attributable dispatcher
+        // error - refusing those late in a run would reject calls that
+        // ordinarily finish in under a second.
+        executorOptions: { toolMinBudgetMs: { subAgentQuery: SUB_LLM_HTTP_TIMEOUT_MS } },
         budget: {
           maxExecutions: parsed.budget?.max_executions ?? 25,
           maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,

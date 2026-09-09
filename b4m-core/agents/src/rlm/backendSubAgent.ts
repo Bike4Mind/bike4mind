@@ -8,10 +8,18 @@ import type { ReplSession } from './ReplSession';
  * existing `ICompletionBackend` - typically a Bedrock-routed Haiku
  * tier resolved by `resolveModelTiers()` in the tavern.
  *
- * This is the production-shape sub-LLM factory. It does NOT use the
- * Anthropic SDK directly (the alternate `subAgentQuery` in
- * `tools.ts` does that for spike convenience); it routes through the
- * same backend the rest of the agent already uses, which means:
+ * NOT the deployed sub-LLM factory, despite what this docblock used to
+ * claim. `buildDataLakeTools` in the client's `rlm/tools.ts` is what every
+ * live caller gets, and this has no non-test consumer. Three things that
+ * version carries are therefore absent here: the sub-LLM timeout rung, the
+ * settle-at-estimate accounting for an aborted call (this still `release()`s,
+ * booking $0 for a generation the provider already billed), and an output
+ * ceiling sized to fit that rung (this still allows 4000 tokens). Read it as
+ * the backend-routed ALTERNATIVE it is: adopting it means bringing those with
+ * it.
+ *
+ * What it offers over the SDK-direct version is routing through the same
+ * backend the rest of the agent already uses, which means:
  * - Bedrock auth + region routing handled upstream
  * - Cost / token accounting compatible with the rest of the
  *   tavern's heartbeat instrumentation

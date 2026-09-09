@@ -150,6 +150,26 @@ export interface IsolatedVmExecutorOptions {
    * subsequent calls fail fast rather than throwing opaque errors.
    */
   memoryLimitMb?: number;
+  /**
+   * Per tool name, the shortest dispatch bound that tool may be given, in ms.
+   * A call whose remaining run budget falls below its floor is REFUSED rather
+   * than dispatched.
+   *
+   * The bound a tool actually gets is `min(toolTimeoutMs, run time left)`, so
+   * it shrinks as the run proceeds. Once it drops under a deadline the tool
+   * enforces internally, the ordering the caller's timeout ladder is built on
+   * inverts: the dispatcher stops awaiting first, and the tool's own abort -
+   * the thing that produces an attributable error, releases a budget
+   * reservation, or books a spend - lands after nobody is listening. For a
+   * tool that only reads, an abandoned request is merely wasted; for one that
+   * spends money or holds a reservation it is an accounting hole, because the
+   * settle arrives after the caller has already snapshotted usage.
+   *
+   * So the floor is per tool and set by the caller, which is the only layer
+   * that knows what each tool bounds itself by. Tools absent from this map
+   * keep the old behaviour (dispatch with whatever is left).
+   */
+  toolMinBudgetMs?: Record<string, number>;
   /** Optional label for log prefixes. */
   label?: string;
 }
@@ -182,20 +202,41 @@ delete globalThis._callTool;
 
 const HARD_PER_LINE_BYTES = ${HARD_PER_LINE_BYTES};
 
+// Every intrinsic the formatter below reaches for is captured HERE, while the
+// context is still pristine. Resolving \`args.map\` / \`.join\` / \`line.slice\`
+// at CALL time walks a prototype chain the guest owns, so one
+// \`Array.prototype.join = () => 'X'\` - deliberate, or an innocent polyfill -
+// forges every stdout line for the rest of the session, and the run still
+// reports error=null / truncated=false. That is the same integrity failure the
+// frozen \`console\` below exists to prevent, one level down: freezing the
+// binding is worthless if the formatter behind it is guest-reachable.
+const __stringify = JSON.stringify;
+const __String = String;
+const __apply = Reflect.apply;
+const __strSlice = String.prototype.slice;
+
 function __jsonReplacer(_k, v) {
   if (v instanceof Error) return { name: v.name, message: v.message };
   if (typeof v === 'bigint') return v.toString() + 'n';
   return v;
 }
+// Indexed loop and \`+=\` rather than map/join: string concatenation is an
+// operator, not a lookup, so there is nothing here for the guest to replace.
+// What a guest CAN still steer is how its own values render - a \`toJSON\` or
+// \`toString\` on the object it passed - which is content it already owns, not
+// the channel.
 function __formatLine(args) {
-  const line = args.map(a => {
-    if (typeof a === 'string') return a;
-    if (a === undefined) return 'undefined';
-    if (a === null) return 'null';
-    try { return JSON.stringify(a, __jsonReplacer, 2); } catch { return String(a); }
-  }).join(' ');
+  let line = '';
+  for (let i = 0; i < args.length; i++) {
+    if (i > 0) line += ' ';
+    const a = args[i];
+    if (typeof a === 'string') { line += a; continue; }
+    if (a === undefined) { line += 'undefined'; continue; }
+    if (a === null) { line += 'null'; continue; }
+    try { line += __stringify(a, __jsonReplacer, 2); } catch { line += __String(a); }
+  }
   return line.length > HARD_PER_LINE_BYTES
-    ? line.slice(0, HARD_PER_LINE_BYTES) + ' [...line truncated]'
+    ? __apply(__strSlice, line, [0, HARD_PER_LINE_BYTES]) + ' [...line truncated]'
     : line;
 }
 // stdout is the channel the HOST reports back as the run's observation, so its
@@ -206,6 +247,11 @@ function __formatLine(args) {
 // Frozen object + non-writable, non-configurable property: the guest's
 // assignment is a silent no-op in sloppy mode and a TypeError under 'use
 // strict', and either way capture keeps working.
+//
+// The BINDING is what this protects, and the binding is only half of it: a
+// frozen console whose formatter resolved its intrinsics at call time would
+// still hand the guest every line. That half is closed above, where
+// __formatLine captures what it needs.
 const __console = Object.freeze({
   log: (...a) => __cap.applySync(undefined, [__formatLine(a)], { arguments: { copy: true } }),
   warn: (...a) => __cap.applySync(undefined, [__formatLine(a)], { arguments: { copy: true } }),
@@ -363,6 +409,7 @@ export class IsolatedVmExecutor implements ReplExecutor {
   private readonly registerToolsRef: IVM.Reference;
   private readonly timeoutMs: number;
   private readonly toolTimeoutMs: number;
+  private readonly toolMinBudgetMs: Record<string, number>;
   private readonly label: string;
   /** Global names present immediately after bootstrap - the "builtin"
    * baseline listGlobals() subtracts so callers see only user-defined
@@ -386,8 +433,26 @@ export class IsolatedVmExecutor implements ReplExecutor {
    */
   private runDeadlineAt: number | null = null;
 
-  // stdout capture state (host side, same shape as ReplContext)
-  private stdoutChunks: string[] = [];
+  /**
+   * stdout capture state, bounded AT PUSH TIME - head, then a rolling tail,
+   * with what fell between them counted rather than kept.
+   *
+   * This array lives on the HOST heap, which the isolate's `memoryLimit` does
+   * not cover: it bounds the guest's own heap and says nothing about a buffer
+   * the host grows on the guest's behalf. Collecting everything and slicing
+   * afterwards therefore let `while (true) console.log(x)` grow the Lambda's
+   * heap one line at a time, inside a run that is otherwise correctly capped.
+   * The per-line cap in the bootstrap bounds one iteration, not their sum.
+   *
+   * The head/tail rule is the same one `collectStdout()` reports and the same
+   * one the worker backend mirrors with, so what is kept is exactly what would
+   * have been printed.
+   */
+  private stdoutHead: string[] = [];
+  private stdoutHeadBytes = 0;
+  private stdoutTail: string[] = [];
+  private stdoutTailBytes = 0;
+  private stdoutElidedBytes = 0;
   private truncated = false;
 
   constructor(opts: IsolatedVmExecutorOptions = {}) {
@@ -423,6 +488,21 @@ export class IsolatedVmExecutor implements ReplExecutor {
       );
     }
     this.toolTimeoutMs = usableToolTimeout ?? derivedToolTimeout;
+    // Non-finite or non-positive floors are dropped rather than adopted: a NaN
+    // floor loses every comparison, so it would silently disable the refusal
+    // it was passed in to enforce - the same failure mode the timeout
+    // validation above exists for.
+    this.toolMinBudgetMs = {};
+    for (const [name, floor] of Object.entries(opts.toolMinBudgetMs ?? {})) {
+      if (Number.isFinite(floor) && floor > 0) {
+        this.toolMinBudgetMs[name] = floor;
+        continue;
+      }
+      Logger.globalInstance.warn(
+        `[IsolatedVmExecutor] toolMinBudgetMs.${name} (${floor}) must be a positive finite number; ignoring it. ` +
+          `That tool will be dispatched with whatever the run has left.`
+      );
+    }
     this.label = opts.label ?? 'isolated-vm-repl';
     const ivm = loadIvm();
     this.isolate = new ivm.Isolate({ memoryLimit: opts.memoryLimitMb ?? DEFAULT_MEMORY_LIMIT_MB });
@@ -652,6 +732,23 @@ export class IsolatedVmExecutor implements ReplExecutor {
             `${this.timeoutMs}ms budget. Do less work per run, or split it across calls.`,
         });
       }
+      // Refuse rather than dispatch under the tool's own floor. Dispatching a
+      // tool with less time than it bounds itself by inverts the ladder: we
+      // stop awaiting first, and its abort - which is what settles a spend or
+      // produces the attributable error - fires into a run nobody is reading
+      // any more. Refusing costs the agent one observation it can see and
+      // route around, which is strictly the cheaper failure. See
+      // `toolMinBudgetMs`.
+      const floorMs = this.toolMinBudgetMs[name];
+      if (floorMs !== undefined && budgetMs < floorMs) {
+        return JSON.stringify({
+          ok: false,
+          error:
+            `tool "${name}" was not dispatched: it needs at least ${floorMs}ms and only ${budgetMs}ms of this ` +
+            `code_execute run's ${this.timeoutMs}ms budget remains. Call it earlier in the run, or in a run of ` +
+            `its own.`,
+        });
+      }
       value = await withTimeout(
         tool(...args),
         budgetMs,
@@ -704,24 +801,60 @@ export class IsolatedVmExecutor implements ReplExecutor {
   }
 
   private captureLine(line: string): void {
-    this.stdoutChunks.push(line);
+    // `+ 1` throughout: the newline collectStdout() will join with, so the
+    // budgets are counted in the units they are spent in.
+    const cost = line.length + 1;
+    // A fit check, not "is the head already over" - the latter admits one line
+    // of up to HARD_PER_LINE_BYTES past the budget, so the line that crosses
+    // starts the tail instead.
+    if (this.stdoutHeadBytes + cost <= STDOUT_HEAD_BYTES) {
+      this.stdoutHead.push(line);
+      this.stdoutHeadBytes += cost;
+      return;
+    }
+    this.stdoutTail.push(line);
+    this.stdoutTailBytes += cost;
+    // The tail gets whatever the head did not use of the same HEAD + TAIL
+    // total, so a run whose first line is too big for the head is still kept
+    // whole up to that total rather than clipped to the tail budget alone.
+    const tailBudget = STDOUT_HEAD_BYTES + STDOUT_TAIL_BYTES - this.stdoutHeadBytes;
+    // Keep at least one line even when a single line is larger than the whole
+    // budget, or a chatty run's last line - the most diagnostic one - would be
+    // evicted by its own arrival.
+    while (this.stdoutTailBytes > tailBudget && this.stdoutTail.length > 1) {
+      const dropped = this.stdoutTail.shift() as string;
+      this.stdoutTailBytes -= dropped.length + 1;
+      this.stdoutElidedBytes += dropped.length + 1;
+    }
   }
 
   private resetStdout(): void {
-    this.stdoutChunks = [];
+    this.stdoutHead = [];
+    this.stdoutHeadBytes = 0;
+    this.stdoutTail = [];
+    this.stdoutTailBytes = 0;
+    this.stdoutElidedBytes = 0;
     this.truncated = false;
   }
 
   private collectStdout(): string {
-    const joined = this.stdoutChunks.join('\n');
-    if (joined.length <= STDOUT_HEAD_BYTES + STDOUT_TAIL_BYTES) {
-      return joined;
-    }
+    const head = this.stdoutHead.join('\n');
+    if (this.stdoutTail.length === 0) return head;
+    const joinedTail = this.stdoutTail.join('\n');
+    // The rolling window never evicts its only entry, so it can still hold ONE
+    // line longer than the whole budget (up to HARD_PER_LINE_BYTES). Report
+    // the last N chars of it, which is both the rule the worker mirror uses
+    // and the end of the line a reader actually wants.
+    const budget = STDOUT_HEAD_BYTES + STDOUT_TAIL_BYTES - this.stdoutHeadBytes;
+    const overflow = Math.max(0, joinedTail.length - budget);
+    const tail = overflow > 0 ? joinedTail.slice(overflow) : joinedTail;
+    const elidedBytes = this.stdoutElidedBytes + overflow;
+    if (elidedBytes === 0) return head.length === 0 ? tail : `${head}\n${tail}`;
     this.truncated = true;
-    const head = joined.slice(0, STDOUT_HEAD_BYTES);
-    const tail = joined.slice(joined.length - STDOUT_TAIL_BYTES);
-    const elidedBytes = joined.length - STDOUT_HEAD_BYTES - STDOUT_TAIL_BYTES;
-    return `${head}\n[...${elidedBytes} bytes truncated...]\n${tail}`;
+    // An empty head is ordinary now that the head takes only lines that FIT
+    // it: a first line larger than the head budget starts the tail instead.
+    const marker = `[...${elidedBytes} bytes truncated...]`;
+    return head.length === 0 ? `${marker}\n${tail}` : `${head}\n${marker}\n${tail}`;
   }
 }
 

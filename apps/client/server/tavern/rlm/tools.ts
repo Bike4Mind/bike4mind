@@ -138,7 +138,15 @@ interface SubAgentQueryArgs {
  * over the data lake.
  */
 export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
-  const anthropic = new Anthropic({ apiKey: deps.anthropicApiKey });
+  // maxRetries 0, against the SDK default of 2. `subLlmDeadline()` is ONE
+  // signal shared across every attempt the SDK makes, and SUB_LLM_HTTP_TIMEOUT_MS
+  // is sized in `timeouts.ts` as a single generation's budget. Leave retries on
+  // and a 429 plus its backoff sleep eats that budget before the real attempt
+  // starts - and an abort landing during the sleep still books the full
+  // estimate for a call that produced nothing, because the abort path cannot
+  // tell "cut off mid-generation" from "cut off while idle between attempts".
+  // The agent retries at its own level, where it can see the error and decide.
+  const anthropic = new Anthropic({ apiKey: deps.anthropicApiKey, maxRetries: 0 });
   const baseUrl = deps.baseUrl.replace(/\/+$/, '');
   const headers = { ...deps.authHeaders, 'Content-Type': 'application/json' };
 

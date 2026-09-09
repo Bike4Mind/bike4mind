@@ -162,7 +162,6 @@ const HARD_PER_LINE_BYTES = ${HARD_PER_LINE_BYTES};
 const MIRROR_TAIL_FLUSH_MS = ${MIRROR_TAIL_FLUSH_MS};
 
 let stdoutChunks = [];
-let stdoutBytes = 0;
 let truncated = false;
 // --- Mirror state --------------------------------------------------------
 // Mirrors this run's stdout to the main thread as it is produced, in the same
@@ -178,7 +177,20 @@ let mirroredHeadBytes = 0;
 let headMirrorFull = false;
 let tailChunks = [];
 let tailBytes = 0;
+let elidedBytes = 0;
 let tailFlushTimer = null;
+
+/**
+ * What the rolling tail may hold: whatever the head did not use of the same
+ * HEAD + TAIL total collectStdout() reports within. A fixed TAIL budget made
+ * the two disagree whenever the head came up short - a single 6KB first line
+ * does not fit the head, so the mirror would have kept 2KB of a run that
+ * collectStdout() reports whole, and called it truncated. mirroredHeadBytes
+ * is frozen once the head is full, so this is stable for the rest of the run.
+ */
+function tailBudget() {
+  return STDOUT_HEAD_BYTES + STDOUT_TAIL_BYTES - mirroredHeadBytes;
+}
 
 function postToMain(msg) {
   try { parentPort.postMessage(msg); } catch { /* worker being torn down; nothing to preserve */ }
@@ -196,15 +208,18 @@ function flushTail() {
   // same last-N-chars rule collectStdout() uses, which both matches that
   // path and keeps the flush payload bounded - a guest printing 50KB lines
   // would otherwise re-send 50KB on every tick.
-  const overflow = Math.max(0, joined.length - STDOUT_TAIL_BYTES);
+  const overflow = Math.max(0, joined.length - tailBudget());
   postToMain({
     type: 'stdoutTail',
     id: currentRunId,
     tail: overflow > 0 ? joined.slice(overflow) : joined,
-    // What fell BETWEEN the mirrored head and the mirrored tail. Counted in
-    // the same line + newline units as stdoutBytes and mirroredHeadBytes, so
-    // an exact round trip reports zero rather than one byte per line.
-    elidedBytes: Math.max(0, stdoutBytes - mirroredHeadBytes - tailBytes + overflow),
+    // Counted from what was actually DROPPED - lines the rolling window
+    // evicted, plus whatever this payload's own slice cuts - rather than
+    // derived from the byte totals. The derived form read zero on the first
+    // flush by construction (every line was still in the head, so the
+    // subtraction cancelled), which made "truncated" unreportable on exactly
+    // the run the mirror exists for.
+    elidedBytes: elidedBytes + overflow,
   });
 }
 function scheduleTailFlush() {
@@ -217,24 +232,41 @@ function scheduleTailFlush() {
 function mirrorLine(capped) {
   if (currentRunId === null) return;
   if (!headMirrorFull) {
-    mirroredHeadBytes += capped.length + 1;
-    postToMain({ type: 'stdout', id: currentRunId, chunk: capped });
-    // Checked AFTER the add. Checking before it let one line of up to
-    // HARD_PER_LINE_BYTES cross a STDOUT_HEAD_BYTES budget without the
-    // mirror ever being marked short - so no truncation was reported on
-    // precisely the runs that overshot.
-    if (mirroredHeadBytes >= STDOUT_HEAD_BYTES) {
-      headMirrorFull = true;
-      // Post once immediately: a run killed before the first timed flush
-      // would otherwise report a short mirror as if it were complete.
-      flushTail();
+    // Does THIS line fit, rather than "is the running total already over".
+    // Both of the orderings tried before this were wrong in one direction
+    // each: gating on the running total let one line of up to
+    // HARD_PER_LINE_BYTES past a 5KB budget (mirrored head ~55KB, disagreeing
+    // with collectStdout's head and with the "~7K chars" codeExecuteTool
+    // advertises to the model), while adding first and checking after moved
+    // the boundary but kept the crossing line in the head - so the tail was
+    // still empty at the immediate flush below and a run killed right there
+    // dropped the last line before the hang and reported itself complete.
+    //
+    // A fit check does both: the head stops at STDOUT_HEAD_BYTES exactly, and
+    // the line that did not fit STARTS the tail, so the flush that fires on
+    // this same call carries it.
+    if (mirroredHeadBytes + capped.length + 1 <= STDOUT_HEAD_BYTES) {
+      mirroredHeadBytes += capped.length + 1;
+      postToMain({ type: 'stdout', id: currentRunId, chunk: capped });
+      return;
     }
+    headMirrorFull = true;
+    tailChunks.push(capped);
+    tailBytes += capped.length + 1;
+    // Post once immediately: a run killed before the first timed flush would
+    // otherwise report a short mirror as if it were complete.
+    flushTail();
     return;
   }
   tailChunks.push(capped);
   tailBytes += capped.length + 1;
-  while (tailBytes > STDOUT_TAIL_BYTES && tailChunks.length > 1) {
-    tailBytes -= tailChunks.shift().length + 1;
+  // Never evict the only line held: a line larger than the whole budget is
+  // still the last thing the run printed, which is what the mirror is for.
+  const budget = tailBudget();
+  while (tailBytes > budget && tailChunks.length > 1) {
+    const dropped = tailChunks.shift();
+    tailBytes -= dropped.length + 1;
+    elidedBytes += dropped.length + 1;
   }
   scheduleTailFlush();
 }
@@ -249,7 +281,6 @@ function captureLine(args) {
     ? line.slice(0, HARD_PER_LINE_BYTES) + ' [...line truncated]'
     : line;
   stdoutChunks.push(capped);
-  stdoutBytes += capped.length + 1;
   mirrorLine(capped);
 }
 function jsonReplacer(_k, v) {
@@ -351,11 +382,11 @@ parentPort.on('message', async (msg) => {
   }
   if (msg.type === 'runCode') {
     const t0 = Date.now();
-    stdoutChunks = []; stdoutBytes = 0; truncated = false;
+    stdoutChunks = []; truncated = false;
     cancelTailFlush();
     currentRunId = msg.id;
     mirroredHeadBytes = 0; headMirrorFull = false;
-    tailChunks = []; tailBytes = 0;
+    tailChunks = []; tailBytes = 0; elidedBytes = 0;
     let error = null;
     const wrapped = '(async () => {\n' + msg.code + '\n})()';
     try {
@@ -410,7 +441,11 @@ interface PendingRun {
  * the two decided "truncated" on different tests.
  */
 function assembleMirroredStdout(pending: PendingRun): { stdout: string; truncated: boolean } {
-  const parts = [pending.stdoutChunks.join('\n')];
+  // An empty head is ordinary now that the head takes only lines that FIT it:
+  // a first line larger than the head budget starts the tail instead. Skipping
+  // the empty part keeps that run from being reported with a leading newline.
+  const head = pending.stdoutChunks.join('\n');
+  const parts = head.length > 0 ? [head] : [];
   const truncated = pending.stdoutElidedBytes > 0;
   if (truncated) parts.push(`[...${pending.stdoutElidedBytes} bytes truncated...]`);
   if (pending.stdoutTail) parts.push(pending.stdoutTail);

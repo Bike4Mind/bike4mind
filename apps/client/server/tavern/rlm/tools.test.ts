@@ -221,6 +221,41 @@ describe('buildDataLakeTools - every loopback call runs as the requesting princi
     }
   });
 
+  /**
+   * The tool-HTTP rung is the innermost bound in the ladder, and it reaches
+   * five call sites through one helper - so a single dropped `signal:` retires
+   * the rung for a whole tool with nothing failing. Nothing in this file looked
+   * at the second fetch argument before.
+   */
+  it('bounds every loopback call with the tool-HTTP abort signal', async () => {
+    fetchSpy.mockImplementation(
+      async () => new Response(JSON.stringify({ results: [], data: [], total: 0 }), { status: 200 })
+    );
+
+    session.setTools(
+      buildDataLakeTools({
+        baseUrl: 'http://localhost:3000',
+        authHeaders: callerHeaders,
+        anthropicApiKey: 'a',
+        session,
+      })
+    );
+
+    const r = await session.runCode(`
+      await semanticSearch({ query: "q" });
+      await keywordSearch({ query: "q" });
+      await listArticles({});
+    `);
+    expect(r.error).toBeNull();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 3; i++) {
+      const init = fetchSpy.mock.calls[i][1] as RequestInit;
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(init.signal?.aborted).toBe(false);
+    }
+  });
+
   it('sends the caller credential on both getArticle hops, including presigned-url', async () => {
     fetchSpy
       .mockResolvedValueOnce(

@@ -723,17 +723,25 @@ function evictLruReplSession(): boolean {
 const REUSE_IGNORED_OPTION_KEYS = ['label', 'perCallTimeoutMs', 'budget', 'executorOptions'] as const;
 
 /**
- * Structural equality for a shaping option's value. `budget` and
- * `executorOptions` are small flat records of primitives, so key-wise
- * comparison is enough and avoids pulling in a deep-equal dependency for it.
+ * Structural equality for a shaping option's value. Recursive rather than
+ * key-wise: the values it compares are small records, but they are not flat
+ * any more - `executorOptions.toolMinBudgetMs` is itself a record - and a
+ * shallow compare would report two identical option objects as divergent and
+ * warn on every reuse, which is the opposite of what this exists for.
+ * Still no deep-equal dependency: these are records of primitives, nested.
  */
 function shapingValueEquals(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Object.keys(a as Record<string, unknown>);
   const kb = Object.keys(b as Record<string, unknown>);
   if (ka.length !== kb.length) return false;
-  return ka.every(k => (a as Record<string, unknown>)[k] === (b as Record<string, unknown>)[k]);
+  return ka.every(
+    k =>
+      Object.prototype.hasOwnProperty.call(b, k) &&
+      shapingValueEquals((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])
+  );
 }
 
 function warnOnDivergentReuse(existing: ReplSession, opts: ReplSessionOptions): void {

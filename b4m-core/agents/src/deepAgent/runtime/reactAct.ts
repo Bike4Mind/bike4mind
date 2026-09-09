@@ -10,11 +10,17 @@ import { resolveToolbeltProfile } from './toolbelts';
 import type { ActContext, ActResult } from './types';
 
 /**
- * Per-`code_execute` cap for a wake's REPL. Matches the HTTP answerer's rung
- * (`PER_CALL_REPL_TIMEOUT_MS` in `rlm-answer.ts`) so one step's stall costs a
- * step in both surfaces rather than the whole run in one of them.
+ * Per-`code_execute` cap for a wake's REPL. Must equal `PER_CALL_REPL_TIMEOUT_MS`
+ * in the client's `rlm/timeouts.ts`, so one step's stall costs a step in both
+ * surfaces rather than the whole run in one of them.
+ *
+ * A literal rather than an import because the dependency only runs one way:
+ * `timeouts.ts` centralises the ladder but lives in `apps/client`, which this
+ * package cannot reach. Exported so the coupling is enforced from the side
+ * that CAN see both - `timeoutLadder.test.ts` asserts the two are equal, which
+ * is what makes this a shared rung rather than a coincidence.
  */
-const WAKE_PER_CALL_REPL_TIMEOUT_MS = 25_000;
+export const WAKE_PER_CALL_REPL_TIMEOUT_MS = 25_000;
 
 /**
  * Maps a ReActAgent run result into the wake cycle's `ActResult`.

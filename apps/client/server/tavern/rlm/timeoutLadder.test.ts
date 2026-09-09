@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { WAKE_PER_CALL_REPL_TIMEOUT_MS } from '@bike4mind/agents';
 import {
   HARD_TIMEOUT_MS,
   PER_CALL_REPL_TIMEOUT_MS,
@@ -6,6 +7,7 @@ import {
   SUB_LLM_MAX_OUTPUT_TOKENS,
   SUB_LLM_MIN_OUTPUT_TOKENS_PER_SECOND,
   TOOL_HTTP_TIMEOUT_MS,
+  appliedToolDispatchTimeoutMs,
   hostDeadlineMs,
   toolDispatchTimeoutMs,
 } from './timeouts';
@@ -82,5 +84,61 @@ describe('the REPL timeout ladder', () => {
       expect(toolDispatchTimeoutMs(scriptMs)).toBeLessThan(scriptMs);
       expect(scriptMs).toBeLessThan(hostDeadlineMs(scriptMs));
     }
+  });
+
+  /**
+   * Every assertion above compares CONSTANTS, which is a statement about a
+   * tool call made at t=0 and about nothing else. The bound a call actually
+   * gets is capped again by what remains of the script budget, so it decays
+   * across a run and crosses under the inner rungs partway through - the run
+   * shape that reaches it ("two searches, then a sub-agent call") is ordinary,
+   * not adversarial.
+   *
+   * These cases exist because the constant-only tests cannot fail on that:
+   * the first pins WHEN the inversion begins, so the crossing point is a
+   * number someone has to change deliberately, and the second pins the
+   * resolution - `subAgentQuery` carries a `toolMinBudgetMs` floor equal to
+   * its own rung, so it is refused rather than dispatched inverted.
+   */
+  it('inverts the sub-LLM rung once enough of the run is spent', () => {
+    expect(appliedToolDispatchTimeoutMs(0)).toBe(toolDispatchTimeoutMs());
+    // 25_000 - 18_000: the last instant a sub-LLM call still gets its rung.
+    expect(appliedToolDispatchTimeoutMs(7_000)).toBe(SUB_LLM_HTTP_TIMEOUT_MS);
+    expect(appliedToolDispatchTimeoutMs(7_001)).toBeLessThan(SUB_LLM_HTTP_TIMEOUT_MS);
+    // And the tool-HTTP rung goes three seconds later.
+    expect(appliedToolDispatchTimeoutMs(10_000)).toBe(TOOL_HTTP_TIMEOUT_MS);
+    expect(appliedToolDispatchTimeoutMs(10_001)).toBeLessThan(TOOL_HTTP_TIMEOUT_MS);
+  });
+
+  /**
+   * The wake path picks its own script cap in `@bike4mind/agents`, which
+   * cannot import this module - the dependency only runs the other way. So
+   * the rung is a literal in both places, and this is the assertion that
+   * makes them one decision instead of two that happen to agree today.
+   */
+  it('gives the wake path the same per-step rung as the HTTP route', () => {
+    expect(WAKE_PER_CALL_REPL_TIMEOUT_MS).toBe(PER_CALL_REPL_TIMEOUT_MS);
+  });
+
+  /**
+   * The floor the route hands the executor as
+   * `toolMinBudgetMs.subAgentQuery`, checked against the applied bound rather
+   * than described. Refusing exactly when the rung would invert is what makes
+   * the two mutually exclusive: every dispatch that survives the floor runs
+   * under a bound at or above the tool's own deadline, so its abort always
+   * fires before the dispatcher stops waiting. `IsolatedVmExecutor.test.ts`
+   * pins that the executor actually refuses; this pins that the number it is
+   * given is the right one.
+   */
+  it('leaves a usable window in which a sub-LLM call can still be made', () => {
+    // A floor is only half a fix. Set it against a rung the run cannot
+    // actually afford and every call is refused - the tool is dead rather
+    // than safe, and nothing else in this file would notice.
+    const windowMs = PER_CALL_REPL_TIMEOUT_MS - SUB_LLM_HTTP_TIMEOUT_MS;
+    expect(appliedToolDispatchTimeoutMs(0)).toBeGreaterThanOrEqual(SUB_LLM_HTTP_TIMEOUT_MS);
+    expect(appliedToolDispatchTimeoutMs(windowMs)).toBeGreaterThanOrEqual(SUB_LLM_HTTP_TIMEOUT_MS);
+    // And wide enough that the ordinary shape - a couple of sub-second
+    // searches, then a sub-agent call - still clears it.
+    expect(windowMs).toBeGreaterThanOrEqual(5_000);
   });
 });

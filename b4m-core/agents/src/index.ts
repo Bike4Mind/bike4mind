@@ -224,6 +224,7 @@ export type { ReplExecutor, ReplExecutorName } from './rlm/replExecutor';
 export { WorkerReplExecutor } from './rlm/WorkerReplExecutor';
 export type { WorkerReplExecutorOptions } from './rlm/WorkerReplExecutor';
 export { IsolatedVmExecutor, TOOL_CALL_TIMEOUT_FRACTION, HOST_DEADLINE_GRACE_MS } from './rlm/IsolatedVmExecutor';
+export { WAKE_PER_CALL_REPL_TIMEOUT_MS } from './deepAgent/runtime/reactAct';
 export type { IsolatedVmExecutorOptions } from './rlm/IsolatedVmExecutor';
 export {
   ReplSession,

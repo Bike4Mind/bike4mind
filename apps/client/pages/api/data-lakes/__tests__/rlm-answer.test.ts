@@ -56,6 +56,7 @@ vi.mock('@bike4mind/agents', () => ({
 }));
 
 import handler from '../rlm-answer';
+import { SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 type Json = Record<string, unknown>;
 
@@ -187,6 +188,21 @@ describe('POST /api/data-lakes/rlm-answer - REPL sandbox posture', () => {
     const { perCallTimeoutMs } = mockReplSessionCtor.mock.calls[0][0] as { perCallTimeoutMs: number };
     expect(perCallTimeoutMs).toBeGreaterThan(0);
     expect(perCallTimeoutMs).toBeLessThanOrEqual(30_000);
+  });
+
+  it('gives subAgentQuery a dispatch floor equal to its own HTTP rung', async () => {
+    // The bound a tool gets is min(toolTimeoutMs, run time left), so it decays
+    // across a run and crosses under SUB_LLM_HTTP_TIMEOUT_MS about 7s in. Past
+    // that the dispatcher would abandon the await mid-generation: the
+    // reservation settles after getUsage() has been snapshotted and the session
+    // disposed, so the spend is booked where nobody reads it. The floor makes
+    // the executor refuse instead. Asserted against the constant, not a
+    // literal, so the two cannot drift apart.
+    await call({ authorization: 'Bearer caller.jwt.token' });
+
+    expect(mockReplSessionCtor.mock.calls[0][0]).toMatchObject({
+      executorOptions: { toolMinBudgetMs: { subAgentQuery: SUB_LLM_HTTP_TIMEOUT_MS } },
+    });
   });
 
   it('refuses the request when the sandbox cannot be constructed, rather than falling back', async () => {

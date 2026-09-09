@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { IsolatedVmExecutor, TOOL_CALL_TIMEOUT_FRACTION } from './IsolatedVmExecutor';
 import { ReplSandboxRetiredError } from './replExecutor';
 import { ReplSession, _resetReplSessionsForTests } from './ReplSession';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Quest 3c tests: `isolated-vm` V8-isolate backend.
@@ -689,6 +690,150 @@ describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
     const r = await ex.runCode('console.log(await afterPoison());');
     expect(r.error).toBeNull();
     expect(r.stdout).toBe('ok');
+  });
+
+  it('formats stdout without touching guest-reachable array intrinsics', async () => {
+    const ex = spawn();
+    // Freezing the console binding is worthless if the formatter behind it
+    // resolves `args.map` / `.join` through a prototype chain the guest owns.
+    // The trigger does not have to be adversarial - a guest polyfilling
+    // Array.prototype.join owns every later line just as completely, and the
+    // run still reports error=null and truncated=false, so it reads as a
+    // clean success.
+    const poison = await ex.runCode(`
+      Array.prototype.join = () => 'JOINED';
+      Array.prototype.map = () => ['MAPPED'];
+      console.log('a', 'b');
+    `);
+    expect(poison.error).toBeNull();
+    expect(poison.stdout).toBe('a b');
+
+    const later = await ex.runCode("console.log('still', 'ours', 1);");
+    expect(later.error).toBeNull();
+    expect(later.stdout).toBe('still ours 1');
+  });
+
+  it('formats stdout without touching guest-reachable String or JSON intrinsics', async () => {
+    const ex = spawn();
+    const poison = await ex.runCode(`
+      JSON.stringify = () => 'STRINGIFIED';
+      String.prototype.slice = () => 'SLICED';
+      globalThis.String = () => 'STRUNG';
+      console.log({ k: 1 });
+    `);
+    expect(poison.error).toBeNull();
+    // The real serializer ran: the object rendered as pretty-printed JSON
+    // rather than the guest's replacement.
+    expect(poison.stdout).toContain('"k": 1');
+
+    // And the per-line cap still slices with the captured String.prototype.slice.
+    const long = await ex.runCode("console.log('x'.repeat(60000));");
+    expect(long.error).toBeNull();
+    expect(long.stdout).toContain('[...line truncated]');
+    expect(long.stdout).not.toContain('SLICED');
+  });
+
+  it('bounds the host-side stdout buffer at push time, not after the run', async () => {
+    const ex = spawn({ timeoutMs: 5_000 });
+    // The isolate's memoryLimit covers the guest's heap, not this array - so
+    // collecting every line and slicing afterwards let a guest loop grow the
+    // HOST heap inside an otherwise correctly capped run.
+    const r = await ex.runCode(`
+      for (let i = 0; i < 4000; i++) console.log('line ' + i + ' ' + 'p'.repeat(40));
+    `);
+    expect(r.error).toBeNull();
+    expect(r.truncated).toBe(true);
+    expect(r.stdout).toMatch(/\[\.\.\.\d+ bytes truncated\.\.\.\]/);
+    // Head + marker + tail, not 200KB of it.
+    expect(r.stdout.length).toBeLessThan(9_000);
+    // Both ends survive: the first line and the last are what a reader needs.
+    expect(r.stdout).toContain('line 0 ');
+    expect(r.stdout).toContain('line 3999 ');
+  });
+
+  it('reports short output whole, with no truncation marker', async () => {
+    const ex = spawn();
+    const r = await ex.runCode("for (let i = 0; i < 3; i++) console.log('n' + i);");
+    expect(r.error).toBeNull();
+    expect(r.truncated).toBe(false);
+    expect(r.stdout).toBe('n0\nn1\nn2');
+  });
+
+  // --- a tool is refused rather than dispatched under its own deadline -----
+
+  it('refuses a tool whose per-run remaining budget is under its declared floor', async () => {
+    // The dispatch bound is min(toolTimeoutMs, run time left), so it decays
+    // across a run. Below a deadline the tool enforces internally, dispatching
+    // inverts the ladder: the dispatcher stops awaiting first and the tool's
+    // own abort - which is what settles a spend - lands after the run is over.
+    const ex = spawn({ timeoutMs: 1_000, toolMinBudgetMs: { spender: 400 } });
+    const calls: string[] = [];
+    ex.setTools({
+      spender: async () => {
+        calls.push('dispatched');
+        return 'ok';
+      },
+      sleep: async (ms: unknown) => {
+        await new Promise(r => setTimeout(r, Number(ms)));
+        return null;
+      },
+    });
+
+    const r = await ex.runCode(`
+      const first = await spender();
+      await sleep(700);
+      let refusal = null;
+      try { await spender(); } catch (e) { refusal = e.message; }
+      console.log(first + '|' + refusal);
+    `);
+
+    expect(r.error).toBeNull();
+    // Dispatched at t=0 with the full budget; refused once under 400ms remained.
+    expect(calls).toEqual(['dispatched']);
+    expect(r.stdout).toContain('ok|');
+    expect(r.stdout).toContain('needs at least 400ms');
+  });
+
+  it('dispatches a tool with no declared floor no matter how little is left', async () => {
+    // The floor is opt-in per tool: a read-only tool losing a race costs a
+    // wasted fetch, so refusing those late in a run would reject calls that
+    // ordinarily finish in milliseconds.
+    const ex = spawn({ timeoutMs: 1_000, toolMinBudgetMs: { spender: 400 } });
+    const calls: string[] = [];
+    ex.setTools({
+      reader: async () => {
+        calls.push('dispatched');
+        return 'read';
+      },
+      sleep: async (ms: unknown) => {
+        await new Promise(r => setTimeout(r, Number(ms)));
+        return null;
+      },
+    });
+
+    const r = await ex.runCode(`
+      await sleep(700);
+      console.log(await reader());
+    `);
+    expect(r.error).toBeNull();
+    expect(calls).toEqual(['dispatched']);
+    expect(r.stdout).toBe('read');
+  });
+
+  it('ignores a non-finite or non-positive floor rather than silently disabling the refusal', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      // NaN loses every comparison, so an adopted NaN floor would refuse
+      // nothing while looking configured.
+      const ex = spawn({ timeoutMs: 1_000, toolMinBudgetMs: { a: NaN, b: 0, c: -5, d: 400 } });
+      ex.setTools({ a: async () => 'a' });
+      const r = await ex.runCode('console.log(await a());');
+      expect(r.error).toBeNull();
+      expect(r.stdout).toBe('a');
+      expect(warn).toHaveBeenCalledTimes(3);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   // --- WebAssembly is a session-kill primitive in an isolate ---------------

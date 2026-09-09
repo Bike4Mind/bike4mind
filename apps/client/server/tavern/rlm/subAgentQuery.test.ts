@@ -12,10 +12,14 @@ import { SUB_LLM_HTTP_TIMEOUT_MS } from './timeouts';
  */
 
 const createSpy = vi.hoisted(() => vi.fn());
+const ctorSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('@anthropic-ai/sdk', () => ({
   default: class MockAnthropic {
     messages = { create: createSpy };
+    constructor(opts: unknown) {
+      ctorSpy(opts);
+    }
   },
 }));
 
@@ -29,6 +33,29 @@ function toolsFor(session: ReplSession) {
     session,
   });
 }
+
+describe('subAgentQuery client configuration', () => {
+  beforeEach(() => {
+    ctorSpy.mockReset();
+  });
+
+  /**
+   * `subLlmDeadline()` is ONE signal shared across every attempt the SDK
+   * makes, and SUB_LLM_HTTP_TIMEOUT_MS is sized in `timeouts.ts` as a single
+   * generation's budget. At the SDK's default of 2 retries, a 429 plus its
+   * backoff sleep eats that budget before the real attempt starts - and an
+   * abort landing during the sleep still books the full estimate, because the
+   * abort path cannot tell "cut off mid-generation" from "cut off while idle
+   * between attempts". Nothing else in the suite looks at the constructor.
+   */
+  it('disables SDK-level retries so the rung is a single-attempt budget', () => {
+    const session = new ReplSession({ sessionId: 'ctor-opts', executor: 'in-process-unsafe' });
+    toolsFor(session);
+
+    expect(ctorSpy).toHaveBeenCalledTimes(1);
+    expect(ctorSpy.mock.calls[0][0]).toMatchObject({ maxRetries: 0 });
+  });
+});
 
 describe('subAgentQuery model allowlist', () => {
   beforeEach(() => {

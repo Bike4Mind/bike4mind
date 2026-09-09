@@ -21,6 +21,16 @@ import { HOST_DEADLINE_GRACE_MS, TOOL_CALL_TIMEOUT_FRACTION } from '@bike4mind/a
  * `timeoutLadder.test.ts` imports both and asserts the ordering. Nothing in
  * the type system relates these numbers, so a test is the only thing that
  * notices when one moves.
+ *
+ * THE ORDERING IS A PROPERTY OF THE APPLIED BOUNDS, NOT THE CONSTANTS. The
+ * dispatch bound a tool actually receives is `min(toolDispatchTimeoutMs(),
+ * time left in the run)`, so it decays as the run proceeds: past ~7s of a 25s
+ * script it sits under the 18s sub-LLM rung, and past ~10s under the 15s
+ * tool-HTTP rung. Comparing the four constants above says nothing about that.
+ * The rung a call is dispatched under is fixed by `toolMinBudgetMs`, which
+ * refuses a spending tool rather than dispatching it inverted - see the
+ * `executorOptions` comment at the `rlm-answer` session construction, and the
+ * elapsed-time cases in `timeoutLadder.test.ts` that pin it.
  */
 
 /**
@@ -91,6 +101,15 @@ export const HARD_TIMEOUT_MS = 55_000;
 /** The dispatch bound the isolate derives for a single host tool call. */
 export const toolDispatchTimeoutMs = (scriptTimeoutMs = PER_CALL_REPL_TIMEOUT_MS): number =>
   Math.max(1, Math.floor(scriptTimeoutMs * TOOL_CALL_TIMEOUT_FRACTION));
+
+/**
+ * The bound a tool call dispatched `elapsedMs` into a run actually gets - the
+ * static rung above, capped again by what remains of the script budget. This
+ * is the number the ladder's ordering has to hold against; `toolDispatchTimeoutMs`
+ * alone only describes a call made at t=0.
+ */
+export const appliedToolDispatchTimeoutMs = (elapsedMs: number, scriptTimeoutMs = PER_CALL_REPL_TIMEOUT_MS): number =>
+  Math.min(toolDispatchTimeoutMs(scriptTimeoutMs), scriptTimeoutMs - elapsedMs);
 
 /** The instant the host stops waiting and disposes the isolate. */
 export const hostDeadlineMs = (scriptTimeoutMs = PER_CALL_REPL_TIMEOUT_MS): number =>

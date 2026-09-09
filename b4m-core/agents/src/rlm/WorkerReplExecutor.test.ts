@@ -337,6 +337,33 @@ describe('WorkerReplExecutor - the mirrored stdout a retired run reports', () =>
   }, 20_000);
 
   /**
+   * The head takes only lines that FIT it. Two earlier orderings each failed
+   * one way: gating on the running total let one line of up to 50KB past a
+   * 5KB budget, so the mirrored head disagreed with collectStdout's and with
+   * the "~7K chars" the tool advertises to the model; adding first and
+   * checking after kept the crossing line in the head, so the tail was empty
+   * at the immediate flush and a run killed right there reported itself
+   * complete while dropping that line.
+   */
+  it('stops the mirrored head at its budget instead of admitting one huge line', async () => {
+    const ex = new WorkerReplExecutor({ timeoutMs: 1200 });
+    const r = await ex.runCode(
+      `console.log('S'.repeat(200));
+       console.log('H'.repeat(20000));
+       console.log('LAST');
+       await new Promise(() => {});`
+    );
+    expect(r.sandboxRetired).toBe(true);
+    // Head + marker + tail, not 20KB of it - the same total collectStdout
+    // reports within.
+    expect(r.stdout.length).toBeLessThan(9_000);
+    expect(r.stdout).toContain('S'.repeat(200));
+    expect(r.stdout).toContain('LAST');
+    expect(r.truncated).toBe(true);
+    await ex.dispose();
+  }, 20_000);
+
+  /**
    * A tool result structured cloning cannot carry is the one reachable
    * `postMessage` throw on this backend (the terminated-worker case is a
    * silent no-op). Swallowing it left the guest's awaiting promise unsettled,
