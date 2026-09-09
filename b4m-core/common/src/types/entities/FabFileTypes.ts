@@ -385,10 +385,12 @@ export interface IFabFile {
    * SHA-256 (hex) over the file's normalized server-extracted text, computed at chunk time by the
    * admission contract (`computeServerTextHash`). Hashed over the CANONICAL EXTRACTED TEXT, not the
    * chunk output, so it is stable across chunk-policy/embedding-model changes - the trustworthy dedup
-   * input for #1671, distinct from `contentHash` (unverified, and NOT universal: every
-   * `createFabFileByUrl` caller stamps it since #2027 - the web URL door, the Slack link door, and
-   * proposal admission - but the Google Drive connector ingest, which calls `createFabFile` directly,
-   * still does not). Tri-state: absent = never chunked (treat as UNKNOWN, never "no text"); null =
+   * input for #1671, distinct from `contentHash` (unverified, and NOT universal: only a
+   * `createFabFileByUrl` caller that opts into ingest-time dedup by supplying `checkDuplicate`
+   * stamps it - the Slack link door, as of #2027 - so it stays coupled to the dedup behavior rather
+   * than reaching doors that never asked for it; the web URL door, proposal admission, and the
+   * Google Drive connector, which calls `createFabFile` directly, do not stamp it). Tri-state:
+   * absent = never chunked (treat as UNKNOWN, never "no text"); null =
    * chunked with no extractable text; hex = fingerprint. Nulled by FAB_FILE_CONTENT_REWRITE_PATCH on
    * a byte rewrite and by the chunk pass on a text-less re-chunk, so it never outlives its text.
    */
