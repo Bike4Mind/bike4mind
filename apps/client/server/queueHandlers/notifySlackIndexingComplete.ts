@@ -13,10 +13,15 @@ import { decryptToken } from '@server/security/tokenEncryption';
  * never fails or retries vectorization.
  *
  * Resolution chain, since `sourceMetadata: { channel, messageTs }` alone cannot say WHICH Slack
- * workspace/bot token to post with: `sourceMetadata.teamId` (stamped at ingest time - see
- * `dataLakeFileIngest.ts`/`dataLakeLinkIngest.ts`) is the SAME team the message actually arrived
- * on, resolved the same two ways `events.ts` resolves an inbound event - dev-OAuth workspace
- * first, org workspace second - so the token always matches the channel id it is posting to.
+ * workspace/bot token to post with: `sourceMetadata.teamId`/`apiAppId` (stamped at ingest time -
+ * see `dataLakeFileIngest.ts`/`dataLakeLinkIngest.ts`) are the SAME app+team the message actually
+ * arrived on, resolved the SAME way `events.ts` resolves an inbound event - dev-OAuth workspace
+ * via the (apiAppId, teamId) PAIR first (`findBySlackAppIdAndTeamId` then
+ * `findByIdWithCredentials`, since the pair-keyed lookup does not select the token itself), org
+ * workspace via `teamId` alone second - so the token always matches the channel id it is posting
+ * to. Matching on `teamId` alone for the dev-workspace lookup (an earlier version of this chain)
+ * was a real bug: `slackTeamId` carries no unique constraint (deliberately sparse - more than one
+ * app can be installed to the same team), so `findOne` could pick an arbitrary install's token.
  * `fabFile.tags` -> lake -> `organizationId` -> `orgSlackWorkspaceRepository
  * .findByOrganizationIdWithToken` is kept ONLY as a last-resort fallback for files ingested before
  * `teamId` was stamped: it can resolve the wrong workspace for a dev-OAuth install or a user who
@@ -52,18 +57,22 @@ export async function notifySlackIndexingComplete(
   // teamId path hasn't, so look it up now - only reached once a token is already confirmed.
   const lake = resolved.lake ?? (await resolveLake(fabFile, logger));
 
-  // `fileName` can come from an attacker-controlled webpage <title> (createByUrl.ts) - escaped so
-  // a value like "<!channel> URGENT" cannot post as a real broadcast/mention.
+  // `fileName` can come from an attacker-controlled webpage <title> (createByUrl.ts); `lake.name`
+  // is set by whoever created the lake - both escaped so a value like "<!channel> URGENT" cannot
+  // post as a real broadcast/mention.
   const fileName = escapeSlackMrkdwn(fabFile.fileName);
-  const slackClient = new SlackClient(resolved.token, logger);
+  const lakeName = lake ? escapeSlackMrkdwn(lake.name) : null;
+  // Scoped to this caller only (not every SlackClient consumer): this is the one queue handler
+  // posting inline from a time-budgeted Lambda, where redelivery is already safe (atomic claim).
+  const slackClient = new SlackClient(resolved.token, logger, { timeoutMs: 10_000 });
   await slackClient.sendMessage({
     channel,
     threadTs: messageTs,
     // #2029 requires naming both the file and the lake; a lake-less lookup (should not happen for
     // a real Slack-origin file, but the ingest paths don't structurally guarantee it) degrades to
     // the file-only wording rather than printing a hole in the sentence.
-    text: lake
-      ? `"${fileName}" finished indexing in *${lake.name}* and is now searchable.`
+    text: lakeName
+      ? `"${fileName}" finished indexing in *${lakeName}* and is now searchable.`
       : `"${fileName}" finished indexing and is now searchable.`,
   });
 }
@@ -91,11 +100,11 @@ async function resolveLake(
 }
 
 /**
- * Resolves the bot token to post with. Prefers `sourceMetadata.teamId` (the workspace the message
- * actually arrived on); falls back to the older lake->org chain only when no `teamId` is on file,
- * for files ingested before that stamp existed. `lake` on the return value is set only by the
- * legacy path (which had to resolve it anyway); the teamId path leaves it null since it never
- * needed the lookup for the token itself.
+ * Resolves the bot token to post with. Prefers `sourceMetadata.teamId`/`apiAppId` (the workspace
+ * the message actually arrived on); falls back to the older lake->org chain only when no `teamId`
+ * is on file, for files ingested before that stamp existed. `lake` on the return value is set only
+ * by the legacy path (which had to resolve it anyway); the teamId path leaves it null since it
+ * never needed the lookup for the token itself.
  */
 async function resolveSlackBotToken(
   fabFile: Pick<IFabFileDocument, 'id' | 'sourceMetadata' | 'tags'>,
@@ -103,9 +112,27 @@ async function resolveSlackBotToken(
 ): Promise<{ token: string; lake: IDataLakeDocument | null } | null> {
   const teamId = fabFile.sourceMetadata?.teamId;
   if (typeof teamId === 'string' && teamId) {
-    const devWorkspace = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(teamId);
-    const devToken = devWorkspace?.slackBotToken ? decryptToken(devWorkspace.slackBotToken) : null;
-    if (devToken) return { token: devToken, lake: null };
+    const apiAppId = fabFile.sourceMetadata?.apiAppId;
+    if (typeof apiAppId === 'string' && apiAppId) {
+      // Keyed on the (apiAppId, teamId) PAIR, mirroring events.ts's own inbound resolution -
+      // `slackTeamId` alone is not unique (more than one app can be installed to the same team), so
+      // a teamId-only lookup could resolve an arbitrary install's token. The pair-keyed lookup does
+      // not select the token itself (same as events.ts), so a second call fetches credentials.
+      const devWorkspace = await slackDevWorkspaceRepository.findBySlackAppIdAndTeamId(apiAppId, teamId);
+      if (devWorkspace) {
+        const devWorkspaceWithCreds = await slackDevWorkspaceRepository.findByIdWithCredentials(devWorkspace.id);
+        const devToken = devWorkspaceWithCreds?.slackBotToken
+          ? decryptToken(devWorkspaceWithCreds.slackBotToken)
+          : null;
+        if (devToken) return { token: devToken, lake: null };
+      }
+    } else {
+      // Semi-legacy: teamId was stamped before apiAppId was added alongside it. Skip the
+      // dev-workspace lookup entirely rather than resolve it via teamId alone (the bug this chain
+      // was rewritten to fix) - fall through to the org-workspace lookup below, which was always
+      // correctly keyed on teamId alone (an org install is unique per organization, not per team).
+      logger.warn(`FabFile ${fabFile.id} has sourceMetadata.teamId but no apiAppId; skipping dev-workspace lookup`);
+    }
 
     const orgWorkspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(teamId);
     const orgToken = orgWorkspace?.slackBotToken ? decryptToken(orgWorkspace.slackBotToken) : null;
