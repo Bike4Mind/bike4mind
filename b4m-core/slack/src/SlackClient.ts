@@ -190,7 +190,7 @@ export class SlackClient {
   private logger: Logger;
   private readonly MAX_TEXT_LENGTH = 4000; // Slack's character limit
 
-  constructor(botToken: string, logger: Logger) {
+  constructor(botToken: string, logger: Logger, options?: { timeoutMs?: number }) {
     if (isPlaceholderValue(botToken)) {
       throw new Error('Slack bot token is not configured - cannot initialize SlackClient');
     }
@@ -198,11 +198,15 @@ export class SlackClient {
       retryConfig: {
         retries: 2, // Low retries for Lambda timeout budget
       },
-      // Without this, `@slack/web-api` v7 has no request timeout by default, so a slow (not down)
-      // Slack API can block a caller up to its own time budget - e.g. the vectorize queue handler
-      // that now posts here inline, where redelivery is safe (atomic claim) but a stuck request
-      // would otherwise eat the Lambda's whole invocation budget for one message.
-      timeout: 10_000,
+      // `@slack/web-api` v7 has no request timeout by default, so a slow (not down) Slack API can
+      // otherwise block a caller indefinitely. Scoped per-instance via `options.timeoutMs` rather
+      // than a hardcoded value on every caller: this class is shared by ~30 call sites (message
+      // sends, `files.uploadV2`, the paginated Slack-export `conversations.history`), most of which
+      // never asked for a ceiling and might legitimately need longer than a fixed default. `options`
+      // stays absent (unlimited, matching pre-existing behavior for every caller before it existed)
+      // unless a caller explicitly opts in - see `notifySlackIndexingComplete.ts` for the caller
+      // that needs one, and why.
+      timeout: options?.timeoutMs,
     });
     this.logger = logger;
 
