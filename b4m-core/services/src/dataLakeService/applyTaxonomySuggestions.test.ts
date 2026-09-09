@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeBatchDocument, IDataLakeDocument, TaxonomyTag } from '@bike4mind/common';
+import { folderTagForFile } from '@bike4mind/common';
 import { applyTaxonomySuggestions } from './applyTaxonomySuggestions';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -96,6 +97,37 @@ describe('applyTaxonomySuggestions', () => {
     expect(updates[0].id).toBe('f1');
     const names = updates[0].tags.map((t: { name: string }) => t.name).sort();
     // Folder tag kept (unchanged), category tag added - never duplicated.
+    expect(names).toEqual(['acme:legal', 'acme:type:contract']);
+  });
+
+  it('lands under one namespace for a lake whose stored prefix has edge whitespace (#2467)', async () => {
+    // The end-to-end shape of the bug: a lake row predating the create schema's trim stores
+    // " acme: ". The upload pipeline built the file's folder tag from that RAW value
+    // (dataLakeUploadPipeline.ts passes lake.fileTagPrefix straight to folderTagForFile), while
+    // this door builds its tags from the gate's NORMALIZED one. The two agree only because the
+    // builders themselves trim - which is what makes the folder-tag subtraction below still
+    // match, so a re-apply cannot re-add the folder tag under a second spelling.
+    const RAW_PREFIX = ' acme: ';
+    const uploadedFolderTags = folderTagForFile('legal/vendor.pdf', RAW_PREFIX);
+    expect(uploadedFolderTags).toEqual([{ name: 'acme:legal', strength: 1 }]);
+
+    const adapters = makeAdapters({
+      lakeDoc: lake({ fileTagPrefix: RAW_PREFIX }),
+      files: [file({ tags: uploadedFolderTags })],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    const names = updates[0].tags.map((t: { name: string }) => t.name).sort();
+    // Every tag under `acme:`, the form the read arms and the tag-count aggregates match, and
+    // exactly one folder tag - not the raw " acme:legal" the un-normalized builders would write.
     expect(names).toEqual(['acme:legal', 'acme:type:contract']);
   });
 

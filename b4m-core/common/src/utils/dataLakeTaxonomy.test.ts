@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { TaxonomyTag, TaxonomyTagSet } from '../types/entities/DataLakeTypes';
-import { appliedTagsForBatch, folderMatches, sanitizeCategories, tagsForFile } from './dataLakeTaxonomy';
+import {
+  appliedTagsForBatch,
+  folderMatches,
+  folderTagForFile,
+  sanitizeCategories,
+  tagsForFile,
+} from './dataLakeTaxonomy';
 
 /**
  * Regression coverage: the Taxonomy step used to be pure theater - inference returned
@@ -124,6 +130,18 @@ describe('tagsForFile', () => {
     expect(names(result)).toEqual([':legal', ':type:contract']);
   });
 
+  it('trims a stored prefix so every tag lands under the normalized namespace', () => {
+    // A lake row predating the create schema's trim can hold " acme:" (#2467). The write doors
+    // gate on the NORMALIZED prefix and every read arm trims before matching, so a builder that
+    // appended to the raw value would write " acme:legal" - a name nothing can see.
+    const result = tagsForFile(
+      'root/legal/vendor.pdf',
+      taxonomy({ tags: [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })] }),
+      ' acme: '
+    );
+    expect(names(result)).toEqual(['acme:legal', 'acme:type:contract']);
+  });
+
   it('caps how many categories a single file can accumulate, keeping the strongest', () => {
     const many = Array.from({ length: 12 }, (_, i) =>
       tag({ suffix: `cat${i}`, matchingFolders: ['legal'], strength: i / 12 })
@@ -159,6 +177,19 @@ describe('tagsForFile', () => {
   });
 });
 
+describe('folderTagForFile', () => {
+  it('trims a stored prefix, so the upload pipeline and the apply door share one namespace', () => {
+    // The upload pipeline passes the lake's RAW fileTagPrefix (dataLakeUploadPipeline.ts) while
+    // applyTaxonomySuggestions passes the gate's normalized one. Both must produce the same name
+    // for the same file, or a re-apply's folder-tag subtraction stops matching what upload wrote
+    // and the file picks up the folder tag twice under two spellings.
+    expect(folderTagForFile('root/legal/vendor.pdf', ' acme: ')).toEqual(
+      folderTagForFile('root/legal/vendor.pdf', 'acme:')
+    );
+    expect(folderTagForFile('root/legal/vendor.pdf', ' acme: ')).toEqual([{ name: 'acme:legal', strength: 1.0 }]);
+  });
+});
+
 describe('sanitizeCategories', () => {
   it('caps the number of categories at 100, mirroring ApplyTaxonomyRequestInput', () => {
     const categories = Array.from({ length: 150 }, (_, i) => ({ tagName: `type:cat${i}` }));
@@ -191,6 +222,19 @@ describe('sanitizeCategories', () => {
     const result = sanitizeCategories([{ tagName: 'type:contract', matchingFolders: [longFolder] }], 'acme');
 
     expect(result[0]?.matchingFolders[0]?.length).toBeLessThanOrEqual(512);
+  });
+});
+
+describe('sanitizeCategories with an un-trimmed source prefix', () => {
+  it('still strips the inferred prefix, so the suffix does not carry it a second time', () => {
+    // deriveSuffix compares against the same normalized prefix the builders apply. Without that,
+    // a lake stored as " acme:" would keep "acme:contract" whole as the suffix and tagsForFile
+    // would then emit "acme:acme:contract".
+    const [category] = sanitizeCategories(
+      [{ tagName: 'acme:contract', confidence: 0.8, matchingFolders: [] }],
+      ' acme:'
+    );
+    expect(category.suffix).toBe('contract');
   });
 });
 

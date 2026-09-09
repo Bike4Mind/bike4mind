@@ -108,4 +108,14 @@ describe('foldersTagsForBatch', () => {
     expect(new Set(names).size).toBe(names.length);
     expect(names.length).toBeGreaterThan(0);
   });
+
+  it('normalizes a stored prefix that carries edge whitespace (#2467)', () => {
+    // The pipeline passes the lake's RAW fileTagPrefix, and a row predating the create schema's
+    // trim can hold " legal: ". folderTagForFile normalizes, so upload's tag matches the one
+    // applyTaxonomySuggestions later subtracts from its taxonomy result - and both are visible
+    // to the read arms, which trim before matching.
+    expect(foldersTagsForBatch([{ relativePath: 'legal/contracts/a.pdf' }], ' legal: ')).toEqual(
+      foldersTagsForBatch([{ relativePath: 'legal/contracts/a.pdf' }], 'legal:')
+    );
+  });
 });
