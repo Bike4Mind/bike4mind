@@ -21,18 +21,23 @@ this harness answers it before anyone pays for a corpus re-embed.
 
 | phase | script | needs | runs in CI |
 |---|---|---|---|
-| A: capture | `capture-embeddings.ts` | live Mongo + provider key | no |
+| A: capture | `capture-embeddings.ts` | live Mongo (+ provider key to embed) | no |
 | B: analysis | `model-comparison.ts` | a fixture file | yes |
+
+`--dry-run` returns before the provider key is resolved, so the price quote and the corpus-regime gate
+both run on Mongo alone: you can price the run and confirm the lake is in the long-document regime
+*before* going to get a key or authorising any spend, which is the order this runbook wants.
 
 The capture embeds each chunk once per model **at full width** and writes a fixture. Everything after
 that is arithmetic:
 
 - **Widths are free.** `text-embedding-3-*` are Matryoshka models, so `3-small@1536/512` and
   `3-large@3072/1536/512` are five arms off two API calls. No width costs an extra request.
-- **Nothing is written to Mongo.** No scratch lake, no persisted vector. That also disposes of a real
-  hazard: `FabFile.embeddingModel` records the model with **no width**, so two vectors both honestly
-  labelled `text-embedding-3-small` at 1536 and 512 would compare as noise. Nothing is stored here, so
-  nothing can be mislabelled.
+- **Nothing is written to the corpus.** No scratch lake, no persisted vector. (`connectDB` itself is
+  not write-free - it seeds the price catalog and builds indexes on first connect, same as any deploy
+  boot - see the script's docblock.) That also disposes of a real hazard: `FabFile.embeddingModel`
+  records the model with **no width**, so two vectors both honestly labelled `text-embedding-3-small`
+  at 1536 and 512 would compare as noise. Nothing is stored here, so nothing can be mislabelled.
 - **Exact cosine, not ANN.** The comparison scores every chunk through the shipped
   `computeCosineSimilarity`. The subject of the measurement is the embedding space, and ANN recall
   would be a confound on top of it. This is a real difference from the published prod numbers, which
@@ -105,6 +110,16 @@ production lake instead.
 **reproducible** arm - it is public and in-repo, so anyone can re-derive the result. A production lake
 is the **confirmatory** arm, and a human has to name it and authorise the spend.
 
+Two things about that confirmatory arm:
+
+- **Name it by `datalakeTag`, not by slug.** A slug is unique only per organization, and this script
+  resolves one with no org context - which reaches an org-less lake like `system-help` and no
+  org-owned lake at all. `--lake` accepts either and tries the slug first; an org-owned production
+  lake needs its globally-unique `datalakeTag`.
+- **Pass your own `--userId`.** It decides whose credential pays: `getEffectiveLLMApiKeys` prefers a
+  personal key over the platform one, so passing the lake owner's id spends a third party's quota.
+  The preflight prints the resolved source (`credential source`) before it embeds - read that line.
+
 ## Reading the output
 
 Each arm prints a block shaped like the published prod probe, then one cross-arm table.
@@ -112,7 +127,7 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 | column | meaning |
 |---|---|
 | `band min/max/width` | where the served scores sit, pooled across queries. The collapse this exists to measure. |
-| `spread` | mean rank-1 minus rank-10. Near zero means the ranking carries no information. |
+| `spread` | mean rank-1 minus rank-N, where N is the printed `rankDepth` (`RANK_DEPTH`, or fewer on a small corpus). Near zero means the ranking carries no information. |
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |
 | `recall`/`prec`/`hit`/`mrr` | did the wider band actually buy better retrieval, or just rescale the same ordering? |
 
@@ -125,6 +140,14 @@ PARTIAL overlap gets its own note, because the all-or-nothing check above passes
 one supporting slug renders a full set of quality columns computed against the whole supporting set,
 so `recall` and `prec` are bounded well below 1 by the corpus rather than by the model. The note states
 the fraction (`3 of 49 supporting documents captured`); compare arms to each other, not to 1.
+
+Each arm block prints the band **twice**. `overall band` is pooled across every probe question,
+including the 5 deliberate negatives; `positives-only band` is the same statistic over the answerable
+questions alone. Read the instrument check against the second one: the published prod figure
+(0.8272 - 0.8856) was measured over that lake's **relevant** queries, and a band is `max - min`, so
+pooling in a negative's top score is exactly the kind of difference an extreme carries. The go signal
+is unaffected either way - every arm shares one question set - so for comparing arms to each other,
+either band works.
 
 `retrieval_unavailable` is a real number: the capture enumerates the lake with the lifecycle-sweep
 reader (which returns every id the lake has ever held) and then filters it to the files retrieval can
@@ -147,8 +170,13 @@ there only means inlining a doc it could have deferred - while the partition is 
 comes back. Taking the partition as the truth is what makes this an overstatement rather than an
 undercount.
 
-Every arm shares one filter, so the model+width comparison is unaffected either way; the absolute band
-is what carries the bias.
+Every arm shares one filter, which makes the drop neutral for a **mean** - but band width is
+`max - min`, an extreme, and the withheld stratum is not random (a partially vectorized file skews
+long, and this comparison exists because model behaviour may interact with length). So the rider is
+narrower than "unaffected": **the comparison is unbiased when `retrieval_unavailable` is 0**, which
+every arm block prints. On the corpus this targets it is 0 - the prod probe recorded zero missing
+vectors and zero paused or indexing files. Read the counter before reading the widths against each
+other.
 
 `superseded` prints as `n/a`, not `0`: this instrument runs no collapse pass, so claiming it checked
 and found none would be untrue.
