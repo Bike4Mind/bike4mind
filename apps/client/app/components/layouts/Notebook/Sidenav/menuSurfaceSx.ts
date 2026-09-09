@@ -10,15 +10,41 @@ import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 const MENU_INSET = '8px';
 
 /**
+ * A CSS px length. Deliberately narrower than `string`: it is what every knob in this module
+ * actually takes, and it rejects `menuSurfaceSx(theme, 'chartreuse')` at the type level.
+ *
+ * The constraint is chosen, not incidental - it also rejects `0`, `calc(...)` and rem values.
+ * Every caller here passes px, so that costs nothing today; whoever first wants one of those
+ * should widen this rather than cast around it.
+ */
+type PxLength = `${number}px`;
+
+/**
+ * The corner a menu surface uses unless a caller says otherwise, shared by menuSurfaceSx and
+ * menuListSx so their defaults cannot drift into declaring different corners for one element.
+ */
+const MENU_SURFACE_RADIUS: PxLength = '8px';
+
+/** The knobs the three list recipes share. */
+type MenuListOpts = {
+  /** Row spacing: 4px for a Select's listbox, 2px for the denser action menus. */
+  gap?: PxLength;
+  /** The surface's own corner - pass whatever menuSurfaceSx was given, so the two agree. */
+  radius?: PxLength;
+};
+
+/**
  * Shared look for the app's floating menu surfaces (the profile menu, its "More" flyout, the
  * Data Lake row and lake menus, the chat panel's layout Select). One recipe so a tweak to the
  * ground or the lift reaches all of them. `radius` is the surface's own corner: the profile
  * panel and the Data Lake menus use 8px, the More flyout 12px.
  *
  * Anything on this ground that renders as a Joy List - a Menu, a Select listbox - wants
- * menuListSx too, and its rows want selectListboxSx (a Select) or menuItemListSx (a Menu).
+ * menuListSx too, and its rows want selectListboxSx (a Select) or menuItemListSx (a Menu). Pass
+ * a non-default `radius` to BOTH: Joy paints the same element's corner from --List-radius, so the
+ * two agree by construction only at the default (see menuListSx).
  */
-export const menuSurfaceSx = (theme: Theme, radius = '8px') => ({
+export const menuSurfaceSx = (theme: Theme, radius: PxLength = MENU_SURFACE_RADIUS) => ({
   backgroundColor: theme.palette.background.surface,
   border: `1px solid ${theme.palette.divider}`,
   borderRadius: radius,
@@ -40,16 +66,22 @@ export const menuSurfaceSx = (theme: Theme, radius = '8px') => ({
  *
  * --ListItem-radius is pinned rather than left to Joy, which DERIVES a smaller child radius from
  * --List-radius and --List-padding (8/8 comes out at 4px) - the reason the menus disagreed about
- * their row corners. Rows are 8px whatever the surface's own corner is, so both stay literals:
- * --List-radius is only the derivation's input, and menuSurfaceSx owns the corner you see.
+ * their row corners. Rows stay 8px whatever the surface's corner is: a 12px panel still wants
+ * 8px rows.
  *
- * `gap` is the only knob: 4px for a Select's listbox, 2px for the denser action menus. The
- * padding is MENU_INSET, the same constant menuSurfaceSx pads with, so the two stay equal by
- * construction.
+ * --List-radius is NOT merely that derivation's input. Joy paints a visible corner from it on
+ * every surface these recipes land on - Menu.js:51 and Select.js:240 are both
+ * `borderRadius: var(--List-radius, radius.sm)`, and List.js:130 the same on a bare List
+ * (@mui/joy 5.0.0-beta.52). menuSurfaceSx wins that corner today only because its sx class
+ * outranks Joy's styled class, so `radius` is threaded through here to stop the two declaring
+ * different corners for one element.
+ *
+ * `gap` is 4px for a Select's listbox, 2px for the denser action menus. The padding is
+ * MENU_INSET, the same constant menuSurfaceSx pads with, so the two stay equal by construction.
  */
-export const menuListSx = ({ gap = '4px' }: { gap?: string } = {}) => ({
+export const menuListSx = ({ gap = '4px', radius = MENU_SURFACE_RADIUS }: MenuListOpts = {}) => ({
   '--List-padding': MENU_INSET,
-  '--List-radius': '8px',
+  '--List-radius': radius,
   '--List-gap': gap,
   '--ListItem-radius': '8px',
   ...scrollbarStyles,
@@ -74,7 +106,7 @@ export const menuListSx = ({ gap = '4px' }: { gap?: string } = {}) => ({
  * deliberately sit on background.body with no border, which is a different surface, not a
  * drifted copy of this one.
  */
-export const selectListboxSx = (theme: Theme, opts?: { gap?: string }) => ({
+export const selectListboxSx = (theme: Theme, opts?: MenuListOpts) => ({
   ...menuListSx(opts),
   '& [role="option"]': {
     borderRadius: '8px',
@@ -120,7 +152,7 @@ export const selectListboxSx = (theme: Theme, opts?: { gap?: string }) => ({
  * child dropped into a row (an IconButton, a Chip) would pick the row's ground up as its own.
  * rowActionsMenu.tsx zeroes both variables on its trigger for exactly that reason.
  */
-export const menuItemListSx = (theme: Theme, opts?: { gap?: string }) => ({
+export const menuItemListSx = (theme: Theme, opts?: MenuListOpts) => ({
   ...menuListSx(opts),
   '& [role="menuitem"]': {
     transition: 'background 0.15s',
