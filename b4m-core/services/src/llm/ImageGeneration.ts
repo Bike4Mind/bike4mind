@@ -24,6 +24,7 @@ import {
   CreditHolderType,
   PromptIntentSchema,
   ImageModerationIncident as ImageModerationIncidentInput,
+  AttachmentLakeAccess,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -144,6 +145,13 @@ interface IImageGenerationServiceOptions {
   imageProcessorLambdaName?: string;
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
   imageModerationService?: ImageModerationService;
+  /**
+   * Resolves the acting user's owner-wide data-lake access. Threaded to `findAccessibleInIds` so a
+   * lake-only image the workbench admitted still resolves as an image-gen input - parity with the
+   * lake arm that predicate now carries. Optional so existing callers/tests keep compiling; absent
+   * degrades to owner/share/global-read only (today's behaviour).
+   */
+  resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
 async function downloadImage(url: string) {
@@ -183,6 +191,7 @@ export class ImageGenerationService {
   private invokeSummarizeSession: IImageGenerationServiceOptions['invokeSummarizeSession'];
   private imageProcessorLambdaName?: string;
   private imageModerationService?: ImageModerationService;
+  private resolveLakeAccess?: IImageGenerationServiceOptions['resolveLakeAccess'];
 
   constructor(options: IImageGenerationServiceOptions) {
     this.db = options.db;
@@ -197,6 +206,7 @@ export class ImageGenerationService {
     this.invokeSummarizeSession = options.invokeSummarizeSession;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.imageModerationService = options.imageModerationService;
+    this.resolveLakeAccess = options.resolveLakeAccess;
   }
 
   /**
@@ -499,6 +509,7 @@ export class ImageGenerationService {
     fabFileIds,
     userId,
     userGroups,
+    lakeAccess,
     model,
     modelInfo,
     intent,
@@ -508,6 +519,7 @@ export class ImageGenerationService {
     fabFileIds?: string[];
     userId: string;
     userGroups?: string[];
+    lakeAccess?: AttachmentLakeAccess;
     model: string;
     modelInfo: ModelInfo;
     intent: z.infer<typeof PromptIntentSchema>;
@@ -518,7 +530,7 @@ export class ImageGenerationService {
   }> {
     // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
     // never presigned or fed to a provider (owner/share/group/global-read only).
-    const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups });
+    const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups }, lakeAccess);
     const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
 
     // An explicit workbench upload must not be fed into generation while it's held (pending
@@ -556,7 +568,11 @@ export class ImageGenerationService {
         const attachedIds = [...new Set(recentMessages.flatMap(msg => msg.fabFileIds ?? []))];
         const attachedById = new Map<string, IFabFileDocument>();
         if (attachedIds.length) {
-          for (const file of await this.db.fabFiles.findAccessibleInIds(attachedIds, { userId, userGroups })) {
+          for (const file of await this.db.fabFiles.findAccessibleInIds(
+            attachedIds,
+            { userId, userGroups },
+            lakeAccess
+          )) {
             if (file.id) attachedById.set(file.id, file);
           }
         }
@@ -653,6 +669,11 @@ export class ImageGenerationService {
       organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
     ]);
     if (!user) throw new NotFoundError('User not found');
+
+    // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
+    // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
+    // owner/share/global-read only - never widens, never fails the run.
+    const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
 
     const settings = await getSettingsMap(this.db);
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
@@ -779,6 +800,7 @@ export class ImageGenerationService {
         fabFileIds,
         userId,
         userGroups: user.groups ?? undefined,
+        lakeAccess,
         model,
         modelInfo,
         intent,

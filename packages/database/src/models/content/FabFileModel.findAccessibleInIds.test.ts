@@ -82,4 +82,35 @@ describe('FabFileRepository.findAccessibleInIds', () => {
     expect(await fabFileRepository.findAccessibleInIds([], { userId: owner })).toEqual([]);
     expect(await fabFileRepository.findAccessibleInIds(['not-an-object-id'], { userId: owner })).toEqual([]);
   });
+
+  // Lake-only regression: a file the caller can reach ONLY through data-lake membership (not owned,
+  // not shared, not global-read) must resolve when lakeAccess names its lake - parity with the
+  // attachment door (getAccessibleFiles) that admits it. Without the lake arm these silently drop.
+  const lakeTag = 'datalake:org:kb';
+
+  it('drops a lake-only file when no lakeAccess is passed (owner/share/global only)', async () => {
+    const lakeFile = await makeImage(other, { tags: [{ name: lakeTag }] });
+    const files = await fabFileRepository.findAccessibleInIds([lakeFile.id], { userId: owner });
+    expect(files).toEqual([]);
+  });
+
+  it('returns a lake-only file when lakeAccess names its lake by exact tag', async () => {
+    const lakeFile = await makeImage(other, { tags: [{ name: lakeTag }] });
+    const files = await fabFileRepository.findAccessibleInIds(
+      [lakeFile.id],
+      { userId: owner },
+      { dataLakeTags: [lakeTag] }
+    );
+    expect(files.map(f => f.id)).toEqual([lakeFile.id]);
+  });
+
+  it('does NOT return a lake file whose lake is archived, even with lakeAccess', async () => {
+    const archived = await makeImage(other, { tags: [{ name: lakeTag }], archivedAt: new Date() });
+    const files = await fabFileRepository.findAccessibleInIds(
+      [archived.id],
+      { userId: owner },
+      { dataLakeTags: [lakeTag] }
+    );
+    expect(files).toEqual([]);
+  });
 });

@@ -807,7 +807,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @param ids - The IDs of the files.
    * @param access - The caller's userId and (optional) group ids.
    */
-  findAccessibleInIds(ids: string[], access: { userId: string; userGroups?: string[] }): Promise<IFabFileDocument[]>;
+  findAccessibleInIds(
+    ids: string[],
+    access: { userId: string; userGroups?: string[] },
+    lakeAccess?: AttachmentLakeAccess
+  ): Promise<IFabFileDocument[]>;
 
   /**
    * Find files by ID with the heavy and URL-bearing fields projected out, for

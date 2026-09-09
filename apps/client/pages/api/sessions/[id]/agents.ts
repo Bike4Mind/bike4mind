@@ -1,84 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sessionRepository, agentRepository, fabFileRepository } from '@bike4mind/database';
+import { sessionRepository, agentRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { getFilesStorage } from '@server/utils/storage';
-import { IAgent, IAgentDocument, redactSessionForClient, isImageServeable } from '@bike4mind/common';
-
-// `viewerId` is the requesting user: the signed-URL write-back below mutates the FabFile
-// record, so it is gated to the file's owner - a viewer of a *shared* agent still gets a
-// freshly minted display URL but never rewrites another user's FabFile record.
-const refreshAgentAvatarUrls = async (agents: IAgent[], viewerId: string): Promise<IAgent[]> => {
-  const refreshedAgents = await Promise.all(
-    agents.map(async agent => {
-      if (!agent.visual?.portraitUrl) {
-        return agent;
-      }
-
-      try {
-        // S3 URLs look like: https://bucket.s3.region.amazonaws.com/filename.ext?params
-        const url = new URL(agent.visual.portraitUrl);
-        const pathname = url.pathname;
-        const filename = pathname.substring(1);
-
-        if (!filename || !filename.includes('.')) {
-          return agent;
-        }
-
-        // The filePath in the database is just the filename, without the fab-files/ prefix
-        const filePath = filename;
-
-        const fabFile = await fabFileRepository.findOne({ filePath });
-        // Don't re-mint a signed URL for a held/blocked avatar image
-        if (fabFile && fabFile.filePath && isImageServeable(fabFile)) {
-          // Check if the current URL is expired (older than 50 minutes)
-          const now = new Date();
-          const isExpired = !fabFile.fileUrlExpireAt || fabFile.fileUrlExpireAt <= now;
-
-          if (isExpired) {
-            const newSignedUrl = await getFilesStorage().getSignedUrl(fabFile.filePath);
-
-            if (newSignedUrl) {
-              // Persist the fresh URL only on the owner's own record - a shared-agent viewer
-              // must not mutate a FabFile owned by someone else.
-              if (fabFile.userId === viewerId) {
-                const newExpireAt = new Date(now.getTime() + 3600 * 1000);
-                await fabFileRepository.update({
-                  ...fabFile,
-                  fileUrl: newSignedUrl,
-                  fileUrlExpireAt: newExpireAt,
-                });
-              }
-
-              return {
-                ...agent,
-                visual: {
-                  ...agent.visual,
-                  portraitUrl: newSignedUrl,
-                },
-              };
-            }
-          } else {
-            // URL is still valid, use the existing one
-            return {
-              ...agent,
-              visual: {
-                ...agent.visual,
-                portraitUrl: fabFile.fileUrl || agent.visual.portraitUrl,
-              },
-            };
-          }
-        }
-      } catch (error) {
-        console.error(`Error refreshing avatar URL for agent ${agent.name}:`, error);
-      }
-
-      return agent;
-    })
-  );
-
-  return refreshedAgents;
-};
+import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
+import { IAgentDocument, redactSessionForClient } from '@bike4mind/common';
 
 const handler = baseApi()
   .get(

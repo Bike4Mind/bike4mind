@@ -150,7 +150,7 @@ describe('ImageGenerationService.selectInputImage', () => {
   it('resolves a Kontext input image from a user attachment earlier in the notebook (the bug)', async () => {
     // No workbench upload; the image the user attached to a prior message must be found so
     // Kontext (a required-input model) does not falsely report "no input image".
-    const { service } = makeService({
+    const { service, findAccessibleInIds } = makeService({
       fabFilesById: { f1: cleanImage('f1') },
       recentMessages: [{ id: 'm1', type: 'message', timestamp: new Date(0), fabFileIds: ['f1'] }],
     });
@@ -158,10 +158,17 @@ describe('ImageGenerationService.selectInputImage', () => {
     const result = await select(service, {
       model: ImageModels.FLUX_KONTEXT_PRO,
       supportsImageVariation: true,
+      userId: 'u1',
+      userGroups: ['g1'],
     });
 
     expect(result.fileImage?.id).toBe('f1');
     expect(result.imageSource).toBe('notebook_attachment');
+    // Pin the SECOND (message-history) call site independently of the workbench call: the
+    // notebook-attachment lookup must also run as the caller, with the same lakeAccess arg, so a
+    // regression that drops the principal here can no longer be masked by the workbench call
+    // satisfying a shared toHaveBeenCalledWith. Workbench call is #1 (empty ids), history is #2.
+    expect(findAccessibleInIds).toHaveBeenNthCalledWith(2, ['f1'], { userId: 'u1', userGroups: ['g1'] }, undefined);
   });
 
   it('returns no image for Kontext when the notebook has none (downstream throws the guidance error)', async () => {
@@ -221,10 +228,15 @@ describe('ImageGenerationService.selectInputImage', () => {
       userGroups: ['g1'],
     });
     expect(result.fileImage).toBeUndefined();
-    expect(findAccessibleInIds).toHaveBeenCalledWith(['someone-elses-file'], {
-      userId: 'attacker',
-      userGroups: ['g1'],
-    });
+    // Pin the workbench call exactly, third arg included: the scoped lookup runs as the caller
+    // (never a widened principal) and threads the caller's lakeAccess (undefined here - no resolver
+    // wired in this test), so the arm can never be silently dropped from the assertion.
+    expect(findAccessibleInIds).toHaveBeenNthCalledWith(
+      1,
+      ['someone-elses-file'],
+      { userId: 'attacker', userGroups: ['g1'] },
+      undefined
+    );
   });
 
   it('prefers the workbench upload over any notebook-context image', async () => {

@@ -106,6 +106,17 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
 
     await expect(getImageFromFileId(VALID_FILE_ID, context)).rejects.toThrow(`File with ID ${VALID_FILE_ID} not found`);
     expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
+    // Pin the principal that reaches the repo: the lookup runs as the caller (context.userId),
+    // never a widened one, and carries a lakeAccess arm so the denial cannot be an artifact of an
+    // over-narrow query. (lakeAccess resolves to {} here - the fake context wires no lake repos.)
+    const findAccessibleInIds = (
+      context.db as unknown as { fabfiles: { findAccessibleInIds: ReturnType<typeof vi.fn> } }
+    ).fabfiles.findAccessibleInIds;
+    expect(findAccessibleInIds).toHaveBeenCalledWith(
+      [VALID_FILE_ID],
+      { userId: context.userId, userGroups: undefined },
+      expect.anything()
+    );
   });
 
   it('resolves a signed URL for a clean image', async () => {
