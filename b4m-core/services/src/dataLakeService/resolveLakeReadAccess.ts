@@ -46,11 +46,16 @@ export interface LakeAccessLogger {
  * reader/curator/owner and to org-shared lakes) and it bypasses Private-by-default. `grants` is
  * pre-filtered to ACTIVE (expiry) by the caller, so a lapsed grant never reaches here.
  *
- * Role is intentionally not inspected here: any grant a principal holds admits a READ. Owner/curator
- * (and org owner/curator for an org ADMIN) already pass the legacy `owner-admin` arm via
- * canManageLake, so the outcomes this newly flips are (a) a user `reader` grant and (b) an org grant
- * of any role reaching a plain member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP
- * (`ctx.organizationIds`), distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
+ * Role is intentionally not inspected here: any grant a principal holds admits a READ. A user
+ * owner/curator grant already passes the legacy `owner-admin` arm via canManageLake, so the outcomes
+ * this newly flips are (a) a user `reader` grant and (b) an org grant of any role reaching a plain
+ * member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP (`ctx.organizationIds`),
+ * distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
+ *
+ * An org owner/curator grant held by an org ADMIN pre-passes that legacy arm only when the grant is
+ * contained to the lake's own org (or the lake has none) - canManageLake's org-grant rung compares
+ * the two. A CROSS-org org grant is denied there, so it arrives un-allowed and this arm would be
+ * what decides it; `containedGrants` strips the row before it gets here, so the two gates agree.
  *
  * THIS ARM never lets an org grant reach a lake outside the granting org. Scoped deliberately: the
  * claim is about the read-grant arm, not about the whole decision - the legacy `canManageLake` org
@@ -267,4 +272,33 @@ export const grantedLakeReachFor = async (
     grantedLakeIds: Array.from(ids),
     orgGrantedLakes: Object.fromEntries(Array.from(byOrg, ([orgId, lakeIds]) => [orgId, Array.from(lakeIds)])),
   };
+};
+
+/**
+ * Lake ids the caller can reach via a MANAGE-conferring active grant - the narrower sibling of
+ * `grantedLakeReachFor`, for the management views (archived / deleted / transitional) whose only
+ * offered action is a restore, cleanup or retry.
+ *
+ * Narrower two ways. By ROLE: owner/curator only, allow-listed rather than excluding `reader`, so a
+ * role added to DATA_LAKE_ACCESS_ROLES (called out there as an additive change) fails closed here
+ * until someone decides it manages. A reader grant is read access and confers no restore - the same
+ * ground these views already pass includePublic:false on.
+ *
+ * By PRINCIPAL: user grants only, so the return type is a bare id list rather than a
+ * `LakeGrantReach`. An org grant carries no role through `orgGrantArms`, so DataLakeModel already
+ * suppresses those arms alongside the public one whenever `includePublic:false` - which is exactly
+ * the three views this feeds. Resolving an org reach here would therefore be dead weight. Given up
+ * with it either way: an org-LESS lake carrying an org grant, which `orgGrantArms` also never
+ * matches. A SAME-org lake is unaffected - it arrives via findAccessible's own administeredOrgIds
+ * arm, which carries the lake-org containment an id list cannot.
+ *
+ * Reads no cutover flag, unlike `grantedLakeReachFor`'s `includeReaders`: owner/curator grants have
+ * live, unflagged producers (createDataLake, transferLakeOwnership) and the rungs that honor them
+ * are live too, so gating this on the read-grant cutover would withhold ids the manage gate accepts.
+ */
+export const manageGrantedLakeIdsFor = async (userId: string, grants?: PrincipalGrantLookup): Promise<string[]> => {
+  if (!grants) return [];
+  const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
+  const manageable = rows.filter(row => row.role === 'owner' || row.role === 'curator');
+  return Array.from(new Set(manageable.map(row => row.dataLakeId)));
 };
