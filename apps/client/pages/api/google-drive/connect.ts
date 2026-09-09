@@ -4,7 +4,7 @@ import { getAuthUrl } from '@server/integrations/google/drive/common';
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
-    const authUrl = getAuthUrl();
+    const authUrl = getAuthUrl(res);
     return res.json({ authUrl });
   })
 );

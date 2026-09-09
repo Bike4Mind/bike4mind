@@ -12,10 +12,11 @@ const GoogleDriveCallbackPage = () => {
   const search = useSearch({ strict: false });
 
   useEffect(() => {
-    const { code } = search as any;
+    const { code, state } = search as any;
 
     api
-      .get(`/api/google-drive/callback?code=${code}`)
+      // Forward `state` so the API callback can verify the browser-binding nonce.
+      .get(`/api/google-drive/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`)
       .catch(error => {
         console.error('Error connecting to Google Drive:', error);
         toast.error('Error connecting to Google Drive');
