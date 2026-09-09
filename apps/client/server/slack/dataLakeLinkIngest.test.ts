@@ -1,32 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { assertLakeWriteAccess, assertCanWriteDataLakeTags, reconcileDataLakeFallbackTags, DuplicateFabFileError } =
-  vi.hoisted(() => {
-    // Mirrors `fabFilesService.DuplicateFabFileError`'s real shape (createByUrl.ts) closely enough
-    // for `instanceof` to work here - this IS the class both the module under test and this file's
-    // tests reference, so they agree on identity without importing the real (heavy) services module.
-    class DuplicateFabFileError extends Error {
-      constructor(
-        public readonly existing: unknown,
-        public readonly fetchedTitle: string
-      ) {
-        super('Duplicate content already exists in this data lake');
-      }
-    }
-    return {
-      assertLakeWriteAccess: vi.fn(),
-      assertCanWriteDataLakeTags: vi.fn(),
-      reconcileDataLakeFallbackTags: vi.fn(),
-      DuplicateFabFileError,
-    };
-  });
+const { assertLakeWriteAccess, assertCanWriteDataLakeTags, reconcileDataLakeFallbackTags } = vi.hoisted(() => ({
+  assertLakeWriteAccess: vi.fn(),
+  assertCanWriteDataLakeTags: vi.fn(),
+  reconcileDataLakeFallbackTags: vi.fn(),
+}));
 
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { assertLakeWriteAccess, assertCanWriteDataLakeTags, reconcileDataLakeFallbackTags },
-  fabFilesService: { DuplicateFabFileError },
 }));
 
-import { FabFileSourceType } from '@bike4mind/common';
+// The real class, not a mock - `dataLakeLinkIngest.ts` now imports `DuplicateFabFileError` and
+// `isDuplicateFabFileError` from `@bike4mind/common` directly (moved there so a single package
+// owns its identity - see errors.ts), so no shim is needed to make `instanceof` agree here.
+import { DuplicateFabFileError, FabFileSourceType } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { SLACK_MOCK_USER_ID } from '@bike4mind/slack';
 import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps } from './dataLakeLinkIngest';
@@ -252,7 +239,7 @@ describe('duplicate content is skipped, not re-added', () => {
   it('reports skip-not-replace, matching the FILE path wording, without creating anything new', async () => {
     // createByUrl.ts throws this BEFORE any row is created when its checkDuplicate adapter (bound
     // to findByContentHashesInDataLake, scoped to this lake's tag) finds a live match.
-    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' }, 'An Article'));
+    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' } as never, 'An Article'));
 
     const outcome = await run();
 
@@ -266,7 +253,7 @@ describe('duplicate content is skipped, not re-added', () => {
   });
 
   it('is reported as a SUCCESS, never folded into the refusal de-dup path', async () => {
-    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' }, 'An Article'));
+    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' } as never, 'An Article'));
 
     const outcome = await run();
 
