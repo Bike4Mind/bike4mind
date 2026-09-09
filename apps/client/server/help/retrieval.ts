@@ -31,6 +31,7 @@ import {
   stripFrontmatter,
   truncateAndNormalize,
 } from '@bike4mind/scripts/help/utils';
+import { safeHelpContentPath } from './contentPath';
 import fs from 'fs';
 import path from 'path';
 
@@ -273,8 +274,8 @@ function findRelevantHelpEntries(question: string, helpIndex: HelpIndex, isAdmin
  * authenticated route that serves the same files to the help viewer.
  */
 function helpContentRoots(isAdmin: boolean): string[] {
-  const roots = [path.resolve(process.cwd(), PUBLIC_HELP_CONTENT_DIR)];
-  if (isAdmin) roots.push(path.resolve(process.cwd(), ADMIN_HELP_CONTENT_DIR));
+  const roots = [`${process.cwd()}/${PUBLIC_HELP_CONTENT_DIR}`];
+  if (isAdmin) roots.push(`${process.cwd()}/${ADMIN_HELP_CONTENT_DIR}`);
   return roots;
 }
 
@@ -303,12 +304,14 @@ export async function loadHelpContent(slug: string, isAdmin: boolean, logger: He
     const candidates = [`${slug}.md`, `${slug}/index.md`];
     for (const helpContentRoot of helpContentRoots(isAdmin)) {
       for (const candidate of candidates) {
-        const contentPath = path.resolve(helpContentRoot, candidate);
-        // Prevent path traversal
-        if (!contentPath.startsWith(helpContentRoot + path.sep)) {
+        // Guard the relative half, then append with a template literal - the root must never reach
+        // a path.* call. See safeHelpContentPath for why that is load-bearing for bundle size.
+        const relative = safeHelpContentPath(candidate);
+        if (!relative) {
           logger.warn(`[HelpRetrieval] Path traversal attempt blocked for slug: ${slug}`);
           return null;
         }
+        const contentPath = `${helpContentRoot}/${relative}`;
         try {
           const content = await fs.promises.readFile(contentPath, 'utf-8');
           helpContentCache.set(cacheKey, content);

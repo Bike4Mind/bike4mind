@@ -12,6 +12,12 @@ const monorepoRoot = new URL('../../', import.meta.url).pathname;
 // instead of the SST/AWS runtime. `Resource` is the only symbol the code
 // imports from `sst`, so aliasing the whole module is safe. Gated on
 // B4M_SELF_HOST so the normal SST build (staging/prod) is completely unaffected.
+/**
+ * The two help content roots, as outputFileTracingIncludes globs. Kept as one value because both
+ * consuming routes need both roots and they must not drift. See the comment at the include site.
+ */
+const HELP_CONTENT_ROOTS = ['./public/help-content/**/*', './app/generated/help-content-admin/**/*'];
+
 const selfHostResolveAlias = process.env.B4M_SELF_HOST === 'true' ? { sst: '@bike4mind/resource' } : {};
 
 // NEXT_PUBLIC_CDN_URL is an absolute URL on deployed stages, but on personal
@@ -54,17 +60,18 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
-  // Admin help bodies live OUTSIDE public/ (so Next cannot serve them unauthenticated) and are
-  // read at runtime via path.join(process.cwd(), ADMIN_HELP_CONTENT_DIR). Next's file tracing
-  // already resolves that string literal and picks the directory up on its own - the invariant is
-  // recorded at packages/scripts/help/utils.ts - but that is a static-analysis heuristic, and
-  // `output: 'standalone'` above is only set for self-host, so the hosted OpenNext bundle packages
-  // by a different mechanism. Declaring the include makes it explicit for both paths: a future
-  // refactor of content.ts that computes the path instead of naming it cannot silently reduce
-  // every admin help article to a 404 with a green build.
+  // Both help content roots, declared rather than traced. The two server readers
+  // (pages/api/help/content.ts and server/help/retrieval.ts) build their read paths with template
+  // literals and keep the roots out of every path.* call, because @vercel/nft partially evaluates
+  // a path.resolve() whose base it cannot determine statically - a root chosen from a runtime
+  // array is exactly that - then gives up and globs the whole app directory into the bundle. That
+  // measured 47 MB of source, public/, e2e specs and tsconfig.tsbuildinfo against Lambda's hard
+  // 250 MB ceiling. Opaque paths mean nothing traces these files, so they MUST be declared here:
+  // the two halves are a pair, and dropping either one silently 404s every admin help article or
+  // silently re-adds the 47 MB. See server/help/contentPath.ts.
   outputFileTracingIncludes: {
-    '/api/help/content': ['./app/generated/help-content-admin/**/*'],
-    '/api/help/chat': ['./app/generated/help-content-admin/**/*'],
+    '/api/help/content': HELP_CONTENT_ROOTS,
+    '/api/help/chat': HELP_CONTENT_ROOTS,
   },
 
   transpilePackages: [

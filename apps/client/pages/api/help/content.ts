@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ADMIN_HELP_CONTENT_DIR, PUBLIC_HELP_CONTENT_DIR } from '@bike4mind/scripts/help/utils';
+import { safeHelpContentPath } from '@server/help/contentPath';
 import fs from 'fs';
 import path from 'path';
 
@@ -61,12 +62,12 @@ const ASSET_CONTENT_TYPES: Record<string, string | undefined> = {
  * tracks process.cwd() (which the Lambda handler sets) instead of import order.
  */
 function adminContentRoot(): string {
-  return path.join(process.cwd(), ADMIN_HELP_CONTENT_DIR);
+  return `${process.cwd()}/${ADMIN_HELP_CONTENT_DIR}`;
 }
 
 /** Public content root - unchanged, and still served statically by Next. Asset fallback only. */
 function publicContentRoot(): string {
-  return path.resolve(process.cwd(), PUBLIC_HELP_CONTENT_DIR);
+  return `${process.cwd()}/${PUBLIC_HELP_CONTENT_DIR}`;
 }
 
 /** Lexical half of the traversal guard: the path must be relative and carry no `..` segment. */
@@ -77,14 +78,15 @@ function isEscapingPath(requested: string): boolean {
 /**
  * Resolve a caller-supplied docs-root-relative path inside `root`, or null if it lands outside.
  *
- * Mirrors the guard in `server/help/retrieval.ts` ("Path traversal attempt blocked") so the two
- * stay recognisably the same. path.resolve alone is not the guard: it happily normalises
- * `../../generated/help-index.json` into a real path outside the root, which is why the resolved
- * absolute path is compared against `root + path.sep`.
+ * Shares its guard with `server/help/retrieval.ts` via `safeHelpContentPath`, so the two readers
+ * cannot drift apart. Note that the root is appended with a template literal and never handed to
+ * `path.resolve`: that is what keeps @vercel/nft from globbing all of `apps/client` into the
+ * Lambda bundle, and it is why both roots are declared in `outputFileTracingIncludes`. See
+ * `server/help/contentPath.ts` for the full reasoning and the measured cost of getting it wrong.
  */
 function resolveWithinRoot(root: string, requested: string): string | null {
-  const resolved = path.resolve(root, requested);
-  return resolved.startsWith(root + path.sep) ? resolved : null;
+  const relative = safeHelpContentPath(requested);
+  return relative ? `${root}/${relative}` : null;
 }
 
 /**
