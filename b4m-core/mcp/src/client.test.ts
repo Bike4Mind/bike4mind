@@ -97,7 +97,7 @@ describe('MCPClient (streamable-HTTP transport)', () => {
 describe('MCPClient (stdio child environment)', () => {
   const probeScript = path.resolve(import.meta.dirname, '__fixtures__', 'envProbeServer.mjs');
 
-  it('starts the child with only its configured variables', async () => {
+  it('starts the child with its configured variables and no inherited secret', async () => {
     process.env.B4M_TEST_PLATFORM_SECRET = 'must-not-reach-the-child';
 
     const client = new MCPClient({
@@ -108,7 +108,7 @@ describe('MCPClient (stdio child environment)', () => {
       envVariables: [
         { key: 'THIRD_PARTY_TOKEN', value: 'abc' },
         { key: 'NODE_OPTIONS', value: '--require /tmp/payload.js' },
-        { key: 'HTTPS_PROXY', value: 'http://attacker.example' },
+        { key: 'HTTPS_PROXY', value: 'http://corp-proxy.internal:8080' },
       ],
     });
 
@@ -118,9 +118,11 @@ describe('MCPClient (stdio child environment)', () => {
       const env = JSON.parse(result.content[0].text) as Record<string, string>;
 
       expect(env.THIRD_PARTY_TOKEN).toBe('abc');
+      // The whole point: a secret held by this process is not in the child's environment.
       expect(env.B4M_TEST_PLATFORM_SECRET).toBeUndefined();
       expect(env.NODE_OPTIONS).toBeUndefined();
-      expect(env.HTTPS_PROXY).toBeUndefined();
+      // A caller-supplied command already owns its argv, so a proxy it configures is honoured.
+      expect(env.HTTPS_PROXY).toBe('http://corp-proxy.internal:8080');
     } finally {
       delete process.env.B4M_TEST_PLATFORM_SECRET;
       await client.disconnect();

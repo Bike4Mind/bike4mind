@@ -38,24 +38,38 @@ export const MCP_SERVER_ENV_KEYS: Readonly<Record<McpServerName, readonly string
 };
 
 /**
- * Keys no caller-supplied MCP variable may ever set, whatever the server.
- *
- * These do not configure a server, they steer the runtime hosting it: NODE_* and the loader
- * preload variables execute code before the server starts, npm_* redirects package resolution,
- * PATH decides which binary a custom command resolves to, and the proxy variables silently
- * redirect the child's outbound traffic. Matching is case-insensitive because Windows
+ * Keys that make the runtime execute caller-chosen code before the server's entry point runs:
+ * NODE_OPTIONS can `--require` a file, the loader variables preload a shared object, and
+ * ELECTRON_RUN_AS_NODE changes what the binary is. Matching is case-insensitive because Windows
  * environment names are.
  */
-const FORBIDDEN_ENV_KEY_PATTERNS: readonly RegExp[] = [
-  /^NODE_/i,
+const CODE_INJECTING_ENV_KEY_PATTERNS: readonly RegExp[] = [/^NODE_/i, /^ELECTRON_RUN_AS_NODE$/i, /^LD_/i, /^DYLD_/i];
+
+/**
+ * Keys that steer where the child resolves things rather than what it executes: npm_* redirects
+ * package resolution, PATH decides which binary a bare command name finds, and the proxy
+ * variables redirect outbound traffic.
+ */
+const RESOLUTION_STEERING_ENV_KEY_PATTERNS: readonly RegExp[] = [
   /^npm_/i,
-  /^ELECTRON_RUN_AS_NODE$/i,
-  /^LD_/i,
-  /^DYLD_/i,
   /^PATH$/i,
   /^PATHEXT$/i,
   /^(HTTP|HTTPS|ALL|NO|FTP)_PROXY$/i,
   /^GLOBAL_AGENT_/i,
+];
+
+/**
+ * Keys refused when an MCP server record is written through the API.
+ *
+ * Both halves apply here because a stored record configures one of this package's bundled
+ * servers, and none of them wants any of these: for those servers `buildMcpChildEnv` withholds
+ * everything outside `MCP_SERVER_ENV_KEYS` anyway, so refusing at write time is what turns a
+ * silent drop into a visible error. A caller-supplied command is a different case - see
+ * `buildMcpChildEnv`.
+ */
+const FORBIDDEN_ENV_KEY_PATTERNS: readonly RegExp[] = [
+  ...CODE_INJECTING_ENV_KEY_PATTERNS,
+  ...RESOLUTION_STEERING_ENV_KEY_PATTERNS,
 ];
 
 export interface McpEnvVariable {
@@ -63,10 +77,19 @@ export interface McpEnvVariable {
   value: string;
 }
 
+const matchesAny = (patterns: readonly RegExp[], key: string): boolean => {
+  const normalized = key.trim();
+  return patterns.some(pattern => pattern.test(normalized));
+};
+
 /** True when `key` controls the child runtime rather than the MCP server running inside it. */
 export function isForbiddenMcpEnvKey(key: string): boolean {
-  const normalized = key.trim();
-  return FORBIDDEN_ENV_KEY_PATTERNS.some(pattern => pattern.test(normalized));
+  return matchesAny(FORBIDDEN_ENV_KEY_PATTERNS, key);
+}
+
+/** True when `key` would have the runtime load caller-chosen code before the server starts. */
+export function isCodeInjectingMcpEnvKey(key: string): boolean {
+  return matchesAny(CODE_INJECTING_ENV_KEY_PATTERNS, key);
 }
 
 /** The forbidden keys present in `envVariables`, in input order. Empty when the set is clean. */
@@ -97,8 +120,15 @@ export interface BuildMcpChildEnvOptions {
 /**
  * Build the environment for a stdio MCP child.
  *
- * A bundled server gets exactly its declared variables. A caller-defined command has no declared
- * contract to check against, so it gets everything except the keys that would steer its runtime.
+ * A bundled server gets exactly its declared variables - the allowlist decides, and the denylist
+ * above is never consulted.
+ *
+ * A caller-defined command has no declared contract to check against, so it gets everything
+ * except the code-injecting keys. Only the `b4m` CLI config reaches this branch, and that file
+ * already lets its owner set `command` and `args` to any binary - so withholding PATH or a proxy
+ * variable from them protects nobody while breaking a wrapper script or a corporate proxy, and
+ * the warning that says so goes to a stderr the TUI hides. The code-injecting half stays because
+ * an env-only `--require` is the one lever that is easy to set by accident.
  */
 export function buildMcpChildEnv({
   serverName,
@@ -110,7 +140,7 @@ export function buildMcpChildEnv({
     : (MCP_SERVER_ENV_KEYS as Record<string, readonly string[] | undefined>)[serverName];
   const isAllowed = declaredKeys
     ? (key: string) => declaredKeys.includes(key)
-    : (key: string) => !isForbiddenMcpEnvKey(key);
+    : (key: string) => !isCodeInjectingMcpEnvKey(key);
 
   const env: Record<string, string> = {};
   const droppedKeys: string[] = [];

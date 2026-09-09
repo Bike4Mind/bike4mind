@@ -362,7 +362,8 @@ You can run MCP servers in Docker containers for isolation and portability:
 **Docker Configuration Notes:**
 - The `-i` flag is required for stdin communication with the MCP server
 - Use `-e VAR_NAME` (without value) to pass a variable through to the container. It must be listed in this server's `env` block: the MCP child is started with those variables plus the MCP SDK's own defaults (`PATH`, `HOME`, `SHELL`, `TERM`, `USER`), never with your whole shell environment
-- Keys that configure the child's runtime rather than the server - `NODE_*`, `LD_*`, `DYLD_*`, `PATH`, and the `*_PROXY` variables - are refused and logged
+- Keys that would have the runtime load code before the server starts - `NODE_*`, `LD_*`, `DYLD_*`, `ELECTRON_RUN_AS_NODE` - are refused and logged. Everything else in `env` is passed through, so `HTTPS_PROXY`, `NO_PROXY` and a `PATH` your wrapper needs all work here
+- A server entry with no `command` runs one of the bundled servers instead, and those take only the variables that server declares (`GITHUB_ACCESS_TOKEN` for github, the `NOTION_*` set for notion, and so on) - anything else in `env` is withheld and named in a warning
 - The `--rm` flag ensures containers are cleaned up after use
 - Requires Docker to be installed and running
 

@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { McpServerName } from '@bike4mind/common';
-import { MCP_SERVER_ENV_KEYS, buildMcpChildEnv, findForbiddenMcpEnvKeys, isForbiddenMcpEnvKey } from './childEnv';
+import {
+  MCP_SERVER_ENV_KEYS,
+  buildMcpChildEnv,
+  findForbiddenMcpEnvKeys,
+  isCodeInjectingMcpEnvKey,
+  isForbiddenMcpEnvKey,
+} from './childEnv';
 import { mcpSettings } from './settings';
 
 describe('buildMcpChildEnv', () => {
@@ -44,19 +50,36 @@ describe('buildMcpChildEnv', () => {
     expect(droppedKeys).toEqual(['NODE_OPTIONS']);
   });
 
-  it('falls back to refusing runtime keys for a caller-defined server with no declared contract', () => {
+  it('falls back to refusing code-injecting keys for a caller-defined server with no contract', () => {
     const { env, droppedKeys } = buildMcpChildEnv({
       serverName: 'some-third-party-server',
       envVariables: [
         { key: 'THIRD_PARTY_TOKEN', value: 'abc' },
         { key: 'NODE_OPTIONS', value: '--require /tmp/payload.js' },
-        { key: 'HTTPS_PROXY', value: 'http://attacker.example' },
-        { key: 'PATH', value: '/tmp/bin' },
+        { key: 'LD_PRELOAD', value: '/tmp/evil.so' },
       ],
     });
 
     expect(env).toEqual({ THIRD_PARTY_TOKEN: 'abc' });
-    expect(droppedKeys).toEqual(['NODE_OPTIONS', 'HTTPS_PROXY', 'PATH']);
+    expect(droppedKeys).toEqual(['NODE_OPTIONS', 'LD_PRELOAD']);
+  });
+
+  // The owner of a `b4m` CLI config already picks the binary and its argv, so a PATH or proxy
+  // they set is configuration, not an escalation - and withholding it breaks a wrapper script or
+  // a corporate proxy for no gain. Only the code-injecting keys are still refused here.
+  it('lets a caller-defined command keep PATH and the proxy variables', () => {
+    const { env, droppedKeys } = buildMcpChildEnv({
+      serverName: 'some-third-party-server',
+      hasCustomCommand: true,
+      envVariables: [
+        { key: 'HTTPS_PROXY', value: 'http://corp-proxy.internal:8080' },
+        { key: 'PATH', value: '/opt/wrapper/bin' },
+        { key: 'NODE_OPTIONS', value: '--require /tmp/payload.js' },
+      ],
+    });
+
+    expect(env).toEqual({ HTTPS_PROXY: 'http://corp-proxy.internal:8080', PATH: '/opt/wrapper/bin' });
+    expect(droppedKeys).toEqual(['NODE_OPTIONS']);
   });
 
   // The documented CLI config points `name: "github"` at the upstream Docker image, which reads
@@ -129,12 +152,59 @@ describe('isForbiddenMcpEnvKey', () => {
   });
 });
 
-describe('MCP_SERVER_ENV_KEYS stays in sync with the server code', () => {
-  const serverDir = (name: string) => path.resolve(import.meta.dirname, name);
+describe('isCodeInjectingMcpEnvKey', () => {
+  it.each([
+    'NODE_OPTIONS',
+    'node_options',
+    'NODE_EXTRA_CA_CERTS',
+    'ELECTRON_RUN_AS_NODE',
+    'LD_PRELOAD',
+    'DYLD_INSERT_LIBRARIES',
+  ])('refuses %s', key => {
+    expect(isCodeInjectingMcpEnvKey(key)).toBe(true);
+  });
 
-  /** Every `process.env.X` read under a server directory, tests excluded. */
+  // The narrower half of the write-time denylist: these steer resolution rather than execution,
+  // so a caller-supplied command keeps them.
+  it.each(['PATH', 'PATHEXT', 'HTTPS_PROXY', 'no_proxy', 'npm_config_registry', 'GLOBAL_AGENT_HTTP_PROXY'])(
+    'allows %s through, though a stored record still cannot set it',
+    key => {
+      expect(isCodeInjectingMcpEnvKey(key)).toBe(false);
+      expect(isForbiddenMcpEnvKey(key)).toBe(true);
+    }
+  );
+});
+
+describe('MCP_SERVER_ENV_KEYS stays in sync with the server code', () => {
+  const packageSrc = path.resolve(import.meta.dirname);
+  const commonSrc = path.resolve(packageSrc, '../../common/src');
+
+  /**
+   * Directories to scan per server. A server's own directory plus the `@bike4mind/common`
+   * provider modules it reads its credentials through - `atlassian/config.ts` gets its three
+   * variables from `common/src/atlassian/config.ts`, not from anything under `mcp/src/atlassian`.
+   */
+  const scannedDirs: Record<McpServerName, string[]> = {
+    [McpServerName.Github]: [path.join(packageSrc, McpServerName.Github)],
+    [McpServerName.Notion]: [path.join(packageSrc, McpServerName.Notion)],
+    [McpServerName.LinkedIn]: [path.join(packageSrc, McpServerName.LinkedIn), path.join(commonSrc, 'linkedin')],
+    [McpServerName.Atlassian]: [
+      path.join(packageSrc, McpServerName.Atlassian),
+      path.join(commonSrc, 'atlassian'),
+      path.join(commonSrc, 'jira'),
+      path.join(commonSrc, 'confluence'),
+    ],
+  };
+
+  /**
+   * Every literal `process.env` read under a directory, tests excluded. Both access forms are
+   * matched, but a computed key is not resolvable by any scan - `common/src/atlassian/config.ts`
+   * reads `process.env[key]` from a caller-passed name, so its three ATLASSIAN_* variables are
+   * pinned by the settings assertion below rather than by this one.
+   */
   const envReads = (dir: string): Set<string> => {
     const found = new Set<string>();
+    if (!existsSync(dir)) return found;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === '__tests__') continue;
       const full = path.join(dir, entry.name);
@@ -143,8 +213,9 @@ describe('MCP_SERVER_ENV_KEYS stays in sync with the server code', () => {
         continue;
       }
       if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue;
-      for (const match of readFileSync(full, 'utf8').matchAll(/process\.env\.([A-Z0-9_]+)/g)) {
-        found.add(match[1]);
+      const source = readFileSync(full, 'utf8');
+      for (const match of source.matchAll(/process\.env(?:\.([A-Z0-9_]+)|\[['"]([A-Z0-9_]+)['"]\])/g)) {
+        found.add(match[1] ?? match[2]);
       }
     }
     return found;
@@ -153,12 +224,13 @@ describe('MCP_SERVER_ENV_KEYS stays in sync with the server code', () => {
   for (const name of Object.values(McpServerName)) {
     it(`${name} declares every variable its server reads`, () => {
       const declared = MCP_SERVER_ENV_KEYS[name];
-      const missing = [...envReads(serverDir(name))].filter(key => !declared.includes(key));
+      const read = new Set(scannedDirs[name].flatMap(dir => [...envReads(dir)]));
+      const missing = [...read].filter(key => !declared.includes(key));
       expect(missing, `${name} reads these but childEnv.ts withholds them`).toEqual([]);
     });
   }
 
-  it('declares every variable the settings form offers', () => {
+  it('declares every variable this package settings table offers', () => {
     for (const [name, settings] of Object.entries(mcpSettings)) {
       const declared = (MCP_SERVER_ENV_KEYS as Record<string, readonly string[] | undefined>)[name];
       if (!declared) continue;
@@ -167,7 +239,7 @@ describe('MCP_SERVER_ENV_KEYS stays in sync with the server code', () => {
       );
       expect(
         offered.filter(key => !declared.includes(key)),
-        `${name} settings form offers undeliverable keys`
+        `${name} offers undeliverable keys`
       ).toEqual([]);
     }
   });
