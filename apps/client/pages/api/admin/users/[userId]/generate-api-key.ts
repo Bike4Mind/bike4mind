@@ -62,17 +62,28 @@ interface CreateApiKeyBody {
  * the only thing the field is for. Screening here turns that silent no-op into a 400 at mint time,
  * rather than a confusing "You do not manage data lake X" the first time someone uses the key.
  *
- * Ids are lowercased, not merely shape-checked: both stores are `type: [String]`, so the
- * containment check in sessions/create is byte equality against a lake's own (always lowercase)
- * `id` virtual. An uppercase-hex id persists happily here and then never matches.
+ * Ids are lowercased, not merely shape-checked: both stores are `type: [String]`, so downstream
+ * containment is byte equality against a lake's own (always lowercase) `id` virtual - see
+ * `unionPreauthorizedLakeAccess.ts:33-34` (`existingIds` off `access.lakes.map(l => l.id)`) and the
+ * `preauthorizedSet.has(p.id)` filters in `ChatCompletionFeatures.ts` and
+ * `tools/implementation/retrievedLakePrompts.ts`. NOT sessions/create's `.includes(lakeId)`, which
+ * compares against the raw request string (shape-checked by a case-insensitive `isValidObjectId`
+ * and never lowercased) and so answers a 403 rather than missing silently. Lowercasing at mint is
+ * the only casing that matches end to end.
  *
  * The manage check reuses `filterStillManagedLakes` rather than open-coding a rule, so the mint
- * gate, the session-create gate and the per-turn re-check cannot drift apart. That helper bakes in
- * `isAdmin: false`, which is the subtle part: platform-adminness is deliberately not a manage rung
- * for this admission, so a target whose only relationship to the lake is being a platform admin is
- * refused here exactly as sessions/create would refuse them.
+ * gate, the session-create gate and the per-turn re-check apply the same rule. They are still two
+ * call sites into it - sessions/create calls `resolveCanManageLake` directly - so this buys a
+ * shared rule, not a single choke point. That helper bakes in `isAdmin: false`, which is the subtle
+ * part: platform-adminness is deliberately not a manage rung for this admission, so a target whose
+ * only relationship to the lake is being a platform admin is refused here exactly as
+ * sessions/create would refuse them.
  */
-async function screenPreauthorizedLakeIds(raw: unknown, targetUserId: string): Promise<string[] | undefined> {
+async function screenPreauthorizedLakeIds(
+  raw: unknown,
+  targetUserId: string,
+  audit: { logger: { warn: (message: string) => void }; adminLabel: string; targetLabel: string }
+): Promise<string[] | undefined> {
   if (raw === undefined || raw === null) return undefined;
   if (!Array.isArray(raw)) {
     throw new BadRequestError('preauthorizedLakeIds must be an array of data lake ids');
@@ -103,18 +114,23 @@ async function screenPreauthorizedLakeIds(raw: unknown, targetUserId: string): P
   // Every way this field can be wrong answers BadRequest, not the NotFound/Forbidden
   // sessions/create returns for the same conditions: there the lake id is the request's subject,
   // here it is one field of a mint body.
+  //
+  // Id lists below are joined with '; ', never ', '. The admin modal renders these through
+  // parseValidationError (app/hooks/data/userApiKeys.ts), which splits a message containing a colon
+  // on ', ' and reformats each piece as its own "field: message" pair - so a comma-joined list of
+  // ids is shredded into an unreadable toast. A semicolon leaves it nothing to split on.
   const fetched = await Promise.all(ids.map(id => dataLakeRepository.findById(id)));
   const byId = new Map(ids.map((id, i) => [id, fetched[i]]));
   const missing = ids.filter(id => !byId.get(id));
   if (missing.length > 0) {
-    throw new BadRequestError(`Data lake not found: ${missing.join(', ')}`);
+    throw new BadRequestError(`Data lake not found: ${missing.join('; ')}`);
   }
   // Reported apart from a miss because an admin picking from the lake list CAN see a draft lake,
   // and "not found" for a lake on their screen reads as a bug. `status` is the same gate
   // unionPreauthorizedLakeAccess applies before its own re-check.
   const inactive = ids.filter(id => byId.get(id)!.status !== 'active');
   if (inactive.length > 0) {
-    throw new BadRequestError(`Data lake is not active: ${inactive.join(', ')}`);
+    throw new BadRequestError(`Data lake is not active: ${inactive.join('; ')}`);
   }
   const lakes = ids.map(id => byId.get(id)!);
   const manageable = await dataLakeService.filterStillManagedLakes(lakes, targetUserId, {
@@ -124,8 +140,15 @@ async function screenPreauthorizedLakeIds(raw: unknown, targetUserId: string): P
   const manageableIds = new Set(manageable.map(lake => lake.id));
   const unmanaged = ids.filter(id => !manageableIds.has(id));
   if (unmanaged.length > 0) {
+    // Logged, unlike the miss and inactive refusals above: those are operator typos, while this is
+    // an admin reaching for a lake the target has no authority over. The 400 alone is invisible to
+    // an auditor, so a pattern - one admin refused across several targets - would leave no trace.
+    audit.logger.warn(
+      `Admin ${audit.adminLabel} was refused a data lake binding for user ${audit.targetLabel}: ` +
+        `target does not manage ${unmanaged.join('; ')}`
+    );
     throw new BadRequestError(
-      `User does not manage data lake(s): ${unmanaged.join(', ')}. Grant the user access to the lake first.`
+      `User does not manage data lake(s): ${unmanaged.join('; ')}. Grant the user access to the lake first.`
     );
   }
   return ids;
@@ -163,6 +186,15 @@ const handler = baseApi({ auth: true })
       // owner's key list, uncounted by the per-user cap, unreachable by the owner-scoped revoke.
       const targetUserId = targetUser.id;
 
+      // Built once so the success audit line and the refusal warning below name their principals
+      // identically. Usernames go through JSON.stringify - `username` is only
+      // `{ type: String, unique: true }` on UserModel, so it carries no schema-level shape
+      // constraint, and a newline in one would otherwise forge a sibling log entry now that these
+      // lines are the audit record for a cross-tenant lake binding. Both ids are canonical
+      // ObjectId strings and need no escaping.
+      const adminLabel = `${JSON.stringify(req.user.username)} (${req.user.id})`;
+      const targetLabel = `${JSON.stringify(targetUser.username)} (${targetUserId})`;
+
       const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
 
       // Reject any scope outside the mintable allowlist, including admin:* and cc-bridge:connect.
@@ -172,7 +204,11 @@ const handler = baseApi({ auth: true })
         throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
       }
 
-      const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId);
+      const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {
+        logger: req.logger,
+        adminLabel,
+        targetLabel,
+      });
 
       const newApiKey = await userApiKeyService.createUserApiKey(
         targetUserId,
@@ -215,14 +251,12 @@ const handler = baseApi({ auth: true })
         { ability: req.ability }
       );
 
-      // Audit trail with admin details. Every free-form field goes through JSON.stringify - the
-      // same surrounding quotes for any ordinary value - so a newline cannot forge a sibling entry
-      // now that this line is the audit record for a cross-tenant lake binding. `username` is only
-      // `{ type: String, unique: true }` on UserModel, so it carries no schema-level shape
-      // constraint; both ids are canonical ObjectId strings and need no escaping.
+      // Audit trail with admin details. `name` is escaped for the same reason the usernames inside
+      // adminLabel/targetLabel are: it is caller-chosen, and this line is the audit record for a
+      // cross-tenant lake binding.
       req.logger.info(
-        `Admin ${JSON.stringify(req.user.username)} (${req.user.id}) generated API key ${JSON.stringify(name)} for user ${JSON.stringify(targetUser.username)} (${targetUserId})` +
-          (lakeBinding ? ` bound to data lake(s) ${lakeBinding.join(', ')}` : '')
+        `Admin ${adminLabel} generated API key ${JSON.stringify(name)} for user ${targetLabel}` +
+          (lakeBinding ? ` bound to data lake(s) ${lakeBinding.join('; ')}` : '')
       );
 
       return res.status(201).json(newApiKey);

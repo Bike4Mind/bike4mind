@@ -9,8 +9,9 @@ import { createMocks } from 'node-mocks-http';
  *    remain mintable here.
  * 2. Lake-binding screen - `preauthorizedLakeIds` is a CEILING on what the key may admit, never a
  *    grant, so an id the TARGET user cannot manage is inert rather than an escalation. The screen
- *    exists to stop that silent no-op being persisted, and to canonicalize the ids: the containment
- *    check in sessions/create is a byte comparison, so an uppercase-hex id would never match.
+ *    exists to stop that silent no-op being persisted, and to canonicalize the ids: downstream
+ *    containment (unionPreauthorizedLakeAccess, the preauthorizedSet filters) is byte equality
+ *    against a lake's always-lowercase `id` virtual, so an uppercase-hex id would never match.
  * 3. Canonical target id - the same byte-comparison hazard one field over; see the third describe.
  */
 
@@ -341,6 +342,74 @@ describe('POST /api/admin/users/:userId/generate-api-key - preauthorizedLakeIds 
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(
       new RegExp(`does not manage data lake\\(s\\): ${LAKE_B}\\.`)
     );
+  });
+
+  /**
+   * The admin modal renders these messages through parseValidationError
+   * (app/hooks/data/userApiKeys.ts:6-31), which splits a message containing a colon on ', ' and
+   * reformats each piece as its own "field: message" pair. A comma-joined id list is therefore
+   * shredded into an unreadable toast; a semicolon leaves the formatter nothing to split on. These
+   * pin the separator at each of the three refusal sites so the toast cannot silently regress.
+   */
+  describe('multi-id refusals survive the client error formatter', () => {
+    it.each([
+      ['unmanaged', () => mockFilterManaged.mockResolvedValue([])],
+      ['not found', () => mockLakeFind.mockResolvedValue(null)],
+      [
+        'not active',
+        () => mockLakeFind.mockImplementation(async (id: string) => ({ ...activeLake(id), status: 'draft' })),
+      ],
+    ])('joins ids with a semicolon, not ", ", for a %s refusal', async (_label, arrange) => {
+      arrange();
+      const { req, res } = post({
+        name: 'key',
+        scopes: ['notebooks:read'],
+        preauthorizedLakeIds: [LAKE_A, LAKE_B],
+      });
+      const err = await mockRefs.postHandler!(req, res).then(
+        () => null,
+        (e: Error) => e
+      );
+      expect(err).toBeInstanceOf(BadRequestError);
+      expect(err!.message).toContain(`${LAKE_A}; ${LAKE_B}`);
+      expect(err!.message).not.toContain(`${LAKE_A}, ${LAKE_B}`);
+    });
+  });
+
+  it('warns with the admin, target and refused ids when the target manages none of them', async () => {
+    mockFilterManaged.mockResolvedValue([]);
+    const { req, res } = post({
+      name: 'key',
+      scopes: ['notebooks:read'],
+      preauthorizedLakeIds: [LAKE_A, LAKE_B],
+    });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    const warned = ((req as any).logger.warn as any).mock.calls[0][0] as string;
+    expect(warned).toContain('"admin-user" (caller)');
+    expect(warned).toContain('"targetUser" (target-user)');
+    expect(warned).toContain(`${LAKE_A}; ${LAKE_B}`);
+    // The 400 alone leaves no trace, so the refusal must not also be silent in the log.
+    expect(((req as any).logger.info as any).mock.calls).toHaveLength(0);
+  });
+
+  it('does not warn for a miss or an inactive lake - those are operator typos, not authority reaches', async () => {
+    mockLakeFind.mockResolvedValue(null);
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'], preauthorizedLakeIds: [LAKE_A] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(((req as any).logger.warn as any).mock.calls).toHaveLength(0);
+  });
+
+  it('escapes a forged newline in a username on the refusal warning too', async () => {
+    mockFilterManaged.mockResolvedValue([]);
+    mockUserFind.mockResolvedValue({
+      id: 'target-user',
+      username: 'victim\nAdmin nobody (0) generated API key "evil" for user someone',
+    });
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'], preauthorizedLakeIds: [LAKE_A] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    const warned = ((req as any).logger.warn as any).mock.calls[0][0] as string;
+    expect(warned).not.toContain('\n');
+    expect(warned).toContain('\\n');
   });
 
   it('offers no override: an unmanaged lake is refused however the body is dressed up', async () => {
