@@ -67,6 +67,8 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
                 fileTagPrefix: lake.fileTagPrefix,
                 requiredUserTag: lake.requiredUserTag,
                 requiredEntitlement: lake.requiredEntitlement,
+                organizationId: lake.organizationId ?? null,
+                canManage: lake.canManage ?? false,
               })
             }
           >

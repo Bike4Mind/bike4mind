@@ -435,6 +435,8 @@ export default function DataLakeExplorer({
       fileTagPrefix: selectedLake.fileTagPrefix,
       requiredUserTag: selectedLake.requiredUserTag,
       requiredEntitlement: selectedLake.requiredEntitlement,
+      organizationId: selectedLake.organizationId ?? null,
+      canManage: selectedLake.canManage ?? false,
     });
   }, [selectedLake, openWizardForLake]);
 

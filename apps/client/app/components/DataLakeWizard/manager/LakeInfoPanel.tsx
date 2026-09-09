@@ -203,6 +203,8 @@ export function LakeInfoPanel({
                     fileTagPrefix: lake.fileTagPrefix,
                     requiredUserTag: lake.requiredUserTag,
                     requiredEntitlement: lake.requiredEntitlement,
+                    organizationId: lake.organizationId ?? null,
+                    canManage: lake.canManage ?? false,
                   })
                 }
                 sx={{ flexShrink: 0, fontSize: '13px' }}
