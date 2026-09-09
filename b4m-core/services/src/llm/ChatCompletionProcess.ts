@@ -5905,6 +5905,10 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       if (project) {
         this.logger.log('  - Enabling Project feature');
         this.features.set('project', new ProjectFeature(this, project));
+      } else {
+        // projectId is unvalidated request body; a present-but-denied id must be
+        // distinguishable in the logs from a request that carried no projectId.
+        this.logger.warn(`  - Project ${projectId} not accessible to ${this.user.id}; Project feature disabled`);
       }
     }
 

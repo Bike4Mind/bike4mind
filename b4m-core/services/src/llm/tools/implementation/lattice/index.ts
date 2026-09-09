@@ -399,7 +399,9 @@ export const latticeAddEntityTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          // Owner-only by design. Unlike latticeModelService.getModel (owner-OR-org), we omit
+          // the org arm here - it is inert everywhere today anyway (model.organizationId String
+          // vs user.organizationId ObjectId never matches). Revisit if that mismatch is fixed.
           if (model && model.userId === context.userId) {
             // Check if entity already exists
             const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
@@ -552,7 +554,9 @@ export const latticeSetValueTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          // Owner-only by design. Unlike latticeModelService.getModel (owner-OR-org), we omit
+          // the org arm here - it is inert everywhere today anyway (model.organizationId String
+          // vs user.organizationId ObjectId never matches). Revisit if that mismatch is fixed.
           if (model && model.userId === context.userId) {
             // Find the entity
             const entity = model.data.entities.find(e => e.id === entityId || e.name === entityName);
@@ -707,7 +711,9 @@ export const latticeCreateRuleTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          // Owner-only by design. Unlike latticeModelService.getModel (owner-OR-org), we omit
+          // the org arm here - it is inert everywhere today anyway (model.organizationId String
+          // vs user.organizationId ObjectId never matches). Revisit if that mismatch is fixed.
           if (model && model.userId === context.userId) {
             // Check if output entity exists, if not create it
             const outputEntityExists = model.data.entities.some(
