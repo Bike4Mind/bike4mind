@@ -1148,9 +1148,9 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
       scan: { ...scan, filesMatching: 2, filesScoped: 2, filesScanned: 2, chunksScanned: 2 },
     });
     const out = await run(delimiterCtx());
-    expect(out).toContain('1. **Handbook** (relevance 0.81) - dated 2026-08-14');
+    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81) - dated 2026-08-14');
     // No createdAt: the clause is absent entirely, not empty and not stringified.
-    expect(out).toContain('2. **Undated** (relevance 0.81)\n');
+    expect(out).toContain('2. **Undated** (ID: f2, relevance 0.81)\n');
     expect(out).not.toContain('dated undefined');
     expect(out).not.toContain('dated null');
     // Still exactly two real headers: the added suffix must not create or defang one.
@@ -3098,5 +3098,180 @@ describe('search_knowledge_base narrows lake access to the session lake', () => 
 
     const args = semanticDataLakeSearchMock.mock.calls[0][0];
     expect(args.dataLakeTags).toEqual(['datalake:mine', 'datalake:other']);
+  });
+});
+
+describe('search_knowledge_base flags passages that contradict each other', () => {
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 2,
+    filesScoped: 2,
+    filesScanned: 2,
+    chunksScanned: 2,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  const hitOf = (fileId: string, chunkText: string) => ({
+    chunkId: `chunk-${fileId}`,
+    fileId,
+    fileName: `${fileId}.pdf`,
+    fileTags: [],
+    chunkText,
+    score: 0.81,
+  });
+
+  /** Spread over emptySemanticResult so the untyped mock keeps the fields the real service returns. */
+  const searchReturning = (results: ReturnType<typeof hitOf>[], scanOverride = scan) => ({
+    ...emptySemanticResult(),
+    results,
+    totalChunksSearched: results.length,
+    filesInScope: results.length,
+    scan: scanOverride,
+  });
+
+  function conflictContext(settings: Record<string, string> = {}): ToolContext {
+    const rows = Object.entries(settings).map(([settingName, settingValue]) => ({ settingName, settingValue }));
+    const findBySettingNames = vi.fn().mockResolvedValue(rows);
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: {
+          getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+          findAll: findBySettingNames,
+          findBySettingNames,
+        },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('keeps the conflict note at column 0, outside the untrusted block', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')])
+    );
+
+    const out = await run(conflictContext());
+
+    const note = out.indexOf(CONFLICT_NOTE);
+    expect(note).toBeGreaterThanOrEqual(0);
+    // Inside the block the defang pass would indent it, and it would read as document text.
+    expect(note).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the passage
+    // headings, so a looser assertion would pass on a note naming the wrong field entirely.
+    const noteText = out.slice(note, out.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement');
+    expect(noteText).toContain('across documents file-a, file-b.');
+  });
+
+  it('heads each passage with the id the note names, so the model can find it', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')])
+    );
+
+    const out = await run(conflictContext());
+
+    // The other two channels head a section `### Name (ID: ...)`; without the same here, an id in the
+    // note is unresolvable on this channel.
+    // prettyFileName is what renders the label, so it is the id and not the name that is stable.
+    expect(out).toContain('(ID: file-a, relevance 0.81)');
+    expect(out).toContain('(ID: file-b, relevance 0.81)');
+  });
+
+  it('emits nothing when the passages agree, so the note cannot ship always-on', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 99.9%.')])
+    );
+
+    expect(await run(conflictContext())).not.toContain(CONFLICT_NOTE);
+  });
+
+  // The note must describe the SERVED text. A conflict whose evidence was clipped out of the block is
+  // a claim about content the model cannot check - so the figure below sits past the serve budget.
+  it('says nothing about a conflicting figure that the serve budget clipped away', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([
+        hitOf('file-a', 'Uptime is 99.9%.'),
+        hitOf('file-b', `${'padding text. '.repeat(1000)} Uptime is 95%.`),
+      ])
+    );
+
+    const out = await run(conflictContext());
+
+    expect(out).not.toContain('Uptime is 95%.');
+    expect(out).toContain('Uptime is 99.9%.');
+    expect(out).not.toContain(CONFLICT_NOTE);
+  });
+
+  it('renders last of the column-0 notes, nearest the content it describes', async () => {
+    // Two notes ahead of it, not one: file-c is long enough to be clipped, which is what emits the
+    // truncation note, and carries no metric so it stays out of the conflict itself.
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning(
+        [
+          hitOf('file-a', 'Uptime is 99.9%.'),
+          hitOf('file-b', 'Uptime is 95%.'),
+          hitOf('file-c', 'padding text. '.repeat(1000)),
+        ],
+        { ...scan, truncated: true, filesScanned: 1 }
+      )
+    );
+
+    const out = await run(conflictContext());
+
+    const scanNote = out.indexOf('covered only 1 of 2 documents');
+    const truncationNote = out.indexOf('NOTE: 1 of the 3 passages below was truncated');
+    const conflict = out.indexOf(CONFLICT_NOTE);
+    expect(scanNote).toBeGreaterThanOrEqual(0);
+    expect(truncationNote).toBeGreaterThanOrEqual(0);
+    expect(scanNote).toBeLessThan(truncationNote);
+    expect(truncationNote).toBeLessThan(conflict);
+    expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+
+    // And after the "answer directly" line, which tells the model to do the opposite of what the
+    // conflict note asks. Whichever instruction comes last is the one it reads against the content.
+    expect(conflict).toBeGreaterThan(out.indexOf('so answer directly and only call'));
+    expect(conflict).toBeGreaterThan(out.indexOf(GROUNDED_NO_INVENTION_RULE));
+  });
+
+  // The third column-0 note the ordering test above cannot reach: it emits only under a configured
+  // token budget, so the fixture has to configure one. file-c is dropped by the budget, which is what
+  // emits the note, and the conflicting pair ranks ahead of it and is still served.
+  it('renders after the budget note too', async () => {
+    invalidateSettingsCache();
+    countTokensMock.mockClear().mockResolvedValue(80); // 2 of the 3 passages fit in 170
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([
+        hitOf('file-a', 'Uptime is 99.9%.'),
+        hitOf('file-b', 'Uptime is 95%.'),
+        hitOf('file-c', 'Nothing quantitative here.'),
+      ])
+    );
+
+    const out = await run(conflictContext({ kbSearchResultTokenBudget: '170' }));
+
+    const budgetNote = out.indexOf('further relevant passage(s) matched but were not included');
+    const conflict = out.indexOf(CONFLICT_NOTE);
+    expect(budgetNote).toBeGreaterThanOrEqual(0);
+    expect(budgetNote).toBeLessThan(conflict);
+    expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
   });
 });
