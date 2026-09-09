@@ -174,20 +174,22 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     );
   }
 
-  // Single-use nonce: the csrfToken carried in `state` must match the one stored at
-  // connect time. This is a read-then-compare, not a conditional write; the nonce is
-  // cleared in the same update that stores the connection below, so a callback replayed
-  // after that update fails this check.
-  const existingUser = await userRepository.findById(userId);
+  // Atomic nonce consume: a single updateMany with the nonce in the filter
+  // guarantees exactly-once consumption. If a concurrent replay or a second
+  // tab races, one of them gets modifiedCount 0 and fails cleanly.
+  const nonceConsumed = await userRepository.updateMany({ _id: userId, pendingNotionOAuthNonce: csrfToken }, {
+    pendingNotionOAuthNonce: null,
+  } as Record<string, unknown>);
 
-  if (existingUser?.notionConnect?.status === 'connected') {
-    console.log('[Notion Callback] User already has valid Notion connection, skipping token exchange');
-    auditLogger.success({ isDuplicate: true });
-    return res.redirect('/profile?tab=integrations&notion=connected');
-  }
-
-  if (!existingUser || existingUser.pendingNotionOAuthNonce !== csrfToken) {
-    console.error('[Notion Callback] OAuth nonce mismatch or missing (replay?)');
+  if (nonceConsumed.modifiedCount !== 1) {
+    // Check whether they're already connected (benign duplicate)
+    const existingUser = await userRepository.findById(userId);
+    if (existingUser?.notionConnect?.status === 'connected') {
+      console.log('[Notion Callback] User already has valid Notion connection, skipping token exchange');
+      auditLogger.success({ isDuplicate: true });
+      return res.redirect('/profile?tab=integrations&notion=connected');
+    }
+    console.error('[Notion Callback] OAuth nonce mismatch or already consumed (replay?)');
     auditLogger.failure('nonce_mismatch');
     return redirectWithError(
       res,
@@ -315,12 +317,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     ...(rootPageId && { rootPageId }),
   };
 
-  // Consume the nonce and store connection in a single update so that a
-  // failed token exchange leaves the nonce intact for a legitimate retry.
+  // Store connection details. The nonce was already consumed atomically above.
   await userRepository.update({
     id: userId,
     notionConnect,
-    pendingNotionOAuthNonce: null,
   });
 
   console.log(`[Notion Callback] Tokens stored for user ${userId}, status: connected`);

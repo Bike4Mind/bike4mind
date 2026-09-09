@@ -13,6 +13,9 @@ import { debugWarn } from '../logger.js';
 
 export const MAX_ANCESTRY_DEPTH = 10;
 export const MAX_ANCESTRY_CONCURRENCY = 3;
+/** Hard wall-clock budget for a single ancestry walk, in ms. Prevents
+ *  sustained 429 retries from accumulating into minutes of sleep. */
+export const ANCESTRY_DEADLINE_MS = 30_000;
 
 /** Strips dashes and lowercases a Notion UUID for stable comparison. */
 export function normalizeId(id: string): string {
@@ -101,10 +104,20 @@ export async function resolveParentId(pageId: string): Promise<string | null> {
 export async function findAncestorInSet(
   startId: string,
   targetSet: Set<string>,
-  excludedSet: Set<string>
+  excludedSet: Set<string>,
+  deadlineMs: number = ANCESTRY_DEADLINE_MS
 ): Promise<string | null> {
+  const deadline = Date.now() + deadlineMs;
   let currentId = normalizeId(startId);
   for (let depth = 0; depth < MAX_ANCESTRY_DEPTH; depth++) {
+    if (Date.now() > deadline) {
+      debugWarn('ancestry walk exceeded wall-clock deadline', {
+        startId: normalizeId(startId),
+        depth,
+        deadlineMs,
+      });
+      return null;
+    }
     const parentId = await resolveParentId(currentId);
     if (!parentId) return null;
     if (excludedSet.has(parentId)) return null;
