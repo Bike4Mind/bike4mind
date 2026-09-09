@@ -529,6 +529,39 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(result.find(l => l.id === 'granted')).toBeUndefined();
   });
 
+  it.each([
+    ['listDataLakes', listDataLakes] as const,
+    ['listArchivedDataLakes', listArchivedDataLakes] as const,
+    ['listDeletedDataLakes', listDeletedDataLakes] as const,
+  ])('%s hands findAccessible an org grant keyed by the ISSUING org', async (_name, listFn) => {
+    // The issuer is the only thing that makes the org half safe: the datastore ANDs each org's ids
+    // with `organizationId: <that org>` (DataLakeModel `orgGrantArms`), which is the only place the
+    // lake's own org is known. Flattening the map into `grantedLakeIds` on the way here routes it
+    // into the unconditional USER arm, and an orgA grant then lifts an orgB lake's gate for a caller
+    // who belongs to both. Deep equality on purpose - `objectContaining` on `grantedLakeIds` alone
+    // cannot see the org half move.
+    const findAccessible = vi.fn().mockResolvedValue([]);
+    const db = {
+      dataLakes: { findAccessible, find: vi.fn() },
+      settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn(async (type: string, id: string) =>
+          type === 'organization' && id === 'orgA'
+            ? [{ dataLakeId: 'granted', principalType: type, principalId: id, role: 'reader' }]
+            : []
+        ),
+      },
+    };
+
+    await listFn(ctx({ userId: 'me', organizationIds: ['orgA', 'orgB'] }), { db } as never);
+
+    expect(findAccessible.mock.calls[0]![1]).toMatchObject({
+      grantedLakeIds: [],
+      orgGrantedLakes: { orgA: ['granted'] },
+    });
+  });
+
   it('labels a reader-granted lake unmanageable even when another arm returns it', async () => {
     // The org/public arms can surface the same lake independently of grantedLakeIds, so the reader
     // exclusion above is not the only thing standing between a reader and a write-gated list.
@@ -3606,9 +3639,36 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
 
     await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
 
+    // Both halves, not `objectContaining` on the user half: the org half is where containment
+    // lives, and an assertion that never names it cannot see it get flattened away.
     expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(
       ctx({ userId: 'x' }),
-      expect.objectContaining({ grantedLakeIds: ['granted-lake'] })
+      expect.objectContaining({ grantedLakeIds: ['granted-lake'], orgGrantedLakes: {} })
+    );
+  });
+
+  it('carries an org grant through to discover keyed by the ISSUING org', async () => {
+    // Same containment wire as the lake list: the datastore ANDs each org's ids with
+    // `organizationId: <that org>`, so flattening the map here would let an orgA grant discover an
+    // orgB lake for a caller in both. Enforce is on, since the org half is gated behind it.
+    const db = {
+      ...makeDb([publicLake()]),
+      settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn(async (type: string, id: string) =>
+          type === 'organization' && id === 'orgA'
+            ? [{ dataLakeId: 'orgA-lake', principalType: type, principalId: id, role: 'reader' }]
+            : []
+        ),
+      },
+    };
+
+    await browsePublicDataLakes(ctx({ userId: 'x', organizationIds: ['orgA', 'orgB'] }), {}, { db } as any);
+
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ grantedLakeIds: [], orgGrantedLakes: { orgA: ['orgA-lake'] } })
     );
   });
 });

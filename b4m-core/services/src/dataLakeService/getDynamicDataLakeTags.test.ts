@@ -447,15 +447,25 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     requiredUserTag: 'TagIDoNotHold',
   });
 
+  const orgGrantRow = (dataLakeId: string, orgId: string, role: 'owner' | 'curator' | 'reader' = 'reader') =>
+    ({ dataLakeId, principalType: 'organization', principalId: orgId, role }) as never;
+
   const grantCtx = (
     lakes: IDataLakeDocument[],
     rows: unknown[],
-    over: { enforce?: boolean | undefined; organizationIds?: string[] } = {}
+    over: { enforce?: boolean | undefined; organizationIds?: string[]; orgRows?: Record<string, unknown[]> } = {}
   ): DataLakeAccessContext => ({
     db: {
       dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes) } as never,
       organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(over.organizationIds ?? []) },
-      dataLakeAccessGrants: { listByPrincipal: vi.fn().mockResolvedValue(rows) } as never,
+      // Dispatches on the principal it was asked about. A mock that answers every query with the
+      // USER fixture would hand user-shaped rows back to the `('organization', orgId)` lookup, so an
+      // org-reach test would pass on a row production cannot mint.
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn(async (type: string, id: string) =>
+          type === 'user' ? rows : (over.orgRows?.[id] ?? [])
+        ),
+      } as never,
       ...(over.enforce === undefined
         ? {}
         : { adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(over.enforce) } as never }),
@@ -500,6 +510,60 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
       grantCtx([theirGatedLake], [grantRow('theirs', 'reader')], { enforce: true })
     );
     expect(on.dataLakeTags).toEqual(['datalake:theirs']);
+  });
+
+  it('hands the datastore an org grant KEYED BY THE ISSUING ORG, for a caller who belongs to two', async () => {
+    // The wire round 1's containment fix rests on. The datastore ANDs each org's ids with
+    // `organizationId: <that org>` (DataLakeModel `orgGrantArms`), which is the only place the
+    // lake's own org is known - so the issuer has to survive the trip. Flattening this map into
+    // `grantedLakeIds` routes it into the unconditional USER arm instead, and an orgA grant then
+    // lifts an orgB lake's gate for anyone who belongs to both. The DENY itself is proven where the
+    // comparison happens (DataLakeModel.test.ts); what is asserted here is that the question
+    // reaches it intact.
+    const theirOrgALake = dbLake({
+      id: 'theirs-in-a',
+      organizationId: 'orgA',
+      createdByUserId: 'original-creator',
+      requiredUserTag: 'TagIDoNotHold',
+    });
+    const ctxWithOrgGrant = grantCtx([theirOrgALake], [], {
+      enforce: true,
+      organizationIds: ['orgA', 'orgB'],
+      orgRows: { orgA: [orgGrantRow('theirs-in-a', 'orgA')] },
+    });
+
+    const res = await getDynamicDataLakeAccess(ctxWithOrgGrant);
+
+    expect(ctxWithOrgGrant.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith(
+      [],
+      [],
+      ['orgA', 'orgB'],
+      'grantee',
+      { grantedLakeIds: [], orgGrantedLakes: { orgA: ['theirs-in-a'] } }
+    );
+    // And the in-memory pass restores it past its own gate, as the id arm's counterpart.
+    expect(res.dataLakeTags).toEqual(['datalake:theirs-in-a']);
+  });
+
+  it('never asks about an org the caller is not a member of', async () => {
+    // The org half keys off MEMBERSHIP: a grant issued by an org the caller has left reaches
+    // nothing, and no query is spent on it.
+    const ctxNonMember = grantCtx([theirGatedLake], [], {
+      enforce: true,
+      organizationIds: ['orgB'],
+      orgRows: { orgA: [orgGrantRow('theirs', 'orgA')] },
+    });
+
+    const res = await getDynamicDataLakeAccess(ctxNonMember);
+
+    expect(res.dataLakeTags).toEqual([]);
+    expect(ctxNonMember.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith(
+      [],
+      [],
+      ['orgB'],
+      'grantee',
+      { grantedLakeIds: [], orgGrantedLakes: {} }
+    );
   });
 
   it('keeps a grant-reached lake creator-anchored, not caller-anchored', async () => {
