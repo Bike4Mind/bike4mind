@@ -2917,6 +2917,35 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       expect(out).toContain('Tell the user the knowledge base may be returning partial results');
     });
 
+    it('does not blame the floor when nothing was compared - an unembedded lake is not a filtered one', async () => {
+      // Zero results is equally true of a corpus that was never vectorized, so attributing it to the
+      // threshold points the model (and the operator reading the log) at a knob that never ran.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [],
+        totalChunksSearched: 0,
+        filesInScope: 3,
+        chunksScored: 0,
+        scan: { ...scan, chunksScanned: 0, annHits: 0 },
+      });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).not.toContain('a configured relevance threshold filtered out every candidate passage');
+      expect(clampLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('relevance floor'));
+    });
+
+    it('still blames the floor on an ANN-served lake, which legitimately scores zero chunks', async () => {
+      // The guard must be `comparedNoPassages`, not `chunksScored > 0`: an Atlas/OpenSearch lake
+      // answers entirely from ANN hits and reports chunksScored 0 even when the floor did the work.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [],
+        totalChunksSearched: 0,
+        filesInScope: 3,
+        chunksScored: 0,
+        scan: { ...scan, chunksScanned: 0, annFilesQueried: 3, annHits: 12, annModelsQueried: 1 },
+      });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).toContain('a configured relevance threshold filtered out every candidate passage');
+    });
+
     it('an org-rung override on kbSearchMinRelevancePct reaches minScore end-to-end', async () => {
       semanticDataLakeSearchMock.mockResolvedValue({ results: hits(3), totalChunksSearched: 3, filesInScope: 3, scan });
       const context = contextWithKbSettings(

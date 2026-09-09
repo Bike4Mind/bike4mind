@@ -13,7 +13,12 @@ import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
-import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
+import {
+  bestEffortIndexRemove,
+  bestEffortSetDriveConnectionEnabled,
+  type RetrievalIndexPort,
+  type DriveConnectionEnablePort,
+} from './ports';
 
 interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
@@ -32,6 +37,8 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
   };
   retrievalIndex?: RetrievalIndexPort;
+  /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
+  disableDriveConnection?: DriveConnectionEnablePort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -45,7 +52,7 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
 export const deleteDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, retrievalIndex, logger }: DeleteDataLakeAdapters
+  { db, retrievalIndex, disableDriveConnection, logger }: DeleteDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -156,6 +163,8 @@ export const deleteDataLake = async (
       `This data lake moved to '${current.status}' while it was being deleted; its files were soft-deleted but the delete did not complete`
     );
   }
+  // Stops the hourly poll from enqueueing this lake again - best-effort, see ports.ts.
+  await bestEffortSetDriveConnectionEnabled(disableDriveConnection, dataLakeId, logger);
   await recordLakeConfigChange(
     {
       actor,

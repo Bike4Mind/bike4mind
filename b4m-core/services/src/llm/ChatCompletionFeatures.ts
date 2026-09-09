@@ -56,6 +56,7 @@ import {
   lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
   PROMPT_TEXT_MAX,
   type SupportedEmbeddingModel,
@@ -321,6 +322,18 @@ export interface IChatCompletionServiceOptions {
     query: string;
     dataLakeTags: string[];
     retrievalFilter?: RetrievalExclusionOptions;
+    /**
+     * Most beliefs to return, across all of `dataLakeTags`: the `lakeMemoryRecallK` admin setting,
+     * resolved per turn by the caller with a coded fallback.
+     *
+     * Required rather than optional so the in-repo chain (recallLakeMemoryForSession ->
+     * recallLakeMemory) is typechecked end to end - each hop re-declares it required, so dropping
+     * it anywhere along the way fails the build. That does NOT extend to an out-of-repo host:
+     * parameters are bivariant, so an implementation whose own signature omits `k` still satisfies
+     * this type and would silently keep whatever budget it hardcodes. No such host exists today
+     * (this is the only in-tree injection slot), but an added one needs forwarding by hand.
+     */
+    k: number;
   }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
   /**
    * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
@@ -789,11 +802,15 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         return [];
       }
 
+      // Resolved AFTER the no-lakes exit above, so a turn with nothing in scope spends no settings
+      // read on a budget it will never use.
+      const beliefBudget = await this.resolveLakeRecallK();
       const beliefs = await this.chatCompletion.recallLakeMemory({
         userId: this.user.id,
         query,
         dataLakeTags,
         retrievalFilter: this.retrievalFilter,
+        k: beliefBudget,
       });
       if (beliefs.length === 0) {
         // A legitimate zero: recall ran to completion and found nothing. This is the case the
@@ -806,7 +823,12 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // independent of whether the model then also called the knowledge tools.
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.context = quest.promptMeta.context ?? {};
-      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
+      // beliefBudget rides along so `beliefCount` is readable on its own: below the budget means that
+      // is all that qualified, AT the budget means the turn saturated it. Saturation is not proof the
+      // cap excluded anything - a lake holding exactly `k` qualifying beliefs reads identically, and
+      // nothing overfetches k+1 to tell those apart - but it is the signal that raising the budget is
+      // worth trying, which is the diagnosis behind #2496.
+      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, beliefBudget, dataLakeTags };
 
       this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
       // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
@@ -834,6 +856,34 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
           (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
       );
       return [];
+    }
+  }
+
+  /**
+   * The admin's configured `lakeMemoryRecallK`, or the coded default on anything unusable. Mirrors
+   * `resolveForcedRetrievalCharBudget` in KnowledgeRetrievalFeature below: same try/catch shape,
+   * same loud-fallback policy, resolved once per turn.
+   *
+   * `positiveIntOr`'s unusable-value branch is defense-in-depth, not a production-reachable path:
+   * `getSettingsValue` runs the setting's own schema (`.min(1)`, `.max(LAKE_RECALL_K_MAX)`) via
+   * `safeParse` before this sees the value, whatever wrote it. The genuinely reachable branch is
+   * the outer catch (a settings-read failure or outage), which must not cost the turn its card.
+   */
+  private async resolveLakeRecallK(): Promise<number> {
+    try {
+      const configured = await this.chatCompletion.db.adminSettings.getSettingsValue('lakeMemoryRecallK');
+      return positiveIntOr(
+        configured as string | number | null | undefined,
+        LAKE_RECALL_K_DEFAULT,
+        'lakeMemoryRecallK',
+        this.logger
+      );
+    } catch (err) {
+      this.logger.warn(
+        `🌊 Lake memory: failed to read lakeMemoryRecallK; falling back to ${LAKE_RECALL_K_DEFAULT}`,
+        err
+      );
+      return LAKE_RECALL_K_DEFAULT;
     }
   }
 }
@@ -1723,7 +1773,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    // `logger` is not optional in practice: getDynamicDataLakeAccess degrades closed on a failed
+    // grants or lakes read and reports it ONLY through this logger (setting lakeViewComplete false
+    // as the machine-readable half). Omitting it made every one of those catches silent on the main
+    // chat path, so "this user reaches no lakes" and "the grant read just failed" looked identical.
+    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys, logger: this.logger });
     // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
     // reaches this process after vetPreauthorizedLakeIds has established the two are the same
     // principal, and an unvetted path leaves the field unset.

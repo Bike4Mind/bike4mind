@@ -6,8 +6,11 @@ import {
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
+  fabFileChunkRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { UpdateDataLakeRequestInput } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -16,12 +19,26 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
 // call is wired with the settings repo + a logger, so a persisted reader grant resolves into the
 // read decision while EnforceLakeReadGrants is on, and is emitted as a [lakeReadGrantCutover] diff
 // line if an operator turns the setting back off (report-only).
 const readGateLogger = new Logger({ metadata: { handler: 'dataLakeReadGate' } });
+
+/**
+ * Undefined everywhere except self-host OpenSearch (see ports.ts) - Atlas's vector index lives
+ * on the FabFileChunk collection itself, so removing chunks there already removes it; only a
+ * genuinely separate store needs this port wired.
+ */
+const retrievalIndex = () =>
+  selfHostOpenSearchEnabled()
+    ? dataLakeService.openSearchRetrievalIndex({
+        db: { fabFileChunks: fabFileChunkRepository },
+        searchIndex: FabFileChunkSearchIndex,
+      })
+    : undefined;
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -129,6 +146,13 @@ const handler = baseApi()
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         ...lakeConfigAuditDb,
+      },
+      // The SECOND archive door (the lifecycle route is the other) - both ports below have to be
+      // wired here too, or archiving through this door leaves the hourly re-sync poll enqueueing
+      // ingest for a lake nobody can see, and its chunks still retrievable. See ports.ts.
+      retrievalIndex: retrievalIndex(),
+      disableDriveConnection: async ({ dataLakeId }) => {
+        await disableDriveConnectionForLake(dataLakeId);
       },
       logger: req.logger,
     });

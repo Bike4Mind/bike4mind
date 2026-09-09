@@ -19,6 +19,7 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
@@ -169,6 +170,53 @@ You do not need to search for stable knowledge (definitions, mathematics, establ
 When you report a time-sensitive fact, state what it is as of - the date of the source you used - and say plainly when you could not verify something and are answering from training data instead. Never present an unverified recollection as a current fact.`;
 
 /**
+ * Default text for the knowledge-base retrieval nudge, and the `KnowledgeBaseRetrievalPrompt`
+ * admin setting's default.
+ *
+ * The gap this closes: the tool prompt has a when-to-use section for the clock, for web search,
+ * for MCP and for agent delegation, and none for the user's own corpus. The
+ * `search_knowledge_base` description is entirely HOW to search ("Make ONE good search per
+ * distinct topic") and never WHEN, so on the optional path the model decides unaided - and over 30
+ * days of production it reached for the corpus on 20.1% of the turns it was offered on.
+ *
+ * Read 2-arg by ChatCompletionProcess, exactly as WEB_SEARCH_FRESHNESS_PROMPT is and unlike the
+ * 3-arg siblings: an absent row falls back to this constant as the registered default, but a
+ * cleared '' is returned verbatim and drops the section instead of reverting. Deliberate - the
+ * section has no companion boolean, so clearing the field is its only off switch, and that off
+ * switch is what makes it A/B-able without a deploy. Keep the setting's description in sync.
+ *
+ * Names no tool but `search_knowledge_base`, for the same reason the web-search section names no
+ * `web_fetch`: the companion `retrieve_knowledge_content` is paired in at build time but a session
+ * denylist can still strip it (ChatCompletionProcess warns on exactly that case), and instructing
+ * the model to call a tool it was not given makes it emit the call as leaked JSON text.
+ *
+ * The "do not search" paragraph is load-bearing, not padding. A when-to-retrieve nudge without a
+ * don't-retrieve clause buys retrieval on turns that need none - the same failure mode global
+ * forced retrieval already shows on out-of-corpus questions, reached by a different route. Three of
+ * its clauses are load-bearing for a specific co-resident path, not general hedging:
+ * - "from an attached document" - a small attached corpus is INLINED rather than deferred to
+ *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval deliberately steps aside on
+ *   an attached-files turn (`forcedRetrievalAbstention` emits nothing there). Without this clause
+ *   the section tells the model to go searching for content already sitting in its context.
+ * - "already been searched on this turn" - on a forced turn that found nothing,
+ *   `forcedRetrievalNoContextPrompt` instructs the model to say the library does not cover the
+ *   question. A nudge to search then invites a second identical query - a billed query embedding,
+ *   and a chance to talk itself out of a correct abstention.
+ * - the opening scope, "unless its content has been placed in this conversation" - the reason the
+ *   first paragraph does not simply claim the documents are invisible, which is false whenever a
+ *   corpus was inlined.
+ */
+export const KNOWLEDGE_BASE_RETRIEVAL_PROMPT = `# KNOWLEDGE BASE
+
+\`search_knowledge_base\` searches a library of documents the user has made available to you - their own uploads, and any shared or organization library they can reach. You cannot see what a document holds unless its content has been placed in this conversation or you search for it; file names and tags are labels, not content.
+
+Call \`search_knowledge_base\` BEFORE answering when that library would settle the question: anything about their organization, projects, customers, products, processes or people; a term, name, acronym or identifier that is not general public knowledge; a policy, decision, figure or date specific to them; or a question that assumes context this conversation never gave you. If you are about to answer in general terms a question the user means specifically, search first. A general-knowledge answer that sounds right is the failure this library exists to prevent.
+
+Do not search when the answer is already in front of you or out of scope: general knowledge (definitions, mathematics, established theory, public facts); anything answerable from this conversation, from an attached document, or from content already retrieved for you this turn; or a request to transform, summarize or reformat text the user has just supplied. If the library has already been searched on this turn, do not search it again for the same question - a repeat spends a round trip to return the same passages.
+
+When a search does not turn up what was asked for, say so plainly rather than filling the gap from training data, and never imply an answer came from the user's documents when it did not.`;
+
+/**
  * Default text for the formatting system message. Runtime fallback used by
  * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) when the `FormatPromptTemplate`
  * admin setting is blank; that setting's own default is intentionally '' - keep this the sole home.
@@ -203,6 +251,7 @@ export const SettingKeySchema = z.enum([
   'HelpCenterPrompt',
   'AbstentionPrompt',
   'WebSearchFreshnessPrompt',
+  'KnowledgeBaseRetrievalPrompt',
   'UseFormatPrompt',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
@@ -334,6 +383,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
   'forcedRetrievalCharBudget',
+  'lakeMemoryRecallK',
   'kbSearchDefaultResults',
   'kbSearchResultTokenBudget',
   'kbSearchMinRelevancePct',
@@ -856,8 +906,13 @@ export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT = 1;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT = 5;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX = 100;
 
-function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
+function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number; int?: boolean } & BaseSetting) {
   let numberSchema = z.coerce.number();
+  // Opt-in, not the factory default: several settings are genuine fractions (see
+  // ContextVerbatimWindowFraction), so integrality is a property of the setting rather than of
+  // "number setting". Where it IS set, it rejects at the write boundary instead of leaving a
+  // fractional value to be floored later by whichever reader happens to floor it.
+  if (config.int) numberSchema = numberSchema.int();
   if (config.min !== undefined) numberSchema = numberSchema.min(config.min);
   if (config.max !== undefined) numberSchema = numberSchema.max(config.max);
   return {
@@ -1456,6 +1511,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'HelpCenterPrompt', order: 10 },
       { key: 'AbstentionPrompt', order: 11 },
       { key: 'WebSearchFreshnessPrompt', order: 12 },
+      { key: 'KnowledgeBaseRetrievalPrompt', order: 13 },
     ],
   },
   EMBEDDING: {
@@ -1471,6 +1527,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'kbSearchDefaultResults', order: 5 },
       { key: 'kbSearchResultTokenBudget', order: 6 },
       { key: 'kbSearchMinRelevancePct', order: 7 },
+      { key: 'lakeMemoryRecallK', order: 8 },
     ],
   },
   DATA_LAKE_COST: {
@@ -2449,6 +2506,15 @@ export const settingsMap = {
     category: 'AI',
     order: 12,
   }),
+  KnowledgeBaseRetrievalPrompt: makeStringSetting({
+    key: 'KnowledgeBaseRetrievalPrompt',
+    name: 'Knowledge Base Retrieval Prompt',
+    defaultValue: KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
+    description:
+      'System prompt telling the model when to reach for search_knowledge_base rather than answer from training data, and when NOT to. Injected only when the search_knowledge_base tool is offered for the request - a model instructed to search a corpus it has no tool for tends to claim it searched. Clearing this field turns the section OFF rather than restoring the built-in default, and it is the only off switch this section has; to get the stock wording back, paste it in. A change is not instantaneous: the settings cache is per-instance, so it applies immediately on the instance that served the change and within ~5 min (one cache TTL) everywhere else. After an upgrade, diff a saved copy against the built-in default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
+    category: 'AI',
+    order: 13,
+  }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
     name: 'Use Format Prompt',
@@ -3395,7 +3461,9 @@ export const settingsMap = {
       "setting's own value is then unused there, though it still governs the keyword-search " +
       'fallback, and the count served if token pricing itself fails). Does NOT raise the ' +
       "tool's hard ceiling of 10 passages per call - a model that reads max_results up to 10 " +
-      "from its own tool schema won't ask for more than that regardless of this setting.",
+      "from its own tool schema won't ask for more than that regardless of this setting. " +
+      'A change is not instantaneous: the settings cache is per-instance, so it applies immediately ' +
+      'on the instance that served the change and within ~5 min (one cache TTL) everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 5,
@@ -3426,7 +3494,9 @@ export const settingsMap = {
       'chunked smaller no longer silently returns less material for the same setting. 0 (default) ' +
       'disables it: search_knowledge_base then serves exactly kbSearchDefaultResults passages, ' +
       'unchanged from before this setting existed. The FIRST matching passage is always returned ' +
-      'even if it alone exceeds the budget - a search that found something never returns nothing.',
+      'even if it alone exceeds the budget - a search that found something never returns nothing. ' +
+      'A change is not instantaneous: the settings cache is per-instance, so it applies immediately ' +
+      'on the instance that served the change and within ~5 min (one cache TTL) everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 6,
@@ -3446,11 +3516,36 @@ export const settingsMap = {
       'Cosine similarity is not comparable across embedding models: a floor tuned for one model can ' +
       'filter out an entire alternate model, when a lake mixes embedding models, more aggressively ' +
       "than intended. Start low and raise gradually while watching the tool's own retrieval-" +
-      'skipped notices.',
+      'skipped notices. A change is not instantaneous: the settings cache is per-instance, so it ' +
+      'applies immediately on the instance that served the change and within ~5 min (one cache TTL) ' +
+      'everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 7,
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  lakeMemoryRecallK: makeNumberSetting({
+    key: 'lakeMemoryRecallK',
+    name: 'Lake Memory Belief Budget',
+    defaultValue: LAKE_RECALL_K_DEFAULT,
+    min: 1,
+    max: LAKE_RECALL_K_MAX,
+    // A belief count, so 1.5 is not a lower setting - it is a typo. Without this the write path
+    // accepts it and `positiveIntOr` floors it silently at read time, which reports as 1.
+    int: true,
+    description:
+      'Most beliefs the lake memory hot-card injects on a Data-Lake-mode turn, shared across every ' +
+      'lake in scope. Recall still applies its cosine floor and the source-reachability gate first, ' +
+      'so raising this does not admit low-quality beliefs - it raises the ceiling on how many ' +
+      'QUALIFYING beliefs can actually be used, which was pinned at 8 (inherited from personal-' +
+      'memento recall) on no evidence beyond that inheritance. The sibling lever on the same turn is ' +
+      'Forced Retrieval Char Budget, which governs raw chunk text rather than extracted beliefs. ' +
+      'Platform-only for now, like that sibling: this read does not go through the scoped-settings ' +
+      'resolver, so a settableAt block here would be inert metadata at best and could arm the ' +
+      "resolver's fail-loud owner check at worst.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 8,
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',

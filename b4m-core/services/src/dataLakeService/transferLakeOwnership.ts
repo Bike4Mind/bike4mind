@@ -101,7 +101,14 @@ export const transferLakeOwnership = async (
   // offered and the gate this write applies can never drift apart.
   const authority = resolveLakeTransferAuthority(lake, actor, grants);
   if (!authority.allowed) {
-    throw new BadRequestError('You do not have permission to transfer ownership of this data lake');
+    // A personal lake is refused for everyone but a platform admin (see resolveLakeTransferAuthority),
+    // which is not a permission the actor could acquire - so say what would actually unblock them
+    // rather than implying they need a role.
+    throw new BadRequestError(
+      !lakeOrg && !actor.isAdmin
+        ? 'A personal data lake cannot be transferred. Move it into an organization first, then transfer it to a member.'
+        : 'You do not have permission to transfer ownership of this data lake'
+    );
   }
   // Consent guard (see doc above): an org admin acting purely by the org-admin rung may reassign the
   // lake to another member, but may not grab ownership for themselves and then expose it around the

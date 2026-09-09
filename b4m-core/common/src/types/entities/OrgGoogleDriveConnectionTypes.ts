@@ -177,18 +177,28 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findByOrganizationIdAny(organizationId: string): Promise<IOrgGoogleDriveConnectionDocument[]>;
 
   /**
-   * The enabled connection feeding a given lake in a given org, if any (excludes credentials).
+   * The ENABLED connection feeding a given lake in a given org, if any (excludes credentials).
    * organizationId is REQUIRED so a missing tenant scope is a compile error, not a review catch.
+   * `enabled: false` is a real state now that archiving/soft-deleting a lake disables its
+   * connection, so a caller that must still reach the row - anything that revokes the grant,
+   * releases the folder claim, or re-enables - wants findByDataLakeIdAny plus its own org check.
+   * That leaves this one with no production callers today; it survives as the enabled-only
+   * semantic the e2e uses to assert a disabled row really is invisible to the poll's view.
    */
   findByDataLakeId(targetDataLakeId: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * The connection bound to a given lake, whatever its `enabled` state, and deliberately WITHOUT an
-   * org filter - the caller is the lake-purge teardown, which must release the folder claim from
-   * whichever org holds it and cannot re-derive that org once the lake document is gone. A disabled
-   * row still occupies the unique driveFolderId index, so `findByDataLakeId`'s enabled-only view
-   * would leave exactly the strand this exists to prevent. Excludes credentials.
-   * SECURITY: server-side teardown only; never hand the result to a cross-org caller.
+   * org filter. Both of those are load-bearing: the lake-purge teardown runs after the lake's org is
+   * no longer resolvable, and a disabled row still occupies the unique driveFolderId index, so
+   * `findByDataLakeId`'s enabled-only view would leave exactly the strand this exists to prevent;
+   * the lake-lifecycle disable/enable seam and the per-lake disconnect route likewise have to see an
+   * already-disabled row. Excludes credentials.
+   * SECURITY: server-side only; never hand it to a cross-org caller. A caller that answers a tenant
+   * must authorize the CALLER against the owning lake's org first - the drive-connection route does
+   * that in resolveOrgLake via verifyOrgAccess. Comparing the returned row's organizationId to a
+   * server-derived one is a consistency check, not an authorization boundary; on its own it would
+   * hand any org's connection to anyone who can name a lake id.
    */
   findByDataLakeIdAny(targetDataLakeId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
@@ -229,8 +239,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * user, scoped to an org. organizationId is REQUIRED so one org can never overwrite another org's
    * credential. Credential + connectedBy are written unconditionally; status/lastError heal to
    * `connected` only from a non-`syncing` state, so a Re-sync during an in-flight ingest cannot flip
-   * the claim and start a duplicate run (see the model note). SECURITY: `encryptedRefreshToken` must
-   * already be encrypted by the caller (packages/database cannot reach the crypto helpers).
+   * the claim and start a duplicate run (see the model note). `enabled` is re-stamped true as well,
+   * which is the ONLY repair for a lifecycle re-enable that was lost - callers must therefore refuse
+   * a lake that is not draft/active, or this re-enables an archived lake's poll (see the model note
+   * and drive-sync.ts). SECURITY: `encryptedRefreshToken` must already be encrypted by the caller
+   * (packages/database cannot reach the crypto helpers).
    */
   updateCredential(
     id: string,

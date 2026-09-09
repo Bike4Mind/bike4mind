@@ -123,6 +123,9 @@ const FULL_PROMPT_META = {
     // what covers the BSON-type half, so a Number-vs-String slip on any of these three fails here
     // rather than shipping as a field that saves and then fails its Zod re-parse on read.
     injected: { chunks: 5, chars: 1300, topScore: 0.88 },
+    // Deliberately `false`, not `true`: a falsy leaf is where a Mongoose/Zod mismatch silently
+    // drops a value, and `false` is this field's load-bearing case (the A/B's control arm).
+    knowledgeBaseGuidanceInjected: false,
   },
   // Top-level for the same reason as `retrieval` above. The chat coverage banner keys on this
   // field surviving the round-trip, so a shape that persists but fails the Zod re-parse would
