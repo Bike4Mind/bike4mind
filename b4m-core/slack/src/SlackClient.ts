@@ -170,6 +170,18 @@ export interface SlackSearchResult {
 }
 
 /**
+ * Escapes text that will be interpolated into a `sendMessage`/`SendMessageParams.text` string
+ * built from untrusted content (e.g. a webpage title, a user-supplied filename), so it cannot be
+ * read as Slack mrkdwn markup. Without this, a value containing `<!channel>` or `<@USERID>` posts
+ * as a real broadcast/mention rather than literal text - escaping the angle brackets (and `&`, per
+ * Slack's own text-escaping rules) is sufficient, since those special forms cannot parse without
+ * them.
+ */
+export function escapeSlackMrkdwn(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
  * Centralized interface for all Slack API interactions via the @slack/web-api SDK.
  * The SDK handles retry with exponential backoff and rate-limit Retry-After headers.
  */
@@ -186,6 +198,11 @@ export class SlackClient {
       retryConfig: {
         retries: 2, // Low retries for Lambda timeout budget
       },
+      // Without this, `@slack/web-api` v7 has no request timeout by default, so a slow (not down)
+      // Slack API can block a caller up to its own time budget - e.g. the vectorize queue handler
+      // that now posts here inline, where redelivery is safe (atomic claim) but a stuck request
+      // would otherwise eat the Lambda's whole invocation budget for one message.
+      timeout: 10_000,
     });
     this.logger = logger;
 
