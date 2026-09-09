@@ -137,13 +137,15 @@ function isTrustedForInjection(
  * short-circuit `lakeMatchesAccess` + `isTrustedForInjection` in the in-memory filter, exactly as a
  * pre-authorized id does. This is the arm the trust rule's own doc comment used to defer.
  *
- * Its LIVE effect today is narrower than #2495's framing: the only producers of owner/curator
- * grants are createDataLake (a self-grant) and transferLakeOwnership, and the latter refuses an
- * out-of-org new owner for an org-scoped lake - so both parties to such a transfer are org members
- * the org arm already trusted. What this actually fixes now is the TRANSFERRED PERSONAL lake
- * (#1668): `createdByUserId` never moves, so its new owner held the lake's prompt inert. The
- * cross-org sharing case needs the member-management write path, which does not exist yet (see
- * READ_GRANT_ENFORCEMENT_READY) - this is the delivery half waiting for it.
+ * ITS AUDIENCE IS NOW WIDER THAN WHEN THIS ARM LANDED, and a reader has to know it. The arm was
+ * written when the only producers of owner/curator grants were createDataLake (a self-grant) and
+ * transferLakeOwnership, whose out-of-org refusal meant both parties to a transfer were already
+ * org-trusted - so the only case it changed was the TRANSFERRED PERSONAL lake, where
+ * `createdByUserId` never moves and the new owner held the lake's prompt inert. `grantLakeAccess`
+ * is the sharing door that was missing then: a manager can now hand a CURATOR grant to an arbitrary
+ * cross-tenant user, and that grant carries injection trust through this arm the moment it lands.
+ * That is the intended delivery, not a leak - but it means a curator grant is a decision about whose
+ * turn this lake's prompt may steer, and the grant UI discloses it as one.
  *
  * Why curator-or-above is the right cap, and not merely a cautious one: `listDataLakes` serves
  * `systemPrompt` back only when `manageable` holds, so this arm's audience is exactly the audience

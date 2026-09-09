@@ -15,7 +15,9 @@ export interface LakeGrantWriteInput {
  * `null` to allow. Kept out of the service so cross-org containment is pinned by a unit test rather
  * than by review - `resolveReadGrant` honors an org-principal grant with NO same-org check of its
  * own (see the "MUST STAY IN SYNC WITH THE WRITE PATH" note on `resolveLakeReadAccess`), so this
- * function is the entirety of epic decision 12's enforcement.
+ * function is the primary enforcement of that containment. Not the only one: the other producers of
+ * grant rows carry their own (`createDataLake`'s self-grant names the creator, and
+ * `transferLakeOwnership` refuses an out-of-org new owner for an org-scoped lake).
  *
  * Two refusals, for two different reasons:
  *

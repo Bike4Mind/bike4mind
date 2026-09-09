@@ -169,10 +169,17 @@ export function resolveLakeReadAccess(
  * admin toggle stays report-only until the feature is code-complete. Platform altitude on purpose:
  * the setting is a one-time install-wide migration cutover, not a per-lake lever.
  *
- * NEVER throws - an unwired repo OR a failed read degrades to `false` (report-only / legacy), because
+ * NEVER throws - an unwired repo OR a THROWN read degrades to `false` (report-only / legacy), because
  * a failed read is not a "yes": collapsing it into enforce would silently widen access on a transient
  * glitch. The warns are the diagnostics that tell "flag off" apart from "read failed" apart from
  * "operator enabled it but the interlock is still holding" - all three must be visible to a smoke test.
+ *
+ * THAT FAIL-SAFE DOES NOT REACH A NON-THROWING FAILURE, and the reason is in `getSettingsValue`: it
+ * `safeParse`s the stored value and returns the setting's `defaultValue` on failure rather than
+ * raising. `EnforceLakeReadGrants` ships `defaultValue: true`, so a missing row and an unparseable
+ * one both resolve to ENFORCE, not to `false`. For the missing row that is the intended cutover
+ * default; for a malformed row it is indistinguishable from it here, and the settings layer is where
+ * that would have to be told apart.
  */
 export async function resolveEnforceReadGrants(
   settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
