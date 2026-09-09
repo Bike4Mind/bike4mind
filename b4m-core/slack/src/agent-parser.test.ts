@@ -253,6 +253,25 @@ describe('@datalake command', () => {
       expect(looksLikeBareDataLakeMention(parseCommand('datalakes are cool'))).toBe(false);
       expect(looksLikeBareDataLakeMention(parseCommand('metadatalake'))).toBe(false);
     });
+
+    // #2028's acceptance criteria name this specific enumerable set - not general edit-distance
+    // fuzzy matching, which would risk false positives on unrelated words.
+    it('is true for the enumerable set of misspellings #2028 names', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datakale list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('data lake list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('data-lake list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('Datakale'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('<@U12345> datakale list'))).toBe(true);
+    });
+
+    it('is false for a real @datakale-style command too, so misspellings never double-handle either', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('@datakale list'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('@data-lake list'))).toBe(false);
+    });
+
+    it('still requires the word boundary for a misspelling substring', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datakales are cool'))).toBe(false);
+    });
   });
 
   it('selectAgent never routes @datalake to an LLM persona (falls back to the general agent)', () => {
