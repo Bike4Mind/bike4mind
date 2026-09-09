@@ -17,7 +17,7 @@ describe('SimplifiedChatRequestSchema fail-loud defaults', () => {
     expect(result.data?.historyCount).toBe(10);
   });
 
-  it.each([0, -5, -0.5])('rejects a non-positive historyCount (%p) rather than coercing it to the default', invalid => {
+  it.each([0, -5, -0.5])('rejects a non-positive historyCount (%s) rather than coercing it to the default', invalid => {
     // Pre-contract this was `.prefault(10).catch(10)`, which silently swallowed
     // any bad value. Public schemas must surface the error as a 422 instead.
     expect(parse({ historyCount: invalid }).success).toBe(false);

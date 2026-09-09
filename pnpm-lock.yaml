@@ -484,6 +484,9 @@ importers:
       idb-keyval:
         specifier: ^6.2.6
         version: 6.2.6
+      isolated-vm:
+        specifier: ^7.0.0
+        version: 7.0.0
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
@@ -902,6 +905,9 @@ importers:
 
   b4m-core/agents:
     dependencies:
+      '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
