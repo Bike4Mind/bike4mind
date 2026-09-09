@@ -330,7 +330,7 @@ describe('PUT /api/files/[id] - lake write authorization', () => {
     h.findByDatalakeTag.mockResolvedValue(ORG_LAKE);
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.find.mockResolvedValue([]);
-    h.findAccessibleById.mockResolvedValue(fabFile({ userId: 'u2' }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ userId: 'u2' }));
     makeStatefulFabFile({ id: FILE_ID, userId: 'u2', tags: [] });
   });
 
