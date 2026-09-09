@@ -155,6 +155,13 @@ const handler = baseApi({ auth: true })
       if (!targetUser) {
         throw new BadRequestError('User not found');
       }
+      // Canonical target id for everything below, NOT the `userId` URL segment: findById casts to
+      // ObjectId and resolves the user under any hex casing, but every field this id is compared
+      // against afterwards is a `type: String` matched by byte equality - the key's own `userId`,
+      // and each manage rung the lake screen walks. A non-canonical segment minted a key that
+      // authenticates (apiKeyAuth casts too) yet findByUserId never returns: invisible in the
+      // owner's key list, uncounted by the per-user cap, unreachable by the owner-scoped revoke.
+      const targetUserId = targetUser.id;
 
       const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
 
@@ -165,15 +172,10 @@ const handler = baseApi({ auth: true })
         throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
       }
 
-      // `targetUser.id`, NOT the `userId` URL segment: findById casts to ObjectId and so resolves
-      // the user under any hex casing, but every manage rung compares the actor id against a
-      // `type: String` field (createdByUserId, a grant's principalId, an Organization's admin ids)
-      // by byte equality. A non-canonical id would resolve the user and then read as managing
-      // nothing, refusing a target who genuinely manages the lake. Same hazard as the lake ids.
-      const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUser.id);
+      const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId);
 
       const newApiKey = await userApiKeyService.createUserApiKey(
-        userId,
+        targetUserId,
         {
           name,
           scopes: scopes as Parameters<typeof userApiKeyService.createUserApiKey>[1]['scopes'],
@@ -199,7 +201,7 @@ const handler = baseApi({ auth: true })
       // makes "which keys are bound to this lake" answerable without grepping logs.
       await logEvent(
         {
-          userId,
+          userId: targetUserId,
           type: UserApiKeyEvents.CREATED,
           metadata: {
             keyId: newApiKey.id,
@@ -213,11 +215,13 @@ const handler = baseApi({ auth: true })
         { ability: req.ability }
       );
 
-      // Audit trail with admin details. `name` goes through JSON.stringify - the same surrounding
-      // quotes for any ordinary name - so a newline in a caller-chosen name cannot forge a sibling
-      // log entry now that this line is the audit record for a cross-tenant lake binding.
+      // Audit trail with admin details. Every free-form field goes through JSON.stringify - the
+      // same surrounding quotes for any ordinary value - so a newline cannot forge a sibling entry
+      // now that this line is the audit record for a cross-tenant lake binding. `username` is only
+      // `{ type: String, unique: true }` on UserModel, so it carries no schema-level shape
+      // constraint; both ids are canonical ObjectId strings and need no escaping.
       req.logger.info(
-        `Admin ${req.user.username} (${req.user.id}) generated API key ${JSON.stringify(name)} for user ${targetUser.username} (${userId})` +
+        `Admin ${JSON.stringify(req.user.username)} (${req.user.id}) generated API key ${JSON.stringify(name)} for user ${JSON.stringify(targetUser.username)} (${targetUserId})` +
           (lakeBinding ? ` bound to data lake(s) ${lakeBinding.join(', ')}` : '')
       );
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
- * Two guards on the admin key-minting endpoint:
+ * Three concerns on the admin key-minting endpoint:
  *
  * 1. Scope allowlist - the endpoint may mint overwatch-ingest:write (admin-provisioned) but not
  *    admin:* or cc-bridge:connect, which still have no minting path. All standard user scopes
@@ -11,6 +11,7 @@ import { createMocks } from 'node-mocks-http';
  *    grant, so an id the TARGET user cannot manage is inert rather than an escalation. The screen
  *    exists to stop that silent no-op being persisted, and to canonicalize the ids: the containment
  *    check in sessions/create is a byte comparison, so an uppercase-hex id would never match.
+ * 3. Canonical target id - the same byte-comparison hazard one field over; see the third describe.
  */
 
 const LAKE_A = '0123456789abcdef01234567';
@@ -404,6 +405,70 @@ describe('POST /api/admin/users/:userId/generate-api-key - preauthorizedLakeIds 
       scopes: ['notebooks:read'],
       preauthorizedLakeIds: [LAKE_A],
     });
+    await mockRefs.postHandler!(req, res);
+    const logged = ((req as any).logger.info as any).mock.calls[0][0] as string;
+    expect(logged).not.toContain('\n');
+    expect(logged).toContain('\\n');
+  });
+});
+
+/**
+ * The target id is canonicalized once, off `targetUser.id`, and used for the mint as well as the
+ * lake screen. `userRepository.findById` casts to ObjectId and so resolves the user under any hex
+ * casing, but `UserApiKeyModel.userId` is `type: String`: a key minted under a non-canonical
+ * segment authenticates (apiKeyAuth casts too) and is then invisible to every byte-exact
+ * owner-scoped query - findByUserId, countActiveByUserId, findByUserIdAndId.
+ */
+describe('POST /api/admin/users/:userId/generate-api-key - canonical target id', () => {
+  const SEGMENT_UPPER = '0123456789ABCDEF01234567';
+  const CANONICAL = '0123456789abcdef01234567';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFind.mockResolvedValue({ id: CANONICAL, username: 'targetUser' });
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', scopes: ['notebooks:read'] });
+    mockLogEvent.mockResolvedValue(undefined);
+  });
+
+  it('mints under the resolved user id, not the raw URL segment', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] }, { userId: SEGMENT_UPPER });
+    await mockRefs.postHandler!(req, res);
+    expect(mockUserFind).toHaveBeenCalledWith(SEGMENT_UPPER);
+    expect(mockCreateKey).toHaveBeenCalledWith(CANONICAL, expect.anything(), expect.anything());
+  });
+
+  it('attributes the analytics event to the resolved user id', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] }, { userId: SEGMENT_UPPER });
+    await mockRefs.postHandler!(req, res);
+    expect(mockLogEvent).toHaveBeenCalledWith(expect.objectContaining({ userId: CANONICAL }), expect.anything());
+  });
+
+  it('records the resolved user id on the audit line', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] }, { userId: SEGMENT_UPPER });
+    await mockRefs.postHandler!(req, res);
+    const logged = ((req as any).logger.info as any).mock.calls[0][0] as string;
+    expect(logged).toContain(CANONICAL);
+    expect(logged).not.toContain(SEGMENT_UPPER);
+  });
+
+  it('screens the lake binding against the resolved user id', async () => {
+    mockLakeFind.mockImplementation(async (id: string) => activeLake(id));
+    mockFilterManaged.mockImplementation(async (lakes: { id: string }[]) => lakes);
+    const { req, res } = post(
+      { name: 'key', scopes: ['notebooks:read'], preauthorizedLakeIds: [LAKE_A] },
+      { userId: SEGMENT_UPPER }
+    );
+    await mockRefs.postHandler!(req, res);
+    expect(mockFilterManaged.mock.calls[0][1]).toBe(CANONICAL);
+  });
+
+  it('escapes a forged newline in either username so it cannot fake a sibling audit entry', async () => {
+    mockUserFind.mockResolvedValue({
+      id: CANONICAL,
+      username: 'victim\nAdmin nobody (0) generated API key "evil" for user someone',
+    });
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+    (req as any).user.username = 'admin\nforged';
     await mockRefs.postHandler!(req, res);
     const logged = ((req as any).logger.info as any).mock.calls[0][0] as string;
     expect(logged).not.toContain('\n');
