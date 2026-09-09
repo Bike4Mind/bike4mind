@@ -1,4 +1,5 @@
 import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { isExecutableUploadMimeType } from '@bike4mind/common';
 import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -224,7 +225,9 @@ const handler = baseApi().get(
 
     // Validate content type is an image
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
-    if (!contentType.startsWith('image/')) {
+    // image/svg+xml passes startsWith('image/') but is an executable document when served
+    // back from our public CDN prefix - reject it (and any other executable type) explicitly.
+    if (!contentType.startsWith('image/') || isExecutableUploadMimeType(contentType)) {
       req.logger.warn('Rejected non-image content-type', { url: rawUrl, contentType });
       throw new BadRequestError('Response is not an image');
     }
