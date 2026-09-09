@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { appendEditedVersion, nextVersionNumber, versionedFileKey } from './fabfile';
+import { appendEditedVersion, computeContentHash, nextVersionNumber, versionedFileKey } from './fabfile';
+
+describe('computeContentHash', () => {
+  it('is sha256 hex, independent of whether the input is a string or an equivalent Buffer', () => {
+    // Computed independently rather than trusted from the implementation.
+    const expected = 'd9fbbc91492fbb3ba8e57ca15b039134e7098030a89578315a4c354f9117ccf2';
+    expect(computeContentHash('body text')).toBe(expected);
+    expect(computeContentHash(Buffer.from('body text'))).toBe(expected);
+  });
+
+  it('is deterministic and sensitive to every byte, so a single differing byte changes the hash', () => {
+    expect(computeContentHash('same input')).toBe(computeContentHash('same input'));
+    expect(computeContentHash('same input')).not.toBe(computeContentHash('same inpuT'));
+  });
+});
 
 describe('nextVersionNumber', () => {
   it('starts at 1 when there is no history', () => {
