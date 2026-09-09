@@ -417,12 +417,15 @@ export interface IFabFile {
   archivedAt?: Date;
 
   /**
-   * Set the first time the "finished indexing" Slack reply is claimed for this file (#2027) -
-   * an atomic unset->set guard, not just a record of when the post happened, so a redelivered or
-   * concurrent vectorize-completion message never posts the same reply twice. See
-   * `fabFileRepository.claimSlackIndexNotification` and `notifySlackIndexingComplete.ts`.
+   * One entry per completion-notification channel that has claimed this file (#2027) - e.g.
+   * `{ channel: 'slack', at }` once the "finished indexing" Slack reply is claimed. An atomic
+   * per-channel claim guard, not just a record of when a post happened, so a redelivered or
+   * concurrent vectorize-completion message never posts the same reply twice on the same channel.
+   * Generalized (not `slackIndexNotifiedAt: Date`) so a future channel (Teams, email, webhook)
+   * reuses this array instead of accreting its own per-channel timestamp field. See
+   * `fabFileRepository.claimIndexNotification` and `notifySlackIndexingComplete.ts`.
    */
-  slackIndexNotifiedAt?: Date;
+  dispatchedNotifications?: Array<{ channel: string; at: Date }>;
 
   /**
    * Non-destructive AI-edit history for binary Office documents (docx/xlsx). Absent for
@@ -860,12 +863,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
 
   /**
-   * Atomic claim: sets `slackIndexNotifiedAt` only if it is not already set, succeeding only for
-   * the FIRST caller. The redelivery-safety primitive for the "finished indexing" Slack reply
-   * (#2027) - a redelivered or concurrent vectorize-completion message for the same file must
-   * post that reply at most once. Mirrors `dataLakeBatchRepository.claimFileStatus`'s shape.
+   * Atomic per-channel claim: appends a `dispatchedNotifications` entry for `channel` only if one
+   * does not already exist, succeeding only for the FIRST caller. The redelivery-safety primitive
+   * for a completion notification (#2027 introduced it for `'slack'`) - a redelivered or
+   * concurrent vectorize-completion message for the same file must post that channel's reply at
+   * most once. Mirrors `dataLakeBatchRepository.claimFileStatus`'s shape.
    */
-  claimSlackIndexNotification(fabFileId: string): Promise<boolean>;
+  claimIndexNotification(fabFileId: string, channel: string): Promise<boolean>;
 
   /**
    * Search for files.
