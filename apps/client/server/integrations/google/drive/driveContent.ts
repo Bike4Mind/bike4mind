@@ -1,4 +1,4 @@
-import type { drive_v3 } from 'googleapis';
+import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
 import { listFolderChildren, isFolder, isDriveRateLimitError, type DriveFile } from './driveClient';

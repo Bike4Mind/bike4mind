@@ -134,6 +134,10 @@ export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
 
+export const replSandboxUnavailableAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -1038,6 +1042,44 @@ if (isMonitoredStage) {
     tags: {
       Application: 'ModelSunset',
       Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: the REPL sandbox could not be constructed
+   *
+   * Both callers fail closed when `isolated-vm` will not load: the agent wake
+   * drops code_execute and answers anyway, rlm-answer returns 503. Neither is
+   * visible upstream - a wake without its compute lever looks like a wake, and
+   * a 503 on one route looks transient. The cause this guards against (the
+   * native addon missing from a deploy bundle) is total for a build, so this
+   * fires on the first occurrence rather than a volume threshold. Page.
+   *
+   * Metric emitted by: b4m-core/agents/src/rlm/replSandboxMetrics.ts. Alarms
+   * match one exact dimension set, so this uses the Stage-only datapoint; the
+   * Caller dimension ('wake' | 'rlm-answer') is for attribution once notified.
+   *
+   * Metric names MUST STAY IN SYNC with that file; its tests pin the literals.
+   */
+  new aws.cloudwatch.MetricAlarm('replSandboxUnavailable', {
+    name: `${$app.name}-${$app.stage}-repl-sandbox-unavailable`,
+    alarmDescription:
+      'The isolated REPL sandbox failed to construct - code_execute is dropped on wakes and rlm-answer is returning 503',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'SandboxUnavailable',
+    namespace: 'Lumina5/ReplSandbox',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0, // Alert on any occurrence
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [replSandboxUnavailableAlarm!.arn],
+    tags: {
+      Application: 'ReplSandbox',
+      Severity: 'High',
     },
   });
 

@@ -25,7 +25,14 @@ const mcpServerFields = {
   enabled: z.boolean().optional(),
 };
 
-/** PUT: `name` is optional because the route resolves the server by id, not by name. */
+/**
+ * PUT: `name` is optional because the route resolves the server by id, not by name.
+ *
+ * `envVariables` is a full replacement, not a patch - the handler `$set`s whatever arrives, so a
+ * body carrying a subset drops the rest. That is why it stays required here: an omitted array
+ * would have to mean either "clear them" or "leave them alone", and a 400 asking for the whole
+ * set is clearer than picking one silently.
+ */
 export const mcpServerUpdateBodySchema = z.object({
   ...mcpServerFields,
   name: mcpServerFields.name.optional(),

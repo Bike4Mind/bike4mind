@@ -111,3 +111,50 @@ describe('ReplContext', () => {
     expect(globals).toContain('beta');
   });
 });
+
+/**
+ * Characterization tests: these assert that the in-process backend IS
+ * escapable. They exist so the `'in-process-unsafe'` name and the security
+ * note on the class stay load-bearing rather than decorative - if someone
+ * ever hardens this context, these fail and point at the docs to update.
+ *
+ * They are the reason no caller running LLM- or user-authored code may
+ * select this backend. See IsolatedVmExecutor.test.ts for the same vectors
+ * being refused by a real trust boundary.
+ */
+describe('ReplContext is not a sandbox (characterization)', () => {
+  it('leaks the host realm through an injected intrinsic', async () => {
+    const ctx = new ReplContext();
+    // `codeGeneration: { strings: false }` blocks the context's own eval...
+    const blocked = await ctx.runCode('eval("1+1")');
+    expect(blocked.error).toBeTruthy();
+
+    // ...but `Object` here is the HOST's Object, and its constructor lives in
+    // the host context, where codegen is permitted.
+    const r = await ctx.runCode('console.log(typeof Object.constructor("return process")().env);');
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('object');
+  });
+
+  it('leaks the host realm through an injected tool closure', async () => {
+    const ctx = new ReplContext({ tools: { semanticSearch: async () => ({ results: [] }) } });
+    // Tool closures are host functions passed by reference, so their
+    // constructor is the host's AsyncFunction.
+    const r = await ctx.runCode(`
+      const AF = semanticSearch.constructor;
+      console.log(typeof (await AF("return globalThis")()).fetch);
+    `);
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('function');
+  });
+
+  it('does not bound work that happens after an await', async () => {
+    const ctx = new ReplContext({ timeoutMs: 200 });
+    const t0 = Date.now();
+    // The timeout covers the synchronous head of the run only. This busy loop
+    // is in a continuation, so it runs to completion and holds the event loop.
+    const r = await ctx.runCode('await 0; const end = Date.now() + 600; while (Date.now() < end) {}');
+    expect(r.error).toBeNull();
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(500);
+  });
+});

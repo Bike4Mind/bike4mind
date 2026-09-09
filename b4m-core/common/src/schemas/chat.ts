@@ -38,14 +38,35 @@ export const SimplifiedChatRequestSchema = z.object({
   fileIds: z.array(z.string()).prefault([]),
   // New synchronous option - wait for completion before returning
   wait: z.boolean().prefault(false),
-  // Enable full tool access for agent requests (e.g., voice agent_request portal)
+  // Enable full tool access for agent requests (e.g., voice agent_request portal). A `tools`
+  // array sent alongside is added to the offered set (it used to be dropped), and the
+  // full-capability defaults below still apply.
   enableTools: z.boolean().prefault(false),
-  // Tool selection mode: 'fast' = no tools (pure chat), 'smart' = auto-select tools based on prompt
-  // When set, overrides enableTools. When not set, falls back to enableTools behavior.
+  // Tool selection mode: 'fast' = no tools from the request, 'smart' = auto-select tools based on
+  // prompt. When set, overrides enableTools. When not set, a non-empty `tools` array both enables
+  // tools and supplies the set; absent that too, it falls back to enableTools behavior.
   toolMode: z.enum(['fast', 'smart']).optional(),
-  // Explicit tool ids (combined with auto-selected in smart mode). Unknown ids are
-  // filtered by the handler (filterKnownTools), not here - see the rule above.
-  tools: z.array(z.string()).optional(),
+  // Explicit tool ids (combined with auto-selected in smart mode). Non-empty is itself
+  // intent to enable tools, so no companion toolMode/enableTools is required - the array
+  // used to be dropped in silence without one. Unknown ids are filtered by the handler
+  // (filterKnownTools), not here - see the rule above.
+  tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Explicit tool ids to offer the model. A non-empty array enables tools on its own; no ' +
+        'companion `toolMode` or `enableTools` is required. Merged with the auto-selected set ' +
+        'under `toolMode: "smart"`, and ignored under `toolMode: "fast"`. This list ADDS to what ' +
+        'is offered rather than restricting it - the server still offers tools of its own (for ' +
+        'example knowledge retrieval when the session has reachable documents). Unrecognized ids ' +
+        'are dropped rather than rejecting the request; the response reports the surviving set as ' +
+        '`tools.effectiveTools` and the ids that are not tools in this deployment as ' +
+        '`tools.unrecognizedTools`, since no endpoint enumerates the valid ids. ' +
+        '`unrecognizedTools` is reported under every `toolMode` - it describes the ids, not what ' +
+        'the mode did with them - so under `toolMode: "fast"` an id can be absent from ' +
+        '`effectiveTools` (the mode discarded it) without being unrecognized. Both reported lists ' +
+        'are deduplicated, and `unrecognizedTools` names at most the first 10 distinct ids.'
+    ),
   // Explicit overrides - when enableTools is true, these default to true but can be
   // individually disabled (e.g., voice agent_request disables QuestMaster so replies
   // aren't cleared and replaced with a plan document)
@@ -100,6 +121,26 @@ export const ChatAckSchema = z.object({
   timestamp: z.string(),
   model: z.string(),
   message: z.string().optional(),
+  // The tool decision the API layer made for this turn, echoed back so a caller can see what was
+  // offered and what was thrown away. Absent when the layer made no decision and had nothing to
+  // report (the `enableTools`-only path, where the service layer resolves the set). Present on
+  // both the async ACK and the `wait: true` body, and modelled here so the spec and the typed
+  // client carry it - the request field's description points callers at `unrecognizedTools` as the
+  // only way to discover a mistyped tool id, and a documented discovery mechanism has to be in the
+  // contract rather than in prose. Built by `buildToolMeta` in apps/client/pages/api/chat.ts.
+  tools: z
+    .object({
+      // Absent when the caller named tools without sending a mode.
+      toolMode: z.enum(['fast', 'smart']).optional(),
+      // Smart mode only: what the prompt-based recommender picked.
+      autoSelectedTools: z.array(z.string()).optional(),
+      effectiveTools: z.array(z.string()),
+      // Ids the caller sent that are not tools in this deployment. A registry fact, so it is
+      // reported under every toolMode - an id dropped by `fast` is NOT listed here unless it is
+      // also unrecognized. Deduplicated and capped; see the `tools` request field's description.
+      unrecognizedTools: z.array(z.string()).optional(),
+    })
+    .optional(),
   tracking_info: z.object({
     quest_id: z.string(),
     check_status_url: z.string(),

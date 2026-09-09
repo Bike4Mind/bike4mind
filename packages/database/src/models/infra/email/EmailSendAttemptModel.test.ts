@@ -41,9 +41,9 @@ describe('EmailSendAttemptRepository.findByJob - end-of-day extension', () => {
     await repo.findByJob('job-1', { page: 1, limit: 10, endDate });
 
     expect(Number.isNaN(upperBound(find).getTime())).toBe(false);
-    expect(Number.isNaN((countDocuments.mock.calls[0][0] as { createdAt: { $lte: Date } }).createdAt.$lte.getTime())).toBe(
-      false
-    );
+    expect(
+      Number.isNaN((countDocuments.mock.calls[0][0] as { createdAt: { $lte: Date } }).createdAt.$lte.getTime())
+    ).toBe(false);
   });
 
   it('falls back to the un-extended date rather than dropping the bound', async () => {

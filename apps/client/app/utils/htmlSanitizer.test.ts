@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockSanitize = vi.hoisted(() => vi.fn((content: string) => content));
 vi.mock('dompurify', () => ({ default: { sanitize: mockSanitize } }));
 
-import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from './htmlSanitizer';
+import { sanitizeHtmlForIframe, sanitizeHtmlStrict, absolutizeBlessedScripts } from './htmlSanitizer';
 
 describe('sanitizeHtmlForIframe', () => {
   beforeEach(() => {
@@ -120,6 +120,43 @@ describe('sanitizeHtmlForIframe', () => {
     const config = mockSanitize.mock.calls[0][1];
     expect(config.ADD_TAGS).not.toContain('script');
   });
+});
+
+describe('sanitizeHtmlStrict', () => {
+  beforeEach(() => {
+    mockSanitize.mockReset();
+    mockSanitize.mockImplementation((content: string) => content);
+  });
+
+  // App-origin sink (no sandbox iframe): unlike sanitizeHtmlForIframe it must NOT re-admit
+  // style/link/document-shell, or injected email HTML could smuggle app-origin CSS or resource loads.
+  it('forbids style, link, meta and the document-shell tags', () => {
+    sanitizeHtmlStrict('<p>hi</p>');
+    const config = mockSanitize.mock.calls[0][1];
+    expect(config.FORBID_TAGS).toEqual(
+      expect.arrayContaining(['style', 'link', 'meta', 'html', 'head', 'body', 'title', 'base'])
+    );
+  });
+
+  it('forbids script, iframe, object, embed', () => {
+    sanitizeHtmlStrict('<p>hi</p>');
+    const config = mockSanitize.mock.calls[0][1];
+    expect(config.FORBID_TAGS).toEqual(expect.arrayContaining(['script', 'iframe', 'object', 'embed']));
+  });
+
+  it('forbids event-handler attributes', () => {
+    sanitizeHtmlStrict('<p>hi</p>');
+    const config = mockSanitize.mock.calls[0][1];
+    expect(config.FORBID_ATTR).toEqual(expect.arrayContaining(['onload', 'onerror', 'onclick']));
+  });
+
+  it('does NOT re-admit the document shell via ADD_TAGS (unlike the iframe sanitizer)', () => {
+    sanitizeHtmlStrict('<p>hi</p>');
+    const config = mockSanitize.mock.calls[0][1];
+    expect(config.ADD_TAGS).toBeUndefined();
+  });
+  // Behavioural assertions (real DOMPurify actually stripping tags) live in
+  // htmlSanitizer.behaviour.test.ts - dompurify is mocked to identity in this file.
 });
 
 describe('absolutizeBlessedScripts', () => {

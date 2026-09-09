@@ -49,8 +49,9 @@ vi.mock('@bike4mind/database', () => ({
     removeGrant: vi.fn().mockResolvedValue(true),
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
-  // The GET read gate reads the EnforceLakeReadGrants cutover flag (#1673) via assertLakeAccess;
-  // default off keeps these redaction tests on the legacy report-only path.
+  // The GET read gate reads the EnforceLakeReadGrants cutover flag (#1673) via assertLakeAccess.
+  // Stubbed FALSE (not defaulted - the setting ships on) to keep these redaction tests on the
+  // legacy report-only path, which is what they were written against.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));

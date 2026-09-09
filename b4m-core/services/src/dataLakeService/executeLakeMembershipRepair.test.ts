@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const h = vi.hoisted(() => ({ removeFileFromDataLake: vi.fn() }));
+const h = vi.hoisted(() => ({ removeFileFromDataLake: vi.fn(), findById: vi.fn() }));
 vi.mock('./removeFileFromDataLake', () => ({ removeFileFromDataLake: h.removeFileFromDataLake }));
 
-import { executeLakeMembershipRepair } from './executeLakeMembershipRepair';
+import { executeLakeMembershipRepair, MAX_MEMBERSHIP_REPAIR_REMOVALS } from './executeLakeMembershipRepair';
 import {
   groupIdentity,
   planMembershipRepair,
@@ -35,7 +35,7 @@ const group = (fileName: string, bucket: DuplicateGroup['bucket'], members = [me
 });
 
 const actor = { userId: 'u1', isAdmin: false } as never;
-const adapters = { db: {}, logger: { warn: vi.fn() } } as never;
+const adapters = { db: { dataLakes: { findById: h.findById } }, logger: { warn: vi.fn() } } as never;
 
 const run = (
   groups: DuplicateGroup[],
@@ -45,7 +45,13 @@ const run = (
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.removeFileFromDataLake.mockResolvedValue({ success: true, fileCount: 1, totalSizeBytes: 1 });
+  h.findById.mockResolvedValue({ id: 'lake-1' });
+  h.removeFileFromDataLake.mockResolvedValue({
+    success: true,
+    fileCount: 1,
+    totalSizeBytes: 1,
+    restoreTokenMinted: true,
+  });
 });
 
 describe('executeLakeMembershipRepair', () => {
@@ -225,7 +231,77 @@ describe('executeLakeMembershipRepair', () => {
   it('does nothing at all on an empty plan', async () => {
     const outcome = await run([]);
 
-    expect(outcome).toEqual({ removedFabFileIds: [], groupsActedOn: [], failures: [], staleDecisions: [] });
+    expect(outcome).toEqual({
+      removedFabFileIds: [],
+      groupsActedOn: [],
+      failures: [],
+      staleDecisions: [],
+      duplicateDecisions: [],
+      removedWithoutRestoreToken: [],
+      truncated: false,
+    });
     expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
+  });
+  describe('the four signals a bulk caller cannot infer', () => {
+    it('names removals whose restore row never wrote, so undo is already gone', async () => {
+      // The removal door writes that row best-effort in a catch that only warns, so a failed write
+      // leaves membership removed with NO undo at all - not merely undo that expires in 30 minutes.
+      // Without this a surface reports "removed 2" and offers an undo that silently does nothing.
+      h.removeFileFromDataLake.mockImplementation(async (_a: unknown, _l: unknown, id: string) => ({
+        success: true,
+        fileCount: 1,
+        totalSizeBytes: 1,
+        restoreTokenMinted: id !== 'old',
+      }));
+
+      const outcome = await run([
+        group('p.pdf', 'proven-identical', [member('new', HEX), member('mid', HEX), member('old', HEX)]),
+      ]);
+
+      expect(outcome.removedFabFileIds).toEqual(['mid', 'old']);
+      expect(outcome.removedWithoutRestoreToken).toEqual(['old']);
+    });
+
+    it('applies NOTHING for a duplicated file name, rather than letting array order decide', async () => {
+      // [keep-both, keep-newest] removes members and the reverse removes none - a destructive
+      // outcome decided by array position. Neither is defensible, so neither is applied.
+      const g = group('d.pdf', 'differing', [member('new'), member('old')]);
+
+      const outcome = await run(
+        [g],
+        [
+          { fileName: 'd.pdf', decision: 'keep-both', groupIdentity: groupIdentity(g) },
+          { fileName: 'd.pdf', decision: 'keep-newest', groupIdentity: groupIdentity(g) },
+        ]
+      );
+
+      expect(outcome.removedFabFileIds).toEqual([]);
+      expect(outcome.duplicateDecisions).toEqual(['d.pdf']);
+      expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
+    });
+
+    it('stops at the removal ceiling and says so', async () => {
+      // The plan carries no cap of its own, so without this a hand-crafted plan is an unbounded
+      // sequential wave - each removal a read, a $pull and a full lake-stats recompute.
+      const members = Array.from({ length: MAX_MEMBERSHIP_REPAIR_REMOVALS + 5 }, (_, i) => member(`f${i}`, HEX));
+
+      const outcome = await run([group('big.pdf', 'proven-identical', members)]);
+
+      expect(outcome.removedFabFileIds).toHaveLength(MAX_MEMBERSHIP_REPAIR_REMOVALS);
+      expect(outcome.truncated).toBe(true);
+    });
+
+    it('resolves the lake ONCE and fails fast, rather than once per member', async () => {
+      // A lake-level fault is invariant across the loop. Discovering it per member issues one
+      // findById per removal and returns a success-shaped outcome carrying N copies of one message.
+      h.findById.mockResolvedValue(null);
+
+      await expect(
+        run([group('p.pdf', 'proven-identical', [member('new', HEX), member('mid', HEX), member('old', HEX)])])
+      ).rejects.toThrow(/not found/i);
+
+      expect(h.findById).toHaveBeenCalledTimes(1);
+      expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
+    });
   });
 });

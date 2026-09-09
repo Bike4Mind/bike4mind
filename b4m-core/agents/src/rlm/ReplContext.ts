@@ -18,10 +18,26 @@ import vm from 'node:vm';
  * the difference is that in-REPL calls happen inside a single `runCode()`
  * invocation and don't burn a full LLM turn each.
  *
- * SECURITY NOTE: `vm.runInContext` is *not* a security sandbox. It provides
- * a fresh global scope but the same V8 process. Acceptable for trusted
- * tavern-internal agent code; pre-production rollout to user-facing
- * surfaces should swap this for `isolated-vm` or a worker-thread pool.
+ * SECURITY: this class is NOT a sandbox and cannot be made into one. It runs
+ * guest code in the host's own realm, so every injected intrinsic and every
+ * tool closure carries a `constructor` that is the host's real `Function`:
+ *
+ *   Object.constructor('return process')().env        // host env
+ *   semanticSearch.constructor('return globalThis')() // host fetch
+ *
+ * `codeGeneration: { strings: false }` below does not close this. That flag is
+ * per-CONTEXT, and those constructors belong to the HOST context, where codegen
+ * is allowed. Neutering them would mean mutating the host's own intrinsics.
+ *
+ * Its `timeoutMs` is equally partial: `vm.runInContext` bounds only the
+ * synchronous part of the run, and every run is wrapped in an async IIFE, so
+ * anything after the first `await` is uncapped and can hold the main event
+ * loop indefinitely.
+ *
+ * Use it only for code the caller itself wrote - `ReplSession` names it
+ * `'in-process-unsafe'` for that reason. For anything LLM- or user-authored
+ * use `IsolatedVmExecutor` (`executor: 'isolated'`), which is a real trust
+ * boundary.
  *
  * See: apps/client/server/tavern/docs/07-PERSISTENT-REPL-TOOL.md
  */
@@ -38,10 +54,22 @@ export interface ReplRunResult {
   error: string | null;
   truncated: boolean;
   durationMs: number;
+  /**
+   * The run that breached a host deadline or a memory limit and took the
+   * sandbox with it. Set on the breaching run itself, not just on the next
+   * call: the backend retires here, and without a flag on this result the
+   * caller sees an ordinary (retryable-looking) error and only learns the
+   * sandbox is gone when the FOLLOWING call throws `ReplSandboxRetiredError`.
+   *
+   * A flag rather than a throw because stdout captured before the kill is
+   * still worth returning, and a throw would discard it.
+   */
+  sandboxRetired?: boolean;
 }
 
 export interface ReplContextOptions {
-  /** Hard wall-clock cap for a single runCode call. Default 30s. */
+  /** Cap for a single runCode call, in ms. Default 30s. Bounds SYNCHRONOUS
+   * execution only - see the security note on the class. */
   timeoutMs?: number;
   /** Initial set of tools to expose. Can also be set later via setTools(). */
   tools?: ReplToolMap;
@@ -115,9 +143,11 @@ export class ReplContext {
 
     this.ctx = vm.createContext(sandbox, {
       name: this.label,
-      // strings: false disables `eval()` and `new Function()` inside the
-      // context. The LLM has no legitimate reason to generate second-order
-      // code that's invisible in the logged `code` parameter.
+      // strings: false disables the `eval()` and `Function` GLOBALS in this
+      // context, so second-order code does not silently bypass the logged
+      // `code` parameter. It is an auditability measure, not a sandbox: the
+      // same constructors remain reachable through any host object's
+      // prototype chain. See the security note on the class.
       codeGeneration: { strings: false, wasm: false },
     });
   }

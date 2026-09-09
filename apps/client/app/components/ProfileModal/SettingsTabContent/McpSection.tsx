@@ -5,6 +5,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import { Select, Option, Modal, ModalDialog, Chip } from '@mui/joy';
 import { mcpSettings } from '@client/app/utils/mcpSettings';
+import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { gray } from '@client/app/utils/themes/colors';
@@ -122,8 +123,13 @@ const McpSection = () => {
         await createMutation.mutateAsync(formData);
       }
       handleCancelEdit();
+      setIsModalOpen(false);
     } catch (error) {
-      console.error('Error saving MCP server:', error);
+      // The server refuses env keys that configure the child runtime rather than the
+      // integration, so a save can fail on what the user typed. The modal stays open with the
+      // reason rather than closing on a discarded edit.
+      const data = (error as { response?: { data?: { reason?: string; error?: string } } })?.response?.data;
+      toast.error(data?.reason || data?.error || 'Failed to save MCP server.');
     }
   };
 
@@ -249,12 +255,7 @@ const McpSection = () => {
 
       <Modal open={isModalOpen} onClose={() => setIsModalOpen(false)}>
         <ModalDialog>
-          <form
-            onSubmit={e => {
-              handleSubmit(e);
-              setIsModalOpen(false);
-            }}
-          >
+          <form onSubmit={handleSubmit}>
             <Stack spacing={2}>
               <Typography level="h4">{editingId ? 'Edit MCP Server' : 'Create New MCP Server'}</Typography>
 

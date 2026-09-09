@@ -7,6 +7,7 @@ import type { Readable } from 'stream';
 import path from 'path';
 import { existsSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
+import { buildMcpChildEnv } from './childEnv';
 
 export class MCPClient {
   private mcp: Client;
@@ -82,21 +83,14 @@ export class MCPClient {
         return;
       }
 
-      const envVarsObject = this.envVariables.reduce(
-        (acc, env) => ({
-          ...acc,
-          [env.key]: env.value,
-        }),
-        {} as Record<string, string>
-      );
-
       let command: string;
       let args: string[];
+      const customCommand = this.customCommand?.trim() ? this.customCommand : undefined;
 
       // Check if custom command is provided (for external MCP servers like Docker)
-      if (this.customCommand && this.customCommand.trim() !== '') {
+      if (customCommand) {
         // Use external command (e.g., docker run)
-        command = this.customCommand;
+        command = customCommand;
         args = this.customArgs ?? [];
         // Silently use external command - no console output during startup
       } else {
@@ -134,15 +128,24 @@ export class MCPClient {
       // - undefined: inherit to parent (default - shows in terminal)
       const stderrMode = this.suppressStderr ? ('ignore' as const) : this.onStderrLine ? ('pipe' as const) : undefined;
 
+      // Built from an allowlist rather than inherited: this process holds platform credentials,
+      // and the child is a Node runtime that would honour a stored NODE_OPTIONS. See childEnv.ts.
+      const { env, droppedKeys } = buildMcpChildEnv({
+        serverName: this.serverName,
+        envVariables: this.envVariables,
+        hasCustomCommand: Boolean(customCommand),
+      });
+      if (droppedKeys.length > 0) {
+        // Key names only - the values are the user's provider credentials.
+        console.warn(
+          `[MCP] Withheld ${droppedKeys.length} undeclared env variable(s) from ${this.serverName}: ${droppedKeys.join(', ')}`
+        );
+      }
+
       const transportConfig = {
         command,
         args,
-        env: {
-          ...Object.fromEntries(
-            Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
-          ),
-          ...envVarsObject,
-        },
+        env,
         ...(stderrMode && { stderr: stderrMode }),
       };
 

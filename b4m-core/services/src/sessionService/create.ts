@@ -5,6 +5,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  IAgentRepository,
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
@@ -78,6 +79,7 @@ export interface CreateSessionAdapters {
     sessions: ISessionRepository;
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
+    agents: IAgentRepository;
   };
   /** Optional so existing callers compile; without it a failed lake-tag derivation is silent. */
   logger?: Logger;
@@ -114,6 +116,14 @@ export const createSession = async (
       ? rest.retrievalTags
       : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
 
+  // Object-level authz: only attach agents the caller can actually access (owner +
+  // user-shares + group-shares). Foreign ids are filtered out (not replaced by the query
+  // result) so the caller's original order and duplicates are preserved.
+  const accessibleAgentIds = agentIds.length
+    ? new Set((await db.agents.shareable.findAllAccessibleByIds(user, agentIds)).map(agent => agent.id))
+    : null;
+  const authorizedAgentIds = accessibleAgentIds ? agentIds.filter(id => accessibleAgentIds.has(id)) : agentIds;
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -130,7 +140,7 @@ export const createSession = async (
     userId: user.id,
     knowledgeIds,
     artifactIds,
-    agentIds,
+    agentIds: authorizedAgentIds,
     firstCreated: new Date(),
     lastUpdated: new Date(),
     updatedAt: new Date(),

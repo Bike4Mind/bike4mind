@@ -30,7 +30,7 @@ describe('sanitizeReportHtml', () => {
     expect(result).not.toContain('javascript:');
   });
 
-  it('strips data: image src', () => {
+  it('strips data: image src (only remotely hosted images allowed)', () => {
     const result = sanitizeReportHtml('<img src="data:image/png;base64,abc123" alt="x">');
     expect(result).not.toContain('data:');
   });
@@ -41,10 +41,16 @@ describe('sanitizeReportHtml', () => {
     expect(result).toContain('<strong>Bold</strong>');
   });
 
-  it('strips img tags (no external asset loads)', () => {
+  it("keeps img tags with an https src (what's-new emails embed images)", () => {
     const result = sanitizeReportHtml('<img src="https://example.com/img.png" alt="test">');
-    expect(result).not.toContain('<img');
-    expect(result).not.toContain('https://example.com/img.png');
+    expect(result).toContain('<img');
+    expect(result).toContain('https://example.com/img.png');
+    expect(result).toContain('alt="test"');
+  });
+
+  it('strips a javascript: img src while keeping the tag', () => {
+    const result = sanitizeReportHtml('<img src="javascript:alert(1)" alt="x">');
+    expect(result).not.toContain('javascript:');
   });
 
   it('strips style attribute', () => {
@@ -70,5 +76,11 @@ describe('renderAndSanitize', () => {
     const md = '[click me](javascript:alert(1))';
     const result = renderAndSanitize(md);
     expect(result).not.toContain('javascript:');
+  });
+
+  it('keeps a markdown-embedded image', () => {
+    const result = renderAndSanitize('![logo](https://example.com/logo.png)');
+    expect(result).toContain('<img');
+    expect(result).toContain('https://example.com/logo.png');
   });
 });

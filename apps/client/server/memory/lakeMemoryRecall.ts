@@ -21,6 +21,8 @@ export async function recallLakeMemoryForSession(input: {
   query: string;
   dataLakeTags: string[];
   retrievalFilter?: RetrievalExclusionOptions;
+  /** Belief budget for the turn (`lakeMemoryRecallK`), resolved by the caller. */
+  k: number;
 }): Promise<LakeBeliefRecall[]> {
   if (input.dataLakeTags.length === 0 || !input.query.trim()) return [];
 
@@ -54,5 +56,11 @@ export async function recallLakeMemoryForSession(input: {
     retrievalFilter: input.retrievalFilter,
   });
 
-  return recallLakeMemory({ userId: input.userId, query: input.query, lakes, resolveReachableSources });
+  return recallLakeMemory({
+    userId: input.userId,
+    query: input.query,
+    lakes,
+    resolveReachableSources,
+    k: input.k,
+  });
 }

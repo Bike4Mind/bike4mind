@@ -101,6 +101,7 @@ import EnsureQuestRetrievalIndex from './20260902000000_ensure-quest-retrieval-i
 // Renamed from 20260902000000 to 20260903000000 to resolve an id collision with the
 // EnsureQuestRetrievalIndex migration above, which merged into main first.
 import EnsureScopedSettingSettingNameIndex from './20260903000000_ensure-scopedsetting-settingname-index';
+import EncryptIdentityProviderSecrets from './20260904000000_encrypt-identity-provider-secrets';
 import BackfillLakeMemoryEnabledFromLedger from './20260906000000_backfill-lakememoryenabled-from-ledger';
 import EnsureFabFileTagNameFileNameIndex from './20260907000000_ensure-fabfile-tagname-filename-index';
 import ScopeIngestedEmailMessageIdUniqueToOwner from './20260908000000_scope-ingestedemail-messageid-unique-to-owner';
@@ -200,6 +201,7 @@ const coreMigrations: MigrationFile[] = [
   SplitChunkStallMarkersOffNotes,
   EnsureQuestRetrievalIndex,
   EnsureScopedSettingSettingNameIndex,
+  EncryptIdentityProviderSecrets,
   BackfillLakeMemoryEnabledFromLedger,
   EnsureFabFileTagNameFileNameIndex,
   ScopeIngestedEmailMessageIdUniqueToOwner,
