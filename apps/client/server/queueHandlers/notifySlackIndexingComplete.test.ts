@@ -5,21 +5,23 @@ const {
   findByDatalakeTags,
   findByOrganizationIdWithToken,
   findBySlackTeamIdWithTokenOrg,
-  findBySlackTeamIdWithTokenDev,
+  findBySlackAppIdAndTeamId,
+  findByIdWithCredentials,
   decryptToken,
   sendMessage,
 } = vi.hoisted(() => ({
   findByDatalakeTags: vi.fn(),
   findByOrganizationIdWithToken: vi.fn(),
   findBySlackTeamIdWithTokenOrg: vi.fn(),
-  findBySlackTeamIdWithTokenDev: vi.fn(),
+  findBySlackAppIdAndTeamId: vi.fn(),
+  findByIdWithCredentials: vi.fn(),
   decryptToken: vi.fn(),
   sendMessage: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findByDatalakeTags },
-  slackDevWorkspaceRepository: { findBySlackTeamIdWithToken: findBySlackTeamIdWithTokenDev },
+  slackDevWorkspaceRepository: { findBySlackAppIdAndTeamId, findByIdWithCredentials },
 }));
 vi.mock('@bike4mind/database/infra', () => ({
   orgSlackWorkspaceRepository: {
@@ -29,18 +31,23 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken }));
 // Ctor args recorded (not discarded) so a regression sending the wrong/encrypted token is caught.
-vi.mock('@bike4mind/slack', () => ({
-  SlackClient: class {
-    constructor(
-      public botToken: string,
-      public logger: unknown
-    ) {}
-    sendMessage = sendMessage;
-  },
-  // The real implementation, not a stub: these tests assert on exact message text, and this
-  // module is what neutralizes a Slack mrkdwn-injected fileName (e.g. "<!channel>").
-  escapeSlackMrkdwn: (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
-}));
+vi.mock('@bike4mind/slack', async importOriginal => {
+  // escapeSlackMrkdwn imported from the REAL module, not reimplemented: these tests assert on
+  // exact message text pinned to what it neutralizes (e.g. "<!channel>"), and a hand-copy would
+  // silently stop matching if the real implementation ever gains a new escaped character.
+  const actual = await importOriginal<typeof import('@bike4mind/slack')>();
+  return {
+    SlackClient: class {
+      constructor(
+        public botToken: string,
+        public logger: unknown,
+        public options?: { timeoutMs?: number }
+      ) {}
+      sendMessage = sendMessage;
+    },
+    escapeSlackMrkdwn: actual.escapeSlackMrkdwn,
+  };
+});
 
 import { notifySlackIndexingComplete } from './notifySlackIndexingComplete';
 
@@ -50,14 +57,15 @@ const slackFabFile = (overrides: Record<string, unknown> = {}) => ({
   id: 'fab-1',
   fileName: 'Report.pdf',
   sourceType: FabFileSourceType.SLACK,
-  sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', teamId: 'T123' },
+  sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', teamId: 'T123', apiAppId: 'A123' },
   tags: [{ name: 'datalake:sales', strength: 1 }],
   ...overrides,
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  findBySlackTeamIdWithTokenDev.mockResolvedValue(null);
+  findBySlackAppIdAndTeamId.mockResolvedValue(null);
+  findByIdWithCredentials.mockResolvedValue(null);
   findBySlackTeamIdWithTokenOrg.mockResolvedValue({ slackBotToken: 'encrypted-org-token' });
   findByDatalakeTags.mockResolvedValue([{ id: 'lake-1', name: 'Sales Lake', organizationId: 'org-1' }]);
   findByOrganizationIdWithToken.mockResolvedValue({ slackBotToken: 'encrypted-token' });
@@ -65,12 +73,16 @@ beforeEach(() => {
 });
 
 describe('notifySlackIndexingComplete (#2027)', () => {
-  it('resolves the bot token via the dev-OAuth workspace for the message teamId, and posts a threaded reply naming the file and lake', async () => {
-    findBySlackTeamIdWithTokenDev.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
+  it('resolves the bot token via the dev-OAuth workspace for the message (apiAppId, teamId) pair, and posts a threaded reply naming the file and lake', async () => {
+    // Mirrors events.ts's own inbound resolution: the pair-keyed lookup finds the workspace, a
+    // second call by id fetches its credentials - the pair-keyed lookup does not select the token.
+    findBySlackAppIdAndTeamId.mockResolvedValue({ id: 'dev-ws-1' });
+    findByIdWithCredentials.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
 
     await notifySlackIndexingComplete(slackFabFile(), logger);
 
-    expect(findBySlackTeamIdWithTokenDev).toHaveBeenCalledWith('T123');
+    expect(findBySlackAppIdAndTeamId).toHaveBeenCalledWith('A123', 'T123');
+    expect(findByIdWithCredentials).toHaveBeenCalledWith('dev-ws-1');
     expect(findBySlackTeamIdWithTokenOrg).not.toHaveBeenCalled();
     // #2029: the lake lookup happens on this path too (not just the legacy fallback), so the
     // message can name the lake - but only reached because the token above already resolved.
@@ -86,10 +98,11 @@ describe('notifySlackIndexingComplete (#2027)', () => {
     expect(client.botToken).toBe('decrypted:encrypted-dev-token');
   });
 
-  it('falls back to the org workspace for the message teamId when no dev-OAuth workspace matches', async () => {
+  it('falls back to the org workspace for the message teamId when no dev-OAuth workspace matches the (apiAppId, teamId) pair', async () => {
     await notifySlackIndexingComplete(slackFabFile(), logger);
 
-    expect(findBySlackTeamIdWithTokenDev).toHaveBeenCalledWith('T123');
+    expect(findBySlackAppIdAndTeamId).toHaveBeenCalledWith('A123', 'T123');
+    expect(findByIdWithCredentials).not.toHaveBeenCalled();
     expect(findBySlackTeamIdWithTokenOrg).toHaveBeenCalledWith('T123');
     expect(findByDatalakeTags).toHaveBeenCalledWith(['datalake:sales']);
     expect(decryptToken).toHaveBeenCalledWith('encrypted-org-token');
@@ -99,13 +112,28 @@ describe('notifySlackIndexingComplete (#2027)', () => {
   });
 
   it('degrades to file-only wording when the teamId path resolves a token but no lake matches', async () => {
-    findBySlackTeamIdWithTokenDev.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
+    findBySlackAppIdAndTeamId.mockResolvedValue({ id: 'dev-ws-1' });
+    findByIdWithCredentials.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
     findByDatalakeTags.mockResolvedValue([]);
 
     await notifySlackIndexingComplete(slackFabFile(), logger);
 
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ text: '"Report.pdf" finished indexing and is now searchable.' })
+    );
+  });
+
+  it('escapes the lake name too, not just the file name, so a malicious lake name cannot broadcast', async () => {
+    findBySlackAppIdAndTeamId.mockResolvedValue({ id: 'dev-ws-1' });
+    findByIdWithCredentials.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
+    findByDatalakeTags.mockResolvedValue([{ id: 'lake-1', name: '<!channel>', organizationId: 'org-1' }]);
+
+    await notifySlackIndexingComplete(slackFabFile(), logger);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: '"Report.pdf" finished indexing in *&lt;!channel&gt;* and is now searchable.',
+      })
     );
   });
 
@@ -121,13 +149,31 @@ describe('notifySlackIndexingComplete (#2027)', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('T123'));
   });
 
+  it('semi-legacy: skips the dev-workspace lookup entirely when teamId is stamped but apiAppId is not, falling straight to the org lookup', async () => {
+    // A file ingested between the teamId-only stamp and the apiAppId addition. Resolving the
+    // dev-workspace via teamId alone was the exact bug this pair-keyed lookup fixes - skip it
+    // rather than risk resolving an arbitrary install's token.
+    await notifySlackIndexingComplete(
+      slackFabFile({ sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', teamId: 'T123' } }),
+      logger
+    );
+
+    expect(findBySlackAppIdAndTeamId).not.toHaveBeenCalled();
+    expect(findByIdWithCredentials).not.toHaveBeenCalled();
+    expect(findBySlackTeamIdWithTokenOrg).toHaveBeenCalledWith('T123');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('apiAppId'));
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('*Sales Lake*') })
+    );
+  });
+
   it('falls back to the tags->lake->org chain, with a warning, when sourceMetadata has no teamId (pre-stamp files)', async () => {
     await notifySlackIndexingComplete(
       slackFabFile({ sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001' } }),
       logger
     );
 
-    expect(findBySlackTeamIdWithTokenDev).not.toHaveBeenCalled();
+    expect(findBySlackAppIdAndTeamId).not.toHaveBeenCalled();
     expect(findBySlackTeamIdWithTokenOrg).not.toHaveBeenCalled();
     expect(findByDatalakeTags).toHaveBeenCalledWith(['datalake:sales']);
     expect(findByOrganizationIdWithToken).toHaveBeenCalledWith('org-1');
@@ -140,14 +186,14 @@ describe('notifySlackIndexingComplete (#2027)', () => {
   it('skips non-Slack-origin files without touching any repository', async () => {
     await notifySlackIndexingComplete(slackFabFile({ sourceType: undefined }), logger);
 
-    expect(findBySlackTeamIdWithTokenDev).not.toHaveBeenCalled();
+    expect(findBySlackAppIdAndTeamId).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it('skips when sourceMetadata is missing channel/messageTs', async () => {
     await notifySlackIndexingComplete(slackFabFile({ sourceMetadata: { teamId: 'T123' } }), logger);
 
-    expect(findBySlackTeamIdWithTokenDev).not.toHaveBeenCalled();
+    expect(findBySlackAppIdAndTeamId).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -210,8 +256,8 @@ describe('notifySlackIndexingComplete (#2027)', () => {
 
   it('legacy fallback: uses the first matching lake and logs a warning when a file matches more than one', async () => {
     findByDatalakeTags.mockResolvedValue([
-      { id: 'lake-1', organizationId: 'org-1' },
-      { id: 'lake-2', organizationId: 'org-2' },
+      { id: 'lake-1', name: 'Lake One', organizationId: 'org-1' },
+      { id: 'lake-2', name: 'Lake Two', organizationId: 'org-2' },
     ]);
 
     await notifySlackIndexingComplete(
@@ -226,7 +272,8 @@ describe('notifySlackIndexingComplete (#2027)', () => {
   });
 
   it('teamId path: uses the first matching lake and logs a warning when a file matches more than one (resolveLake is shared with the legacy path)', async () => {
-    findBySlackTeamIdWithTokenDev.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
+    findBySlackAppIdAndTeamId.mockResolvedValue({ id: 'dev-ws-1' });
+    findByIdWithCredentials.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
     findByDatalakeTags.mockResolvedValue([
       { id: 'lake-1', name: 'Sales Lake', organizationId: 'org-1' },
       { id: 'lake-2', name: 'Support Lake', organizationId: 'org-2' },
