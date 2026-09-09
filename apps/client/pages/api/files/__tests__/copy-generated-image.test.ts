@@ -29,6 +29,8 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   User: {},
   adminSettingsRepository: {},
+  scopedSettingsRepository: {},
+  dataLakeRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
   questRepository: { findSessionIdsByImage: h.findSessionIdsByImage },
   sessionRepository: { findAllByIds: h.findAllByIds },
