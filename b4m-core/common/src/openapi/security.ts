@@ -61,17 +61,9 @@ export const JWT_SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ jwtA
 export const ALL_API_KEY_SCOPES: string[] = Object.values(ApiKeyScope);
 
 /**
- * Scopes an operation actually enforces, surfaced per-operation via
- * `x-required-scopes`. OR semantics: a key needs ANY ONE of the listed scopes
- * (auth.ts gates with `requiredScopes.some(...)`), not all of them.
- *
- * Only `createCompletion` is listed here: it is a hand-registered legacy
- * operation. Contract-based operations (e.g. sendChatMessage) carry their scopes
- * on the contract itself and are merged in at document-build time, so they are
- * NOT duplicated here. `executeTool` is intentionally ABSENT - its handler is
- * JWT-only and checks no scope, so publishing a scope requirement there would
- * advertise a gate that does not exist.
+ * Legacy per-operation scope map for any hand-registered operation. Now EMPTY:
+ * every public operation is a contract (../api-contract) that carries its own
+ * `scopes`, merged into `x-required-scopes` at document-build time. Kept as an
+ * extension point for a future hand-registered op that can't be a contract.
  */
-export const REQUIRED_SCOPES = {
-  createCompletion: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
-} as const;
+export const REQUIRED_SCOPES = {} as const;

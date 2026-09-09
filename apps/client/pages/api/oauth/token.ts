@@ -12,6 +12,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { oauthAuthorizationCodeRepository, userRepository } from '@bike4mind/database';
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
 import { issueSessionForRequest } from '@server/auth/issueSession';
+import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -49,7 +50,9 @@ const handler = baseApi({ auth: false })
           .json({ error: 'unauthorized_client', error_description: 'Invalid client credentials or redirect_uri' });
       }
 
-      const authCode = await oauthAuthorizationCodeRepository.findValidCode(code);
+      // Atomically claim the code so a leaked code can't be redeemed twice by
+      // concurrent requests. Any subsequent failure leaves it consumed (single-use).
+      const authCode = await oauthAuthorizationCodeRepository.consumeValidCode(code);
       if (!authCode) {
         return res
           .status(400)
@@ -71,9 +74,6 @@ const handler = baseApi({ auth: false })
             .json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' });
         }
       }
-
-      // prevent replay
-      await oauthAuthorizationCodeRepository.markUsed(authCode.id);
 
       const user = await userRepository.findById(authCode.userId);
       if (!user) {
@@ -101,7 +101,7 @@ const handler = baseApi({ auth: false })
         id_token: idToken,
         refresh_token: refreshToken,
         token_type: 'Bearer',
-        expires_in: 3600,
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
       });
     }
 

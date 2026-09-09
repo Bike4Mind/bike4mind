@@ -1,8 +1,9 @@
-import { deviceAuthorizationRepository } from '@bike4mind/database';
+import { deviceAuthorizationRepository, digestDeviceCode } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { generateDeviceCode, generateUserCode, hashDeviceCode } from '@server/utils/oauth/deviceAuthHelpers';
+import { generateDeviceCode, generateUserCode } from '@server/utils/oauth/deviceAuthHelpers';
 import { z } from 'zod';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 const InitiateRequestSchema = z.object({
   client_id: z.literal('b4m-cli'),
@@ -21,10 +22,8 @@ const handler = baseApi({ auth: false })
     const deviceCode = generateDeviceCode();
     const userCode = generateUserCode();
 
-    const hashedDeviceCode = await hashDeviceCode(deviceCode);
-
     await deviceAuthorizationRepository.create({
-      deviceCode: hashedDeviceCode,
+      deviceCode: digestDeviceCode(deviceCode),
       userCode,
       status: 'pending',
       userId: null,
@@ -37,7 +36,7 @@ const handler = baseApi({ auth: false })
       verificationAttempts: 0,
     });
 
-    const baseUrl = process.env.APP_URL?.includes('localhost')
+    const baseUrl = isLocalAppUrl()
       ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
       : process.env.APP_URL || 'http://localhost:3000';
 

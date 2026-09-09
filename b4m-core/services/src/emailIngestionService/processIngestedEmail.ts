@@ -49,7 +49,7 @@ async function storeEmail(
   const messageId = parsedEmail.messageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   // Check if email already exists (idempotency for retries)
-  const existingEmail = await adapters.db.ingestedEmails.findByMessageId(messageId);
+  const existingEmail = await adapters.db.ingestedEmails.findByMessageId(messageId, validated.userId);
   if (existingEmail) {
     Logger.info('Email already exists, returning existing ID:', existingEmail.id);
     return existingEmail.id;
@@ -101,7 +101,20 @@ async function storeEmail(
     userId: validated.userId,
   });
 
-  const storedEmail = await adapters.db.ingestedEmails.create(emailData);
+  let storedEmail;
+  try {
+    storedEmail = await adapters.db.ingestedEmails.create(emailData);
+  } catch (error) {
+    // A duplicate key means a live row for this owner and Message-ID landed between the lookup
+    // above and this insert - two SQS deliveries of the same message racing. That is the
+    // idempotent case the lookup exists to serve, so rethrowing would DLQ mail already ingested.
+    // Anything else is a real failure and still propagates.
+    if ((error as { code?: number })?.code !== 11000) throw error;
+    const existing = await adapters.db.ingestedEmails.findByMessageId(messageId, validated.userId);
+    if (!existing) throw error;
+    Logger.info('Email already stored under this owner, returning existing ID:', existing.id);
+    return existing.id;
+  }
 
   Logger.info('Email stored successfully with ID:', storedEmail.id);
 
@@ -180,6 +193,7 @@ export async function processIngestedEmail(
           fabFiles: adapters.db.fabFiles,
           adminSettings: adapters.db.adminSettings,
           users: adapters.db.users,
+          dataLakes: adapters.db.dataLakes,
         },
       },
       validated.organizationId
@@ -198,6 +212,7 @@ export async function processIngestedEmail(
           fabFiles: adapters.db.fabFiles,
           adminSettings: adapters.db.adminSettings,
           users: adapters.db.users,
+          dataLakes: adapters.db.dataLakes,
         },
       },
       validated.organizationId

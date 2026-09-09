@@ -42,18 +42,22 @@ const COOKIE_PATH = '/api';
  * transport helper - reached from nearly every auth route - does not drag the services barrel in
  * behind it. A cookie that outlives the session just yields one rejected refresh; one that dies
  * early logs the user out, which is the failure this whole change exists to prevent, so err long.
+ * Since sliding expiry landed, every rotated Set-Cookie re-stamps this Max-Age, so the cookie
+ * slides with the session's idle window; the 90d absolute cap (ABSOLUTE_SESSION_MAX_MS) is
+ * enforced server-side only.
  */
 const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 /** Secure breaks plain-http localhost, where e2e and local dev run. */
-const secureAttribute = (): string => (process.env.NODE_ENV === 'production' ? '; Secure' : '');
+export const secureAttribute = (): string => (process.env.NODE_ENV === 'production' ? '; Secure' : '');
 
 /**
  * Append rather than overwrite: `res.setHeader('Set-Cookie', string)` replaces any Set-Cookie
  * already on the response (Node treats a string value as the whole header). loginAs sets two
- * cookies in one response, so this must accumulate.
+ * cookies in one response, so this must accumulate. Shared with the OAuth flow-cookie helpers
+ * (oauthFlowCookie.ts), which set a browser-binding nonce alongside the refresh cookie.
  */
-function appendSetCookie(res: Response, cookie: string): void {
+export function appendSetCookie(res: Response, cookie: string): void {
   const existing = res.getHeader('Set-Cookie');
   const next = existing
     ? Array.isArray(existing)

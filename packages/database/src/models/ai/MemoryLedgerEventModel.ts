@@ -282,6 +282,85 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
     const res = await this.model.updateMany({ principalKind, principalId, ownerUserId, subject }, SHRED_UPDATE);
     return res.modifiedCount ?? 0;
   }
+
+  /**
+   * Coverage over a principal's SURVIVING chain, for lake-memory health: when it was last
+   * written, how many distinct beliefs it holds, and how many distinct source documents contributed
+   * to it. `shredded: { $ne: true }` is REQUIRED - a shred is an in-place update (SHRED_UPDATE below),
+   * not a delete, so without the filter a purged profile would report as fully present. `shredded` is
+   * in neither index above, so this scan is bounded by the (principalKind, principalId) prefix but is
+   * NOT index-covered on the shred filter itself; `$project` keeps the ~8KB-per-event embedding
+   * ciphertext out of the pipeline before it groups - measured at 6.1s vs 0.5s over 400 events with
+   * vs without (see `listChain`).
+   *
+   * `subject` is unencrypted but TOKENIZED (an HMAC, not readable text) and `sources` is cleartext
+   * (see the field docs above), so a distinct count/union of either is safe to return over an
+   * otherwise-encrypted chain.
+   */
+  async aggregateLakeMemoryCoverage(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string
+  ): Promise<{ lastBuiltAt: string | null; factCount: number; sourceDocumentCount: number }> {
+    const [row] = await this.model.aggregate<{
+      lastBuiltAt: string | null;
+      factCount: number;
+      sourceDocumentCount: number;
+    }>([
+      { $match: { principalKind, principalId, ownerUserId, shredded: { $ne: true } } },
+      { $project: { _id: 0, subject: 1, sources: 1, at: 1 } },
+      {
+        $group: {
+          _id: null,
+          lastBuiltAt: { $max: '$at' },
+          subjects: { $addToSet: '$subject' },
+          sourcesArrays: { $push: '$sources' },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          lastBuiltAt: 1,
+          factCount: { $size: '$subjects' },
+          sourceDocumentCount: {
+            $size: {
+              $reduce: { input: '$sourcesArrays', initialValue: [], in: { $setUnion: ['$$value', '$$this'] } },
+            },
+          },
+        },
+      },
+    ]);
+    return row ?? { lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 };
+  }
+
+  /**
+   * Every principalId with a SURVIVING (non-shredded) chain of the given kind. For the
+   * backfill migration: which lakes already have a real memory profile, derived from the ledger
+   * rather than from `lakeMemoryExtractionAt` (a concurrency lease, not a completion stamp - its
+   * steady state on a successfully-built lake is `null`).
+   */
+  async distinctSurvivingPrincipalIds(principalKind: MemoryPrincipalKind): Promise<string[]> {
+    return this.model.distinct('principalId', { principalKind, shredded: { $ne: true } });
+  }
+
+  /**
+   * Shred every event EXTRACTED FROM one source document - the per-document counterpart of
+   * markShredded, scoped by the `sources` entry that extraction stamps on each fact.
+   *
+   * This is what makes destroying a lake document reach the beliefs it produced. The principal's
+   * key stays: other documents' facts on the same lake chain must remain readable, so removing this
+   * source's ciphertext is what makes these facts irrecoverable. Same payload removal as the other
+   * two shreds, so the chain still verifies.
+   */
+  async markSourceShredded(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string,
+    source: string
+  ): Promise<number> {
+    const res = await this.model.updateMany({ principalKind, principalId, ownerUserId, sources: source }, SHRED_UPDATE);
+    return res.modifiedCount ?? 0;
+  }
 }
 
 /**

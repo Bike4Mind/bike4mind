@@ -9,6 +9,16 @@ import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefi
  */
 export const UNCATEGORIZED_TAG_SUFFIX = 'uncategorized';
 
+/**
+ * Relevance weight this reconciler stamps on a minted `<prefix>uncategorized` tag, and the one
+ * `setDataLakeFileTags` (the lake-scoped tag-write door) stamps on a caller-authored addition.
+ * Prefix-arm content tags in this codebase are overwhelmingly `1` (folder tags, this stamp, the
+ * backfill migration), so a shared constant is right here - do NOT reuse `DATALAKE_TAG_STRENGTH`
+ * (constants/dataLakes.ts), which is the MEMBERSHIP meta-tag's own weight and, by its own doc, "a
+ * constant, not a score" for a different tag entirely.
+ */
+export const LAKE_CONTENT_TAG_STRENGTH = 1;
+
 type FileTag = { name: string; strength: number };
 
 type LakeTagAdapters = {
@@ -55,11 +65,16 @@ const satisfiesPrefix = (tags: readonly FileTag[], prefix: string): boolean =>
  * Why a lake gets no automatic content tag, or the prefix to stamp under.
  *
  * `overlapCheckFailed` rides along with a PERMITTED decision rather than refusing, because the
- * two callers want opposite directions and only they can choose. The write doors stamp anyway -
- * a diagnostic lookup must never be the thing that fails a file write, and stamping is the
- * pre-existing behavior. A bulk backfill refuses instead: it mints across every legacy row at
- * once, so an unverified overlap there could hand a whole lake's files to another lake's
- * teardown. See the migration that consumes this.
+ * callers want TWO different directions and only each caller can choose which is right for it.
+ * The live write doors (this reconciler) stamp anyway - a diagnostic lookup must never be the
+ * thing that fails a file write, and stamping is the pre-existing behavior. The bulk backfill
+ * migration and the two CALLER-AUTHORED doors (`setDataLakeFileTags` for one file,
+ * `applyTaxonomySuggestions` for a whole batch) refuse instead, for related but distinct reasons:
+ * the migration mints across every legacy row at once, so an unverified overlap there could hand
+ * a whole lake's files to another lake's teardown; the caller-authored doors mint names the CALLER
+ * chose rather than a fixed placeholder, so an unverified overlap there could mint prefix-arm
+ * membership - and therefore read access - in a lake the caller may hold no rights over. See the
+ * migration and those doors for how each consumes this.
  */
 export type LakeStampDecision =
   | { stamp: true; prefix: string; overlapCheckFailed?: boolean }
@@ -71,12 +86,53 @@ export type LakeStampDecision =
 
 type StampGateLake = Pick<IDataLakeDocument, 'id' | 'name' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'>;
 
+export type RefusedStampDecision = Extract<LakeStampDecision, { stamp: false }>;
+
+/**
+ * Why the prefix is unusable, in a sentence a lake manager can act on. The slug alone
+ * ("registry-prefix-overlap") is what a caller used to see, and it names the mechanism without
+ * saying what it means for their files.
+ */
+const STAMP_REFUSAL_EXPLANATIONS: Record<RefusedStampDecision['reason'], string> = {
+  'unusable-prefix': 'the lake has no usable tag prefix, so a tag built on it would be invisible to every query',
+  'reserved-namespace': `the prefix reaches the reserved ${DATALAKE_TAG_PREFIX} namespace`,
+  'prefix-overlap': 'the prefix overlaps another data lake, so the tag would grant that lake membership of these files',
+  'registry-prefix-overlap':
+    'the prefix overlaps a built-in data lake, so the tag would expose these files to everyone with access to that lake',
+};
+
+/**
+ * The refusal every CALLER-AUTHORED tag-write door returns for a lake `decideStampPrefix`
+ * declined - `setDataLakeFileTags` (single file) and `applyTaxonomySuggestions` (whole batch).
+ *
+ * Shared so one lake and one reason cannot produce two different answers depending on which door
+ * the caller happened to use; that disagreement is what #2398 was. Keeps the reason slug in the
+ * text: it is what someone greps for after a support report, and it is the one part of the message
+ * that maps back to a branch of the gate.
+ */
+export const stampRefusalMessage = (decision: RefusedStampDecision): string => {
+  const reason = decision.detail ? `${decision.reason}: ${decision.detail}` : decision.reason;
+  return `This lake's tag prefix cannot be used right now: ${STAMP_REFUSAL_EXPLANATIONS[decision.reason]} (${reason})`;
+};
+
+/**
+ * The companion refusal for a PERMITTED decision carrying `overlapCheckFailed`. Both
+ * caller-authored doors fail closed on it - they admit names the caller chose rather than a fixed
+ * placeholder, so an unverified overlap must not let a curator mint prefix-arm membership (and
+ * therefore read access) in a lake they may hold no rights over. The live reconciler and the
+ * backfill migration each make their own call; see `LakeStampDecision`.
+ */
+export const UNVERIFIED_PREFIX_OVERLAP_REFUSAL =
+  "Could not verify this lake's tag prefix does not overlap another lake right now - try again";
+
 /**
  * The ONE gate on "may this lake have a content tag minted for it, and under what prefix".
  *
- * Shared by the write-door reconciler below and the one-shot backfill migration, so the tags a
- * backfill writes are exactly the tags the live doors would have written. Re-deriving these
- * conditions in the migration is the drift this exists to prevent.
+ * Shared by the write-door reconciler below, the one-shot backfill migration and both
+ * caller-authored tag-write doors, so the tags a backfill writes are exactly the tags the live
+ * doors would have written and the two caller-authored doors cannot refuse the same lake for
+ * different reasons. Re-deriving these conditions anywhere else is the drift this exists to
+ * prevent - `applyTaxonomySuggestions` checking only the registry arm of it was #2398.
  */
 export const decideStampPrefix = async (
   lake: StampGateLake,
@@ -233,7 +289,7 @@ export const createDataLakeFallbackTagger = ({ db, logger }: LakeTagAdapters): D
     const additions: FileTag[] = [];
     for (const prefix of [...currentPrefixes].sort()) {
       if (satisfiesPrefix([...kept, ...additions], prefix)) continue;
-      additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: 1 });
+      additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: LAKE_CONTENT_TAG_STRENGTH });
     }
 
     if (additions.length === 0 && retractions.size === 0) return tags as (T | FileTag)[];

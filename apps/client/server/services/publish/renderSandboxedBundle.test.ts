@@ -189,6 +189,42 @@ describe('renderSandboxedBundle', () => {
     });
   });
 
+  describe('off-origin links', () => {
+    const render = (body: string) =>
+      renderSandboxedBundle({
+        indexHtml: `<html><head></head><body>${body}</body></html>`,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'public',
+      }).srcdoc;
+
+    it('retargets an off-origin link to a new tab with rel=noopener', () => {
+      const srcdoc = render(`<a href="https://github.com/o/r/issues/1">issue</a>`);
+      expect(srcdoc).toContain('target="_blank"');
+      expect(srcdoc).toContain('rel="noopener"');
+    });
+
+    it('keeps the author rel tokens and does not add noreferrer', () => {
+      const srcdoc = render(`<a href="https://example.com/" rel="nofollow">x</a>`);
+      expect(srcdoc).toContain('rel="nofollow noopener"');
+      expect(srcdoc).not.toContain('noreferrer');
+    });
+
+    it('retargets a protocol-relative off-origin link', () => {
+      const srcdoc = render(`<a href="//example.com/x">x</a>`);
+      expect(srcdoc).toContain('target="_blank"');
+    });
+
+    it('leaves same-origin, relative, fragment and non-http links alone', () => {
+      const srcdoc = render(
+        `<a href="${ORIGIN}/p/u/s/other">a</a><a href="page2.html">b</a><a href="#tldr">c</a>` +
+          `<a href="mailto:x@example.com">d</a>`
+      );
+      expect(srcdoc).not.toContain('target="_blank"');
+      expect(srcdoc).not.toContain('rel="noopener"');
+    });
+  });
+
   describe('fragment-nav helper', () => {
     const html = `<html><head></head><body><a href="#tldr">jump</a></body></html>`;
 
@@ -215,6 +251,52 @@ describe('renderSandboxedBundle', () => {
         assetMode: 'inline',
       });
       expect(srcdoc).not.toContain(`b4m:'fragment'`);
+    });
+  });
+
+  describe('print bridge', () => {
+    it('appends the bridge after author content, inside the body', () => {
+      const html = `<html><head></head><body><h1 id="last">Hi</h1></body></html>`;
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'public',
+      });
+      expect(srcdoc).toContain(`b4m==='print'`);
+      expect(srcdoc.indexOf(`b4m==='print'`)).toBeGreaterThan(srcdoc.indexOf('id="last"'));
+      expect(srcdoc.indexOf(`b4m==='print'`)).toBeLessThan(srcdoc.indexOf('</body>'));
+    });
+
+    it('rides along on every render - gated, ?a= sub-document, and the ?export=html download', () => {
+      const html = `<html><head></head><body><h1>Hi</h1></body></html>`;
+      const gated = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'private',
+        assets: new Map(),
+        pagePaths: [URL_BASE],
+      });
+      const subDoc = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: '',
+        origin: ORIGIN,
+        visibility: 'public',
+        assetMode: 'inline',
+      });
+      expect(gated.srcdoc).toContain('print-color-adjust');
+      expect(subDoc.srcdoc).toContain('print-color-adjust');
+    });
+
+    it('still lands when the author ships a bare fragment rather than a document', () => {
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: `<h1>Hi</h1>`,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'public',
+      });
+      expect(srcdoc).toContain('window.print');
     });
   });
 });

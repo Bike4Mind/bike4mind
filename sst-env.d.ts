@@ -6,6 +6,10 @@
 
 declare module "sst" {
   export interface Resource {
+    "ANTHROPIC_ADMIN_API_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "ANTHROPIC_API_KEY": {
       "type": "sst.sst.Secret"
       "value": string
@@ -162,6 +166,10 @@ declare module "sst" {
       "value": string
     }
     "OKTA_USE_ORG_AUTH_SERVER": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "OPENAI_ADMIN_API_KEY": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -382,7 +390,19 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
+    "dataLakeResearchQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "dataLakeResearchQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeTaxonomyQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "driveLakeIngestQueue": {
       "type": "sst.aws.Queue"
       "url": string
     }

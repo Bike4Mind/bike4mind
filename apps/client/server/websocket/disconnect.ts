@@ -77,6 +77,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
             reason: 'disconnected',
             source: swept.source,
             deviceId: swept.deviceId,
+            endpoint,
             logger,
           })
         )

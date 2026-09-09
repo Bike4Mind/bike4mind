@@ -7,6 +7,7 @@ import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { parseMcpResult } from '@server/utils/parseMcpResult';
+import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { JiraResource } from '@bike4mind/slack';
 import { ConfluenceResource } from '@bike4mind/slack';
 
@@ -100,7 +101,7 @@ const handler = baseApi().post(async (req, res) => {
     const mimeType = (fileData.mimeType as string) || 'application/octet-stream';
 
     res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(String(downloadFilename))}"`);
+    res.setHeader('Content-Disposition', buildContentDisposition(String(downloadFilename)));
     res.setHeader('Content-Length', fileBuffer.length);
     res.setHeader('X-Content-Type-Options', 'nosniff');
 

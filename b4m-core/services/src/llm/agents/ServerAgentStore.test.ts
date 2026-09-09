@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ServerAgentDefinition } from '@bike4mind/agents';
-import { ServerAgentStore } from './ServerAgentStore';
+import { ServerAgentStore, builtInAgentModelReferences } from './ServerAgentStore';
 
 function makeCustomAgent(overrides: Partial<ServerAgentDefinition> = {}): ServerAgentDefinition {
   return {
@@ -126,5 +126,26 @@ describe('ServerAgentStore', () => {
 
       expect(filtered.getAgentNames().sort()).toEqual(['code_review', 'compliance_reviewer']);
     });
+  });
+});
+
+describe('builtInAgentModelReferences', () => {
+  it('declares a model for every built-in agent', () => {
+    const refs = builtInAgentModelReferences();
+    const names = new ServerAgentStore({}).getAgentNames();
+
+    // The hygiene report can only flag what it is handed, so a built-in missing
+    // from this map is a surface silently exempt from the check.
+    expect(Object.keys(refs).sort()).toEqual([...names].sort());
+    for (const [name, decl] of Object.entries(refs)) {
+      expect(decl.model, `${name} declares no model`).toBeTruthy();
+    }
+  });
+
+  it('carries the fallback chain through so dead rungs are reportable too', () => {
+    const refs = builtInAgentModelReferences();
+    const withChains = Object.values(refs).filter(d => (d.fallbackModels?.length ?? 0) > 0);
+
+    expect(withChains.length).toBeGreaterThan(0);
   });
 });

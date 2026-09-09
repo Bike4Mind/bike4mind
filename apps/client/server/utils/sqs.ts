@@ -90,12 +90,15 @@ export const sendBatchToQueue = async (
   return results;
 };
 
-export const sendToQueue = async (queueUrl: string, message: Record<string, unknown>) => {
+export const sendToQueue = async (queueUrl: string, message: Record<string, unknown>, delaySeconds?: number) => {
   const sqs = createSqsClient();
 
   const command = new SendMessageCommand({
     QueueUrl: queueUrl,
     MessageBody: JSON.stringify(message),
+    // SQS caps DelaySeconds at 900 (15 min) and rejects larger values - clamp so a caller can defer
+    // a message (e.g. a re-enqueued retry) without having to know the ceiling.
+    ...(delaySeconds ? { DelaySeconds: Math.min(Math.max(0, Math.floor(delaySeconds)), 900) } : {}),
   });
   const response = await sqs.send(command);
   return response.MessageId;

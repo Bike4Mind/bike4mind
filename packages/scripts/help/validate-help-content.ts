@@ -7,6 +7,10 @@
  * - Internal links: every `[...](*.md)` link resolves to a real article file on disk.
  * - Anchor links:  every `#anchor` (same-page) and `file.md#anchor` link points to a real heading.
  * - Images/assets: every `![...](path)` references a file that exists on disk.
+ * - Media guards:  embedded media must live inside the docs tree (no external
+ *   hosts, no path traversal), use web-playable formats (.webm/.mp4 for video),
+ *   and stay under the MEDIA_SIZE_LIMITS caps - everything under
+ *   public/help-content ships in the deploy bundle and is downloaded by users.
  *
  * Relative links reuse the SAME `./` / `../` algorithm as the in-app renderer
  * (`resolveRelativePath` from utils.ts), but resolve against the article's FILE path
@@ -20,9 +24,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { DOCS_ROOT, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
-import { resolveRelativePath, stripMarkdownFormatting, toAnchor } from './utils.js';
+import { resolveRelativePath, stripMarkdownFormatting, toAnchor, VIDEO_EXTENSIONS, isYouTubeUrl } from './utils.js';
 
-export type FindingType = 'frontmatter' | 'link' | 'anchor' | 'image';
+export type FindingType = 'frontmatter' | 'link' | 'anchor' | 'image' | 'media';
 
 export interface Finding {
   type: FindingType;
@@ -45,7 +49,32 @@ export interface ExtractedLink {
 }
 
 const EXTERNAL_PREFIXES = ['http://', 'https://', 'mailto:', 'tel:', '//'];
-const ASSET_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.pdf'];
+
+/**
+ * Every extension the Help Center will bundle and render. This is an allowlist:
+ * anything outside it is rejected as an embed, so a format we have no size cap
+ * for can never reach the deploy bundle. Must stay covered by MEDIA_SIZE_LIMITS
+ * (asserted by a test in __tests__/validate-help-content.test.ts).
+ */
+export const ASSET_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.pdf', ...VIDEO_EXTENSIONS];
+
+/**
+ * Size caps (bytes) for embedded help media. Bundled media ships in the deploy
+ * bundle and is downloaded by end users, so an oversized file is an error, not
+ * a warning. GIFs get a slightly higher cap than stills but anything longer
+ * than a few seconds should be a muted .webm clip instead (10-20x smaller).
+ */
+export const MEDIA_SIZE_LIMITS: Record<string, { extensions: string[]; maxBytes: number }> = {
+  image: { extensions: ['.png', '.jpg', '.jpeg', '.svg', '.webp', '.ico'], maxBytes: 1 * 1024 * 1024 },
+  gif: { extensions: ['.gif'], maxBytes: 3 * 1024 * 1024 },
+  video: { extensions: VIDEO_EXTENSIONS, maxBytes: 10 * 1024 * 1024 },
+  // PDFs aren't rendered inline but ARE bundled when referenced, so they get
+  // a cap too to keep the deploy bundle sane.
+  pdf: { extensions: ['.pdf'], maxBytes: 5 * 1024 * 1024 },
+};
+
+/** Video containers browsers can't reliably play inline - rejected with guidance. */
+const UNSUPPORTED_MEDIA_EXTENSIONS = ['.mov', '.avi', '.mkv', '.m4v', '.wmv', '.flv', '.ogv'];
 
 /**
  * Blank out fenced code blocks, inline code spans, and HTML comments while
@@ -122,14 +151,79 @@ export function getArticleAnchors(content: string): Set<string> {
   return anchors;
 }
 
-function isExternal(target: string): boolean {
+export function isExternal(target: string): boolean {
   const lower = target.toLowerCase();
   return EXTERNAL_PREFIXES.some(p => lower.startsWith(p));
 }
 
-function hasAssetExtension(pathPart: string): boolean {
+export function hasAssetExtension(pathPart: string): boolean {
   const lower = pathPart.toLowerCase();
   return ASSET_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+/**
+ * Resolve an asset link target to an absolute path, or null when the resolved
+ * path escapes the docs tree (path traversal). Shared with
+ * bundle-help-content.ts so validation and bundling agree on where an asset
+ * lives on disk.
+ */
+export function resolveAssetPath(pathPart: string, articleDir: string, docsRoot: string): string | null {
+  const abs = pathPart.startsWith('/') ? path.join(docsRoot, pathPart) : path.resolve(articleDir, pathPart);
+  const rel = path.relative(docsRoot, abs);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return abs;
+}
+
+function mediaSizeLimit(pathPart: string): { kind: string; maxBytes: number } | null {
+  const lower = pathPart.toLowerCase();
+  for (const [kind, limit] of Object.entries(MEDIA_SIZE_LIMITS)) {
+    if (limit.extensions.some(ext => lower.endsWith(ext))) return { kind, maxBytes: limit.maxBytes };
+  }
+  return null;
+}
+
+function formatMb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+/**
+ * Media policy for one referenced asset: null when it may ship, otherwise the
+ * reason to reject it. The single source of truth for the format and size rules,
+ * so bundle-help-content.ts enforces exactly what validateArticles reports.
+ *
+ * `isImage` gates the allowlist: an embed must be a format we bundle and render,
+ * while a plain hyperlink to an unknown extension is just a link and resolves as
+ * one. The size cap only runs when `readSize` is supplied (callers that have not
+ * yet resolved the file on disk pass format-only), and an unreadable size is
+ * itself a rejection so the cap can never fail open.
+ */
+export function mediaPolicyError(
+  pathPart: string,
+  opts: { isImage: boolean; readSize?: () => number | undefined }
+): string | null {
+  const unsupported = UNSUPPORTED_MEDIA_EXTENSIONS.find(ext => pathPart.toLowerCase().endsWith(ext));
+  if (unsupported) {
+    return `Unsupported media format "${unsupported}" in "${pathPart}": convert to ${VIDEO_EXTENSIONS.join(' or ')} for inline playback`;
+  }
+
+  // Allowlist rejection, not just the blocklist above: an extension in neither
+  // list (.mpg, .3gp, .m2ts) would otherwise pass the format check AND have no
+  // size cap to exceed, shipping unchecked and rendering as a broken <img>.
+  if (opts.isImage && !hasAssetExtension(pathPart)) {
+    return `Unsupported embed format in "${pathPart}": embedded media must use one of ${ASSET_EXTENSIONS.join(', ')}`;
+  }
+
+  const limit = mediaSizeLimit(pathPart);
+  if (!limit || !opts.readSize) return null;
+
+  const size = opts.readSize();
+  if (size === undefined) {
+    return `Could not read the size of "${pathPart}" to enforce the ${formatMb(limit.maxBytes)} ${limit.kind} cap`;
+  }
+  if (size > limit.maxBytes) {
+    return `${limit.kind} "${pathPart}" is ${formatMb(size)}, over the ${formatMb(limit.maxBytes)} ${limit.kind} cap. Shorten it or re-encode (long GIFs should be muted .webm clips)`;
+  }
+  return null;
 }
 
 /**
@@ -187,6 +281,8 @@ export interface ValidateOptions {
   fileExists?: (absPath: string) => boolean;
   /** Root for resolving absolute (`/foo.png`) asset paths. Defaults to DOCS_ROOT. */
   docsRoot?: string;
+  /** Asset size lookup (bytes); injected for testing. Defaults to fs.statSync. */
+  fileSize?: (absPath: string) => number | undefined;
 }
 
 /**
@@ -196,6 +292,15 @@ export interface ValidateOptions {
 export function validateArticles(articles: LoadedHelpArticle[], opts: ValidateOptions = {}): Finding[] {
   const fileExists = opts.fileExists ?? ((p: string) => fs.existsSync(p));
   const docsRoot = opts.docsRoot ?? DOCS_ROOT;
+  const fileSize =
+    opts.fileSize ??
+    ((p: string): number | undefined => {
+      try {
+        return fs.statSync(p).size;
+      } catch {
+        return undefined;
+      }
+    });
 
   const anchorsBySlug = new Map<string, Set<string>>();
   for (const a of articles) {
@@ -231,11 +336,46 @@ export function validateArticles(articles: LoadedHelpArticle[], opts: ValidateOp
         continue;
       }
 
-      if (isExternal(link.target)) continue;
+      if (isExternal(link.target)) {
+        // EMBEDDED media (image syntax) must be committed to the docs tree so
+        // it ships on the app CDN - no third-party hosts in the Help Center.
+        // EXCEPTION: YouTube links are allowed, so large demo videos can be
+        // hosted instead of bloating the repo (the renderer turns them into an
+        // embed). Plain hyperlinks to external files ([text](https://.../x.pdf))
+        // are not embeds and stay allowed like any other external link.
+        if (link.isImage && !isYouTubeUrl(link.target)) {
+          findings.push({
+            ...base,
+            type: 'media',
+            line: link.line,
+            message: `External media is not allowed: "${link.target}". Commit the file next to the article (e.g. ./media/) so it ships on the app CDN, or embed a YouTube link`,
+          });
+        }
+        continue;
+      }
+
+      // Format rules run before anything touches disk: a [link](demo.mov) would
+      // otherwise fall through to article-link resolution and produce a
+      // confusing "broken link" error, and an image-syntax reference to an
+      // extension we don't bundle is a format problem, not a missing file.
+      const formatError = mediaPolicyError(pathPart, { isImage: link.isImage });
+      if (formatError) {
+        findings.push({ ...base, type: 'media', line: link.line, message: formatError });
+        continue;
+      }
 
       // Image / asset reference: resolve on disk
       if (link.isImage || hasAssetExtension(pathPart)) {
-        const absPath = pathPart.startsWith('/') ? path.join(docsRoot, pathPart) : path.resolve(articleDir, pathPart);
+        const absPath = resolveAssetPath(pathPart, articleDir, docsRoot);
+        if (!absPath) {
+          findings.push({
+            ...base,
+            type: 'media',
+            line: link.line,
+            message: `Asset path escapes the docs tree: ${pathPart}`,
+          });
+          continue;
+        }
         if (!fileExists(absPath)) {
           findings.push({
             ...base,
@@ -243,6 +383,16 @@ export function validateArticles(articles: LoadedHelpArticle[], opts: ValidateOp
             line: link.line,
             message: `Referenced asset not found: ${pathPart}`,
           });
+          continue;
+        }
+        // Now that the file is resolved, run the full policy (the format rules
+        // already passed above) so the size cap is applied to real bytes.
+        const policyError = mediaPolicyError(pathPart, {
+          isImage: link.isImage,
+          readSize: () => fileSize(absPath),
+        });
+        if (policyError) {
+          findings.push({ ...base, type: 'media', line: link.line, message: policyError });
         }
         continue;
       }
@@ -316,7 +466,7 @@ async function main(): Promise<void> {
   const findings = validateArticles(articles);
 
   if (findings.length === 0) {
-    console.log('✅ Help content validation passed — no broken links, anchors, images, or frontmatter issues.');
+    console.log('✅ Help content validation passed - no broken links, anchors, media, or frontmatter issues.');
     return;
   }
 
@@ -328,7 +478,7 @@ async function main(): Promise<void> {
   console.error(`\n❌ Help content validation found ${findings.length} issue(s):`);
   console.error(
     `   ` +
-      (['frontmatter', 'link', 'anchor', 'image'] as FindingType[])
+      (['frontmatter', 'link', 'anchor', 'image', 'media'] as FindingType[])
         .filter(t => counts[t])
         .map(t => `${counts[t]} ${t}`)
         .join(', ')

@@ -4,6 +4,9 @@
 import passport from '@server/auth/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { OAUTH_NONCE_HASH_REQ_KEY } from '@server/auth/passportOAuthStateStore';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 const SERVICES: { [service: string]: { scope: string[] | string } } = {
   google: {
@@ -40,10 +43,15 @@ const handler = baseApi({ auth: false }).get(
       return res.status(400).json({ error: 'Invalid request' });
     }
 
+    // Bind this login to the initiating browser: set the nonce cookie now (only
+    // here do we hold `res`) and stash its hash so the state store binds it into
+    // the state token minted inside passport.authenticate below.
+    (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY] = issueStateNonce(res);
+
     // In dev, derive callback URL from the actual request host so OAuth
     // redirects back to the correct port (Next.js may not be on :3000)
     const authenticateOptions: Record<string, unknown> = { scope: SERVICES[strategy].scope };
-    if (process.env.APP_URL?.includes('localhost')) {
+    if (isLocalAppUrl()) {
       const protocol = req.headers['x-forwarded-proto'] || 'http';
       const host = req.headers.host || 'localhost:3000';
       authenticateOptions.callbackURL = `${protocol}://${host}/api/auth/${strategy}/callback`;

@@ -2,7 +2,7 @@ import { ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { z } from 'zod';
 import { NotFoundError } from '@bike4mind/utils';
-import { isImageServeable } from '@bike4mind/common';
+import { isImageServeable, isUserInitiatedAbort } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { diffLines, type Change } from 'diff';
 
@@ -178,7 +178,9 @@ Return only the edited content without any markdown code blocks or explanations.
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
-          { temperature: 0.3, stream: false }, // Lower temperature for more consistent edits
+          // Lower temperature for more consistent edits. abortSignal: see
+          // ToolContext.getAbortSignal - Stop must reach nested generation too.
+          { temperature: 0.3, stream: false, abortSignal: context.getAbortSignal?.() },
           async (texts, info) => {
             editedContent = texts.filter(t => t !== null && t !== undefined).join('');
             if (info) completionInfo = info;
@@ -230,6 +232,13 @@ Return only the edited content without any markdown code blocks or explanations.
 
         return JSON.stringify(result, null, 2);
       } catch (error) {
+        // A user Stop reaches this catch now that the edit sub-call is cancellable. Log it as
+        // the intended outcome rather than a fault, and rethrow the original so the AbortError
+        // identity survives for isUserInitiatedAbort checks upstream.
+        if (error instanceof Error && isUserInitiatedAbort(error, context.getAbortSignal?.())) {
+          context.logger.debug(`📝 Edit File Tool: edit cancelled by the caller`);
+          throw error;
+        }
         context.logger.error(`📝 Edit File Tool: Error editing file`, error);
         const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
         throw new Error(`Failed to edit file: ${errorMessage}`);

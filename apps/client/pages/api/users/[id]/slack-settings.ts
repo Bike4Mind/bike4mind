@@ -1,9 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { User, Session, Agent } from '@bike4mind/database';
+import { User, Session, Agent, Project } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError } from '@server/utils/errors';
 
 const KeywordRoutingRuleSchema = z.object({
@@ -103,6 +103,40 @@ const handler = baseApi()
           slackSettings.keywordRouting = slackSettings.keywordRouting.filter(rule => rule.keywords.length > 0);
         }
 
+        // Validate defaultNotebookId ownership (mirror keywordRouting above). This value is
+        // later dereferenced by Slack handlers (/notebook status, quick-ask routing) with no
+        // ownership re-check, so a foreign notebook id must be rejected at write time.
+        if (slackSettings.defaultNotebookId) {
+          if (!isValidObjectId(slackSettings.defaultNotebookId)) {
+            return res.status(400).json({ error: 'Invalid notebook ID format' });
+          }
+          const notebook = await Session.findOne({
+            _id: slackSettings.defaultNotebookId,
+            userId,
+            deletedAt: { $exists: false },
+          }).select('_id');
+
+          if (!notebook) {
+            return res.status(400).json({ error: 'Default notebook not found or does not belong to you' });
+          }
+        }
+
+        // Validate defaultProjectId access (owner or member, mirroring the customAgentId check).
+        if (slackSettings.defaultProjectId) {
+          if (!isValidObjectId(slackSettings.defaultProjectId)) {
+            return res.status(400).json({ error: 'Invalid project ID format' });
+          }
+          const project = await Project.findOne({
+            _id: slackSettings.defaultProjectId,
+            $or: [{ userId }, { 'users.userId': userId }],
+            deletedAt: { $exists: false },
+          }).select('_id');
+
+          if (!project) {
+            return res.status(400).json({ error: 'Default project not found or not accessible' });
+          }
+        }
+
         // Check if Slack ID is already in use by another user
         if (slackSettings.slackUserId) {
           const existingUser = await User.findOne({
@@ -125,7 +159,7 @@ const handler = baseApi()
 
         // Validate custom agent exists and is accessible to user
         if (slackSettings.customAgentId) {
-          if (!Types.ObjectId.isValid(slackSettings.customAgentId)) {
+          if (!isValidObjectId(slackSettings.customAgentId)) {
             throw new BadRequestError('Invalid agent ID format');
           }
 

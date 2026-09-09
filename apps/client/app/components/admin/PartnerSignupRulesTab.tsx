@@ -437,7 +437,10 @@ export default function PartnerSignupRulesTab() {
 
       {/* Create / edit modal */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)}>
-        <ModalDialog sx={{ minWidth: 440, maxWidth: 540 }} data-testid="partner-rule-modal">
+        <ModalDialog
+          sx={{ minWidth: 440, maxWidth: 540, maxHeight: '90vh', overflowY: 'auto' }}
+          data-testid="partner-rule-modal"
+        >
           <ModalClose />
           <Typography level="h4">{editing ? 'Edit signup rule' : 'Add signup rule'}</Typography>
           <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: -0.5 }}>
@@ -477,6 +480,7 @@ export default function PartnerSignupRulesTab() {
               <FormLabel>Entitlements</FormLabel>
               <Autocomplete
                 multiple
+                freeSolo
                 options={ENTITLEMENT_OPTIONS}
                 value={form.entitlements}
                 onChange={(_event, value) => setForm(f => ({ ...f, entitlements: value }))}
@@ -484,8 +488,14 @@ export default function PartnerSignupRulesTab() {
                 data-testid="partner-rule-entitlements-input"
               />
               <FormHelperText>
-                Pick from the products the registry recognizes. A new product key must be added to the entitlement
-                registry before it appears here.
+                {/* FormHelperText's root is flex, so mixed text/element children become separate
+                    flex items laid out side by side instead of flowing as one paragraph - a single
+                    wrapping child keeps the sentence inline. */}
+                <span>
+                  Pick from the products the registry recognizes, or type a lake grant as{' '}
+                  <code>datalake:&lt;slug&gt;</code> and press Enter. A new product key must be added to the entitlement
+                  registry before it appears in the list.
+                </span>
               </FormHelperText>
             </FormControl>
 

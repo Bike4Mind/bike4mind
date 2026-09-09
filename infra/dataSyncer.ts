@@ -9,7 +9,7 @@
  */
 
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
-import { secrets } from './secrets';
+import { b4mProdApiKey, secrets } from './secrets';
 import { lambdaVpc } from './vpc';
 
 /**
@@ -32,7 +32,7 @@ export const dataSyncer = new sst.aws.Function('DataSyncer', {
   timeout: '5 minutes', // Generous timeout for fetching and writing mappings
   memory: '512 MB',
   vpc: lambdaVpc,
-  link: [secrets.MONGODB_URI, secrets.B4M_PROD_API_KEY],
+  link: [secrets.MONGODB_URI, b4mProdApiKey],
   logging: {
     retention: '3 days',
   },

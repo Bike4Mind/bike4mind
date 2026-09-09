@@ -144,7 +144,7 @@ const ToolsUsed = memo<ToolsUsedProps>(({ functionCalls = [], size = 'sm' }) => 
             </Box>
           )}
 
-          {selectedTool?.returnValue && (
+          {selectedTool?.returnValue && selectedTool?.success !== false && (
             <Box>
               <Typography level="title-sm" sx={{ mb: 1 }}>
                 Response
@@ -169,13 +169,16 @@ const ToolsUsed = memo<ToolsUsedProps>(({ functionCalls = [], size = 'sm' }) => 
             </Box>
           )}
 
-          {selectedTool?.error && (
+          {(selectedTool?.success === false || selectedTool?.error) && (
             <Box sx={{ mt: 2 }}>
               <Typography level="title-sm" color="danger" sx={{ mb: 1 }}>
                 Error
               </Typography>
-              <Typography level="body-sm" color="danger">
-                {selectedTool.error}
+              <Typography level="body-sm" color="danger" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {/* Absent error/returnValue is ambiguous here - a genuinely detail-less failure
+                    reads identically to a non-owner viewer whose functionCalls redaction strips
+                    both fields. Neutral copy covers both without implying a bug. */}
+                {selectedTool?.error ?? selectedTool?.returnValue ?? 'Details not available.'}
               </Typography>
             </Box>
           )}

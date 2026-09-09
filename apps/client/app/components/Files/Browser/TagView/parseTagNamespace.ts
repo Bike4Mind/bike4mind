@@ -1,7 +1,15 @@
 export interface TagNode {
   segment: string;
   fullPath: string;
+  /** This node's own count plus every descendant's - what the folder row's chip shows. */
   fileCount: number;
+  /**
+   * Files tagged with this node's exact fullPath, as opposed to a deeper child tag. A node can
+   * carry both children AND its own directly-tagged files (e.g. a file tagged "a:b" while others
+   * are tagged "a:b:c"). Tracked separately from fileCount because navigating into a branch node
+   * only ever shows its children - without this, those files would have nowhere to render.
+   */
+  ownFileCount: number;
   children: TagNode[];
 }
 
@@ -25,25 +33,23 @@ export function buildTagTree(tagCounts: { tag: string; count: number }[]): TagNo
 
       let existing = currentLevel.find(n => n.segment === segment);
       if (!existing) {
-        existing = { segment, fullPath, fileCount: 0, children: [] };
+        existing = { segment, fullPath, fileCount: 0, ownFileCount: 0, children: [] };
         currentLevel.push(existing);
       }
 
       if (isLeaf) {
-        existing.fileCount += count;
+        existing.ownFileCount += count;
       }
 
       currentLevel = existing.children;
     }
   }
 
-  // Propagate counts upward: each node's fileCount = sum of all descendant leaf counts
+  // fileCount = this node's own count plus every descendant's, computed bottom-up.
   function sumCounts(nodes: TagNode[]): number {
     for (const node of nodes) {
-      if (node.children.length > 0) {
-        const childSum = sumCounts(node.children);
-        node.fileCount += childSum;
-      }
+      const childSum = node.children.length > 0 ? sumCounts(node.children) : 0;
+      node.fileCount = node.ownFileCount + childSum;
     }
     return nodes.reduce((sum, n) => sum + n.fileCount, 0);
   }
@@ -73,4 +79,20 @@ export function getNodesAtPath(roots: TagNode[], breadcrumb: string[]): TagNode[
     current = found.children;
   }
   return current;
+}
+
+/**
+ * The node AT a breadcrumb path, as opposed to getNodesAtPath's children of it. Null for the
+ * root (breadcrumb [], which has no single node) or a path that doesn't exist in the tree.
+ */
+export function getNodeAtPath(roots: TagNode[], breadcrumb: string[]): TagNode | null {
+  let current = roots;
+  let node: TagNode | null = null;
+  for (const segment of breadcrumb) {
+    const found = current.find(n => n.segment === segment);
+    if (!found) return null;
+    node = found;
+    current = found.children;
+  }
+  return node;
 }

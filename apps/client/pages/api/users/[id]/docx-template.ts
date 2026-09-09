@@ -60,6 +60,11 @@ const handler = baseApi()
           });
         }
 
+        // preferences defaults to null (UserModel.ts), and Mongo's dot-path $set can't create
+        // a field inside a null parent ("Cannot create field 'x' in element {preferences: null}").
+        // Coerce it to an object first for any user who has never set a preference before.
+        await User.updateOne({ _id: userId, preferences: null }, { $set: { preferences: {} } });
+
         // Update user preferences with template file ID
         const updatedUser = await User.findByIdAndUpdate(
           userId,
@@ -125,11 +130,15 @@ const handler = baseApi()
           return res.status(404).json({ error: 'User not found' });
         }
 
-        // Remove the template tag from the file if it exists
+        // Remove the template tag only from a file the caller owns: a poisoned
+        // docxTemplateFileId must not strip the DocxTemplate tag off a foreign file.
         if (previousFileId) {
-          await AppFile.findByIdAndUpdate(previousFileId, {
-            $pull: { tags: AppFileReservedTags.DocxTemplate },
-          });
+          const previousFile = await AppFile.findById(previousFileId).select('userId');
+          if (previousFile && (previousFile.userId?.toString() === userId?.toString() || req.user?.isAdmin)) {
+            await AppFile.findByIdAndUpdate(previousFileId, {
+              $pull: { tags: AppFileReservedTags.DocxTemplate },
+            });
+          }
         }
 
         Logger.info(`Removed DOCX template for user ${userId}`, { previousFileId });
@@ -166,9 +175,11 @@ const handler = baseApi()
         }
 
         // Get file details
-        const appFile = await AppFile.findById(fileId).select('name size mimeType');
-        if (!appFile) {
-          // Template file was deleted, clear the preference
+        const appFile = await AppFile.findById(fileId).select('name size mimeType userId');
+        // Treat a missing file OR one the caller does not own as not-found and clear the
+        // stale preference: docxTemplateFileId used to be self-settable, so a poisoned value
+        // must not leak a foreign file's name/size/mimeType here.
+        if (!appFile || (appFile.userId?.toString() !== userId?.toString() && !req.user?.isAdmin)) {
           await User.findByIdAndUpdate(userId, {
             $unset: { 'preferences.docxTemplateFileId': '' },
           });

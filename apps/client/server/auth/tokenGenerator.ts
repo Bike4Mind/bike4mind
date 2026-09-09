@@ -1,6 +1,14 @@
 import { AuthTokenGeneratorService } from '@bike4mind/auth';
 import { Config } from '@server/utils/config';
 
+/**
+ * Access-token lifetime, in seconds. Exported because OAuth token responses must advertise the
+ * REAL value in `expires_in`: clients (notably the CLI) compute their own expiry from it and use
+ * that to decide when to refresh proactively, so an inflated number means they sit on a dead token
+ * until a request fails. MUST STAY IN SYNC with accessTokenExpiresIn below.
+ */
+export const ACCESS_TOKEN_TTL_SECONDS = 30 * 60;
+
 export const authTokenGenerator = new AuthTokenGeneratorService({
   accessTokenSecret: Config.JWT_SECRET,
   refreshTokenSecret: Config.JWT_SECRET,

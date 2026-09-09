@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.62",
+  "version": "0.1.66",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -9,7 +9,8 @@
     "./migrate/migrationManager": "./migrate/migrationManager.ts",
     "./help/types": "./help/types.ts",
     "./help/utils": "./help/utils.ts",
-    "./help/loadHelpArticles": "./help/loadHelpArticles.ts"
+    "./help/loadHelpArticles": "./help/loadHelpArticles.ts",
+    "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -20,7 +21,10 @@
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",
     "datalake:check-prefix-overlaps": "tsx migrate/check-datalake-prefix-overlaps.ts",
     "datalake:check-prefix-dupes": "tsx migrate/check-datalake-prefix-dupes.ts",
+    "datalake:check-prefix-only-members": "tsx migrate/check-datalake-prefix-only-members.ts",
     "datalake:ingest-pdfs": "tsx datalake/ingest-pdf-datalake.ts",
+    "datalake:check-stranded-drive-connections": "tsx datalake/check-stranded-drive-connections.ts",
+    "datalake:seed-stranded-member": "tsx datalake/seed-stranded-lake-member.ts",
     "db:create-user": "tsx createUser.ts",
     "db:list-users": "tsx listUsers.ts",
     "db:setup-email-user": "tsx setupTestEmailUser.ts",
@@ -33,6 +37,7 @@
     "test:email-ingestion": "tsx testEmailIngestLambda.ts",
     "test:api-usage": "tsx test-api-usage-monitoring.ts",
     "test:agent-execute-ws": "tsx testAgentExecuteWs.ts",
+    "test:kb-refusal": "tsx testKnowledgeToolRefusal.ts",
     "create-prod-release": "tsx src/createProductionRelease.ts",
     "help:ingest-datalake": "tsx help/ingest-help-datalake.ts",
     "help:build-index": "tsx help/build-help-index.ts",
@@ -43,11 +48,18 @@
     "help:regenerate": "pnpm help:build-index && pnpm help:bundle-content && pnpm help:vectorize",
     "test:seed-context-summary": "tsx seedContextSummary.ts",
     "migrate:encrypt-tokens": "tsx migrate/encrypt-tokens-at-rest.ts",
+    "migrate:encrypt-admin-secrets": "tsx migrate/encrypt-admin-settings-and-apikeys.ts",
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
-    "tavern:upload-icons": "tsx src/uploadTavernIcons.ts"
+    "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
+    "count-tokens-probe": "tsx count-tokens-probe.ts",
+    "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
+    "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts",
+    "retrieval:capture-embeddings": "tsx retrieval/capture-embeddings.ts",
+    "retrieval:model-comparison": "tsx retrieval/model-comparison.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-lambda": "^3.1080.0",
     "@aws-sdk/client-s3": "^3.1080.0",
     "@aws-sdk/client-sqs": "^3.1080.0",

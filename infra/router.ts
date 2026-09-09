@@ -193,16 +193,51 @@ const routerInstance = shouldUseSharedRouter
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
 
 /**
+ * `router.url` with any trailing slash removed. Shared by both URL injectors below so the
+ * two cannot disagree about what "a bare origin" means - they already did once, which is
+ * what this exists to prevent recurring.
+ */
+function bareOrigin(url: typeof routerInstance.url) {
+  return url.apply(u => u.replace(/\/+$/, ''));
+}
+
+/**
  * Returns the CDN base URL to inject into Lambda environment variables.
  * Personal `sst dev` stages (DEV_ROUTER_DISTRIBUTION_ID set) use the local
  * proxy; all deployed stages use the real CloudFront distribution URL.
+ *
+ * Normalized for the same reason as APP_URL (see appUrlForLambdaEnv): consumers treat
+ * NEXT_PUBLIC_CDN_URL as an origin and append their own path, so a trailing slash lands
+ * as a double slash in every URL built from it. LOCAL_FILE_PROXY_BASE is a literal with
+ * no trailing slash, so only the CloudFront arm needs normalizing.
  */
 export function cdnUrlForLambdaEnv() {
-  return $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? LOCAL_FILE_PROXY_BASE : routerInstance.url;
+  return $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? LOCAL_FILE_PROXY_BASE : bareOrigin(routerInstance.url);
 }
 
 // Export router for other infrastructure to use
 export const router = routerInstance;
+
+/**
+ * `router.url` with any trailing slash removed, so APP_URL is always a bare origin.
+ *
+ * `Router.url` can carry a trailing slash. Every consumer of APP_URL treats it as an
+ * origin and appends its own path, so the slash is wrong everywhere it lands:
+ *
+ *   - `csrfProtection` compares it against `new URL(header).origin`, which is always
+ *     normalized. A trailing slash makes the allow-list entry unmatchable, so every
+ *     state-changing request is rejected while reads keep working.
+ *   - `auth.ts` builds OAuth and SAML callback URLs as `APP_URL + '/api/auth/...'`,
+ *     producing a double slash. Providers match callback URLs exactly.
+ *   - `oauthServer.ts` uses it as the OIDC issuer, where the exact string is a
+ *     spec-level identity rather than a formatting detail.
+ *
+ * Normalizing once here keeps all four injection sites agreeing on one value, rather
+ * than each deciding for itself.
+ */
+export function appUrlForLambdaEnv() {
+  return bareOrigin(routerInstance.url);
+}
 
 export const whatsNewDistributionId = new sst.Linkable('whatsNewDistributionId', {
   properties: {

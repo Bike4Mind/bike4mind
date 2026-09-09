@@ -52,7 +52,18 @@ vi.mock('@server/auth/issueSession', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
-vi.mock('@server/utils/validators', () => ({ validateAppUrl: () => 'http://localhost:3000' }));
+vi.mock('@server/utils/validators', () => ({
+  validateAppUrl: () => 'http://localhost:3000',
+  // The route now shares one localhost predicate with csrfProtection; the real
+  // implementation is pure, so mirror it rather than stubbing a boolean.
+  isLocalAppUrl: (u?: string) => {
+    try {
+      return ['localhost', '127.0.0.1', '0.0.0.0'].includes(new URL(u ?? process.env.APP_URL ?? '').hostname);
+    } catch {
+      return false;
+    }
+  },
+}));
 vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 vi.mock('@bike4mind/observability', () => ({
@@ -69,7 +80,8 @@ function makeReqRes() {
   const { req, res } = createMocks({
     method: 'GET',
     query: { state: STATE, code: CODE },
-    headers: { host: 'localhost:3000', 'user-agent': 'vitest' },
+    // PKCE verifier now rides a browser-bound cookie, not the state token.
+    headers: { host: 'localhost:3000', 'user-agent': 'vitest', cookie: 'b4m_okta_pkce=pkce-verifier' },
     url: '/api/auth/okta/callback',
   });
   return { req: req as any, res: res as any };
@@ -90,7 +102,7 @@ beforeEach(() => {
 
   mockVerifyState.mockReturnValue({
     valid: true,
-    payload: { idpId: 'idp-1', codeVerifier: 'pkce-verifier' },
+    payload: { idpId: 'idp-1' },
   });
   mockGetConfig.mockResolvedValue({
     config: { issuer: 'https://okta.example.com' },

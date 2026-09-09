@@ -24,7 +24,9 @@ export const getFabFilesFromServerByIds = async (ids: string[]) => {
 };
 
 export const chunkFabFileFromServer = async (fabFileId: string, chunkSize: number) => {
-  const response = await api.post(`/api/files/chunk`, {
+  // `unknown` not the api client's default `any`: no caller reads the ack body (useChunkFile's
+  // onSuccess ignores it), so keep the return un-narrowed rather than leaking `any` to the mutation.
+  const response = await api.post<unknown>(`/api/files/chunk`, {
     fabFileId,
     chunkSize,
   });
@@ -245,11 +247,10 @@ export const deleteFileUtility = async (fileId: string): Promise<boolean> => {
 };
 
 export const chunkFileUtility = async (fabFileId: string, chunkSize: number) => {
-  try {
-    await chunkFabFileFromServer(fabFileId, chunkSize);
-  } catch (err: any) {
-    console.error('Failed to chunk the file:', err);
-  }
+  // Do not swallow: a rejected request (e.g. a 404 when the workbench still holds a file
+  // deleted server-side, or the route's positive-integer 400) must reject the mutation so
+  // useChunkFile's onError fires instead of onSuccess running on a request that never landed.
+  return await chunkFabFileFromServer(fabFileId, chunkSize);
 };
 
 export const getFabFileByIdFromServer = async (fabFileId: string): Promise<IFabFileDocument> => {

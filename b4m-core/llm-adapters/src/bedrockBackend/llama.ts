@@ -4,6 +4,11 @@ import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseC
 import { BaseBedrockBackend } from './base';
 
 export default class LlamaBedrockBackend extends BaseBedrockBackend {
+  /** Reports done only on response.stop_reason on the terminal chunk, so a missing terminal event means a truncated stream. */
+  protected override get signalsStreamTermination(): boolean {
+    return true;
+  }
+
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {

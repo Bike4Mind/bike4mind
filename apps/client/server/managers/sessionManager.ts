@@ -2,7 +2,8 @@
  * Session management - split into focused responsibility modules:
  *
  * - `sessionCrud`        - lifecycle, querying, basic persistence
- * - `sessionOperations`  - message CRUD, fork/clone/snip, generation control, summarization
+ * - `sessionOperations`  - message CRUD, generation control, summarization (fork/snip live in
+ *                          `@bike4mind/services`' `sessionService`, not here)
  * - `sessionSideEffects` - WebSocket notifications, analytics, activity logging, event publishing
  *
  * This file re-exports the public surface so existing callers importing from

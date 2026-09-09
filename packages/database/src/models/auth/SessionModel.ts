@@ -1,8 +1,14 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../content/SharableDocumentModel';
-import { ISession, ISessionDocument, ISessionRepository, SearchOptions } from '@bike4mind/common';
-import { softDeletePlugin } from '../../utils/mongo';
+import {
+  DATA_LAKE_GROUNDING_MODES,
+  ISession,
+  ISessionDocument,
+  ISessionRepository,
+  SearchOptions,
+} from '@bike4mind/common';
+import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
 import { NotFoundError } from '@bike4mind/utils';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -47,6 +53,15 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     disableUserIntegrations: { type: Boolean, required: false },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
+    // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
+    // member admission, distinct from an ordinary session that never went through it. Written ONLY
+    // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake
+    // check - never part of session creation's own input, so fork/clone/snip cannot copy it.
+    preauthorizedLakeIds: { type: [String], default: undefined },
+    // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
+    // a session not created for a lake must read back undefined, which the completion path's corpus
+    // defer plan treats as its pre-existing size-only behavior (a default here would change that).
+    corpusGroundingMode: { type: String, enum: [...DATA_LAKE_GROUNDING_MODES], required: false },
     retrievalExcludeFilenameMarkers: [{ type: String, required: false }],
     retrievalVectorizedOnly: { type: Boolean, required: false },
     citationStyle: { type: String, enum: ['named', 'indexed'], required: false },
@@ -191,6 +206,13 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
 
 export class SessionRepository extends BaseRepository<ISessionDocument> implements ISessionRepository {
   shareable: ISessionRepository['shareable'];
+  /**
+   * Explicit session for the queries below. Null means "let transactionAsyncLocalStorage decide",
+   * which is what callers should want: this instance is shared, so a session assigned here
+   * outlives the transaction that created it and the next reader fails with "Use of expired
+   * sessions". Nothing sets it today.
+   */
+  ctx: mongoose.mongo.ClientSession | null;
   private questModel?: Model<unknown>;
 
   constructor(
@@ -204,10 +226,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     this.sessionModel = sessionModel;
     this.shareable = extensions.shareable;
     this.questModel = extensions.questModel;
-  }
-
-  set ctx(ctx: mongoose.mongo.ClientSession | null) {
-    this.ctx = ctx;
+    this.ctx = null;
   }
 
   async search(
@@ -267,8 +286,17 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
 
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {
+    // Scope the match to the owner: the conversation id is client-controlled (it comes
+    // straight from the uploaded export), so without userId a forged id colliding with
+    // another user's session would match their row and re-own it via $set. Scoping is
+    // safe because no unique index exists on openaiConversationId, so a cross-tenant
+    // collision falls through to upsert and inserts a fresh row for this user.
+    const { userId } = update;
+    if (!userId) {
+      throw new Error('upsertByOpenaiConversationId requires userId in update to scope ownership');
+    }
     const query = this.sessionModel.findOneAndUpdate(
-      { openaiConversationId },
+      { openaiConversationId, userId },
       { $set: update },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -280,8 +308,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return query;
   }
   async upsertByClaudeConversationId(claudeConversationId: string, update: Partial<ISession>) {
+    // See `upsertByOpenaiConversationId` above: scope the match to the owner so a forged
+    // client-controlled conversation id cannot re-own another user's session.
+    const { userId } = update;
+    if (!userId) {
+      throw new Error('upsertByClaudeConversationId requires userId in update to scope ownership');
+    }
     const query = this.sessionModel.findOneAndUpdate(
-      { claudeConversationId },
+      { claudeConversationId, userId },
       { $set: update },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -350,8 +384,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
   }
+  /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[]) {
-    return this.sessionModel.find({ _id: { $in: ids } });
+    return this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
   }
 
   async attachAgent(sessionId: string, agentId: string) {
@@ -383,7 +418,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (!session) {
       throw new NotFoundError('Session not found');
     }
-    return session.agentIds || [];
+    // Callers resolve each entry with agentRepository.findById, so one legacy entry that cannot
+    // address a row took the whole attached-agent list down with it.
+    return usableObjectIds(session.agentIds, 'SessionModel.getAttachedAgents');
   }
 
   async addArtifact(sessionId: string, artifactId: string) {

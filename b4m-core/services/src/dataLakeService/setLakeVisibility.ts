@@ -1,6 +1,11 @@
-import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { findCollidingPrefixLakes } from './tagPrefixCollision';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
  * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
@@ -8,9 +13,16 @@ import { findCollidingPrefixLakes } from './tagPrefixCollision';
  */
 export type LakeVisibility = 'private' | 'organization' | 'public';
 
-interface SetLakeVisibilityAdapters {
-  db: {
+interface SetLakeVisibilityAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
@@ -31,23 +43,34 @@ interface SetLakeVisibilityAdapters {
  * Only those two fields change.
  */
 export const setLakeVisibility = async (
-  actor: { userId: string; isAdmin: boolean; organizationId?: string },
+  // `organizationId` here is the WRITE TARGET - the per-request-validated active org
+  // (resolveActiveOrg) an org promotion moves the lake into. It is deliberately a single id
+  // and deliberately NOT from AccessContext, which carries only the membership SET and no
+  // singular org since #1674 (the pointer is a display preference, never an authorization read).
+  actor: ManageActor & { organizationId?: string },
   dataLakeId: string,
   visibility: LakeVisibility,
-  { db }: SetLakeVisibilityAdapters
+  { db, logger }: SetLakeVisibilityAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the creator can change a data lake’s visibility');
+  const grants = await loadActiveLakeGrants(existing, { db });
+  if (!canManageLake(existing, actor, grants)) {
+    throw new BadRequestError('You do not have permission to change the visibility of this data lake');
   }
   const exposes = visibility === 'organization' || visibility === 'public';
-  // Exposing (org or public) targets the ACTOR's own scope, so only the owner may do it -
-  // otherwise a platform admin acting on someone else's lake would expose it without consent
-  // (and org promotion would pull it into the admin's org). Demotion to private stays owner/admin.
-  if (exposes && existing.createdByUserId !== actor.userId) {
+  // Exposing (org or public) targets the ACTOR's own scope, so only the OWNER may do it -
+  // otherwise a platform admin (or a curator/org-admin who can otherwise manage) acting on the
+  // lake would expose it without the owner consenting (and org promotion would pull it into the
+  // actor org). Demotion to private stays full-manage. Deliberately isEffectiveOwner, not
+  // canManageLake: it is the grant-aware owner check (a transferred owner qualifies, the creator
+  // once superseded does not) WITHOUT the admin / curator / org-admin bypasses this must exclude.
+  // This invariant is not routable around via transfer: transferLakeOwnership's consent guard
+  // forbids an org admin from transferring a lake to THEMSELVES (they must name another member), so
+  // an org admin cannot self-grant ownership here and then expose. See transferLakeOwnership.ts.
+  if (exposes && !isEffectiveOwner(existing, actor, grants)) {
     throw new BadRequestError('Only the lake’s owner can change how it is shared.');
   }
   if (visibility === 'organization' && !actor.organizationId) {
@@ -107,6 +130,7 @@ export const setLakeVisibility = async (
       id: dataLakeId,
       organizationId: targetOrg ?? null,
       isPublic: targetIsPublic,
+      ...lakeConfigWriteStamp(actor),
     } as Partial<IDataLakeDocument>);
   } catch (err) {
     // A concurrent create/rename can win the (organizationId, slug) unique index between the
@@ -122,5 +146,39 @@ export const setLakeVisibility = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after visibility change');
   }
+
+  // Reuses the grants already loaded for the gate above, so the recorded rung is the one that
+  // actually authorized this write rather than a second, later read of the grant set.
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'visibility',
+      // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+      // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+      // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+      // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+      // projection is exact rather than reconstructed.
+      // `undefined` rather than the write's `null`: the write needs `null` to actually unset the
+      // field in Mongo, while `diffLakeConfig` collapses `null` and `undefined` onto the same
+      // "not set" value, so the recorded change is identical either way.
+      changes: diffLakeConfig(existing, {
+        ...existing,
+        organizationId: targetOrg ?? undefined,
+        isPublic: targetIsPublic,
+      }),
+      // No `manageRung` override, either direction. An EXPOSING write is gated on
+      // `isEffectiveOwner` alone ("WITHOUT the admin / curator / org-admin bypasses this must
+      // exclude"), and `resolveLakeManageRung` now checks the admin rung LAST, so for an actor who
+      // cleared that gate it reports `grant-owner`/`creator` on its own - the branch that actually
+      // let the call through. Demotion to private stays full `canManageLake`, where the resolver's
+      // wider ladder is the honest answer. Overriding here would have to restate the resolver to
+      // stay right, and the two drifting apart is exactly how one direction of the SAME edit by the
+      // SAME owner came to record a different authority than the other.
+    },
+    { db, logger }
+  );
+
   return updated;
 };

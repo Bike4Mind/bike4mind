@@ -216,4 +216,50 @@ describe('StreamAccumulator', () => {
       expect(infoArg.outputTokens).toBe(8);
     });
   });
+
+  // Without this the CLI cannot distinguish a reply cut off at the output ceiling from a
+  // finished one - it just renders a sentence that stops mid-word.
+  describe('finalize - stop reason', () => {
+    it('delivers a stop reason carried on a content event', async () => {
+      const acc = new StreamAccumulator();
+      acc.apply(content('cut off here', { stopReason: 'max_tokens' }));
+      const callback = vi.fn().mockResolvedValue(undefined);
+      await acc.finalize(callback);
+
+      expect((callback.mock.calls[0][1] as CompletionInfo).stopReason).toBe('max_tokens');
+    });
+
+    it('delivers a stop reason on the tool-use path', async () => {
+      const acc = new StreamAccumulator();
+      acc.apply(toolUse('calling', [{ name: 'tool', arguments: '{}' }], { stopReason: 'max_tokens' }));
+      const callback = vi.fn().mockResolvedValue(undefined);
+      await acc.finalize(callback);
+
+      expect((callback.mock.calls[0][1] as CompletionInfo).stopReason).toBe('max_tokens');
+    });
+
+    // The regression this guards: stopReason is latched separately BECAUSE lastUsageInfo is
+    // replaced wholesale by each usage-bearing event. Folding it in there would let a later
+    // usage event silently erase it.
+    it('survives a later usage-bearing event that carries no stop reason', async () => {
+      const acc = new StreamAccumulator();
+      acc.apply(content('start', { stopReason: 'max_tokens' }));
+      acc.apply(content(' more', { usage: { inputTokens: 10, outputTokens: 8 } }));
+      const callback = vi.fn().mockResolvedValue(undefined);
+      await acc.finalize(callback);
+
+      const infoArg = callback.mock.calls[0][1] as CompletionInfo;
+      expect(infoArg.stopReason).toBe('max_tokens');
+      expect(infoArg.outputTokens).toBe(8);
+    });
+
+    it('leaves stopReason undefined when no event reports one', async () => {
+      const acc = new StreamAccumulator();
+      acc.apply(content('all done'));
+      const callback = vi.fn().mockResolvedValue(undefined);
+      await acc.finalize(callback);
+
+      expect((callback.mock.calls[0][1] as CompletionInfo).stopReason).toBeUndefined();
+    });
+  });
 });

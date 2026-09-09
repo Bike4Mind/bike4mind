@@ -1,9 +1,12 @@
 import { Logger } from '@bike4mind/observability';
 import {
   FAB_FILE_CONTENT_REWRITE_PATCH,
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
+  IScopedSettingsRepository,
   IUserDocument,
   KnowledgeType,
   isImageServeable,
@@ -12,6 +15,7 @@ import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 
 import { z } from 'zod';
 
@@ -41,13 +45,19 @@ const EXPIRE_IN_SECONDS = 3600;
 
 type UpdateFabFileParameters = z.infer<typeof updateFabFileSchema>;
 
-interface UpdateFabFileAdapters {
-  db: {
+interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     fabFiles: Pick<
       IFabFileRepository,
       'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
     >;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+    // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
+    // Forwarded to reconcileLakeTags for the admission contract's lever (#1680). Required for the
+    // same reason it is there: a door that could omit it would silently skip the contract.
+    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -61,18 +71,35 @@ interface UpdateFabFileAdapters {
       etag?: string;
     }>;
   };
+  /**
+   * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
+   * does). It cannot be read off the user document, so omitting it drops the two org rungs of
+   * `canManageLake` from `reconcileLakeTags`' join gate - making this write strictly narrower than
+   * the route gate in front of it. Same adapter, for the same reason, as `createFabFile`'s.
+   */
+  administeredOrgIds?: string[];
 }
 
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, logger, storage }: UpdateFabFileAdapters
+  { db, logger, storage, administeredOrgIds }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
-  const fabFile = await db.fabFiles.shareable.findAccessibleById(user, id);
+  // Update-level, not read-level: a read share authorizes viewing this file, never rewriting its
+  // bytes, tags or metadata. Unlike findAccessibleById this returns a hydrated document, and the
+  // `{ ...fabFile }` spread below would copy Mongoose internals instead of the fields - so
+  // normalize first, as updateDocumentSharing does for the same reason.
+  const found = await db.fabFiles.shareable.findUpdateAccessById(user, id);
 
-  if (!fabFile) throw new NotFoundError('Invalid ID');
+  if (!found) throw new NotFoundError('Invalid ID');
+
+  const fabFile = (
+    typeof (found as { toJSON?: unknown }).toJSON === 'function'
+      ? (found as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : found
+  ) as IFabFileDocument;
 
   if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
     const mimeType = params.mimeType ?? fabFile.mimeType;
@@ -107,18 +134,28 @@ export const updateFabFile = async (
     Object.assign(fabFile, FAB_FILE_CONTENT_REWRITE_PATCH);
   }
 
-  // A tag replacement can join or leave a data lake, which is more than an array write: leaving
-  // has to clear the lake's prefixed content tags as well, and both directions have to leave the
-  // lake's stats correct. Resolved (and gated) BEFORE the write below, applied after it.
+  // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
+  // why. Resolved (and gated) BEFORE the write below, applied after it. This actor also widens
+  // what an org admin can do beyond the join gate itself: content tags under an org lake's prefix
+  // that were previously force-carried become droppable, and a manageable prefix-arm join now
+  // lands in `joins` rather than `statsOnlyJoins` - which can flip a draft lake to active. Both
+  // follow from the same fix and are wanted, but the activation is one-way.
   const lakeTags =
     params.tags === undefined
       ? undefined
       : await reconcileLakeTags(
-          { userId: user.id, isAdmin: !!user.isAdmin },
+          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] },
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,
-          { db, logger }
+          {
+            db,
+            logger,
+            fileOwnerUserId: fabFile.userId,
+            // Already in hand, so the admission contract grades this file on the target its chunks
+            // WERE built with instead of re-fetching it or predicting from policy.
+            fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+          }
         );
 
   const updatedFabFile: Partial<IFabFileDocument> = {
@@ -143,15 +180,11 @@ export const updateFabFile = async (
 
   await db.fabFiles.update(updatedFabFile);
 
-  // Membership writes land on the persisted array, so they cannot be clobbered by the write
-  // above.
+  // A whole-array write can never leave a lake (see reconcileLakeTags), so tagsToPersist - already
+  // assigned into updatedFabFile above - is always the true final array; commit() only needs to
+  // recompute stats for any new join.
   if (lakeTags) {
     await lakeTags.commit();
-    // Leaving a lake also clears its prefixed content tags, so the array assembled above is no
-    // longer what is stored. Report what a subsequent GET would: a caller trusting a response
-    // that still lists tags this call just removed draws the wrong conclusion.
-    const persisted = await db.fabFiles.findById(id);
-    if (persisted) updatedFabFile.tags = persisted.tags;
   }
 
   return updatedFabFile;

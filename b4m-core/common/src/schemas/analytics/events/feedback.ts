@@ -12,8 +12,6 @@ interface ICreateFeedbackEvent extends IBaseEvent {
   metadata: {
     /** ID of the feedback that was created */
     id: string;
-    /** Content of the feedback */
-    content?: string;
   };
 }
 
@@ -30,8 +28,6 @@ interface IUpdateFeedbackEvent extends IBaseEvent {
   metadata: {
     /** ID of the feedback that was updated */
     id: string;
-    /** Updated content of the feedback */
-    content?: string;
     status?: string;
     username?: string;
   };
@@ -42,13 +38,8 @@ interface IFeedbackSentEvent extends IBaseEvent {
   metadata: {
     /** ID of the feedback that was sent */
     id: string;
-    /** Content of the sent feedback */
-    content?: string;
   };
 }
 
 export type FeedbackEventPayload =
-  | ICreateFeedbackEvent
-  | IDeleteFeedbackEvent
-  | IUpdateFeedbackEvent
-  | IFeedbackSentEvent;
+  ICreateFeedbackEvent | IDeleteFeedbackEvent | IUpdateFeedbackEvent | IFeedbackSentEvent;

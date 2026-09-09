@@ -105,8 +105,10 @@ export async function dispatchReviewToSreRevision(
   const rawConfig = await adminSettingsRepository.getSettingsValue('sreAgentConfig');
   const config = SreAgentConfigSchema.parse(rawConfig ?? {});
 
-  const repoSlug = review.repository?.full_name;
-  const repoConfig = resolveFullConfig(config, repoSlug ?? '');
+  // '' never resolves to a configured repo, so a non-null repoConfig proves the
+  // webhook named a repo we know - which is what the claim below is bound to.
+  const repoSlug = review.repository?.full_name ?? '';
+  const repoConfig = resolveFullConfig(config, repoSlug);
 
   if (!repoConfig) {
     logger?.info('[SRE-REVISION] Repo not configured, skipping revision');
@@ -144,7 +146,7 @@ export async function dispatchReviewToSreRevision(
   }
 
   // 7. Atomic claim: fixed -> revision_requested (handles dupes, cap, merged-PR guard)
-  const claimed = await sreErrorTrackingRepository.claimRevision(tracking.id, repoConfig.maxRevisions);
+  const claimed = await sreErrorTrackingRepository.claimRevision(tracking.id, repoSlug, repoConfig.maxRevisions);
 
   if (!claimed) {
     // Check if we hit the revision cap - if so, escalate to human

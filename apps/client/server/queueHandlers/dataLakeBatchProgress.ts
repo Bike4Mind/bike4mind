@@ -23,6 +23,7 @@ import {
 import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/queueHandlers/sqsDelivery';
 import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 /**
  * Non-final-attempt guard shared by fabFileChunk.ts/fabFileVectorize.ts's catch blocks: on any
@@ -71,12 +72,16 @@ export async function deferFailureIfRetryable(
  */
 export async function finalizeBatchIfComplete(
   batch: IDataLakeBatchDocument | null,
-  logger: { error: (msg: string) => void }
+  // `warn` as well as `error`: this is the highest-volume producer of the auto-activate config
+  // event, and `recordLakeConfigChange` is best-effort - it warns and swallows rather than failing
+  // the batch. Without a real logger threaded to it that warning lands on `console.warn`, which is
+  // invisible to log-based alerting, so an audit trail could go quietly dark here of all places.
+  logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void }
 ): Promise<void> {
   if (!batch) return;
   if (batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles < batch.totalFiles) return;
 
-  const outcome = batch.failedFiles > 0 ? 'completed_with_errors' : 'completed';
+  const outcome = resolveBatchOutcome(batch);
   const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, outcome);
   if (!finalized) return; // another handler finalized first — don't double-recompute.
 
@@ -87,8 +92,12 @@ export async function finalizeBatchIfComplete(
   try {
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (lake) {
+      // Batch completion is the canonical way a draft lake first holds files and flips to active,
+      // so this is the dominant producer of the `auto-activate` config-change event. Unwired, the
+      // status change most likely to happen is the one the history would not contain.
       await dataLakeService.recomputeLakeStats(lake, {
-        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
+        logger,
       });
     }
   } catch (error) {
@@ -110,6 +119,33 @@ export async function finalizeBatchIfComplete(
 /** True once a batch has reached its completion threshold. */
 export function isBatchComplete(batch: IDataLakeBatchDocument | null): boolean {
   return !!batch && batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles >= batch.totalFiles;
+}
+
+/**
+ * Which terminal status a finished batch settles as. The single source of truth for that decision:
+ * the persisted transition above and the six `data_lake_batch_progress` websocket payloads that
+ * report it (objectCreated, fabFileChunk x3, fabFileVectorize x2) each open-coded this expression,
+ * so the record and the client's view of the same batch could disagree.
+ *
+ * `deferredFiles` counts candidates a multi-run Drive chain planned and then wrote off unfinished, so
+ * a batch carrying any is NOT a clean success even when nothing failed - the files are missing from
+ * the lake. It is deliberately absent from `isBatchComplete`'s threshold: a deferred candidate mints
+ * no manifest entry and no counter, so gating completion on it would strand every stopped-short batch
+ * in `processing` until the reconciler force-failed it. The threshold decides WHETHER a batch is
+ * done; this decides whether it went well (#2394).
+ */
+export function resolveBatchOutcome(batch: IDataLakeBatchDocument): 'completed' | 'completed_with_errors' {
+  return batch.failedFiles > 0 || (batch.deferredFiles ?? 0) > 0 ? 'completed_with_errors' : 'completed';
+}
+
+/**
+ * The terminal status to REPORT for a batch, or `undefined` while it has not finished - the shape the
+ * websocket progress payloads want, so they stay in lockstep with what was actually persisted.
+ */
+export function completedBatchStatus(
+  batch: IDataLakeBatchDocument | null
+): 'completed' | 'completed_with_errors' | undefined {
+  return batch && isBatchComplete(batch) ? resolveBatchOutcome(batch) : undefined;
 }
 
 /**
@@ -163,7 +199,10 @@ export async function enqueueTaxonomyAnalysisIfWanted(
         .setTaxonomyStatusIfActive(batch.id, ['queued'], 'failed', {
           taxonomyError: 'Daily AI tag-suggestion limit reached - try again tomorrow',
         })
-        .catch(() => null);
+        .catch(error => {
+          logger.error(`Error reverting batch ${batch.id} to failed after daily taxonomy cap: ${error}`);
+          return null;
+        });
       // Only notify if THIS call's transition actually won (mirrors analyzeBatchTaxonomy's
       // fail()) - otherwise something else already resolved the phase, and pushing here would
       // contradict whatever that other resolution already told the client.
@@ -192,14 +231,18 @@ export async function enqueueTaxonomyAnalysisIfWanted(
  * taxonomy analysis) and is gated on:
  *   - the `EnableLakeMemory` admin flag, off by default - the producer stays dark until an operator
  *     opts a deployment in for the measurement rollout;
+ *   - the PER-LAKE `lakeMemoryEnabled` field - the platform flag only gates availability, this
+ *     is the lake owner's own opt-in;
  *   - a PER-LAKE daily cap, so a burst of batch finalizes triggers at most a few full-lake extractions.
+ *     This cap is now shared with the manual build/rebuild door (POST /lake-memory), so a manual build
+ *     spending the day's budget can make a real upload's extraction silently drop - hence the warn below.
  * Unlike taxonomy (which only needs file metadata), extraction reads chunk TEXT, so it must run after
  * the chunk/vectorize pipeline finishes - hence finalize, not upload-complete. The job itself is
  * idempotent (the ledger de-dups), so a dropped cap slot only delays a re-scan, never loses data.
  */
 export async function enqueueLakeMemoryExtractionIfWanted(
   batch: IDataLakeBatchSummary | null,
-  logger: { error: (msg: string) => void }
+  logger: { warn: (msg: string) => void; error: (msg: string) => void }
 ): Promise<void> {
   if (!batch) return;
 
@@ -207,13 +250,24 @@ export async function enqueueLakeMemoryExtractionIfWanted(
     const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
     if (!enabled) return;
 
+    const lake = await dataLakeRepository.findById(batch.dataLakeId);
+    if (!lake?.lakeMemoryEnabled) {
+      logger.warn(`Lake memory not enabled for lake ${batch.dataLakeId}; skipping extraction for batch ${batch.id}`);
+      return;
+    }
+
     // Per-lake cap: collapses a burst of finalizes into a bounded number of full-lake extractions.
     const { success: withinCap } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
       lakeMemoryRateLimitKey(batch.dataLakeId),
       LAKE_MEMORY_DAILY_CAP,
       LAKE_MEMORY_RATE_LIMIT_WINDOW_MS
     );
-    if (!withinCap) return;
+    if (!withinCap) {
+      logger.warn(
+        `Lake memory daily cap reached for lake ${batch.dataLakeId}; skipping extraction for batch ${batch.id}`
+      );
+      return;
+    }
 
     await sendToQueue(Resource.lakeMemoryQueue.url, {
       batchId: batch.id,

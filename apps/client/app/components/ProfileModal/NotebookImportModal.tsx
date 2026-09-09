@@ -28,6 +28,7 @@ import { CloudUpload, Upload, DataObject, History } from '@mui/icons-material';
 import { toast } from 'sonner';
 import { ContextHelpButton } from '@client/app/components/help';
 import { api } from '@client/app/contexts/ApiContext';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 
 interface NotebookImportModalProps {
   open: boolean;
@@ -131,33 +132,14 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
         content = encoder.encode(jsonData).buffer;
       }
 
-      // Upload directly to S3 using XMLHttpRequest for progress tracking
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-
-        xhr.upload.addEventListener('progress', event => {
-          if (event.lengthComputable) {
-            const percentComplete = Math.round((event.loaded / event.total) * 100);
-            setUploadProgress(percentComplete);
+      await uploadFileToUrl(uploadUrl, new Blob([content], { type: contentType }), contentType, {
+        onUploadProgress: event => {
+          if (event.total) {
+            setUploadProgress(Math.round((event.loaded / event.total) * 100));
           }
-        });
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setUploadProgress(100);
-            resolve();
-          } else {
-            reject(new Error('Failed to upload file to storage'));
-          }
-        });
-
-        xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
-        xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
-
-        xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', contentType);
-        xhr.send(content);
+        },
       });
+      setUploadProgress(100);
 
       toast.success('🚀 Import started! You will receive a notification when it is complete.', {
         description: `Import ID: ${importId}`,
@@ -192,7 +174,12 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
 
   return (
     <Modal open={open} onClose={onClose} className="notebook-import-modal-root">
-      <ModalDialog size="md" sx={{ maxWidth: 700 }} className="notebook-import-modal-dialog">
+      <ModalDialog
+        size="md"
+        sx={{ maxWidth: 700 }}
+        className="notebook-import-modal-dialog"
+        data-testid="notebook-import-modal"
+      >
         <DialogTitle className="notebook-import-modal-title">
           <Box display="flex" alignItems="center" gap={1}>
             <CloudUpload sx={{ mr: 1 }} />
@@ -248,6 +235,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                     >
                       <input
                         className="notebook-import-modal-file-input"
+                        data-testid="notebook-import-file-input"
                         ref={fileInputRef}
                         type="file"
                         accept=".json"
@@ -329,7 +317,8 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                   />
                 </FormControl>
                 <Typography level="body-xs" color="neutral">
-                  Keep original IDs for same-platform imports (useful for developers)
+                  Keep original IDs for chat messages and artifacts on same-platform imports (useful for developers);
+                  other items always get new IDs
                 </Typography>
               </Stack>
 
@@ -355,6 +344,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Knowledge Files</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-import-knowledge-switch' } }}
                     checked={options.importKnowledge}
                     onChange={e => updateOption('importKnowledge', e.target.checked)}
                   />
@@ -441,6 +431,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
               <Button
                 variant="solid"
                 color="primary"
+                data-testid="notebook-import-submit-btn"
                 onClick={handleImport}
                 loading={isImporting}
                 disabled={

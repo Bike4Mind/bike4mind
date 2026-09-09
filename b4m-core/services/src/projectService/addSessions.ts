@@ -6,11 +6,13 @@ import {
   ISessionRepository,
   IUserDocument,
   Permission,
+  BadRequestError,
+  NotFoundError,
+  secureParameters,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';
+import { distinctIdCount, mergeIds } from '../utils/objectIds';
 import { updateShareableFiles } from './addFiles';
 
 const addSessionsProjectSchema = z.object({
@@ -36,21 +38,31 @@ export const addSessions = async (
   const { db } = adapters;
   const { projectId, sessionIds } = secureParameters(params, addSessionsProjectSchema);
 
-  const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
-  if (sessions.length === 0) {
-    throw new NotFoundError('Sessions not found');
-  }
-
+  // Resolved before the session guards so a bad projectId answers 404 'Project not found' rather
+  // than reporting the sessions as inaccessible.
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
   if (!project) {
     throw new NotFoundError('Project not found');
   }
 
-  project.sessionIds = uniq([...project.sessionIds, ...sessionIds]);
+  const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
+  if (sessions.length === 0) {
+    throw new NotFoundError('Sessions not found');
+  }
+  // Partial resolve is a 400; all-missing keeps the 404 above. See addFiles. Counted as DISTINCT
+  // rows ignoring hex case: the reader returns one row per document, so the same notebook sent
+  // twice - or sent as both `abc` and `ABC` - is not one that could not be reached.
+  if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
+
+  // The ids that RESOLVED, not the request's raw list - same reason as the fileIds push below.
+  project.sessionIds = mergeIds(
+    project.sessionIds,
+    sessions.map(session => session.id)
+  );
   project.updatedAt = new Date();
 
   const fileIds = await updateShareableSessions(user, { project, sessions }, adapters);
-  project.fileIds = uniq([...project.fileIds, ...fileIds]);
+  project.fileIds = mergeIds(project.fileIds, fileIds);
 
   await db.projects.update(project);
 
@@ -85,7 +97,11 @@ const updateShareableSessions = async (
       const files = await db.fabFiles.findAllByIds(session.knowledgeIds);
 
       await updateShareableFiles(user.id, { project, files }, adapters);
-      fileIds.push(...session.knowledgeIds);
+      // The ids that RESOLVED, not the session's raw list, so a legacy unusable id is not copied
+      // into project.fileIds and spread to another document. Note this is narrower than "the
+      // castable ids": softDeletePlugin adds `deletedAt: null` to the find, so a soft-deleted row
+      // is absent too and its id stops being inherited. Pinned in addSessions.fileIds.test.ts.
+      fileIds.push(...files.map((file: { id: string }) => file.id));
     }
   }
 

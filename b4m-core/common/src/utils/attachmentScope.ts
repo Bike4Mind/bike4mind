@@ -11,8 +11,12 @@
  *
  * Resolved once when an upload starts and frozen onto the pending file, so a later
  * change to the control - or a notebook switch - cannot re-scope something in flight.
+ *
+ * The array is the source of truth so UI can enumerate the modes rather than restating
+ * them; its order is the order the composer's scope control renders in.
  */
-export type AttachScopeMode = 'auto' | 'notebook' | 'message';
+export const ATTACH_SCOPE_MODES = ['auto', 'notebook', 'message'] as const;
+export type AttachScopeMode = (typeof ATTACH_SCOPE_MODES)[number];
 export type AttachScope = 'notebook' | 'message';
 
 /**

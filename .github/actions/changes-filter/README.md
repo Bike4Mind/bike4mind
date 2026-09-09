@@ -5,7 +5,8 @@ and (independently) whether it touched the **docs site**. Use it to skip the
 expensive test + deploy pipeline on docs-only / config-only changes. The
 `docs-changed` output originally gated a Docusaurus build-verification job;
 that job is removed for now (this repo tracks only docs-site markdown, not
-the site scaffolding), so `docs-changed` is currently unconsumed.
+the site scaffolding). It now gates the `help-docs` job in `ci.yml`, which runs
+the help guards that a docs-only (non-deployable) run would otherwise skip.
 
 Ported from `MillionOnMars/polaris` (PRs #4204 + #4540), adapted for lumina5:
 docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
@@ -16,7 +17,7 @@ docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
 | Output | Meaning |
 |---|---|
 | `deployable` | `'true'` to run test + deploy, `'false'` to skip. Fails **open** (`true`) when the diff range can't be resolved. |
-| `docs-changed` | `'true'` when the changeset touches `docs-site/`. Fails **open** (`true`) on an unresolved range. Currently unconsumed. |
+| `docs-changed` | `'true'` when the changeset touches `docs-site/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
 
 The two are orthogonal: a docs-only PR is `deployable=false, docs-changed=true`;
 a code+docs PR is `true, true`; a `.changeset` or root-`README` change is
@@ -34,7 +35,12 @@ a code+docs PR is `true, true`; a `.changeset` or root-`README` change is
   semantics — not the per-push `before..after` range. Without this, a synchronize
   that also merges/rebases `main` in would carry all of main's deployable files and
   force a spurious deploy of a docs-only PR. `push` to main/prod keeps the per-push
-  range (no PR to scope to).
+  range (no PR to scope to), and `merge_group` uses the queue entry's own
+  `base_sha..head_sha`, which is that entry's own change rather than the whole batch:
+  `base_sha` is the commit the entry was built on (the target-branch tip, or the
+  previous entry's speculative head in a stacked group), so each queue entry is gated on
+  exactly the diff its own PR CI evaluated. That also makes `base_sha` an ancestor of
+  `head_sha`, so two-dot already equals three-dot there and no `merge-base` call is needed.
 - **No third-party trust surface.** ~40 lines of `git diff`; nothing to SHA-pin or
   audit (cf. the 2025 `tj-actions/changed-files` supply-chain incident).
 
@@ -60,6 +66,11 @@ jobs:
   core-build:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
+    ...
+
+  help-docs:
+    needs: changes
+    if: needs.changes.outputs.docs-changed == 'true'
     ...
 
 ```
@@ -90,3 +101,17 @@ Every uncertain state resolves to "deploy + build docs": unresolved diff range
 `docs-changed=true`. A `changes` job that crashed without writing outputs would
 look identical to a skip to the downstream `if:` checks, so failing open trades one
 unnecessary deploy for never silently dropping one.
+
+That posture only holds for a *one-off* unresolved range. An event with no arm in the
+action's `case "$EVENT_NAME"` block fails open on **every** run of that trigger, and
+the run looks entirely normal - nothing errors, some extra jobs just run. That is what
+`merge_group` did before it was handled: the merge queue evaluated
+`deployable=true, docs-changed=true` unconditionally and so gated on a different signal
+than the PR's own CI, which lets a queue run fail a leg the PR legitimately skipped.
+`packages/scripts/src/checkChangesFilterEvents.test.ts` therefore cross-checks `ci.yml`'s
+trigger list against the arms, and checks that each arm's SHAs are declared in the
+step's `env:` block, bound to that event's own payload, and bound to the end of the range
+their names claim (an arm alone reads unset vars and fails open identically; a base bound
+to a head fails closed, which is worse - the diff is empty and the legs the gate should
+trigger are skipped instead). Letting an event fail open on purpose is fine - write the arm
+explicitly (`BASE=""; HEAD=""`) so the choice is visible rather than inherited.

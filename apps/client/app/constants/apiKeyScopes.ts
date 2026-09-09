@@ -101,6 +101,25 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     description: 'Append Hearth events, create channels, and advance actor cursors',
     endpoints: ['POST /api/hearth/events', 'POST /api/hearth/channels', 'POST /api/hearth/catchup'],
   },
+  {
+    value: ApiKeyScope.OPTIHASHI_READ,
+    label: 'OptiHashi: Read',
+    description: 'Inspect OptiHashi problems, runs, and run artifacts without commissioning any compute',
+    endpoints: [
+      'GET /api/premium-optihashi/quantum/runs',
+      'GET /api/premium-optihashi/quantum/runs/:id',
+      'GET /api/premium-optihashi/quantum/problems',
+    ],
+  },
+  {
+    value: ApiKeyScope.OPTIHASHI_COMPUTE,
+    label: 'OptiHashi: Compute',
+    description: 'Submit OptiHashi compute runs and cancel them. Spends credits - grant only to keys that must solve',
+    endpoints: [
+      'POST /api/premium-optihashi/quantum/qwork/submit',
+      'POST /api/premium-optihashi/quantum/runs/:id/cancel',
+    ],
+  },
 ];
 
 /** All user-selectable scope values, e.g. for a "Select All" action. */
@@ -117,6 +136,19 @@ export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set([ApiKeySc
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
   s => !DEDICATED_FLOW_SCOPES.has(s.value)
 );
+
+/**
+ * Scopes no mint route may ever issue: they are granted by a flow of their own
+ * (`admin:*` is provisioned out of band, `cc-bridge:connect` by the bridge
+ * pairing handshake) and must stay outside every allowlist. Listed explicitly so
+ * the coverage test in apiKeyScopes.test.ts can tell "deliberately unmintable"
+ * from "someone added an enum value and forgot to register it" - the failure mode
+ * that left the `datalake:*` scopes impossible to mint.
+ */
+export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
+  ApiKeyScope.ADMIN,
+  ApiKeyScope.CC_BRIDGE,
+]);
 
 /**
  * Scopes that are provisioned by admins only and must never appear in the user-facing

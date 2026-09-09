@@ -3,6 +3,7 @@ import {
   Casino as DiceIcon,
   Image as ImageIcon,
   MusicNote as MusicIcon,
+  GraphicEq as AudioIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -24,7 +25,7 @@ import {
   ShowChart as FinanceIcon,
   Groups as BobPanelIcon,
 } from '@mui/icons-material';
-import { B4MLLMTools, OrchestrationDefaultsSchema } from '@bike4mind/common';
+import { B4MLLMTools } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services';
 import type { ToolAvailability } from '@pages/api/settings/serverConfig';
 import React from 'react';
@@ -109,6 +110,13 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
     description: 'AI-generated background music from text descriptions',
     icon: MusicIcon,
     color: '#ab47bc',
+  },
+  audio_generation: {
+    name: 'audio_generation',
+    displayName: 'Audio Generation',
+    description: 'AI-generated speech (TTS) or sound effects from text',
+    icon: AudioIcon,
+    color: '#26a69a',
   },
   mermaid_chart: {
     name: 'mermaid_chart',
@@ -275,42 +283,6 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
 };
 
 /**
- * Tool ids (in the UI's vocabulary) that are actually usable when the composer
- * is in **Agent mode** (the Deep Agent / agent_executor path).
- *
- * Agent mode does NOT honor the user's per-message Smart Tools selection. It
- * runs the synthetic orchestration profile's `allowedTools` minus `deniedTools`
- * (see OrchestrationDefaultsSchema in @bike4mind/common). We derive the set from
- * those shared schema defaults at module load so it stays in sync with the
- * server, then apply one alias: the agent's `retrieve_knowledge_content` maps to
- * the UI's `search_knowledge_base` toggle (both are "knowledge base access" to
- * the user). Tool ids that aren't UI toggles (file_read, code_execute,
- * coordinate_task, edit_image) are kept in the set but simply never match a
- * rendered toggle.
- *
- * Caveat: this reflects the DEFAULT agent profile. An org whose admin customizes
- * orchestration tools may differ; this is a best-effort UI hint, not the
- * authorization decision (the server still enforces the real list).
- */
-const AGENT_TOOL_UI_ALIASES: Record<string, B4MLLMTools> = {
-  retrieve_knowledge_content: 'search_knowledge_base',
-};
-
-export const AGENT_MODE_TOOL_IDS: ReadonlySet<string> = (() => {
-  const defaults = OrchestrationDefaultsSchema.parse({});
-  const denied = new Set(defaults.deniedTools);
-  const ids = new Set<string>();
-  for (const tool of defaults.allowedTools) {
-    if (denied.has(tool)) continue;
-    ids.add(AGENT_TOOL_UI_ALIASES[tool] ?? tool);
-  }
-  return ids;
-})();
-
-/** Whether a Smart Tools toggle is honored when the composer is in Agent mode. */
-export const isToolAvailableInAgentMode = (toolName: B4MLLMTools): boolean => AGENT_MODE_TOOL_IDS.has(toolName);
-
-/**
  * Whether the server reported this tool's required API key/config as missing
  * (`serverConfig.toolAvailability`, computed by `computeToolAvailability` in
  * `apps/client/pages/api/settings/serverConfig.ts`).
@@ -369,6 +341,7 @@ export const TOOL_CATEGORIES: Record<string, string> = {
   deep_research: 'Search',
   image_generation: 'Generation',
   music_generation: 'Generation',
+  audio_generation: 'Generation',
   prompt_enhancement: 'Generation',
   edit_image: 'Generation',
   mermaid_chart: 'Visualization',

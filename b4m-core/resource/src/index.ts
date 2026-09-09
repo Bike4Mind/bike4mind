@@ -57,7 +57,7 @@ type Env = Record<string, string | undefined>;
  *  Names already SCREAMING_SNAKE (secrets like `B4M_PROD_API_KEY`,
  *  `E2E_CLEANUP_SECRET`) pass through unchanged - splitting on their
  *  digit-to-uppercase boundaries would corrupt the real secret name. */
-function toEnvKey(name: string): string {
+export function toEnvKey(name: string): string {
   if (/^[A-Z0-9_]+$/.test(name)) return name;
   return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
 }

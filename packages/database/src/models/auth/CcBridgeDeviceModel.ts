@@ -62,7 +62,10 @@ CcBridgeDeviceSchema.index({ apiKeyId: 1 }, { unique: true });
 // without scanning revoked rows, which accumulate durably.
 CcBridgeDeviceSchema.index(
   { userId: 1, lastSeenAt: -1 },
-  { partialFilterExpression: { revokedAt: { $exists: false } }, name: 'userId_lastSeenAt_active' }
+  // `revokedAt: null` (not `$exists: false`, which Mongo rejects in a partial filter)
+  // covers active devices: equality-to-null indexes both absent and explicit-null
+  // revokedAt, while revoked rows (a Date) are excluded.
+  { partialFilterExpression: { revokedAt: null }, name: 'userId_lastSeenAt_active' }
 );
 
 export const CcBridgeDevice: ICcBridgeDeviceModel =

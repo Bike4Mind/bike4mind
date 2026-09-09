@@ -22,21 +22,10 @@ import SortIcon from '@mui/icons-material/Sort';
 import CreditCardIcon from '@mui/icons-material/CreditCard';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useUserCreditsManager } from '../hooks/useUserCreditsManager';
 import ViewUserProfile from './ViewUserProfile';
 import { CreditAdjustmentModal } from './CreditAdjustmentModal';
-
-interface AdminUser {
-  id: string;
-  name?: string;
-  email?: string;
-  currentCredits?: number;
-  loginRecords?: Array<{ loginTime?: string | Date }> | null;
-  lastActiveAt?: string | Date;
-  isOnline?: boolean;
-  isAdmin?: boolean;
-  createdAt: string;
-}
 
 interface UserCreditsManagerProps {
   onRefresh?: () => void;
@@ -47,7 +36,7 @@ const ACTIVE_WITHIN_DAYS = 30;
 
 // Most recent explicit login (loginRecords, as the Admin > Users view uses); falls back
 // to the websocket-tracked lastActiveAt for users with no recorded login yet.
-const getLastLoginDate = (user: AdminUser): Date | null => {
+const getLastLoginDate = (user: AdminUserListItem): Date | null => {
   const latest = user.loginRecords?.reduce<string | Date | undefined>((acc, record) => {
     const t = record?.loginTime;
     if (!t) return acc;
@@ -57,7 +46,7 @@ const getLastLoginDate = (user: AdminUser): Date | null => {
   return source ? new Date(source) : null;
 };
 
-const getActivityStatus = (user: AdminUser): { label: string; color: 'success' | 'neutral' } => {
+const getActivityStatus = (user: AdminUserListItem): { label: string; color: 'success' | 'neutral' } => {
   if (user.isOnline) return { label: 'Online', color: 'success' };
   if (user.lastActiveAt) {
     const daysSince = (Date.now() - new Date(user.lastActiveAt).getTime()) / 86_400_000;
@@ -67,11 +56,11 @@ const getActivityStatus = (user: AdminUser): { label: string; color: 'success' |
 };
 
 export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefresh }) => {
-  const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
+  const [selectedUser, setSelectedUser] = useState<AdminUserListItem | null>(null);
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
   const isMobile = useIsMobile();
 
-  const openCreditsModal = (user: AdminUser) => {
+  const openCreditsModal = (user: AdminUserListItem) => {
     setSelectedUser(user);
     setCreditsModalOpen(true);
   };
@@ -164,7 +153,7 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
         </Alert>
       ) : isMobile ? (
         <Stack spacing={1}>
-          {(paginatedUsers as AdminUser[]).map(user => {
+          {paginatedUsers.map(user => {
             const lastLogin = getLastLoginDate(user);
             const status = getActivityStatus(user);
             return (
@@ -233,7 +222,7 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
               </tr>
             </thead>
             <tbody>
-              {(paginatedUsers as AdminUser[]).map(user => {
+              {paginatedUsers.map(user => {
                 const lastLogin = getLastLoginDate(user);
                 const status = getActivityStatus(user);
                 return (

@@ -140,6 +140,18 @@ Protect your account with two-factor authentication:
 - Use if you lose your authenticator
 - Regenerate codes anytime
 
+### Active Sessions
+
+Found in the **Security** area of your settings, this lists every device currently signed in to your account.
+
+- **See your devices** - each entry shows the browser and operating system, its last-active time, and its IP address. The device you're using is marked **This device**.
+- **Sign out one device** - click **Sign out** next to any other device to end just that session (for example, a public computer you forgot to log out of). Your other devices stay signed in.
+- **Log out of all other devices** - the button at the bottom signs out every device **except the one you're on**. Use it if you think someone else has access to your account; you stay signed in here, and it only appears when another device is actually signed in.
+
+Signing out of the current device (the normal **Log out** in the profile menu) now ends only that session - your phone stays signed in when you log out on your laptop, and vice versa.
+
+**Troubleshooting:** when you sign out another device (individually or via **Log out of all other devices**), that device can stay active for up to 30 minutes (one access-token lifetime) before it's fully locked out, though it can no longer stay signed in past that window. If you need a device cut off instantly, an administrator can force-log-out your account from every device.
+
 ### Blocked IPs
 
 View and manage automatically blocked IP addresses:

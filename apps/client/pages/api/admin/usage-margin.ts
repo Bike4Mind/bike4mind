@@ -1,9 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, userRepository } from '@bike4mind/database';
 import { usdToCredits } from '@bike4mind/utils';
+import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 
 const VIEWS = ['model-day', 'user', 'provider-month', 'settlement'] as const;
+// A year of reconciliation history; keeps the dashboard's provider-month list finite.
+const PROVIDER_MONTH_WINDOW = 12;
 type MarginView = (typeof VIEWS)[number];
 
 /**
@@ -13,8 +16,13 @@ type MarginView = (typeof VIEWS)[number];
  * Responses include targetCreditsPerUsd = usdToCredits(1): what current pricing
  * charges per $1 of COGS. Rows below it were charged under older pricing or
  * indicate a leak.
+ *
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+ * before req.user is set, so a key issued for a narrow integration can't read
+ * margin data just because its owner is an admin. JWT/browser admins skip that
+ * check and still pass the isAdmin gate below.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }
@@ -47,7 +55,7 @@ const handler = baseApi().get(async (req, res) => {
   }
 
   if (view === 'provider-month') {
-    const rows = await usageEventRepository.monthlyCogsByProvider();
+    const rows = await usageEventRepository.monthlyCogsByProvider(PROVIDER_MONTH_WINDOW);
     return res.json({ targetCreditsPerUsd, rows });
   }
 

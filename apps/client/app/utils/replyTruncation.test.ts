@@ -132,3 +132,31 @@ describe('getReplyTruncationState', () => {
     });
   });
 });
+
+describe('degenerate-repetition stop reason', () => {
+  // Regression for the PR #1427 review: `degenerate_repetition` sits outside
+  // CLEAN_FINISH_REASONS, but that set only feeds the ARTIFACT branch. The prose
+  // branch used to require an exact 'max_tokens', so an aborted degenerate stream
+  // with no unclosed artifact - the common case - surfaced no notice at all.
+  it('surfaces a distinct notice when a reply was stopped for repeating itself', () => {
+    const state = getReplyTruncationState({
+      reply: 'Here is the module. ' + '</invoke>\n'.repeat(50),
+      completed: true,
+      finishReason: 'degenerate_repetition',
+    });
+
+    expect(state.notice).toBe('reply-degenerate');
+  });
+
+  it('keeps the ceiling notice distinct from the degeneration notice', () => {
+    expect(
+      getReplyTruncationState({ reply: 'partial prose', completed: true, finishReason: 'max_tokens' }).notice
+    ).toBe('reply-partial');
+  });
+
+  it('still surfaces nothing when no finish reason is reported', () => {
+    // The property the original exact-match comment was protecting: pre-existing
+    // quests with no finishReason must not grow a false banner.
+    expect(getReplyTruncationState({ reply: 'some prose', completed: true }).notice).toBeNull();
+  });
+});

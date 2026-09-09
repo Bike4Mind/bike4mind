@@ -30,6 +30,7 @@ import {
   Input,
 } from '@mui/joy';
 import axios from 'axios';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { toast } from 'sonner';
 
 import { api } from '@client/app/contexts/ApiContext';
@@ -41,6 +42,7 @@ import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyle
 import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
+import ActiveSessionsSection from './ActiveSessionsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
@@ -146,28 +148,28 @@ const GeneralSettingsTab = () => {
   const toggleHelp = () => updatePreferences({ showHelp: !settings.showHelp });
 
   const handleImportHistoryUpload = async (source: 'OpenAI' | 'Claude', file: File) => {
-    // Upload file data to S3, using the API to gather the signed URL
-    const content = await file.arrayBuffer();
-    const uploadUrl = await api.get(`/api/import-history/upload?source=${source}`).then(res => res.data.url);
-    console.debug(`Uploading ${file.name} (${file.size} bytes) to ${uploadUrl} (content type ${file.type})`);
+    // The server decides where the bytes go: a presigned S3 PUT when hosted, or a same-origin
+    // proxy path on self-host, where MinIO is neither browser-reachable nor CSP-allowed.
+    // uploadFileToUrl is what knows to send the app's Bearer to the latter and withhold it from
+    // the former, so this must not PUT directly (see browserUploadCallSites.test.ts).
 
-    // Use axios instead of api here because of Authorization headers
-    const response = await axios.put(uploadUrl, content, {
-      headers: { 'Content-Type': file.type },
-      onUploadProgress: progressEvent => {
-        if (progressEvent.total) {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(percentCompleted);
-        }
-      },
-    });
-
-    setUploadProgress(0);
-
-    if (response.status === 200) {
+    try {
+      const uploadUrl = await api.get(`/api/import-history/upload?source=${source}`).then(res => res.data.url);
+      // The File streams straight through; reading it into an ArrayBuffer first would hold an
+      // entire history export in browser memory.
+      await uploadFileToUrl(uploadUrl, file, file.type, {
+        onUploadProgress: progressEvent => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(percentCompleted);
+          }
+        },
+      });
       toast.success('LLM history uploaded to servers successfully');
-    } else {
-      toast.error(`Failed to upload LLM history: ${response.statusText}`);
+    } catch (err) {
+      toast.error(`Failed to upload LLM history: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setUploadProgress(0);
     }
   };
 
@@ -324,6 +326,7 @@ const GeneralSettingsTab = () => {
                 <StyledButton
                   color="primary"
                   variant="outlined"
+                  data-testid="notebook-import-open-btn"
                   onClick={() => toggleNotebookImportModal()}
                   sx={{ fontSize: '13px' }}
                 >
@@ -332,6 +335,7 @@ const GeneralSettingsTab = () => {
                 <StyledButton
                   color="primary"
                   variant="outlined"
+                  data-testid="notebook-export-open-btn"
                   onClick={() => toggleNotebookExportModal()}
                   sx={{ fontSize: '13px' }}
                 >
@@ -546,6 +550,8 @@ const GeneralSettingsTab = () => {
               </Box>
             </Grid>
           </Grid>
+
+          <ActiveSessionsSection />
         </SectionContainer>
       </Box>
 

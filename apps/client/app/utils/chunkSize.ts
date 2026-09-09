@@ -1,0 +1,18 @@
+import { settingsMap } from '@bike4mind/common';
+
+/**
+ * Applies the DefaultChunkSize setting's own scope clamp (floor + ceiling) to a chunk-size value.
+ * Use this at every client-side read/prefill/submit site for a chunk size, so a legacy stored value
+ * above the ceiling (settings.ts documents this as a real, reachable state) or a hand-typed number
+ * can never bypass the same bound the resolver enforces server-side
+ * (`settingsMap.DefaultChunkSize.scope.clamp`). The settings-fetch route applies no clamp of its
+ * own, so an above-ceiling stored value reaches every read site here raw; only POST
+ * /api/files/chunk's own check catches it otherwise, and chunkFileUtility swallows a rejected
+ * request (filesAPICalls.ts), so an unclamped value here would resolve as a silent false "success"
+ * with nothing queued, not a visible error.
+ */
+export function clampChunkSize(value: number): number {
+  // {} is safe only because this setting's clamp ignores its scope arg (settings.ts); a future
+  // scope-aware clamp on DefaultChunkSize would need this call to pass a real scope instead.
+  return settingsMap.DefaultChunkSize.scope?.clamp?.(value, {}) ?? value;
+}
