@@ -228,6 +228,17 @@ const EMBEDDING_MODEL_PRICE_PER_TOKEN: Partial<Record<SupportedEmbeddingModel, n
   [OllamaEmbeddingModel.SNOWFLAKE_ARCTIC_EMBED]: 0,
 };
 
+/**
+ * Does the price table hold a rate for this model, as opposed to settling $0 because it has no entry?
+ *
+ * `getEmbeddingModelCost` cannot tell those apart from the outside: a locally-hosted embedder priced
+ * at an explicit 0 and a model with no rate at all both return 0. A usage-event write does not care -
+ * a SPEND PREFLIGHT does, because quoting $0 as truth is the one lie a spend gate must not tell.
+ * Lives beside the table so the answer cannot drift from the data.
+ */
+export const hasPublishedEmbeddingRate = (model: string): boolean =>
+  EMBEDDING_MODEL_PRICE_PER_TOKEN[model as SupportedEmbeddingModel] !== undefined;
+
 /** Compute USD cost for an embedding call. Unpriced models settle $0 with an alarm. */
 export const getEmbeddingModelCost = (model: string, inputTokens: number): number => {
   const rate = EMBEDDING_MODEL_PRICE_PER_TOKEN[model as SupportedEmbeddingModel];

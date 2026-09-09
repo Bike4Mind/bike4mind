@@ -16,6 +16,11 @@ export type CitableFileFields = CitableFabFileFields;
  * (b4m-core/services) - this is the same "can the knowledge tool actually reach this doc" predicate,
  * duplicated across packages with no shared symbol. Change one, change the other.
  *
+ * A THIRD copy lives in `isCapturableFile` (packages/scripts/retrieval/capturePlan.ts): the same
+ * conditions minus the `embeddingModel` clause, because that harness deliberately varies the model.
+ * The embeddingModel lockstep test does not see it (it has no such clause, correctly), so this note
+ * is the only signal anyone editing the conditions below will get.
+ *
  * The SAME reachability that gate enforces (+ #1464): a lake belief must only lean on a doc that
  * `search_knowledge_base`'s semantic arm can actually surface, or its citation dangles. Conditions:
  *  - live: not soft-deleted or archived, and not retrieval-excluded by the session filter;
