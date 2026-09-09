@@ -39,7 +39,7 @@ describe('editFileTool cancellation handling', () => {
       userId: 'u1',
       user: {},
       logger,
-      db: { fabfiles: { findById: vi.fn(async () => FILE) } },
+      db: { fabfiles: { findByIdAndUserId: vi.fn(async () => FILE) } },
       llm: { complete },
       statusUpdate: vi.fn(),
       model: 'test-model',

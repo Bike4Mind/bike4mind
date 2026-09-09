@@ -21,13 +21,13 @@ describe('editFileTool malformed fileId handling', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  function makeContext(findById: ReturnType<typeof vi.fn>) {
+  function makeContext(findByIdAndUserId: ReturnType<typeof vi.fn>) {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     return {
       userId: 'u1',
       user: {},
       logger,
-      db: { fabfiles: { findById } },
+      db: { fabfiles: { findByIdAndUserId } },
       llm: { complete: vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined)) },
       statusUpdate: vi.fn(),
       model: 'test-model',
@@ -44,12 +44,12 @@ describe('editFileTool malformed fileId handling', () => {
     ['an id with the dot mangled to a space', '2506 07866'],
     ['a 23-hex near-miss', '68b0f3a2c1d4e5f6071829'],
   ])('rejects %s without querying for it', async (_label, fileId) => {
-    const findById = vi.fn();
-    const context = makeContext(findById);
+    const findByIdAndUserId = vi.fn();
+    const context = makeContext(findByIdAndUserId);
 
     await expect(run(context, fileId)).rejects.toThrow(`File with ID ${fileId} not found`);
     // The point of the guard: the value never reaches the `_id` cast that would throw a CastError.
-    expect(findById).not.toHaveBeenCalled();
+    expect(findByIdAndUserId).not.toHaveBeenCalled();
   });
 
   it('tells the model the same thing a well-formed id with no row behind it does', async () => {
@@ -70,17 +70,17 @@ describe('editFileTool malformed fileId handling', () => {
   // real ones included, fell through to the not-found above. Mock the key the hosts actually
   // wire (`fabfiles`) or this test pins the bug instead of the behaviour.
   it('reaches the repository for a well-formed id and goes on to edit', async () => {
-    const findById = vi.fn(async () => ({
+    const findByIdAndUserId = vi.fn(async () => ({
       fileName: 'a.txt',
       mimeType: 'text/plain',
       fileUrl: 'https://files.example/a.txt',
       moderationStatus: 'clean',
     }));
-    const context = makeContext(findById);
+    const context = makeContext(findByIdAndUserId);
 
     const result = await run(context, WELL_FORMED_FILE_ID);
 
-    expect(findById).toHaveBeenCalledWith(WELL_FORMED_FILE_ID);
+    expect(findByIdAndUserId).toHaveBeenCalledWith(WELL_FORMED_FILE_ID, 'u1');
     expect(JSON.stringify(result)).not.toMatch(/not found/);
   });
 });
