@@ -97,6 +97,7 @@ export * from './LakeConfigHistoryTypes';
 export * from './DataLakeSpendNotificationTypes';
 export * from './LakeAccessViewTypes';
 export * from './DataLakeProposalTypes';
+export * from './DataLakeResearchTypes';
 export * from './LakeMembershipDecisionTypes';
 export * from './SreTypes';
 export * from './SecopsTriageTypes';

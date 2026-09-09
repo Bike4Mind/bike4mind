@@ -171,3 +171,89 @@ describe('FabFileRepository.findDataLakeMembershipMembers', () => {
     expect(rows.map(r => r.userId).sort()).toEqual([CREATOR, 'someone-else']);
   });
 });
+
+describe('FabFileRepository.findLakeMemberSiblingsByFileName', () => {
+  const META = [{ name: 'datalake:acme', strength: 1 }];
+
+  it('returns the same-name members of the lake, excluding the candidate', async () => {
+    const candidate = await makeFile({ tags: META, createdAt: new Date('2026-03-01T00:00:00Z') });
+    const sibling = await makeFile({ tags: META, createdAt: new Date('2026-01-01T00:00:00Z') });
+    await makeFile({ tags: META, fileName: 'other.pdf' });
+
+    const rows = await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, 'report.pdf', candidate.id);
+
+    expect(rows.map(r => r.fabFileId)).toEqual([sibling.id]);
+  });
+
+  it('projects the identity signals the refinement reads', async () => {
+    // The whole point of the read: without these two the admission checkpoint silently falls to the
+    // bare file-name tier and stops distinguishing two same-named documents.
+    const candidate = await makeFile({ tags: META });
+    await makeFile({ tags: META, relativePath: 'docs/', driveFileId: 'd1' });
+
+    const [row] = await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, 'report.pdf', candidate.id);
+
+    expect(row.relativePath).toBe('docs/');
+    expect(row.driveFileId).toBe('d1');
+    // Absent is projected as null, not undefined - the pure grouping folds both, but the row type
+    // promises null.
+    expect(row.serverTextHash).toBeNull();
+    expect(row.fileSize).toBeNull();
+    expect(row.arm).toBe('meta-tag');
+  });
+
+  it('reaches prefix-only members, so a dynamic lake is not silently exempt', async () => {
+    const candidate = await makeFile({ tags: META });
+    const prefixOnly = await makeFile({ tags: [{ name: 'acme:legal', strength: 1 }] });
+
+    const rows = await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, 'report.pdf', candidate.id);
+
+    expect(rows.map(r => r.fabFileId)).toEqual([prefixOnly.id]);
+    expect(rows[0].arm).toBe('prefix');
+  });
+
+  it('excludes deleted, archived and still-pending rows', async () => {
+    const candidate = await makeFile({ tags: META });
+    await makeFile({ tags: META, deletedAt: new Date() });
+    await makeFile({ tags: META, archivedAt: new Date() });
+    await makeFile({ tags: META, status: 'pending' });
+
+    const rows = await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, 'report.pdf', candidate.id);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('never matches a member of a DIFFERENT lake', async () => {
+    const candidate = await makeFile({ tags: META });
+    await makeFile({ tags: [{ name: 'datalake:other', strength: 1 }] });
+
+    const rows = await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, 'report.pdf', candidate.id);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('returns nothing for an empty name, rather than scanning the lake', async () => {
+    const candidate = await makeFile({ tags: META });
+    await makeFile({ tags: META });
+
+    expect(await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, '', candidate.id)).toEqual([]);
+  });
+
+  it('returns nothing for an id that cannot address a row', async () => {
+    // Fail-safe: the alternative is skipping the exclusion and reporting the admitted member as its
+    // own duplicate.
+    await makeFile({ tags: META });
+
+    expect(await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, 'report.pdf', 'not-an-id')).toEqual([]);
+  });
+
+  it('keeps the NEWEST members when one name holds more copies than the bound', async () => {
+    const candidate = await makeFile({ tags: META, createdAt: new Date('2026-01-01T00:00:00Z') });
+    const newest = await makeFile({ tags: META, createdAt: new Date('2026-05-01T00:00:00Z') });
+    await makeFile({ tags: META, createdAt: new Date('2026-02-01T00:00:00Z') });
+
+    const rows = await fabFileRepository.findLakeMemberSiblingsByFileName(SCOPE, 'report.pdf', candidate.id, 1);
+
+    expect(rows.map(r => r.fabFileId)).toEqual([newest.id]);
+  });
+});

@@ -80,7 +80,8 @@ function makeReqRes() {
   const { req, res } = createMocks({
     method: 'GET',
     query: { state: STATE, code: CODE },
-    headers: { host: 'localhost:3000', 'user-agent': 'vitest' },
+    // PKCE verifier now rides a browser-bound cookie, not the state token.
+    headers: { host: 'localhost:3000', 'user-agent': 'vitest', cookie: 'b4m_okta_pkce=pkce-verifier' },
     url: '/api/auth/okta/callback',
   });
   return { req: req as any, res: res as any };
@@ -101,7 +102,7 @@ beforeEach(() => {
 
   mockVerifyState.mockReturnValue({
     valid: true,
-    payload: { idpId: 'idp-1', codeVerifier: 'pkce-verifier' },
+    payload: { idpId: 'idp-1' },
   });
   mockGetConfig.mockResolvedValue({
     config: { issuer: 'https://okta.example.com' },

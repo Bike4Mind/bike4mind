@@ -55,6 +55,27 @@ export function isLakeCreator(
 }
 
 /**
+ * May this actor DESTROY the lake's memory profile? Deliberately NARROWER than `canManageLake`.
+ *
+ * Reading a lake is org-shared and managing one is grant-aware, but an irreversible crypto-shred of
+ * what the whole org reads is creator-or-platform-admin only. No grants and no org rung: a curator or
+ * org admin may build the profile and may not erase it.
+ *
+ * Named and exported so the API gate and the UI's button flag consult ONE predicate. They were two
+ * open-coded expressions - the button rendered on the grant-aware `canManage` while the endpoint
+ * called `canManageLake` with neither grants nor `organizationId`, which silently reduces it to this
+ * - so curator-grant holders, org admins and transferred owners were all offered a button the
+ * endpoint answered with a 403.
+ */
+export function canShredLakeMemory(
+  lake: Pick<IDataLakeDocument, 'createdByUserId'>,
+  actor: Pick<ManageActor, 'userId' | 'isAdmin'>
+): boolean {
+  if (actor.isAdmin) return true;
+  return isLakeCreator(lake, actor);
+}
+
+/**
  * The lake's EFFECTIVE owner ids: the holders of an `owner`-role USER grant if any exist, otherwise
  * the immutable creator. This is the one place "who owns this lake" is resolved, so a transfer
  * (which upserts an owner grant) supersedes the creator everywhere without ever mutating

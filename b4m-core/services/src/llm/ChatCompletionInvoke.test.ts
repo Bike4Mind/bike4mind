@@ -20,12 +20,16 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
   let mockDb: any;
   const OWNER_ID = 'owner-1';
   const SHAREE_ID = 'sharee-1';
+  const EDITOR_ID = 'editor-1';
   const ATTACKER_ID = 'attacker-1';
 
   const session = {
     id: 'session-1',
     userId: OWNER_ID,
-    users: [{ userId: SHAREE_ID }],
+    users: [
+      { userId: SHAREE_ID, permissions: ['read'] },
+      { userId: EDITOR_ID, permissions: ['read', 'update'] },
+    ],
     agentIds: [],
   };
 
@@ -74,8 +78,17 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     await expect(invoke.invoke({ body, userId: OWNER_ID })).rejects.toThrow(/Invalid model/);
   });
 
-  it('lets a session sharee (in session.users) past the access check', async () => {
+  it('rejects a read-only sharee, who must not drive a completion that writes to the notebook', async () => {
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body, userId: SHAREE_ID })).rejects.toThrow(/Invalid model/);
+    await expect(invoke.invoke({ body, userId: SHAREE_ID })).rejects.toThrow(/access/i);
+
+    expect(mockedGetAvailableModels).not.toHaveBeenCalled();
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+    expect(mockDb.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a sharee holding update past the access check', async () => {
+    const invoke = makeInvoke();
+    await expect(invoke.invoke({ body, userId: EDITOR_ID })).rejects.toThrow(/Invalid model/);
   });
 });

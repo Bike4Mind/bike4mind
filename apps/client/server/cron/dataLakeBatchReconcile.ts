@@ -45,6 +45,16 @@ const MAX_PER_RUN = 500;
 const CHUNK_RESCUE_MAX_PER_RUN = 500;
 
 /**
+ * How many stranded-vectorize sends are in flight at once, matching the bound the un-chunked sweep
+ * and driveLakeResyncPoll already use. sendToQueue builds a fresh SQSClient per call
+ * (server/utils/sqs.ts), so its retry token bucket never throttles down across the loop and every
+ * failed send pays its full attempt budget with no back-off. Run one-at-a-time against a degraded
+ * queue, CHUNK_RESCUE_MAX_PER_RUN of those is a wall-clock cost this handler cannot absorb - it is
+ * the LAST of three sweeps in one 10-minute Lambda, so the tail is what gets cut off.
+ */
+const ENQUEUE_CONCURRENCY = 10;
+
+/**
  * Hosted counterpart of the same second pass in the self-host worker's fabFileChunkScan: files
  * whose chunks were committed but whose vectorize hand-off failed. Re-enqueueing a chunk message
  * resumes only the fan-out (see buildStrandedVectorizeScanFilter and fabFileChunk.ts) - it never
@@ -59,13 +69,16 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
-  // Per-send catch, not a bare sequential loop: one throttled or unroutable send must cost only
-  // itself, not abandon every candidate behind it (the same lesson driveLakeResyncPoll learned). A
-  // recovery sweep is the worst place for that, since it runs precisely when the queue is under the
-  // stress that makes a transient send failure likely. Returns the SENT count so a partially-failing
-  // tick is distinguishable from a clean one in the log.
+  // Bounded-concurrency fan-out with a PER-FILE catch: one throttled or unroutable send must cost
+  // only itself, not abandon every candidate behind it (the same lesson driveLakeResyncPoll
+  // learned). A recovery sweep is the worst place for that, since it runs precisely when the queue
+  // is under the stress that makes a transient send failure likely - which is also why the sends
+  // are bounded rather than sequential, see ENQUEUE_CONCURRENCY. Returns the SENT count so a
+  // partially-failing run is distinguishable from a clean one in the log.
+  // Read the queue URL once: an unlinked-resource fault is one config error, not a log per file.
+  const queueUrl = Resource.fabFileChunkQueue.url;
   let sent = 0;
-  for (const file of candidates) {
+  const sendOne = async (file: (typeof candidates)[number]) => {
     try {
       // Deliberately UNSTAMPED, unlike the un-chunked sweep above (#2309): these files are already
       // chunked, and the handler's halt branch (fabFileChunk.ts, isConvergenceHalted) runs ABOVE the
@@ -78,7 +91,7 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
       // no chunks to damage; this filter has no paused-file exclusion, which is what would make the
       // re-fire unbounded rather than one-shot. Finishing an already-committed hand-off is not the
       // background work the kill switch exists to stop.
-      await sendToQueue(Resource.fabFileChunkQueue.url, {
+      await sendToQueue(queueUrl, {
         fabFileId: String(file._id),
         userId: String(file.userId),
       });
@@ -86,6 +99,9 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
     } catch (err) {
       logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue send failed for ${file._id}: ${err}`);
     }
+  };
+  for (let i = 0; i < candidates.length; i += ENQUEUE_CONCURRENCY) {
+    await Promise.all(candidates.slice(i, i + ENQUEUE_CONCURRENCY).map(file => sendOne(file)));
   }
   return sent;
 }

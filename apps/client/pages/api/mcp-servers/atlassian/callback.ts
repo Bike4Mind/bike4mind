@@ -3,6 +3,7 @@ import { userRepository } from '@bike4mind/database';
 import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConfig';
 import { Config } from '@server/utils/config';
 import crypto from 'crypto';
+import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { encryptToken } from '@server/security/tokenEncryption';
 
@@ -40,6 +41,9 @@ interface ResourceResponse {
 const handler = baseApi({ auth: false }).get(async (req, res) => {
   const { code, state } = req.query;
 
+  // Burn the browser-binding nonce cookie on every exit path.
+  clearStateNonce(res);
+
   const auditLogger = IntegrationAuditLogger.create(
     {
       entityType: 'oauth',
@@ -67,6 +71,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   let csrfToken: string;
   let timestamp: number;
   let signature: string;
+  let nonceHash: string;
 
   try {
     const stateData = JSON.parse(decodeURIComponent(state));
@@ -74,8 +79,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     csrfToken = stateData.csrfToken;
     timestamp = stateData.timestamp;
     signature = stateData.signature;
+    nonceHash = stateData.nonceHash;
 
-    if (!userId || !csrfToken || !timestamp || !signature) {
+    if (!userId || !csrfToken || !timestamp || !signature || !nonceHash) {
       throw new Error('Missing required state parameters');
     }
   } catch (parseError) {
@@ -94,12 +100,35 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
   const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(`${userId}:${csrfToken}:${timestamp}`);
+  hmac.update(`${userId}:${csrfToken}:${timestamp}:${nonceHash}`);
   const expectedSignature = hmac.digest('hex');
 
   if (signature !== expectedSignature) {
     console.error('❌ CSRF signature validation failed');
     auditLogger.failure('csrf_signature_invalid');
+    return res.redirect('/profile?tab=integrations&atlassian=error');
+  }
+
+  // Idempotency, deliberately ABOVE the browser-binding gate: the first callback burns the nonce
+  // cookie, so a refresh or Back through this handler (which sets no no-store) arrives with no
+  // cookie and would otherwise be reported as a session_mismatch failure for a link that is live.
+  // Safe at this position because the signature check above already proves the state is one we
+  // issued for this userId, and this branch exchanges nothing, mutates nothing and grants nothing -
+  // it only restates a connection the caller's own state names.
+  const existingUser = await userRepository.findById(userId);
+  if (existingUser?.atlassianConnect?.status === 'connected') {
+    console.log('✅ User already has valid Atlassian connection, skipping token exchange');
+    auditLogger.success({ isDuplicate: true });
+    return res.redirect('/profile?tab=integrations&atlassian=connected');
+  }
+
+  // Browser-binding: the shared nonce cookie set at connect time must match the
+  // (signed) hash in the state, proving the same browser is completing the flow.
+  // Fails closed - a missing or mismatched cookie is rejected.
+  const presentedNonceHash = readStateNonceHash(req);
+  if (!presentedNonceHash || presentedNonceHash !== nonceHash) {
+    console.error('❌ Browser-binding nonce validation failed');
+    auditLogger.failure('session_mismatch');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
 
@@ -115,14 +144,6 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     console.error('❌ CSRF token timestamp is in the future');
     auditLogger.failure('csrf_token_future');
     return res.redirect('/profile?tab=integrations&atlassian=error');
-  }
-
-  // Idempotency check: avoid re-running token exchange if the callback fires more than once
-  const existingUser = await userRepository.findById(userId);
-  if (existingUser?.atlassianConnect?.status === 'connected') {
-    console.log('✅ User already has valid Atlassian connection, skipping token exchange');
-    auditLogger.success({ isDuplicate: true });
-    return res.redirect('/profile?tab=integrations&atlassian=connected');
   }
 
   const { clientId, clientSecret, redirectUri } = await getAtlassianOAuthConfig();

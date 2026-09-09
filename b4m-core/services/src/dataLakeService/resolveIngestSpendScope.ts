@@ -1,4 +1,5 @@
 import type { IDataLakeBatchRepository, IDataLakeRepository } from '@bike4mind/common';
+import { DATA_LAKES, matchesTagPrefixArm } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { findMemberLakesForFile, type ChunkPolicyFile } from './chunkPolicyConflict';
 import { extractDataLakeMetaTags, isStaticRegistryDatalakeTag } from './authorizeLakeWrite';
@@ -35,11 +36,13 @@ export interface IngestSpendScope {
  * why findMemberLakesForFile drops their meta-tags - a filter that exists there so a documentless
  * lake cannot be asked to declare a chunk policy, and which would silently read as "not lake work"
  * here. But Rebuild Passages does run over them (assertLakeRebuildAccess is deliberately the one
- * file-level lake write that needs no lake document), and their members are stamped with the
- * meta-tag and no batchId, so this is precisely the bulk-door-over-tagged-population case the
- * throughput cap exists for. Returning an empty scope puts those calls under the platform-wide
- * throughput and period windows while leaving the run and lake meters alone - correct rather than
- * merely convenient, since neither has anywhere to write for a lake that does not exist.
+ * file-level lake write that needs no lake document), and their members carry no batchId, so this
+ * is precisely the bulk-door-over-tagged-population case the throughput cap exists for. BOTH of
+ * their membership arms count: the `datalake:<slug>` meta-tag and a tag under the registry
+ * `fileTagPrefix` - the latter is most of such a lake, and no batch or meta-tag signal reaches it.
+ * Returning an empty scope puts those calls under the platform-wide throughput and period windows
+ * while leaving the run and lake meters alone - correct rather than merely convenient, since
+ * neither has anywhere to write for a lake that does not exist.
  *
  * Deliberately does NOT catch a failed lakes read. An unreadable membership is UNKNOWN, and
  * treating unknown as "not lake work" would route the call around the throughput cap and every
@@ -65,13 +68,20 @@ export async function resolveIngestSpendScope(
 
   const memberLakes = await findMemberLakesForFile(file, db.dataLakes);
   if (memberLakes.length === 0) {
-    // No DB-backed lake. Before calling this "not lake work", check the one membership signal
+    // No DB-backed lake. Before calling this "not lake work", check the membership signals
     // findMemberLakesForFile is built to discard (see the doc comment above).
     const tagNames = (file.tags ?? []).map(t => t?.name);
-    const staticTags = extractDataLakeMetaTags(tagNames).filter(isStaticRegistryDatalakeTag);
-    if (staticTags.length > 0) {
+    const staticTag = extractDataLakeMetaTags(tagNames).filter(isStaticRegistryDatalakeTag)[0];
+    // The prefix arm, matched against the COMPILE-TIME registry so this costs no lakes read and the
+    // zero-reads property above survives. No ownership conjunct, mirroring `registryMembershipScope`
+    // - a registry prefix is config rather than a user-chosen tag, so there is no creator to anchor
+    // to. Reaching this arm is what keeps the rebuild door's members metered now that it selects
+    // them (`resolveLakeMembershipScope`); meta-tag-only here left most of the wave unmetered.
+    const prefixArmLake = DATA_LAKES.find(config => matchesTagPrefixArm(tagNames, config.fileTagPrefix));
+    if (staticTag || prefixArmLake) {
       logger?.log?.(
-        `[spendGate] file ${file.id} is a static-registry lake member (${staticTags[0]}); metering platform windows only`
+        `[spendGate] file ${file.id} is a static-registry lake member ` +
+          `(${staticTag ?? prefixArmLake?.fileTagPrefix}); metering platform windows only`
       );
       return {};
     }

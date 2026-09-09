@@ -1287,3 +1287,79 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
     expect(record).toHaveBeenCalled();
   });
 });
+
+/**
+ * This channel returns whole documents the caller named, so a conflict here is lower-signal than on
+ * the ranked paths - but two explicitly-requested documents disagreeing is still a disagreement the
+ * user should hear. The note is composed by retrievalConflictNote.ts (unit-tested there); this locks
+ * the WIRING and the column-0 placement.
+ */
+describe('retrieve_knowledge_content cross-document conflict note', () => {
+  const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
+  /** Per-file chunk text, unlike pagedTextChunkRepo above, which serves one document. */
+  function multiFileChunkRepo(byFileId: Record<string, string>) {
+    return {
+      findTextsByFabFileId: vi.fn(async (id: string, opts?: { afterChunkId?: string }) =>
+        opts?.afterChunkId ? [] : [{ id: `${id}-c1`, text: byFileId[id] ?? '' }]
+      ),
+      countByFabFileId: vi.fn(async () => 1),
+    };
+  }
+
+  async function runQuery(byFileId: Record<string, string>) {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() },
+        fabfilechunks: multiFileChunkRepo(byFileId),
+      } as never,
+    });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: Object.keys(byFileId).map(id => makeFile({ id, fileName: `${id}.pdf` })),
+    });
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    return (await tool.toolFn({ query: 'uptime' })) as string;
+  }
+
+  it('keeps the note at column 0, outside the untrusted block', async () => {
+    const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });
+
+    const note = out.indexOf(CONFLICT_NOTE);
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(note).toBeLessThan(out.indexOf(BEGIN));
+    // Last of our column-0 framing, nearest the content it describes - as the source comment claims
+    // and as the other two channels already pin.
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(note);
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the
+    // `### ... (ID: ...)` headings, so a looser assertion would pass on a note naming the wrong
+    // field entirely - this channel's chunk ids are `${file.id}-c1`.
+    const noteText = out.slice(note, out.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement');
+    expect(noteText).toContain('across documents file-a, file-b.');
+    expect(out).toContain('(ID: file-a)');
+  });
+
+  it('says nothing when the documents agree', async () => {
+    const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 99.9%.' });
+
+    expect(out).not.toContain(CONFLICT_NOTE);
+  });
+
+  // The note must describe the SERVED text. The char budget is spent across files in key order, so
+  // file-a arrives whole and file-b's figure is past the cut - a note naming it would be a claim
+  // about content the model cannot check.
+  it('says nothing about a conflicting figure the char budget clipped away', async () => {
+    const out = await runQuery({
+      'file-a': 'Uptime is 99.9%.',
+      'file-b': `${'padding text. '.repeat(1000)} Uptime is 95%.`,
+    });
+
+    // Both halves matter: the first proves the padding actually reached the budget (without it the
+    // test passes on a fixture that was never clipped), the second that the surviving half is served.
+    expect(out).not.toContain('Uptime is 95%.');
+    expect(out).toContain('Uptime is 99.9%.');
+    expect(out).not.toContain(CONFLICT_NOTE);
+  });
+});

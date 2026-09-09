@@ -28,8 +28,8 @@ import {
   skillRepository,
   usageEventRepository,
   userRepository,
-  dataLakeRepository,
   dataLakeAccessGrantRepository,
+  dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
 import {

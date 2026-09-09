@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import bcrypt from 'bcryptjs';
 
 /**
  * Generate 8-character user code (base32, no confusing characters)
@@ -12,7 +11,8 @@ export function generateUserCode(): string {
 
   for (let i = 0; i < 8; i++) {
     if (i === 4) code += '-'; // Add separator
-    code += charset[Math.floor(Math.random() * charset.length)];
+    // crypto.randomInt is a CSPRNG; Math.random is predictable and must never mint a credential.
+    code += charset[crypto.randomInt(charset.length)];
   }
 
   return code;
@@ -23,11 +23,4 @@ export function generateUserCode(): string {
  */
 export function generateDeviceCode(): string {
   return crypto.randomBytes(64).toString('hex');
-}
-
-/**
- * Hash device code for secure storage
- */
-export async function hashDeviceCode(deviceCode: string): Promise<string> {
-  return bcrypt.hash(deviceCode, 10);
 }

@@ -75,6 +75,15 @@ const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 // duplicate the tail, so this buffer is the thing that actually keeps a large folder converging.
 const INGEST_DEADLINE_BUFFER_MS = 90_000;
 
+// Wait before the continuation slice when Drive throttled this one. The jitter is what makes it
+// shedding rather than a reschedule: several connections poll on the same tick against ONE Drive
+// project quota, so a fixed delay would just re-collide them at the new time. Per-call retry inside
+// each Drive call site is separate hardening (#2395); this is the amount the deferral itself needs.
+const INGEST_RATE_LIMIT_DELAY_SECONDS = 60;
+const INGEST_RATE_LIMIT_JITTER_SECONDS = 30;
+const rateLimitBackoffSeconds = () =>
+  INGEST_RATE_LIMIT_DELAY_SECONDS + Math.floor(Math.random() * INGEST_RATE_LIMIT_JITTER_SECONDS);
+
 // Wall-clock budget when the caller cannot supply the Lambda's real remaining time (tests, the
 // self-host worker, any non-Lambda host). Keeps the guard active by default rather than silently
 // absent. Mirrors extractLakeMemory's DEFAULT_RUN_BUDGET_MS, against the same 10-minute ceiling.
@@ -205,14 +214,22 @@ export function hasDriveFileChanged(
  * vectorizedFiles never increments and the batch never crosses its finalize threshold. Hence the
  * per-file `appendFiles` AHEAD of `storage.upload`, not a single append after the loop.
  *
- * totalFiles is seeded with the candidate count (adds + re-ingests); a skip (oversized / unsupported
- * / transient fetch error) is folded into `skippedFiles` as it happens, so `vectorized + failed +
- * skipped` still reaches totalFiles exactly (finalizeBatchIfComplete's gate) without the ingestable
- * count being known up front. Removals happen outside the batch (immediate lake-membership pulls).
+ * totalFiles is seeded with the candidate count (adds + re-ingests); a PERMANENT skip (oversized,
+ * unsupported, a fetch that failed for this file's own sake) is folded into `skippedFiles` as it
+ * happens, so `vectorized + failed + skipped` still reaches totalFiles exactly
+ * (finalizeBatchIfComplete's gate) without the ingestable count being known up front. Removals happen
+ * outside the batch (immediate lake-membership pulls).
+ *
+ * A Drive RATE LIMIT is deliberately not one of those. recordSkippedDriveFile is idempotent per chain,
+ * so a skip is subtracted from every later slice's walk - recording a throttle as one drops the file
+ * from the lake for good while the batch still finalizes clean, which is a silently incomplete lake
+ * behind a green dashboard (#2394). It takes the deferral path below instead.
  *
  * A folder too large for one invocation ingests across SEVERAL, as a chain of slices. The loop yields
- * on the Lambda deadline (INGEST_DEADLINE_BUFFER_MS) rather than being killed, then re-enqueues itself
- * carrying the batch it was filling. Three things make that converge where a plain SQS retry did not:
+ * on the Lambda deadline (INGEST_DEADLINE_BUFFER_MS) rather than being killed - or on a Drive rate
+ * limit, which additionally delays the continuation so the next slice is not hammering the same
+ * exhausted quota - then re-enqueues itself carrying the batch it was filling. Three things make
+ * that converge where a plain SQS retry did not:
  *
  *   - The next slice ADOPTS the batch instead of creating one, and subtracts the Drive ids that batch
  *     has already UPLOADED or permanently skipped a FabFile for (findDriveFileIdsByBatchId,
@@ -231,7 +248,10 @@ export function hasDriveFileChanged(
  *     interval is its queue wait, not its run length.
  *   - `totalFiles` is re-planned as the chain goes (raised when a later walk finds more, set exactly
  *     when the chain ends), so the finalize gate is still reached exactly and the batch never settles
- *     mid-chain or strands in `processing` afterwards.
+ *     mid-chain or strands in `processing` afterwards. That final set is a NARROWING, so the same
+ *     settle records the shortfall it just wrote off as `deferredFiles` - otherwise a chain that
+ *     ingested 3 of 500 files finalizes as a clean 3-of-3, and the only account of the other 497 is a
+ *     connection field the next sync overwrites (#2394).
  *
  * A throw part-way through a CONTINUATION slice is rethrown for SQS retry as before, and that retry
  * redelivers the same message - resumeBatchId included - so it adopts the batch and resumes instead of
@@ -288,10 +308,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // handler's own skip() (drive-side: oversized/unsupported/fetch-failed) mints no manifest entry
       // at all, so those are the only skippedFiles that need adding back in.
       const produced = (current.files?.filter(f => f.status !== 'skipped').length ?? 0) + (current.skippedFiles ?? 0);
+      // What the chain PLANNED minus what it produced is exactly the work it gave up on, and it is
+      // derivable here at every exit - including the ones that cannot know a count (a continuation whose
+      // connection or lake was deleted mid-chain settles a batch it never got to walk). Recording it is
+      // what keeps the re-plan below honest: dropping totalFiles to `produced` is what lets the finalize
+      // gate be reached at all, but on its own it rewrites a chain that ingested 3 of 500 files into a
+      // clean 3-of-3 success, and in the degenerate case (throttled before the first file on every
+      // slice) into an empty folder. `max` because a mid-chain walk that finds MORE files raises the
+      // plan, never lowers it, so produced can never legitimately exceed it.
+      const deferredFiles = Math.max(0, current.totalFiles - produced);
       const settled =
         produced === current.totalFiles
           ? current
-          : await dataLakeBatchRepository.setTotalFilesIfActive(batchId, produced);
+          : await dataLakeBatchRepository.setTotalFilesIfActive(batchId, produced, deferredFiles);
       await finalizeBatchIfComplete(settled ?? current, logger);
     };
 
@@ -861,6 +890,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           failedFiles: 0,
           processingFailedFiles: 0,
           skippedFiles: 0,
+          deferredFiles: 0,
           uploadedSizeBytes: 0,
           files: [],
           appliedTags: [],
@@ -900,6 +930,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
       //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
       let deferred = 0;
+      // Set when Drive throttled this slice, which changes both the continuation's delay and the
+      // message the operator sees if the chain runs out of slices still throttled.
+      let rateLimited = false;
       for (const [index, file] of candidates.entries()) {
         // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
         // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
@@ -922,6 +955,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
         const result = await fetchDriveFileContent(drive, file);
         if (!result.ok) {
+          // A throttle is transient, so it must never become a permanent skip (see header). Yield the
+          // whole remainder rather than just this file: the next candidates would hit the same
+          // exhausted quota, and deferred candidates are re-walked by the continuation, so they stay
+          // in play and the batch cannot finalize as a clean success without them.
+          if (result.reason === 'rate_limited') {
+            rateLimited = true;
+            deferred = candidates.length - index;
+            logger.warn('[driveLakeIngest] Drive rate-limited a content fetch; deferring the rest of the slice', {
+              connectionId,
+              batchId: batch.id,
+              driveFileId: file.id,
+              slice,
+              deferred,
+              detail: result.detail,
+            });
+            break;
+          }
           await skip(file.id, result.reason);
           continue;
         }
@@ -1002,13 +1052,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         uploaded,
         skipped,
         deferred,
+        rateLimited,
         retired,
       });
 
-      // 7) Out of time with files left: hand the claim and the batch to another slice rather than
-      //    finishing here. The claim is renewed (never released) so the connection stays 'syncing' and
-      //    no poll can start a competing walk in the gap, and the batch stays open so the next slice
-      //    appends to it instead of starting a second one.
+      // 7) Files left over (out of time, or Drive throttling us): hand the claim and the batch to
+      //    another slice rather than finishing here. The claim is renewed (never released) so the
+      //    connection stays 'syncing' and no poll can start a competing walk in the gap, and the batch
+      //    stays open so the next slice appends to it instead of starting a second one.
       if (deferred > 0 && slice + 1 < MAX_INGEST_SLICES) {
         const renewedToken = await orgGoogleDriveConnectionRepository.renewSyncClaim(
           connectionId,
@@ -1021,20 +1072,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           // holds, and releasing on a superseded token is a silent no-op that would strand the
           // connection at 'syncing' with no continuation ever enqueued.
           ingestClaimToken = renewedToken;
-          await sendToQueue(Resource.driveLakeIngestQueue.url, {
-            connectionId,
-            resumeBatchId: batch.id,
-            slice: slice + 1,
-            claimToken: renewedToken,
-          });
+          // Spread rather than passing `undefined`: the deadline yield wants SQS's own immediate
+          // delivery, and only a throttled slice asks for a delay.
+          const backoff: [number] | [] = rateLimited ? [rateLimitBackoffSeconds()] : [];
+          await sendToQueue(
+            Resource.driveLakeIngestQueue.url,
+            {
+              connectionId,
+              resumeBatchId: batch.id,
+              slice: slice + 1,
+              claimToken: renewedToken,
+            },
+            ...backoff
+          );
           // Handed off: the continuation owns the claim from here, so a later throw (the `finally`
           // below) must NOT release it out from under that slice.
           ingestClaimToken = undefined;
-          logger.info('[driveLakeIngest] out of time; enqueued continuation slice', {
+          logger.info('[driveLakeIngest] enqueued continuation slice', {
             connectionId,
             batchId: batch.id,
             slice: slice + 1,
             deferred,
+            rateLimited,
+            delaySeconds: backoff[0],
           });
           // Deliberately NOT releasing the claim, and NOT finalizing: the chain owns both until it ends.
           return;
@@ -1063,6 +1123,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           batchId: batch.id,
           slice,
           deferred,
+          rateLimited,
           maxSlices: MAX_INGEST_SLICES,
         });
       }
@@ -1075,11 +1136,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       if (adoptedBatch || deferred > 0) await settleChainedBatch(batch.id);
       else await finalizeBatchIfComplete(await dataLakeBatchRepository.findById(batch.id), logger);
 
-      await releaseClaim(
-        deferred > 0
-          ? `Sync stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files left. The next scheduled poll continues from here; split very large folders into subfolders to converge faster.`
-          : null
-      );
+      // The one operator-visible account of a chain that stopped short, so it has to name the actual
+      // cause: "split the folder up" is wrong (and unactionable) advice for a quota problem.
+      const stoppedShort =
+        deferred === 0
+          ? null
+          : rateLimited
+            ? `Google Drive is rate-limiting this sync, and it stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files still to ingest. Those files are NOT in the lake yet. The next scheduled poll retries them; if it keeps happening, sync fewer folders on the same schedule.`
+            : `Sync stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files left. The next scheduled poll continues from here; split very large folders into subfolders to converge faster.`;
+      await releaseClaim(stoppedShort);
     } finally {
       await flushReclaimedStorage();
 

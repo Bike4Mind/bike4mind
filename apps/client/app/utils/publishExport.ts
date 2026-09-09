@@ -8,11 +8,12 @@
  * data helpers with no imports beyond the escaper - the serve surfaces run under
  * `script-src 'none'`, so anything here must work with zero JS.
  *
- * PDF is not a server `?export=` format: it is produced client-side on the owner
- * path (the Published tab) by printing the HTML export from an isolated sandboxed
- * frame - see printToPdf.ts. The CSP-locked viewer footers still cannot offer it
- * (the reply/fabfile page is served `script-src 'none'`, and the bundle wrapper's
- * script-src admits only the comment widget), so PDF stays owner-only.
+ * PDF is not a server `?export=` format: it is always produced client-side by the
+ * browser's print dialog. Two paths, neither of them a footer link here - the owner
+ * path prints a fresh render of the HTML export from an isolated sandboxed frame (see
+ * printToPdf.ts), and the public bundle wrapper prints the artifact frame in place via
+ * the first-party widget (pages/api/publish/widget.ts). The reply/fabfile footers still
+ * cannot offer PDF at all: that page is served `script-src 'none'`.
  */
 
 import { escapeAttr } from './htmlEscape';
