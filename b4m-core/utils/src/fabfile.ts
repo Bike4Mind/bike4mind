@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { IFabFile, IFabFileVersion, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import axios from 'axios';
 import { BadRequestError, CorruptedFileError } from './errors';
@@ -163,6 +164,15 @@ export const getFileContent = async (
 
   return content;
 };
+
+/**
+ * Content hash for per-lake FabFile dedup (`findByContentHashesInDataLake`). Shared by every
+ * ingest path that needs to hash bytes before creating a FabFile - the Slack attachment path
+ * (raw downloaded buffer) and the URL/link path (`fetchAndParseURL`'s extracted `textContent`) -
+ * so the two cannot compute the same thing two different ways.
+ */
+export const computeContentHash = (content: string | Buffer): string =>
+  createHash('sha256').update(content).digest('hex');
 
 /** The next 1-based version number given the existing (possibly absent) version history. */
 export const nextVersionNumber = (versions?: Pick<IFabFileVersion, 'version'>[]): number => {
