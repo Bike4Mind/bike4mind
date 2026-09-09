@@ -142,7 +142,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     // hasMore drives the handler's re-enqueue. A purged lake that still asked for a continuation would
     // keep billing LLM work to rebuild exactly what was just erased.
     seedLake(10);
-    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: purgedNow() });
+    getLakeMemoryFenceMock.mockImplementation(async () => ({ exists: true, purgedAt: purgedNow() }));
 
     const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
 
@@ -329,7 +329,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     // The lease is deliberately NOT cleared by the purge itself, precisely so this run releases it -
     // otherwise a post-purge rebuild would 409 until the lease aged out.
     seedLake(10);
-    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: purgedNow() });
+    getLakeMemoryFenceMock.mockImplementation(async () => ({ exists: true, purgedAt: purgedNow() }));
 
     await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
 
