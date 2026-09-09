@@ -38,8 +38,11 @@ import { getFilesStorage } from '@server/utils/storage';
  * candidate already passed through the acquisition queue's own dedup, keyed on canonical source
  * identity (`proposeDataLakeContent.ts`'s `canonicalSourceKey`), before a human ever approved it.
  * A second, content-hash-keyed check here would be redundant at best and could refuse an approval
- * the queue already decided was distinct. `createFabFileByUrl` still stamps `contentHash`
- * unconditionally (as of #2027) even without `checkDuplicate` wired - it is just never CHECKED here.
+ * the queue already decided was distinct. Since this door supplies no `checkDuplicate`,
+ * `createFabFileByUrl` does not stamp `contentHash` on rows created here either - deliberately, not
+ * just an absence of checking: `contentHash` also drives `unarchiveDataLake`'s hard-delete dedup
+ * pass, and a proposal-admitted row should not be exposed to that on a text-hash collision it never
+ * opted into.
  */
 export function admitProposedSource(
   actor: AccessContext,
