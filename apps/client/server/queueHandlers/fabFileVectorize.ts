@@ -1,4 +1,4 @@
-import { SupportedEmbeddingModelSchema } from '@bike4mind/common';
+import { FabFileSourceType, SupportedEmbeddingModelSchema } from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -520,15 +520,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // must never fail or retry vectorization, which already persisted vectorized:true. Claimed
       // BEFORE sending, unlike the websocket push above: a redelivered or concurrent completion
       // message for this file must post the "finished indexing" reply at most once, not every time.
-      try {
-        const claimedSlackNotification = await fabFileRepository.claimSlackIndexNotification(fabFileId);
-        if (claimedSlackNotification) {
-          await notifySlackIndexingComplete(fabFile, logger).catch(err =>
-            logger.error(`Error sending the Slack indexing-complete notification for ${fabFileId}: ${err}`)
-          );
+      // Gated on sourceType up front: notifySlackIndexingComplete no-ops for non-Slack files anyway,
+      // and sourceType/sourceMetadata/tags never change during vectorization, so existingFabFile
+      // (fetched once, above) is used instead of the fabFile re-fetched for the chunkCount rollup.
+      if (existingFabFile.sourceType === FabFileSourceType.SLACK) {
+        try {
+          const claimedSlackNotification = await fabFileRepository.claimSlackIndexNotification(fabFileId);
+          if (claimedSlackNotification) {
+            await notifySlackIndexingComplete(existingFabFile, logger).catch(err =>
+              logger.error(`Error sending the Slack indexing-complete notification for ${fabFileId}: ${err}`)
+            );
+          }
+        } catch (err) {
+          logger.error(`Error claiming the Slack indexing-complete notification for ${fabFileId}: ${err}`);
         }
-      } catch (err) {
-        logger.error(`Error claiming the Slack indexing-complete notification for ${fabFileId}: ${err}`);
       }
 
       // Track batch progress if file belongs to a data lake batch.
