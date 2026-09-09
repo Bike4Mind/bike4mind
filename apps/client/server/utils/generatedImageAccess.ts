@@ -17,6 +17,8 @@ export async function userCanAccessGeneratedImage(imageKey: string, userId: stri
   if (!imageKey || !userId) return false;
   const sessionIds = await questRepository.findSessionIdsByImage(imageKey);
   if (sessionIds.length === 0) return false;
-  const sessions = await sessionRepository.findAllByIds(sessionIds);
+  // includeDeleted mirrors findSessionIdsByImage: a key from a soft-deleted quest or session still
+  // belongs to that session's owner, so the owner must not lose access to their own image.
+  const sessions = await sessionRepository.findAllByIds(sessionIds, { includeDeleted: true });
   return sessions.some(session => session.userId === userId || session.users?.some(share => share.userId === userId));
 }
