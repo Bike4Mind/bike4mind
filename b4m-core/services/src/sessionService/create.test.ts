@@ -51,12 +51,13 @@ describe('createSession - agent object-level authz', () => {
     expect(create.mock.calls[0][0].agentIds).toEqual([OWN_AGENT]);
   });
 
-  it('keeps a group-shared agent (no over-denial)', async () => {
+  it('keeps a group-shared agent (no over-denial) while dropping a foreign one beside it', async () => {
     // findAllAccessibleByIds honors owner + user-shares + group-shares, so a group-shared
-    // agent the caller does not own still resolves and is attached.
+    // agent the caller does not own still resolves and is attached; a foreign id supplied
+    // alongside it is filtered out.
     const { create, adapters } = makeAdapters([GROUP_SHARED_AGENT]);
 
-    await createSession(user, { name: 'S', agentIds: [GROUP_SHARED_AGENT] }, adapters);
+    await createSession(user, { name: 'S', agentIds: [GROUP_SHARED_AGENT, VICTIM_AGENT] }, adapters);
 
     expect(create.mock.calls[0][0].agentIds).toEqual([GROUP_SHARED_AGENT]);
   });
@@ -93,6 +94,7 @@ describe('createSession lake-scope derivation', () => {
           sessions: { create: vi.fn(async (d: unknown) => ({ id: 's1', ...(d as object) })) },
           projects: {} as never,
           fabFiles: { shareable: { findAllAccessibleByIds } } as never,
+          agents: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } } as never,
         },
       },
       findAllAccessibleByIds,

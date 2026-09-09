@@ -240,8 +240,8 @@ const handler = baseApi()
 
           for (const [charId, agentId] of Object.entries(agentIds)) {
             try {
-              // Object-level authz: only append memory to agents the caller can access
-              const agent = await agentRepository.shareable.findAccessibleById(req.user, agentId as string);
+              // Object-level authz: appending memory is a write, so require update access
+              const agent = await agentRepository.shareable.findUpdateAccessById(req.user, agentId as string);
               if (!agent) continue;
               const char = (characters as { id: string; name: string; personality: string }[]).find(
                 c => c.id === charId

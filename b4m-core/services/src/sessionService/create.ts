@@ -116,6 +116,14 @@ export const createSession = async (
       ? rest.retrievalTags
       : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
 
+  // Object-level authz: only attach agents the caller can actually access (owner +
+  // user-shares + group-shares). Foreign ids are filtered out (not replaced by the query
+  // result) so the caller's original order and duplicates are preserved.
+  const accessibleAgentIds = agentIds.length
+    ? new Set((await db.agents.shareable.findAllAccessibleByIds(user, agentIds)).map(agent => agent.id))
+    : null;
+  const authorizedAgentIds = accessibleAgentIds ? agentIds.filter(id => accessibleAgentIds.has(id)) : agentIds;
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -132,12 +140,7 @@ export const createSession = async (
     userId: user.id,
     knowledgeIds,
     artifactIds,
-    // Object-level authz: only attach agents the caller can actually access (owner +
-    // user-shares + group-shares). Foreign ids are dropped, matching the shareable
-    // pattern used elsewhere, so a caller cannot leak another user's agent prompt.
-    agentIds: agentIds.length
-      ? (await db.agents.shareable.findAllAccessibleByIds(user, agentIds)).map(agent => agent.id)
-      : agentIds,
+    agentIds: authorizedAgentIds,
     firstCreated: new Date(),
     lastUpdated: new Date(),
     updatedAt: new Date(),
