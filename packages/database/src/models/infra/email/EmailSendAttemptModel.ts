@@ -117,7 +117,9 @@ export class EmailSendAttemptRepository
         // end-of-day extension on is the last representable one, which no stored document
         // can exceed anyway. Validating the caller's string belongs at the HTTP boundary,
         // not here -- this repository cannot tell a wire value from a computed one.
-        (query.createdAt as Record<string, unknown>).$lte = Number.isNaN(endOfDay.getTime()) ? endDate : endOfDay;
+        (query.createdAt as Record<string, unknown>).$lte = Number.isNaN(endOfDay.getTime())
+          ? endDate
+          : endOfDay;
       }
     }
 

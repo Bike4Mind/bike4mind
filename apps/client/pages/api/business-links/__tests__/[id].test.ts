@@ -82,16 +82,16 @@ describe('PUT /api/business-links/[id] - categoryId validation', () => {
 
   // The payload is built unconditionally, so a falsy-but-present value still reaches the
   // cast even though `if (categoryId && ...)` would skip it.
-  it.each([
-    ['zero', 0],
-    ['false', false],
-  ])('rejects a falsy-but-present categoryId (%s)', async (_label, value) => {
-    const { req, res } = invokePut({ categoryId: value as unknown as string });
-    await mockRefs.putHandler!(req, res);
+  it.each([['zero', 0], ['false', false]])(
+    'rejects a falsy-but-present categoryId (%s)',
+    async (_label, value) => {
+      const { req, res } = invokePut({ categoryId: value as unknown as string });
+      await mockRefs.putHandler!(req, res);
 
-    expect(res._getStatusCode()).toBe(400);
-    expect(mockRefs.updatePayload).toBeUndefined();
-  });
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockRefs.updatePayload).toBeUndefined();
+    }
+  );
 
   // '' is what the edit form sends when no categories have loaded, and it means "no
   // category". It casts (so it cannot reach the payload as-is) but null is the clean way to
