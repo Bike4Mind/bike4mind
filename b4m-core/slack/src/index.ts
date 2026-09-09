@@ -61,6 +61,7 @@ export {
   parseImageModelOverride,
   parseDataLakeCommand,
   isDataLakeCommand,
+  looksLikeBareDataLakeMention,
   DATA_LAKE_AGENT_KEY,
 } from './agent-parser';
 export type { BuildSystemPromptOptions, ParsedDataLakeCommand, DataLakeSubcommand } from './agent-parser';
