@@ -37,7 +37,7 @@ type Opts = Parameters<typeof buildAccessibleQuery>[1];
 const MAXIMAL = {
   name: 'the maximal non-admin caller',
   ctx: ctx({ organizationIds: ['o1'], administeredOrgIds: ['o3'], entitlementKeys: ['e-1'] }),
-  opts: { grantedLakeIds: ['l1'], orgGrantedLakes: { o1: ['l2'] }, includePublic: true } as Opts,
+  opts: { grantedLakeIds: ['l1'], orgGrantedLakes: { o1: ['l2'] }, includePublic: true } satisfies Opts,
   arms: [...FIND_ACCESSIBLE_ARMS],
 };
 
@@ -93,13 +93,29 @@ describe('buildAccessibleQuery - arm labelling', () => {
     expect(buildAccessibleQuery(c, opts).arms).toEqual(arms);
   });
 
-  it.each(CONTEXTS)('keeps arms parallel to the $or for $name', ({ ctx: c, opts }) => {
+  // A count check alone cannot see a label that has drifted off the disjunct it names, and the
+  // labels are the whole product of this builder. One cheap shape probe per arm, each distinct
+  // enough to reject any of the others.
+  type Arm = Record<string, unknown>;
+  const conjuncts = (a: Arm): Arm[] => (a.$and as Arm[] | undefined) ?? [];
+  const SHAPE: Record<FindAccessibleArm, (a: Arm) => boolean> = {
+    owner: a => 'createdByUserId' in a,
+    public: a => conjuncts(a)[0]?.isPublic === true,
+    orgGate: a => conjuncts(a).length === 3,
+    orgAdmin: a => typeof a.organizationId === 'object' && !('_id' in a),
+    grant: a => '_id' in a && !('organizationId' in a),
+    orgGrant: a => '_id' in a && typeof a.organizationId === 'string',
+  };
+
+  it.each(CONTEXTS)('sits every label in front of the disjunct it names for $name', ({ ctx: c, opts }) => {
     const { filter, arms } = buildAccessibleQuery(c, opts);
-    const or = (filter.$or as unknown[] | undefined) ?? [];
-    // An arm pushed into the $or without a label (or labelled without being pushed) lands here.
-    // If this fails, teach `FIND_ACCESSIBLE_ARMS` about the new arm AND give ARM_COVERAGE in
-    // dataLakeService.test.ts a position on it.
+    const or = (filter.$or as Arm[] | undefined) ?? [];
+    // Fails on a disjunct pushed into the $or without a label (or labelled without being pushed),
+    // and on a label/disjunct misalignment the counts agree about. If this fails, teach
+    // `FIND_ACCESSIBLE_ARMS` about the new arm AND give ARM_COVERAGE in dataLakeService.test.ts a
+    // position on it.
     expect(or.length).toBe(arms.length);
+    arms.forEach((name, i) => expect(SHAPE[name](or[i])).toBe(true));
   });
 
   it('reaches every declared arm and declares every arm it reaches', () => {
@@ -115,8 +131,12 @@ describe('buildAccessibleQuery - arm labelling', () => {
       return { select: () => [] } as never;
     }) as never);
 
-    await dataLakeRepository.findAccessible(MAXIMAL.ctx, MAXIMAL.opts);
-    spy.mockRestore();
+    try {
+      await dataLakeRepository.findAccessible(MAXIMAL.ctx, MAXIMAL.opts);
+    } finally {
+      // Without the finally, a throw above leaves the `find` spy installed for the rest of the file.
+      spy.mockRestore();
+    }
 
     // Without this, the guards above could hold on a builder the shipped method had stopped using.
     expect(captured).toEqual(buildAccessibleQuery(MAXIMAL.ctx, MAXIMAL.opts).filter);
