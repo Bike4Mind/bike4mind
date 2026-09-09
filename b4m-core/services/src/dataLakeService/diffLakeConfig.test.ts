@@ -216,4 +216,32 @@ describe('grantChange', () => {
     expect(grantChange('user', 'u1', 'reader', 'reader')).toBeNull();
     expect(grantChange('user', 'u1', undefined, undefined)).toBeNull();
   });
+
+  it('encodes an expiry into the value, so an EXPIRY-ONLY move is still a change', () => {
+    // Shortening a grant to lapse tomorrow changes a principal's access as much as a re-role does;
+    // with the role alone in the value it compared equal and recorded nothing.
+    const until = new Date('2027-01-01T00:00:00.000Z');
+    expect(grantChange('user', 'u1', 'reader', 'reader', null, until)).toEqual({
+      field: 'accessGrant',
+      kind: 'literal',
+      before: 'user:u1=reader',
+      after: 'user:u1=reader until 2027-01-01T00:00:00.000Z',
+    });
+    expect(grantChange('user', 'u1', 'reader', 'reader', until, null)).toEqual({
+      field: 'accessGrant',
+      kind: 'literal',
+      before: 'user:u1=reader until 2027-01-01T00:00:00.000Z',
+      after: 'user:u1=reader',
+    });
+  });
+
+  it('leaves an open-ended grant reading exactly as it always did, and same terms are still null', () => {
+    const until = new Date('2027-01-01T00:00:00.000Z');
+    expect(grantChange('user', 'u1', undefined, 'reader', null, null)).toEqual({
+      field: 'accessGrant',
+      kind: 'literal',
+      after: 'user:u1=reader',
+    });
+    expect(grantChange('user', 'u1', 'reader', 'reader', until, new Date(until))).toBeNull();
+  });
 });

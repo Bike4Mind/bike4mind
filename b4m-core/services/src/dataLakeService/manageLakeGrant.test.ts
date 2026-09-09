@@ -22,9 +22,13 @@ const makeAdapters = (
     grants?: IDataLakeAccessGrantDocument[];
     existing?: IDataLakeAccessGrantDocument | null;
     userByEmail?: { id: string } | null;
+    /** More than one account matching the typed address - the case-variant duplicate. */
+    usersByEmail?: { id: string }[];
     removed?: boolean;
   } = {}
 ) => {
+  const matchingUsers =
+    over.usersByEmail ?? (over.userByEmail === undefined ? [{ id: 'u1' }] : over.userByEmail ? [over.userByEmail] : []);
   const upsertGrant = vi.fn(async (input: never) => grantRow(input));
   const removeGrant = vi.fn(async () => over.removed !== false);
   const record = vi.fn(async () => undefined);
@@ -41,7 +45,7 @@ const makeAdapters = (
           upsertGrant,
           removeGrant,
         },
-        users: { findByEmail: vi.fn(async () => (over.userByEmail === undefined ? { id: 'u1' } : over.userByEmail)) },
+        users: { findAllByEmailsOrUsernames: vi.fn(async () => matchingUsers) },
         lakeConfigChangeEvents: { record },
       },
     } as never,
@@ -286,6 +290,78 @@ describe('grantLakeAccess', () => {
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
+  it('refuses an AMBIGUOUS email rather than granting to an arbitrary one of the matches', async () => {
+    // Email uniqueness is case-SENSITIVE while the lookup collates case-insensitively, so `a@b.c`
+    // and `A@b.c` are two real accounts one typed address matches. Picking one silently is how a
+    // grant lands on the wrong person; a findOne-shaped lookup cannot even see the second match.
+    const { adapters, upsertGrant } = makeAdapters({ usersByEmail: [{ id: 'u1' }, { id: 'u2' }] });
+    await expect(
+      grantLakeAccess(owner, 'lake1', { principalType: 'user', principalEmail: 'a@b.c', role: 'reader' }, adapters)
+    ).rejects.toThrow(/more than one account/i);
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('refuses a CURATOR granting curator, so curatorship cannot propagate itself', async () => {
+    const { adapters, upsertGrant } = makeAdapters({ grants: curatorGrants });
+    await expect(
+      grantLakeAccess(curator, 'lake1', { principalType: 'user', principalEmail: 'u1@b.c', role: 'curator' }, adapters)
+    ).rejects.toThrow(/curators cannot grant curator access/i);
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('lets an OWNER grant curator - the refusal is the rung, not the role', async () => {
+    // The anti-cheat for the test above: a blanket refusal of `curator` would pass it too.
+    const { adapters, upsertGrant } = makeAdapters();
+    await grantLakeAccess(
+      owner,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'curator' },
+      adapters
+    );
+    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ role: 'curator' }));
+  });
+
+  it('audits an EXPIRY-ONLY change, which moves the role not at all', async () => {
+    // The expiry is part of what the grant confers: shortening one is an access change, and with the
+    // role alone in the audited value it landed as a write nothing recorded.
+    const expiresAt = new Date(Date.now() + 86_400_000);
+    const { adapters, record } = makeAdapters({ existing: grantRow({ principalId: 'u1', role: 'reader' }) });
+    await grantLakeAccess(
+      owner,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader', expiresAt },
+      adapters
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: [
+          {
+            field: 'accessGrant',
+            kind: 'literal',
+            before: 'user:u1=reader',
+            after: `user:u1=reader until ${expiresAt.toISOString()}`,
+          },
+        ],
+      })
+    );
+  });
+
+  it('records nothing when an omitted expiry leaves the row exactly as it stood', async () => {
+    // The anti-cheat for the test above: `expiresAt` omitted means "leave it alone", so the audit
+    // has to resolve the after side against the ROW - reading the omission as a clear would record
+    // a phantom "expiry removed" on every routine same-role re-grant of an expiring row.
+    const { adapters, record } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader', expiresAt: new Date(Date.now() + 86_400_000) }),
+    });
+    await grantLakeAccess(
+      owner,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' },
+      adapters
+    );
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('forwards an explicit expiry and omits the key when unset', async () => {
     const expiresAt = new Date(Date.now() + 86_400_000);
     const withExpiry = makeAdapters();
@@ -344,6 +420,20 @@ describe('revokeLakeAccess', () => {
       expect.objectContaining({
         action: 'revoke-access',
         changes: [{ field: 'accessGrant', kind: 'literal', before: 'user:u1=reader' }],
+      })
+    );
+  });
+
+  it('carries the dead expiry of a LAPSED row into the audited `before`', async () => {
+    // Otherwise the history reads as though live access was taken away, when the row had already
+    // conferred nothing. The role cannot simply be dropped the way the grant door drops a lapsed
+    // `previousRole`: with no `after` side that returns null and loses the event entirely.
+    const expiresAt = new Date(Date.now() - 86_400_000);
+    const { adapters, record } = makeAdapters({ existing: grantRow({ principalId: 'u1', role: 'reader', expiresAt }) });
+    await revokeLakeAccess(owner, 'lake1', { principalType: 'user', principalId: 'u1' }, adapters);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: [{ field: 'accessGrant', kind: 'literal', before: `user:u1=reader until ${expiresAt.toISOString()}` }],
       })
     );
   });

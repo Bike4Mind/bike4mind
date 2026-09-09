@@ -7,7 +7,7 @@ import type {
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake, type ManageActor } from './manageRule';
+import { canManageLake, resolveLakeManageRung, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { grantChange } from './diffLakeConfig';
@@ -28,7 +28,7 @@ interface ManageLakeGrantAdapters extends LakeConfigAuditAdapters {
       IDataLakeAccessGrantRepository,
       'listByLake' | 'findGrant' | 'upsertGrant' | 'removeGrant'
     >;
-    users: Pick<IUserRepository, 'findByEmail'>;
+    users: Pick<IUserRepository, 'findAllByEmailsOrUsernames'>;
   };
 }
 
@@ -40,9 +40,10 @@ export interface GrantLakeAccessInput {
    * A `user` principal, named by email. The ONLY way to name one, deliberately: it is the only
    * workable input for the cross-tenant sharing case this relation exists for (a manager granting
    * access outside their own org has no way to learn a userId), and it is the only one that cannot
-   * invent a principal. Resolved by EXACT lookup (`findByEmail`), never a search, so this adds no
-   * user-enumeration surface beyond the yes/no an exact address already answers; the door is
-   * manage-gated, so that oracle is never anonymous.
+   * invent a principal. Resolved by WHOLE-ADDRESS lookup, never a prefix or substring search, so
+   * this adds no user-enumeration surface beyond the yes/no an exact address already answers; the
+   * door is manage-gated, so that oracle is never anonymous. The lookup is case-INSENSITIVE while
+   * the uniqueness index is not, so it can match more than one account - see `resolvePrincipalId`.
    */
   principalEmail?: string;
   role: DataLakeAccessRole;
@@ -99,18 +100,28 @@ async function loadManageableLake(
  * through `transferLakeOwnership`) and that an organization principal must be the lake's own org
  * (the cross-org containment `resolveReadGrant` delegates to this path).
  *
+ * A CURATOR CANNOT MINT ANOTHER CURATOR. `canManageLake`'s curator rung is deliberately transitive
+ * for routine sharing (a curator is there to hand out reader access), but letting it hand out its
+ * OWN rung makes curatorship self-propagating: an owner who appoints one curator has, from that
+ * moment, no way to bound the set of people who manage the lake, and no rung above reader is ever
+ * required again. Refused by naming the winning rung rather than re-deriving it, so this stays
+ * exactly one rung of `canManageLake` and cannot drift from it.
+ *
  * Idempotent: `upsertGrant` is keyed on (lake, principalType, principalId), so re-granting the same
- * role converges and records NO audit event (`grantChange` returns null) - a request that changed
- * nothing is not a change. A re-grant over a LAPSED row is not that case: it clears the dead expiry
- * and so restores access, which is audited even when the role is unchanged.
+ * role on the same terms converges and records NO audit event (`grantChange` returns null) - a
+ * request that changed nothing is not a change. A re-grant over a LAPSED row is not that case: it
+ * clears the dead expiry and so restores access, which is audited even when the role is unchanged.
+ * Neither is a re-grant that only moves the EXPIRY: the expiry is part of what the grant confers, so
+ * it rides in the audited value (see `grantChange`) instead of landing as a silent write.
  *
  * ONE write, so no transaction is needed - contrast `transferLakeOwnership`'s explicit NOT ATOMIC
  * note, which covers a multi-write loop. The audit is still recorded LAST, so it can never claim a
  * grant that failed.
  *
- * Reader grants are RECORDED but not yet ENFORCED: `READ_GRANT_ENFORCEMENT_READY` gates the read
- * arm, so until it flips a reader grant lists nothing. The access route reports that state to the
- * UI (`meta.readerGrantsEnforced`) rather than letting the row look live.
+ * Reader grants are RECORDED here and RESOLVED at read time only while the `EnforceLakeReadGrants`
+ * platform setting is on - the source interlock has flipped, so that setting is now the whole gate.
+ * The access route reports the resolved state to the UI (`meta.readerGrantsEnforced`) rather than
+ * letting a row look live when it admits nobody.
  */
 export async function grantLakeAccess(
   actor: ManageActor,
@@ -126,7 +137,6 @@ export async function grantLakeAccess(
   if (refusal) {
     throw new BadRequestError(refusal);
   }
-
   // The persisted row, not the ACTIVE grant set: a lapsed grant is still the row being overwritten,
   // so it is what the owner refusal and the expiry resolution below both have to be judged against.
   const existing = await db.dataLakeAccessGrants.findGrant(lake.id, input.principalType, principalId);
@@ -138,6 +148,15 @@ export async function grantLakeAccess(
     throw new BadRequestError(ownerRefusal);
   }
 
+  // Non-transitive curatorship - see the note above. Judged on the rung that authorized THIS actor,
+  // so an owner or org admin who also holds a curator grant is unaffected: `resolveLakeManageRung`
+  // reports the strongest lake-side relationship and returns `grant-curator` only when nothing above
+  // it applies. Ordered AFTER the owner-row refusal deliberately: a curator aiming at an ownership
+  // row is being told the wrong thing if the reply is about their own rung - the row is the reason.
+  if (input.role === 'curator' && resolveLakeManageRung(lake, actor, grants) === 'grant-curator') {
+    throw new BadRequestError('Curators cannot grant curator access; ask an owner or an organization admin');
+  }
+
   // A lapsed row conferred nothing, so it is neither an expiry worth keeping nor an honest `before`.
   // Keeping it would write the new role onto a past date, which `loadActiveLakeGrants` still filters
   // out - the silent no-op `refuseGrantWrite` refuses to create outright. Reporting the lapsed role
@@ -146,6 +165,12 @@ export async function grantLakeAccess(
   const lapsed = !!existing?.expiresAt && existing.expiresAt.getTime() <= Date.now();
   const previousRole = lapsed ? undefined : existing?.role;
   const expiresAt = input.expiresAt !== undefined ? input.expiresAt : lapsed ? null : undefined;
+
+  // The audited before/after terms. `expiresAt` above is the WRITE's intent, where `undefined` means
+  // "leave whatever is there alone" - which is not the resulting state, so the audit resolves it
+  // against the row rather than recording an omission as a clear.
+  const previousExpiresAt = lapsed ? null : (existing?.expiresAt ?? null);
+  const nextExpiresAt = expiresAt !== undefined ? expiresAt : (existing?.expiresAt ?? null);
 
   await db.dataLakeAccessGrants.upsertGrant({
     dataLakeId: lake.id,
@@ -164,7 +189,9 @@ export async function grantLakeAccess(
       // than collapsing to the creator arm.
       grants,
       action: 'grant-access',
-      changes: [grantChange(input.principalType, principalId, previousRole, input.role)].filter(c => c !== null),
+      changes: [
+        grantChange(input.principalType, principalId, previousRole, input.role, previousExpiresAt, nextExpiresAt),
+      ].filter(c => c !== null),
     },
     { db, logger }
   );
@@ -206,7 +233,13 @@ export async function revokeLakeAccess(
       lake,
       grants,
       action: 'revoke-access',
-      changes: [grantChange(input.principalType, input.principalId, existing.role, undefined)].filter(c => c !== null),
+      // The removed row's own expiry rides in the `before`, so revoking a LAPSED grant does not read
+      // as though live access was taken away. It cannot be dropped to `undefined` the way the grant
+      // door drops a lapsed `previousRole`: with no `after` side, that would make `grantChange`
+      // return null and lose the event for a write that did happen.
+      changes: [
+        grantChange(input.principalType, input.principalId, existing.role, undefined, existing.expiresAt ?? null),
+      ].filter(c => c !== null),
     },
     { db, logger }
   );
@@ -223,10 +256,17 @@ export async function revokeLakeAccess(
  * check one. The grant's natural key is (lake, principalType, principalId) against a `type: String`
  * field, so a mistyped id becomes a permanent row that `UserModel.findByIds` silently drops - an
  * unresolvable opaque principal in the compliance export - and a whitespace or case variant of a
- * real id becomes a SECOND row for the same person that no read can ever match. `findByEmail` is
- * the only input that resolves to a real account before anything is written. An `organization` id
- * needs no such check: `refuseGrantWrite` pins it to the lake's own org, so there is nothing to
- * invent.
+ * real id becomes a SECOND row for the same person that no read can ever match. An email is the only
+ * input that resolves to a real account before anything is written. An `organization` id needs no
+ * such check: `refuseGrantWrite` pins it to the lake's own org, so there is nothing to invent.
+ *
+ * AMBIGUITY IS REFUSED, NOT RESOLVED, and this is why the plural lookup is used for a single
+ * address. Email uniqueness on the users collection is case-SENSITIVE (`email_1`) while every
+ * caller-facing lookup collates case-INSENSITIVELY, so `a@b.co` and `A@b.co` can be two distinct
+ * real accounts that one typed address matches. `findByEmail` is a `findOne` over exactly that
+ * match set: it returns an arbitrary one of them, which on this door means the grant silently lands
+ * on the wrong person's account. `UserModel.findAllByEmailsOrUsernames` carries the same obligation
+ * in its own docblock, and `sharingService/create.ts` is the other caller that honors it.
  */
 async function resolvePrincipalId(input: GrantLakeAccessInput, db: ManageLakeGrantAdapters['db']): Promise<string> {
   if (input.principalType !== 'user') {
@@ -238,9 +278,14 @@ async function resolvePrincipalId(input: GrantLakeAccessInput, db: ManageLakeGra
   if (!input.principalEmail) {
     throw new BadRequestError('A grant must name the person to share with by email address');
   }
-  const user = await db.users.findByEmail(input.principalEmail);
-  if (!user) {
+  const matches = await db.users.findAllByEmailsOrUsernames([input.principalEmail], []);
+  if (matches.length === 0) {
     throw new BadRequestError('No account was found for that email address');
   }
-  return user.id;
+  if (matches.length > 1) {
+    throw new BadRequestError(
+      'More than one account uses that email address, so it does not identify who to share with; ask an administrator to resolve the duplicate'
+    );
+  }
+  return matches[0].id;
 }
