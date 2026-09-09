@@ -54,15 +54,15 @@ describe('filterServeableFilePaths', () => {
     expect(lookup).toHaveBeenCalledTimes(4);
   });
 
-  it('drops a blocked image and keeps an untracked filePath (no FabFile record found)', async () => {
+  it('drops a blocked image and denies an untracked, non-allowlisted key (deny-by-default)', async () => {
     const lookup = vi.fn(async (filePath: string) => {
       if (filePath === 'blocked.png') return { _id: 'b', mimeType: 'image/png', moderationStatus: 'blocked' };
-      return null; // no FabFile record - this route also serves arbitrary S3 keys.
+      return null; // no FabFile record - an untracked, non-allowlisted key is no longer signed.
     });
 
-    const result = await filterServeableFilePaths(['blocked.png', 'untracked.txt'], lookup, allowAll);
+    const result = await filterServeableFilePaths(['blocked.png', 'exports/leak.json'], lookup, allowAll);
 
-    expect(result).toEqual([null, 'untracked.txt']);
+    expect(result).toEqual([null, null]);
   });
 
   it('drops a filePath whose FabFile has no moderationStatus yet (undefined/pending scan, fail-closed)', async () => {
@@ -87,13 +87,44 @@ describe('filterServeableFilePaths', () => {
     expect(result).toEqual(['mine.png', null]);
   });
 
-  it('does not run the access check for an untracked key (nothing to own)', async () => {
+  it('denies an untracked, non-allowlisted key without consulting the access check', async () => {
     const lookup = vi.fn(async () => null);
     const isAccessible = vi.fn(async () => false);
 
-    const result = await filterServeableFilePaths(['untracked.txt'], lookup, isAccessible);
+    const result = await filterServeableFilePaths(['exports/leak.json'], lookup, isAccessible);
 
-    expect(result).toEqual(['untracked.txt']);
+    expect(result).toEqual([null]);
     expect(isAccessible).not.toHaveBeenCalled();
+  });
+
+  // Allowlisted ownerless-serveable prefix (admin "What's New" modal images). This is the P1
+  // regression: modal images ARE tracked FabFiles, so a plain owner check 404s them for every
+  // non-admin. The prefix allowlist serves them regardless of owner, whether or not they have a row.
+  it('serves an allowlisted prefix even for a tracked file the caller may not access, without the access check', async () => {
+    const lookup = vi.fn(async () => ({ _id: 'modal', mimeType: 'image/png', moderationStatus: 'clean' }));
+    const isAccessible = vi.fn(async () => false); // caller is not owner/share of this modal image
+
+    const result = await filterServeableFilePaths(['modals/whats-new.png'], lookup, isAccessible);
+
+    expect(result).toEqual(['modals/whats-new.png']);
+    expect(isAccessible).not.toHaveBeenCalled();
+  });
+
+  it('serves an allowlisted prefix that has no FabFile row (untracked modal key)', async () => {
+    const lookup = vi.fn(async () => null);
+    const isAccessible = vi.fn(async () => false);
+
+    const result = await filterServeableFilePaths(['modals/orphaned.png'], lookup, isAccessible);
+
+    expect(result).toEqual(['modals/orphaned.png']);
+    expect(isAccessible).not.toHaveBeenCalled();
+  });
+
+  it('still withholds an allowlisted-prefix image that is held by moderation (allowlist does not bypass moderation)', async () => {
+    const lookup = vi.fn(async () => ({ _id: 'modal', mimeType: 'image/png', moderationStatus: 'pending' }));
+
+    const result = await filterServeableFilePaths(['modals/pending.png'], lookup, allowAll);
+
+    expect(result).toEqual([null]);
   });
 });

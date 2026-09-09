@@ -7,7 +7,7 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
-import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
 
 const s3Client = new S3Client();
 
@@ -22,30 +22,48 @@ type FabFileLookupResult = {
   mimeType?: string | null;
   moderationStatus?: string | null;
   tags?: { name: string }[] | null;
+  deletedAt?: Date | null;
 } | null;
+
+/**
+ * S3 key prefixes served WITHOUT an owner/ACL check - the one object class this route legitimately
+ * signs for a caller who neither owns the file nor reaches it through a lake: admin "What's New" /
+ * banner modal images (uploaded under `modals/`, then shown to every non-admin end user). The
+ * allowlist gates by KEY PREFIX independent of whether a FabFile row exists, because a modal image
+ * IS usually tracked - an ownership check would (and did) 404 it for every non-admin. Everything not
+ * matched here must clear the per-file ACL or the lake gate below.
+ */
+const OWNERLESS_SERVEABLE_KEY_PREFIXES = ['modals/'];
+
+const isOwnerlessServeableKey = (filePath: string): boolean =>
+  OWNERLESS_SERVEABLE_KEY_PREFIXES.some(prefix => filePath.startsWith(prefix));
 
 /**
  * This route maps arbitrary S3 `filePaths[]` to signed URLs, so it must gate each key before
  * signing on two axes: it must not hand out a URL for a held (pending scan) or blocked uploaded
- * image, and it must not sign another user's file (IDOR). Positional - returns one entry per input
- * `filePath` (`null` where the URL is withheld) so the caller can zip the result back against
- * `filePaths` by index; the client already tolerates a missing URL at a given index.
+ * image, and it must not sign a file the caller may not read (IDOR). Positional - returns one entry
+ * per input `filePath` (`null` where the URL is withheld) so the caller can zip the result back
+ * against `filePaths` by index; the client already tolerates a missing URL at a given index.
  *
- * A `filePath` with no FabFile record (`lookup` returns `null`) is passed through unchanged: this
- * route also serves S3 keys that aren't tracked as a FabFile (e.g. admin "What's New" modal
- * images), which have no owner to check and can't be moderation-gated. A tracked file is dropped
- * if it isn't `isImageServeable`, or if `isAccessible` says the caller may not read it.
+ * Deny-by-default. A key signs only if it clears moderation AND is either an allowlisted
+ * ownerless-serveable prefix (see `OWNERLESS_SERVEABLE_KEY_PREFIXES`) or a tracked file the caller
+ * may read (`isAccessible`). An untracked, non-allowlisted key (`lookup` -> `null`) is DENIED: this
+ * route shares a bucket with export/archive objects that carry no FabFile row, and signing those
+ * for any authenticated caller was an IDOR. The allowlist does NOT bypass moderation - a held modal
+ * image is still withheld.
  */
 export async function filterServeableFilePaths(
   filePaths: string[],
   lookup: (filePath: string) => Promise<FabFileLookupResult>,
-  isAccessible: (fabFile: NonNullable<FabFileLookupResult>) => Promise<boolean>
+  isAccessible: (fabFile: NonNullable<FabFileLookupResult>) => Promise<boolean>,
+  isAllowlisted: (filePath: string) => boolean = isOwnerlessServeableKey
 ): Promise<(string | null)[]> {
   return Promise.all(
     filePaths.map(async filePath => {
       const fabFile = await lookup(filePath);
-      if (!fabFile) return filePath; // untracked S3 key - no owner/moderation record to check
-      if (!isImageServeable(fabFile)) return null; // held/blocked by moderation
+      if (fabFile && !isImageServeable(fabFile)) return null; // held/blocked by moderation
+      if (isAllowlisted(filePath)) return filePath; // ownerless-serveable prefix (e.g. modal images)
+      if (!fabFile) return null; // untracked, non-allowlisted key - no owner to authorize (IDOR guard)
       if (!(await isAccessible(fabFile))) return null; // not the caller's to read
       return filePath;
     })
@@ -85,8 +103,9 @@ const handler = baseApi().get(
         async fabFile => {
           const id = String(fabFile._id);
           if (await fabFileRepository.shareable.findAccessibleById(req.user, id)) return true;
+          if (fabFile.deletedAt) return false; // soft-deleted lake article must not sign (mirrors files/[id])
           const lakes = await accessibleLakes();
-          return grantingLakes(lakes, fabFile.tags?.map(t => t.name) ?? []).length > 0;
+          return isFileInAccessibleLake(lakes, fabFile);
         }
       );
 
