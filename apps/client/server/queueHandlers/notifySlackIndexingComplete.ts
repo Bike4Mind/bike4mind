@@ -67,6 +67,10 @@ async function resolveSlackBotToken(
     const orgWorkspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(teamId);
     if (orgWorkspace?.slackBotToken) return decryptToken(orgWorkspace.slackBotToken);
 
+    // Deliberately does NOT fall back to the lake/org chain here - see the header. Still worth a
+    // warn: a stamped teamId with no matching workspace is a real signal (uninstalled workspace,
+    // rotated token) that would otherwise show up only as a silently-missing notification.
+    logger.warn(`FabFile ${fabFile.id} has sourceMetadata.teamId ${teamId} but no matching Slack workspace was found`);
     return null;
   }
 
