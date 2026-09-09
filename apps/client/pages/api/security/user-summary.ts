@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { authFailLogRepository } from '@bike4mind/database';
+import { clampedIntParam } from '@server/utils/dateParam';
 
 /**
  * GET /api/security/user-summary
@@ -9,7 +10,9 @@ import { authFailLogRepository } from '@bike4mind/database';
  */
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { hours?: string }>(async (req, res) => {
-    const hours = Math.min(parseInt(req.query.hours || '24', 10), 168);
+    // Bounded at both ends so the arithmetic below cannot overflow into an Invalid Date, which
+    // would cast against the Date-typed `createdAt` filter in getUserFailedLogins.
+    const hours = clampedIntParam('hours', req.query.hours, 24, 1, 168);
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
     const user = req.user;
