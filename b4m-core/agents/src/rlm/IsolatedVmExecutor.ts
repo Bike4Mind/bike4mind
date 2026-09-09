@@ -446,10 +446,14 @@ export class IsolatedVmExecutor implements ReplExecutor {
    *
    * The head/tail rule is the same one `collectStdout()` reports and the same
    * one the worker backend mirrors with, so what is kept is exactly what would
-   * have been printed.
+   * have been printed, in print order. `stdoutHeadFull` is what keeps the
+   * order half of that true - see `captureLine()`. Must stay in sync with
+   * `WorkerReplExecutor`'s `headMirrorFull`.
    */
   private stdoutHead: string[] = [];
   private stdoutHeadBytes = 0;
+  /** Latched once a line has gone to the tail: the head never reopens. */
+  private stdoutHeadFull = false;
   private stdoutTail: string[] = [];
   private stdoutTailBytes = 0;
   private stdoutElidedBytes = 0;
@@ -806,12 +810,16 @@ export class IsolatedVmExecutor implements ReplExecutor {
     const cost = line.length + 1;
     // A fit check, not "is the head already over" - the latter admits one line
     // of up to HARD_PER_LINE_BYTES past the budget, so the line that crosses
-    // starts the tail instead.
-    if (this.stdoutHeadBytes + cost <= STDOUT_HEAD_BYTES) {
+    // starts the tail instead. Latched, because the fit check ALONE is not
+    // enough: once a long line has opened the tail, a shorter line printed
+    // after it still fits the head and would render above lines that are
+    // actually older, with elidedBytes still 0 so nothing reports it.
+    if (!this.stdoutHeadFull && this.stdoutHeadBytes + cost <= STDOUT_HEAD_BYTES) {
       this.stdoutHead.push(line);
       this.stdoutHeadBytes += cost;
       return;
     }
+    this.stdoutHeadFull = true;
     this.stdoutTail.push(line);
     this.stdoutTailBytes += cost;
     // The tail gets whatever the head did not use of the same HEAD + TAIL
@@ -831,6 +839,7 @@ export class IsolatedVmExecutor implements ReplExecutor {
   private resetStdout(): void {
     this.stdoutHead = [];
     this.stdoutHeadBytes = 0;
+    this.stdoutHeadFull = false;
     this.stdoutTail = [];
     this.stdoutTailBytes = 0;
     this.stdoutElidedBytes = 0;

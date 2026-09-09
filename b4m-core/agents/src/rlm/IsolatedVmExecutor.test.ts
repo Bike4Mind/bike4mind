@@ -759,6 +759,31 @@ describe('IsolatedVmExecutor - guest cannot reach the host realm', () => {
     expect(r.stdout).toBe('n0\nn1\nn2');
   });
 
+  it('keeps stdout in print order once a line has crossed into the tail', async () => {
+    const ex = spawn({ timeoutMs: 5_000 });
+    // The head takes lines that FIT it, so a long line starts the tail. The
+    // fit check alone is not enough: a SHORT line printed afterwards fits the
+    // head again and renders above lines that are older than it, while
+    // nothing was elided - so truncated stays false and error stays null and
+    // the reordering is silent. Head is 5000 bytes; the three lines below sit
+    // either side of that boundary deliberately.
+    const r = await ex.runCode(`
+      console.log('A'.repeat(4899));
+      console.log('B'.repeat(199));
+      console.log('C'.repeat(49));
+    `);
+    expect(r.error).toBeNull();
+    const a = r.stdout.indexOf('A');
+    const b = r.stdout.indexOf('B');
+    const c = r.stdout.indexOf('C');
+    expect(a).toBeGreaterThanOrEqual(0);
+    expect(b).toBeGreaterThan(a);
+    expect(c).toBeGreaterThan(b);
+    // Nothing was dropped, so the run must not claim otherwise either.
+    expect(r.truncated).toBe(false);
+    expect(r.stdout).not.toContain('bytes truncated');
+  });
+
   // --- a tool is refused rather than dispatched under its own deadline -----
 
   it('refuses a tool whose per-run remaining budget is under its declared floor', async () => {

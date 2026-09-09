@@ -1055,6 +1055,15 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // reactAct.ts publishes Lumina5/ReplSandbox SandboxUnavailable from its
+        // fail-closed branch, alarmed at infra/alarms.ts:1064. This handler is
+        // the only function that reaches it with Caller=wake - without the
+        // grant the emit AccessDenies and the alarm watches a metric nobody
+        // publishes. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {
