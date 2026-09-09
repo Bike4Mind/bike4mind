@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { UploadTooLargeError, spoolRequestToFile } from './spoolRequestToFile';
 
+/** basename() passes a literal ".." through unchanged (it is only two dots, not a separator). */
+const parentOf = (spooledPath: string): string => spooledPath.replace(/\/\.\.$/, '');
+
 /** A request body as the route sees it: an async iterable of Buffers. */
 const bodyOf = (...chunks: string[]): AsyncIterable<Buffer> => ({
   async *[Symbol.asyncIterator]() {
@@ -46,6 +49,17 @@ describe('spoolRequestToFile', () => {
     } finally {
       await spooled.cleanup();
     }
+  });
+
+  it('rejects a filename of exactly ".." instead of writing outside the temp directory', async () => {
+    // basename('..') returns '..' unchanged, unlike '../../escaped.zip' above, so the resulting
+    // path points at the temp directory's parent rather than a file inside it.
+    let attemptedPath: string | undefined;
+    await expect(
+      spoolRequestToFile(bodyOf('x'), 1024, { filename: '..', onPath: p => (attemptedPath = p) })
+    ).rejects.toThrow();
+    expect(attemptedPath, 'test needs the path to check for a leak').toBeDefined();
+    expect(existsSync(parentOf(attemptedPath!))).toBe(false);
   });
 
   it('cleanup removes the file and is safe to call twice', async () => {

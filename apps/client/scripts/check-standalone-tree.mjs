@@ -11,7 +11,7 @@
 // Allowlist rather than denylist on purpose: the next regression will sweep in a directory
 // nobody thought to name.
 //
-// Usage: node scripts/check-standalone-tree.mjs <path-to-.next/standalone/<app>>
+// Usage: node apps/client/scripts/check-standalone-tree.mjs <path-to-.next/standalone/<app>>
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,21 +29,35 @@ if (!fs.existsSync(appDir)) {
 }
 
 const entries = fs.readdirSync(appDir).sort();
+const entrySet = new Set(entries);
 const offenders = entries.filter((entry) => !ALLOWED.has(entry));
+const missing = [...ALLOWED].filter((entry) => !entrySet.has(entry)).sort();
 
-if (offenders.length === 0) {
+if (offenders.length === 0 && missing.length === 0) {
   console.log(`check-standalone-tree: ${appDir} is clean (${entries.length} allowed entries)`);
   process.exit(0);
 }
 
-console.error(`check-standalone-tree: ${offenders.length} unexpected entries in ${appDir}`);
-for (const offender of offenders) {
-  const full = path.join(appDir, offender);
-  const kind = fs.lstatSync(full).isDirectory() ? 'dir ' : 'file';
-  console.error(`  ${kind} ${offender}`);
+if (offenders.length > 0) {
+  console.error(`check-standalone-tree: ${offenders.length} unexpected entries in ${appDir}`);
+  for (const offender of offenders) {
+    const full = path.join(appDir, offender);
+    const kind = fs.lstatSync(full).isDirectory() ? 'dir ' : 'file';
+    console.error(`  ${kind} ${offender}`);
+  }
+  console.error(
+    'A failure here means file tracing swept the app source tree into the build output; expected only: ' +
+      [...ALLOWED].join(', ')
+  );
 }
-console.error(
-  'A failure here means file tracing swept the app source tree into the build output; expected only: ' +
-    [...ALLOWED].join(', ')
-);
+
+if (missing.length > 0) {
+  // A truncated build (e.g. a build step that died silently) still writes a subset of the
+  // allowed entries, which the offender check alone reports as clean.
+  console.error(`check-standalone-tree: ${missing.length} expected entries missing from ${appDir}`);
+  for (const entry of missing) {
+    console.error(`  missing ${entry}`);
+  }
+}
+
 process.exit(1);

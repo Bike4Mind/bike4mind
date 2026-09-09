@@ -6,8 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
- * Exercises scripts/check-standalone-tree.mjs, the last thing the container build runs before
- * the standalone output is copied into the runner image.
+ * Exercises apps/client/scripts/check-standalone-tree.mjs, the last thing the container build
+ * runs before the standalone output is copied into the runner image.
  *
  * The guard exists because a @vercel/nft directory-glob fallback swept all of apps/client into
  * the build output, and nothing failed: the image built, the Lambda deployed, and the only
@@ -20,7 +20,7 @@ import path from 'node:path';
  * offenders it names on stderr, which is exactly what the Dockerfile depends on.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const GUARD = path.join(REPO_ROOT, 'scripts', 'check-standalone-tree.mjs');
+const GUARD = path.join(REPO_ROOT, 'apps', 'client', 'scripts', 'check-standalone-tree.mjs');
 
 const HEALTHY_ENTRIES = ['.next', 'app', 'node_modules', 'package.json', 'server.js'];
 
@@ -97,5 +97,15 @@ describe('check-standalone-tree', () => {
     const { status, output } = runGuard(path.join(tmpRoot, 'nope'));
     expect(status).toBe(1);
     expect(output).toContain('no standalone app directory');
+  });
+
+  it('fails and names what is missing when a truncated build drops an expected entry', () => {
+    makeHealthyTree();
+    fs.rmSync(path.join(appDir, 'server.js'));
+
+    const { status, output } = runGuard(appDir);
+    expect(status).toBe(1);
+    expect(output).toContain('missing');
+    expect(output).toContain('server.js');
   });
 });
