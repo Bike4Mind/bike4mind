@@ -1,12 +1,18 @@
-import { userApiKeyService } from '@bike4mind/services';
+import { userApiKeyService, dataLakeService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { userRepository } from '@bike4mind/database';
+import {
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  organizationRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
+import { toObjectIdString } from '@server/utils/objectId';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
@@ -17,6 +23,18 @@ const ADMIN_ENDPOINT_MINTABLE_SCOPES = new Set<string>([
   ...USER_API_KEY_SCOPE_VALUES,
   ...ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value),
 ]);
+
+/**
+ * Bounds the lake screen below, which dedupes and then spends one `findById` per id before
+ * `createUserApiKey`'s own `.max(25)` is ever reached. Same 25, applied to the RAW array rather
+ * than to the deduped set the service counts - so 26 entries that dedupe to 23 are refused here
+ * and would have been accepted there. Deliberate: the looser reading would put the cap after the
+ * dedupe, which is the walk it exists to bound.
+ *
+ * Deliberately larger than sessions/create.ts's per-SESSION cap: a key is a ceiling spanning many
+ * sessions, so the two bound different things and are not a mismatch to be reconciled.
+ */
+const MAX_PREAUTHORIZED_LAKES = 25;
 
 interface RequestQuery {
   userId: string;
@@ -32,6 +50,85 @@ interface CreateApiKeyBody {
   };
   /** Lake ids to bind this key to for the manage-but-not-member session admission. Admin-only. */
   preauthorizedLakeIds?: string[];
+}
+
+/**
+ * Screen an admin-supplied lake binding against the TARGET user.
+ *
+ * The binding is a CEILING, never a grant: pages/api/sessions/create.ts requires the key's list to
+ * contain the lake AND independently re-checks the acting user's live manage rights, and the read
+ * path re-derives those every turn (dataLakeService.filterStillManagedLakes). So an id the target
+ * cannot manage escalates nothing - it just makes the binding fail to narrow anything, which is
+ * the only thing the field is for. Screening here turns that silent no-op into a 400 at mint time,
+ * rather than a confusing "You do not manage data lake X" the first time someone uses the key.
+ *
+ * Ids are lowercased, not merely shape-checked: both stores are `type: [String]`, so the
+ * containment check in sessions/create is byte equality against a lake's own (always lowercase)
+ * `id` virtual. An uppercase-hex id persists happily here and then never matches.
+ *
+ * The manage check reuses `filterStillManagedLakes` rather than open-coding a rule, so the mint
+ * gate, the session-create gate and the per-turn re-check cannot drift apart. That helper bakes in
+ * `isAdmin: false`, which is the subtle part: platform-adminness is deliberately not a manage rung
+ * for this admission, so a target whose only relationship to the lake is being a platform admin is
+ * refused here exactly as sessions/create would refuse them.
+ */
+async function screenPreauthorizedLakeIds(raw: unknown, targetUserId: string): Promise<string[] | undefined> {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new BadRequestError('preauthorizedLakeIds must be an array of data lake ids');
+  }
+  // Capped on the RAW array, before the loop below rather than on its deduped result: the body
+  // cap admits tens of thousands of ids, so a cap applied afterwards would bound the reads and
+  // leave the walk over `raw` unbounded. The Set is the other half - deduping via `ids.includes`
+  // would be quadratic in the input even with this cap in place.
+  if (raw.length > MAX_PREAUTHORIZED_LAKES) {
+    throw new BadRequestError(`At most ${MAX_PREAUTHORIZED_LAKES} pre-authorized data lakes per key`);
+  }
+
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const entry of raw) {
+    const id = typeof entry === 'string' ? toObjectIdString(entry) : undefined;
+    if (!id) {
+      // The echoed value is unvalidated input, so bound it.
+      throw new BadRequestError(`Invalid data lake id: ${String(entry).slice(0, 64)}`);
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  if (ids.length === 0) return undefined;
+
+  // Every way this field can be wrong answers BadRequest, not the NotFound/Forbidden
+  // sessions/create returns for the same conditions: there the lake id is the request's subject,
+  // here it is one field of a mint body.
+  const fetched = await Promise.all(ids.map(id => dataLakeRepository.findById(id)));
+  const byId = new Map(ids.map((id, i) => [id, fetched[i]]));
+  const missing = ids.filter(id => !byId.get(id));
+  if (missing.length > 0) {
+    throw new BadRequestError(`Data lake not found: ${missing.join(', ')}`);
+  }
+  // Reported apart from a miss because an admin picking from the lake list CAN see a draft lake,
+  // and "not found" for a lake on their screen reads as a bug. `status` is the same gate
+  // unionPreauthorizedLakeAccess applies before its own re-check.
+  const inactive = ids.filter(id => byId.get(id)!.status !== 'active');
+  if (inactive.length > 0) {
+    throw new BadRequestError(`Data lake is not active: ${inactive.join(', ')}`);
+  }
+  const lakes = ids.map(id => byId.get(id)!);
+  const manageable = await dataLakeService.filterStillManagedLakes(lakes, targetUserId, {
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    organizations: organizationRepository,
+  });
+  const manageableIds = new Set(manageable.map(lake => lake.id));
+  const unmanaged = ids.filter(id => !manageableIds.has(id));
+  if (unmanaged.length > 0) {
+    throw new BadRequestError(
+      `User does not manage data lake(s): ${unmanaged.join(', ')}. Grant the user access to the lake first.`
+    );
+  }
+  return ids;
 }
 
 /**
@@ -68,6 +165,13 @@ const handler = baseApi({ auth: true })
         throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
       }
 
+      // `targetUser.id`, NOT the `userId` URL segment: findById casts to ObjectId and so resolves
+      // the user under any hex casing, but every manage rung compares the actor id against a
+      // `type: String` field (createdByUserId, a grant's principalId, an Organization's admin ids)
+      // by byte equality. A non-canonical id would resolve the user and then read as managing
+      // nothing, refusing a target who genuinely manages the lake. Same hazard as the lake ids.
+      const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUser.id);
+
       const newApiKey = await userApiKeyService.createUserApiKey(
         userId,
         {
@@ -75,7 +179,7 @@ const handler = baseApi({ auth: true })
           scopes: scopes as Parameters<typeof userApiKeyService.createUserApiKey>[1]['scopes'],
           expiresAt: expiresAt ? new Date(expiresAt) : undefined,
           rateLimit,
-          preauthorizedLakeIds,
+          preauthorizedLakeIds: lakeBinding,
           metadata: {
             clientIP: req.ip,
             userAgent: req.headers['user-agent'],
@@ -89,7 +193,10 @@ const handler = baseApi({ auth: true })
         }
       );
 
-      // Log analytics event attributed to the target user
+      // Log analytics event attributed to the target user. The lake binding rides along because it
+      // is the one part of this mint that reaches another tenant's asset and it is invisible on the
+      // lake side - it grants nothing there, so it appears in no grant listing. Recording it here
+      // makes "which keys are bound to this lake" answerable without grepping logs.
       await logEvent(
         {
           userId,
@@ -100,14 +207,18 @@ const handler = baseApi({ auth: true })
             scopes: newApiKey.scopes,
             expiresAt: newApiKey.expiresAt?.toISOString(),
             createdFrom: 'dashboard',
+            preauthorizedLakeIds: lakeBinding,
           },
         },
         { ability: req.ability }
       );
 
-      // Audit trail with admin details
+      // Audit trail with admin details. `name` goes through JSON.stringify - the same surrounding
+      // quotes for any ordinary name - so a newline in a caller-chosen name cannot forge a sibling
+      // log entry now that this line is the audit record for a cross-tenant lake binding.
       req.logger.info(
-        `Admin ${req.user.username} (${req.user.id}) generated API key "${name}" for user ${targetUser.username} (${userId})`
+        `Admin ${req.user.username} (${req.user.id}) generated API key ${JSON.stringify(name)} for user ${targetUser.username} (${userId})` +
+          (lakeBinding ? ` bound to data lake(s) ${lakeBinding.join(', ')}` : '')
       );
 
       return res.status(201).json(newApiKey);
