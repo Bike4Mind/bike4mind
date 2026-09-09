@@ -62,6 +62,7 @@ export {
   parseDataLakeCommand,
   isDataLakeCommand,
   looksLikeBareDataLakeMention,
+  BARE_DATA_LAKE_MENTION_PATTERN,
   DATA_LAKE_AGENT_KEY,
 } from './agent-parser';
 export type { BuildSystemPromptOptions, ParsedDataLakeCommand, DataLakeSubcommand } from './agent-parser';
