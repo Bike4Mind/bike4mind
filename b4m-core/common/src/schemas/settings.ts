@@ -3586,10 +3586,9 @@ export const settingsMap = {
     key: 'forcedRetrievalMinSimilarityPct',
     name: 'Forced Retrieval Absolute Floor (%)',
     defaultValue: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-    // min 1, not 0: clearing a number field in the admin UI coerces to 0, and 0 here makes the
-    // "no chunk cleared the similarity floor" abstention unreachable, so a wholly off-topic corpus
-    // would inject its best band instead of abstaining. 1% still effectively disables the gate for
-    // anyone who means to.
+    // min 1, not 0: clearing a number field in the admin UI coerces to 0, so a 0 here is far more
+    // likely to be an emptied field than an intent to disable the gate. 1% still effectively
+    // disables it for anyone who means to, while keeping an accidental clear out of range.
     min: 1,
     max: 100,
     int: true,

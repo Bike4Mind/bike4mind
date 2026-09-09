@@ -10,9 +10,10 @@ describe('AdminSettingsCache tolerates a partial logger', () => {
    * scoped resolver guards one layer out, `resolveSpendLevers` rethrows to halt spend - so a cache
    * that threw while logging could surface as a silent wrong value or as an unhandled rejection.
    */
-  // Typed as the widened parameter, not cast through `Logger`: the cast would pass whether or not
-  // the constructor actually accepts a partial logger, so it would assert nothing about the widening.
-  const partialLogger: PartialAdminSettingsLogger = { warn: vi.fn(), error: vi.fn() };
+  // Runtime-only by construction: no tsconfig here includes `*.test.ts`, so nothing typechecks this
+  // annotation and it cannot enforce the widening. The compile-time half lives next to the
+  // interface in AdminSettingsCache.ts.
+  const partialLogger: PartialAdminSettingsLogger = { warn: vi.fn() };
 
   it('invalidateAll still clears the cache instead of throwing on a missing log level', () => {
     const cache = new AdminSettingsCache(partialLogger);

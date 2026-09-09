@@ -582,10 +582,8 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
     expect(settingsMap.forcedRetrievalRelativeFloorPct.min).toBe(0);
     expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(0)).toBe(0);
 
-    // The ABSOLUTE floor stops at 1, because 0 there is not "disabled" but "unreachable": clearing
-    // a number field in the admin UI coerces to 0, and a 0 similarity floor makes the "no chunk
-    // cleared the floor" abstention impossible, so a wholly off-topic corpus would inject its best
-    // band instead of abstaining. 1% still effectively disables the gate for anyone who means to.
+    // The ABSOLUTE floor stops at 1, because clearing a number field in the admin UI coerces to 0,
+    // so 0 reads as an emptied field rather than as intent. 1% still effectively disables the gate.
     expect(settingsMap.forcedRetrievalMinSimilarityPct.min).toBe(1);
     expect(() => settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(0)).toThrow();
     expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(1)).toBe(1);

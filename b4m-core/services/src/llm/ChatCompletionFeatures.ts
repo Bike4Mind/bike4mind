@@ -2069,8 +2069,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * `scopeForCaller`).
    *
    * Percent-to-fraction conversion happens here, once, so every comparison below is against a raw
-   * cosine. `nonNegativeIntOr` rather than `positiveIntOr` because `0` is meaningful for both (a
-   * disabled relative floor, an absent absolute one), so it must not be treated as unusable.
+   * cosine. `nonNegativeIntOr` rather than `positiveIntOr` because `0` is meaningful for the
+   * RELATIVE floor (a disabled floor) and both floors share this helper. It is not meaningful for
+   * the absolute one, whose schema bounds it at `min: 1`, so 0 never reaches here for that key -
+   * the reader stays deliberately more permissive than the writer.
    *
    * Never throws, and the catch reaches wider than "no adminSettings adapter": the platform-only
    * path calls `getSettingsValue` unguarded, so a settings or DB outage on an overlay-less host
@@ -2116,8 +2118,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * scoped overlay is wired. When it is absent there is no override to find and the platform read is
    * byte-identical, so this takes the plain `getSettingsValue` route rather than requiring every host
    * to carry the overlay - the same optionality `scopedSettings` is already documented with on the
-   * db contract above, and the same two-path shape `resolveSearchBudgets` uses, inner guard
-   * included: a scoped failure degrades to the platform read, not to the coded defaults.
+   * db contract above, and the same two-path shape `resolveSearchBudgets` uses.
+   *
+   * The scoped branch is wrapped defensively, NOT because production takes the fallback:
+   * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
+   * the only thing the catch can realistically see is an argument-evaluation error. The corollary is
+   * worth knowing rather than assuming away - when the resolver's OWN platform read fails it
+   * resolves the coded default internally and returns normally, so a settings outage lands on coded
+   * defaults whether or not this guard is here.
    */
   private async readForcedRetrievalFloorPcts(): Promise<{ relative: unknown; absolute: unknown }> {
     const { db, user } = this.chatCompletion;
@@ -2544,13 +2552,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
       // everything or nothing (#2497).
       //
-      // Skipped when the top score is not positive, and that guard is LOAD-BEARING today rather
-      // than written for a future floor. `topScore` is not derived from `pool`: it is updated one
-      // line BEFORE the absolute-floor `continue`, so it tracks every finite scored candidate while
-      // `pool` holds only those that cleared the floor. A turn whose scores are all negative
-      // therefore gets past the `scoredCount === 0` guard, leaves `pool` empty, and arrives here
-      // with `topScore` below zero. That matters because a multiplicative floor inverts across zero
-      // (0.85 * -0.2 = -0.17, ABOVE the score it came from), rejecting even the best candidate.
+      // Skipped when the top score is not positive. `topScore` is not derived from `pool` - it is
+      // updated one line BEFORE the absolute-floor `continue`, so it tracks every finite scored
+      // candidate while `pool` holds only those that cleared the floor - which means the VARIABLE
+      // can be negative here even though the guard is inert. Inert twice over: the absolute floor
+      // is a percent and so never below 0, so a negative `topScore` implies every score was
+      // rejected and `ranked` is empty; and a negative cutoff would fail the `> 0` test below
+      // anyway. Kept as documentation that a multiplicative floor inverts across zero
+      // (0.85 * -0.2 = -0.17, ABOVE the score it came from), which would matter if a future
+      // absolute floor ever admitted negatives.
       //
       // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
       // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the
