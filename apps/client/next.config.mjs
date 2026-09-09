@@ -54,6 +54,35 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
+  // Test code has no business in a production server bundle, and here it is not merely dead
+  // weight: 1,226 test files plus the Playwright fixtures are ~13 MB of the server function,
+  // which sits against Lambda's 262144000-byte UNZIPPED limit (not adjustable - the measured
+  // bundle was at 100.0% of it, which is what blocked staging deploys on 2026-09-09).
+  //
+  // It is also a correctness hazard, not just a size one. Next compiles every file under
+  // `pages/` into a routable entry, including `__tests__/` subdirectories, and a preloaded test
+  // module executes its side effects: one of them calls aws-sdk-client-mock's
+  // `mockClient(S3Client)`, which replaces `S3Client.prototype.send` process-wide with a stub
+  // that resolves undefined. `apps/client/scripts/pruneTestRoutes.mjs` exists to strip those
+  // entries out of a built `.next` for exactly that reason; excluding them from the trace in the
+  // first place is the same fix applied one step earlier, and it covers every deploy target
+  // rather than only the one that remembers to run the pruner.
+  //
+  // Globs are matched against paths relative to `outputFileTracingRoot` above, so they are
+  // written from the monorepo root. Keep the two in sync if that root ever changes.
+  outputFileTracingExcludes: {
+    '*': [
+      '**/*.test.ts',
+      '**/*.test.tsx',
+      '**/*.spec.ts',
+      '**/*.spec.tsx',
+      '**/__tests__/**',
+      '**/__test__/**',
+      '**/__mocks__/**',
+      'apps/client/e2e/**',
+    ],
+  },
+
   transpilePackages: [
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',
