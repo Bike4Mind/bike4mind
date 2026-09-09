@@ -2070,9 +2070,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    *
    * Percent-to-fraction conversion happens here, once, so every comparison below is against a raw
    * cosine. `nonNegativeIntOr` rather than `positiveIntOr` because `0` is meaningful for the
-   * RELATIVE floor (a disabled floor) and both floors share this helper. It is not meaningful for
-   * the absolute one, whose schema bounds it at `min: 1`, so 0 never reaches here for that key -
-   * the reader stays deliberately more permissive than the writer.
+   * RELATIVE floor (a disabled floor) and both floors share this helper. `0` is not meaningful for
+   * the absolute floor, and what keeps it out is the READ path, not the write boundary - scripts
+   * and migrations write this collection raw, but both readers re-parse through the setting's own
+   * schema (`min: 1`) and substitute the coded default on failure. Same mechanism
+   * `forcedRetrievalFloorFraction` relies on for its range check.
    *
    * Never throws, and the catch reaches wider than "no adminSettings adapter": the platform-only
    * path calls `getSettingsValue` unguarded, so a settings or DB outage on an overlay-less host
@@ -2554,13 +2556,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //
       // Skipped when the top score is not positive. `topScore` is not derived from `pool` - it is
       // updated one line BEFORE the absolute-floor `continue`, so it tracks every finite scored
-      // candidate while `pool` holds only those that cleared the floor - which means the VARIABLE
-      // can be negative here even though the guard is inert. Inert twice over: the absolute floor
-      // is a percent and so never below 0, so a negative `topScore` implies every score was
-      // rejected and `ranked` is empty; and a negative cutoff would fail the `> 0` test below
-      // anyway. Kept as documentation that a multiplicative floor inverts across zero
-      // (0.85 * -0.2 = -0.17, ABOVE the score it came from), which would matter if a future
-      // absolute floor ever admitted negatives.
+      // candidate while `pool` holds only those that cleared the floor, and can therefore be
+      // negative here. The guard is inert either way: a non-positive `topScore` makes the product
+      // non-positive, so the `> 0` test below takes the unfiltered branch with or without it. Kept
+      // as documentation that a multiplicative floor inverts across zero (0.85 * -0.2 = -0.17,
+      // ABOVE the score it came from), which would matter if a future absolute floor admitted
+      // negatives.
       //
       // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
       // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the

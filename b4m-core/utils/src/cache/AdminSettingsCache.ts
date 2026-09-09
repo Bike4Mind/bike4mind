@@ -15,7 +15,7 @@ export interface PartialAdminSettingsLogger {
 }
 
 // Compile-time proof of that widening, kept in a file the compiler actually reads: no tsconfig in
-// this repo includes `*.test.ts`, so the sibling test exercises the widening at runtime only and
+// this package includes `*.test.ts`, so the sibling test exercises the widening at runtime only and
 // would keep passing if the parameter were narrowed back to `Logger`. This statement would not.
 ({ warn: () => {} }) satisfies ConstructorParameters<typeof AdminSettingsCache>[0];
 
