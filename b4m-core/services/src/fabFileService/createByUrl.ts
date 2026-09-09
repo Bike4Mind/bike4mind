@@ -8,10 +8,34 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, computeContentHash, secureParameters } from '@bike4mind/utils';
 import { fetchAndParseURL } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createFabFile, CreateFabFileAdapters } from './create';
+
+/**
+ * Thrown by `createFabFileByUrl` when the adapter-supplied `checkDuplicate` finds a live match
+ * for the fetched content's hash, BEFORE any row is created - so a caller that dedupes never
+ * strands a row the way a create-then-check ordering would. A thrown error rather than a
+ * changed return type: every other caller (the web URL door, the proposal-admission door)
+ * never supplies `checkDuplicate` and so can never see this thrown, keeping their contract
+ * exactly as it was before this existed.
+ */
+export class DuplicateFabFileError extends Error {
+  constructor(
+    /** The already-live FabFile this fetch's content hash matches. */
+    public readonly existing: IFabFileDocument,
+    /** The title `fetchAndParseURL` resolved for THIS attempt - what the caller should name the skip. */
+    public readonly fetchedTitle: string
+  ) {
+    // Generic on purpose: this class is thrown for ANY `checkDuplicate` caller, not only the Slack
+    // data-lake path - a "data lake" specific message here would misdescribe a future caller that
+    // dedupes against something else. Callers that need lake-specific wording build it themselves
+    // (see `dataLakeLinkIngest.ts`'s catch, which never reads this message).
+    super('Duplicate content already exists');
+    this.name = 'DuplicateFabFileError';
+  }
+}
 
 const createFabFileByUrlSchema = z.object({
   url: z
@@ -73,12 +97,19 @@ type CreateFabFileByUrlAdapters = {
   deleteCreatedFile?: (id: string) => Promise<unknown>;
   /** Forwarded verbatim to `createFabFile` - see its adapter doc for when this must be supplied. */
   administeredOrgIds?: string[];
+  /**
+   * Per-lake content-hash dedup, run AFTER the fetch (so the hash reflects what was actually
+   * retrieved) and BEFORE `createFabFile` (so a match never creates a row). Optional: the web URL
+   * door and the proposal-admission door supply nothing here and are unaffected - only the Slack
+   * link path opts in. Return the existing match to skip, or null to proceed.
+   */
+  checkDuplicate?: (contentHash: string) => Promise<IFabFileDocument | null>;
 };
 
 export const createFabFileByUrl = async (
   userId: string,
   parameters: CreateFabFileByUrlParameters,
-  { db, storage, tags, provenance, deleteCreatedFile, administeredOrgIds }: CreateFabFileByUrlAdapters
+  { db, storage, tags, provenance, deleteCreatedFile, administeredOrgIds, checkDuplicate }: CreateFabFileByUrlAdapters
 ) => {
   const logger = new Logger();
   const params = secureParameters(parameters, createFabFileByUrlSchema);
@@ -88,6 +119,20 @@ export const createFabFileByUrl = async (
   const { textContent, mimeType, title } = await fetchAndParseURL(params.url, { logger });
 
   const fileSize = typeof textContent === 'string' ? Buffer.byteLength(textContent) : textContent.length;
+  // Hashes whatever `fetchAndParseURL` returned - extracted text for most content, raw bytes for a
+  // PDF (see `ingest.ts`'s `urlContent = body` arm). Either way, identical input deterministically
+  // produces identical `textContent`, so this still satisfies "byte-identical fetched bodies are
+  // duplicates" without widening `fetchAndParseURL`'s own contract.
+  //
+  // Only computed/checked/stamped when there is content: an empty fetch (a JS-only or paywalled
+  // page) would otherwise share one `computeContentHash('')` key across every such page, making
+  // unrelated empty fetches collide with each other as false "duplicates".
+  const contentHash = fileSize > 0 ? computeContentHash(textContent) : undefined;
+
+  if (contentHash && checkDuplicate) {
+    const existing = await checkDuplicate(contentHash);
+    if (existing) throw new DuplicateFabFileError(existing, title);
+  }
 
   const fabFile = await createFabFile(
     userId,
@@ -98,6 +143,7 @@ export const createFabFileByUrl = async (
       type: KnowledgeType.URL,
       public: false,
       prefix: 'url',
+      contentHash,
       // Forwarded from the adapters, not from `params` - see the `tags` note above.
       ...(tags && { tags }),
     },
