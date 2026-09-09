@@ -1212,6 +1212,172 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.results.map(r => r.fileId).sort()).toEqual(['covered', 'missed']);
   });
 
+  /**
+   * The alarm for the exact way this cutover failed in production: enabled, indexed, and silently
+   * never running because no chunk carried an `embeddingModel`. Every arm asserts the `reason`,
+   * since that is the only part of the log that tells an operator which of three fixes applies.
+   */
+  describe('flag-on-but-idle alarm', () => {
+    const ALARM = 'no ANN query ran';
+
+    it('reports no-ready-files when the index is queryable but nothing passed the readiness gate', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('f1', { chunkEmbeddingModelStampedAt: undefined })],
+        scanChunks: chunkRows('f1', 2),
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: logger as never }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(vectorSearch).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(ALARM),
+        expect.objectContaining({ reason: 'no-ready-files', backend: 'atlas', rankableFiles: 1 })
+      );
+    });
+
+    it('reports index-not-queryable when the index migrator has not finished', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('f1')],
+        scanChunks: chunkRows('f1', 2),
+        indexQueryable: false,
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: logger as never }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(ALARM),
+        expect.objectContaining({ reason: 'index-not-queryable' })
+      );
+    });
+
+    it('reports no-backend when the flag is on but the deployment has no ANN backend', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds } = annAdapters({
+        files: [annFile('f1')],
+        scanChunks: chunkRows('f1', 2),
+      });
+
+      // No vectorSearch/getAtlasIndexStatus adapters and no vectorIndex: DocumentDB, or any
+      // deployment where the flag was flipped on without the backend behind it.
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: logger as never }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+      } as never);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(ALARM),
+        expect.objectContaining({ reason: 'no-backend', backend: 'none' })
+      );
+    });
+
+    it('stays silent on a healthy ANN query and when the caller never opted in', async () => {
+      const healthyLogger = makeLogger();
+      const healthy = annAdapters({
+        files: [annFile('ready')],
+        annHits: [{ id: 'ready-c0', fabFileId: 'ready', text: 'ann hit', score: 0.95 }],
+      });
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: healthyLogger as never }, {
+        db: {
+          fabfiles: { search: healthy.search },
+          fabfilechunks: {
+            findVectorsByFabFileIds: healthy.findVectorsByFabFileIds,
+            vectorSearch: healthy.vectorSearch,
+            getAtlasIndexStatus: healthy.getAtlasIndexStatus,
+          },
+        },
+      } as never);
+      expect(healthyLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining(ALARM), expect.anything());
+
+      // Flag off is the default for most deployments - scan-only is correct there, not an alarm.
+      const offLogger = makeLogger();
+      const off = annAdapters({ files: [annFile('f1')], scanChunks: chunkRows('f1', 2) });
+      await semanticDataLakeSearch({ ...baseParams(), logger: offLogger as never }, {
+        db: {
+          fabfiles: { search: off.search },
+          fabfilechunks: {
+            findVectorsByFabFileIds: off.findVectorsByFabFileIds,
+            vectorSearch: off.vectorSearch,
+            getAtlasIndexStatus: off.getAtlasIndexStatus,
+          },
+        },
+      } as never);
+      expect(offLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining(ALARM), expect.anything());
+    });
+  });
+
+  /**
+   * The rebucket keys off SATURATION, not bare absence from `filesWithHits`.
+   *
+   * The ANN query is bounded by similarity rank (`limit: topK`), so at most topK files can appear
+   * in `filesWithHits` and every other ready file is absent for the correct reason that it did not
+   * rank. Rebucketing on absence alone made the ANN path's benefit `topK / fileCount`, shrinking
+   * as a lake grows - backwards from the point of the index. These two tests pin the boundary in
+   * both directions; the pair matters more than either alone, since a fix that simply stopped
+   * rebucketing would pass the first and lose the un-indexed-file safety net the second guards.
+   */
+  it('does not rescan an unranked ready file when ANN saturated its limit', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('covered'), annFile('unranked')],
+      // Available to the scan if anything asked for them - the assertion is that nothing does.
+      scanChunks: chunkRows('unranked', 3),
+      annHits: [
+        { id: 'covered-c0', fabFileId: 'covered', text: 'ann hit', score: 0.95 },
+        { id: 'covered-c1', fabFileId: 'covered', text: 'ann hit', score: 0.94 },
+      ],
+    });
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), vectorSearchEnabled: true, topK: 2, logger: logger as never },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    // The point of the index: a ready file that lost on rank costs nothing.
+    expect(result.scan.chunksScanned).toBe(0);
+    expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+    // Both ready files stayed on the ANN route, so neither was scanned.
+    expect(result.scan.annFilesQueried).toBe(2);
+    expect(result.scan.annHits).toBe(2);
+    expect(result.results.map(r => r.fileId)).toEqual(['covered', 'covered']);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('returned no hits for ready files'),
+      expect.anything()
+    );
+  });
+
+  it('still rescans an unranked ready file when ANN came back short of its limit', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('covered'), annFile('unranked')],
+      scanChunks: chunkRows('unranked', 3),
+      // One hit against topK 2: the backend exhausted what it has indexed and still came up short,
+      // so absence is real evidence of missing content rather than a ranking outcome.
+      annHits: [{ id: 'covered-c0', fabFileId: 'covered', text: 'ann hit', score: 0.95 }],
+    });
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), vectorSearchEnabled: true, topK: 2, logger: logger as never },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.chunksScanned).toBe(3);
+    expect(result.scan.annFilesQueried).toBe(1);
+    expect(result.results.map(r => r.fileId)).toContain('unranked');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('returned no hits for ready files'),
+      expect.objectContaining({ fileCount: 1, hitsReturned: 1, limit: 2 })
+    );
+  });
+
   describe('mixed-embeddingModel lake (alternate-model ANN cutover)', () => {
     const SMALL_3 = 'text-embedding-3-small';
     const VOYAGE_3 = 'voyage-3';
