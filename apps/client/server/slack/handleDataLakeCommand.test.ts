@@ -8,17 +8,26 @@ const { ingestSlackFilesIntoLake, ingestSlackLinkIntoLake, buildSlackAccessConte
   ingestSlackLinkIntoLake: vi.fn(),
   buildSlackAccessContext: vi.fn(),
 }));
-const { listDataLakes } = vi.hoisted(() => ({ listDataLakes: vi.fn() }));
+const { listDataLakes, grantedLakeIdsFor } = vi.hoisted(() => ({
+  listDataLakes: vi.fn(),
+  grantedLakeIdsFor: vi.fn(),
+}));
 
 vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes } }));
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeIdsFor } }));
 // Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
 // dispatch and reply composition only. Each path's own behavior has its own test file.
 vi.mock('./dataLakeIngestAuthz', () => ({ buildSlackAccessContext }));
 vi.mock('./dataLakeFileIngest', () => ({ ingestSlackFilesIntoLake }));
 vi.mock('./dataLakeLinkIngest', () => ({ ingestSlackLinkIntoLake }));
 
-import { handleDataLakeCommand, runDataLakeSlackCommand, formatIngestOutcome } from './handleDataLakeCommand';
+import {
+  handleDataLakeCommand,
+  runDataLakeSlackCommand,
+  formatIngestOutcome,
+  slugTier,
+  type ListScope,
+} from './handleDataLakeCommand';
 
 const actor = { id: 'u1', isAdmin: false };
 const dataLakeAccessGrants = { listByLake: vi.fn(), listActiveByLakes: vi.fn(), listByPrincipal: vi.fn() };
@@ -37,6 +46,7 @@ const baseParams = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   buildSlackAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, userTags: [], entitlementKeys: [] });
+  grantedLakeIdsFor.mockResolvedValue([]);
 });
 
 describe('handleDataLakeCommand', () => {
@@ -259,40 +269,57 @@ describe('handleDataLakeCommand', () => {
 
       it('never prints a slug `add` cannot resolve (listed implies addable)', async () => {
         const catalog = [
-          { slug: 'personal', name: 'Personal', canManage: true },
-          { slug: 'ours', name: 'Ours', canManage: true, organizationId: 'org-a' },
-          { slug: 'theirs', name: 'Theirs', canManage: true, organizationId: 'org-b' },
-          { slug: 'open-lake', name: 'Open', canManage: true, organizationId: 'org-b', isPublic: true },
-          { slug: 'notes', name: 'Org-less Notes', canManage: true },
-          { slug: 'notes', name: 'Org Notes', canManage: true, organizationId: 'org-a' },
+          { id: 'personal', slug: 'personal', name: 'Personal', canManage: true },
+          { id: 'ours', slug: 'ours', name: 'Ours', canManage: true, organizationId: 'org-a' },
+          { id: 'theirs', slug: 'theirs', name: 'Theirs', canManage: true, organizationId: 'org-b' },
+          { id: 'open', slug: 'open-lake', name: 'Open', canManage: true, organizationId: 'org-b', isPublic: true },
+          { id: 'notes-orgless', slug: 'notes', name: 'Org-less Notes', canManage: true },
+          { id: 'notes-org', slug: 'notes', name: 'Org Notes', canManage: true, organizationId: 'org-a' },
           // Deliberately NOT uniformly writable: the winning lake for `shared` is unwritable, so
           // `add` refuses the slug and the guard must see the reply omit it rather than print the
           // writable org-less one. A catalog with canManage: true everywhere cannot catch that.
-          { slug: 'shared', name: 'Writable Org-less Shared', canManage: true },
-          { slug: 'shared', name: 'Read-only Org Shared', canManage: false, organizationId: 'org-a' },
+          { id: 'shared-orgless', slug: 'shared', name: 'Writable Org-less Shared', canManage: true },
+          {
+            id: 'shared-org',
+            slug: 'shared',
+            name: 'Read-only Org Shared',
+            canManage: false,
+            organizationId: 'org-a',
+          },
+          // A grant-held (tier 2) lake, present so this guard exercises all three tiers `slugTier`
+          // ranks - not just own-org/org-less - and would catch a future tier this reply omits.
+          { id: 'granted-lake', slug: 'granted-only', name: 'Granted Only', canManage: true, organizationId: 'org-z' },
         ];
         listDataLakes.mockResolvedValue(catalog);
+        grantedLakeIdsFor.mockResolvedValue(['granted-lake']);
 
-        // Mirrors DataLakeModel.findBySlug: an own-org match first (lowest org id), then the
-        // org-less fallback. If that rule changes, this guard is what catches the divergence.
-        const findBySlug = (slug: string) => {
-          const own = catalog
-            .filter(l => l.slug === slug && l.organizationId && adminCtx.organizationIds.includes(l.organizationId))
-            .sort((a, b) => String(a.organizationId).localeCompare(String(b.organizationId)));
-          return own[0] ?? catalog.find(l => l.slug === slug && !l.organizationId) ?? null;
+        // Mirrors `add` by calling the SAME production ranking function `list` itself uses
+        // (`slugTier`, exported from handleDataLakeCommand.ts) rather than a hand-rolled copy of
+        // the arm order - a hand-rolled copy is exactly what let the grant tier go uncovered here
+        // before #2425's review caught it.
+        const resolveBySlug = (slug: string, scope: ListScope, grantedLakeIds: ReadonlySet<string>) => {
+          let best: { lake: (typeof catalog)[number]; tier: 0 | 1 | 2 } | null = null;
+          for (const lake of catalog) {
+            if (lake.slug !== slug) continue;
+            const tier = slugTier(lake, scope, grantedLakeIds);
+            if (tier !== null && (!best || tier < best.tier)) best = { lake, tier };
+          }
+          return best?.lake ?? null;
         };
 
         // Both actors, because the write gate differs: an admin is granted outright on any
         // non-registry lake, so an admin-only run cannot see an unwritable winner at all.
         for (const isAdmin of [true, false]) {
-          buildSlackAccessContext.mockResolvedValue({ ...adminCtx, isAdmin });
+          const scope = { ...adminCtx, isAdmin };
+          buildSlackAccessContext.mockResolvedValue(scope);
 
           const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin } }));
 
           const slugs = printedSlugs(reply);
           expect(slugs.length, `no rows printed for isAdmin=${isAdmin}`).toBeGreaterThan(0);
+          const grantedLakeIds = new Set(['granted-lake']);
           for (const slug of slugs) {
-            const resolved = findBySlug(slug);
+            const resolved = resolveBySlug(slug, scope, grantedLakeIds);
             expect(resolved, `add to \`${slug}\` would be refused`).not.toBeNull();
             expect(reply).toContain(resolved!.name);
             // `add` gates the lake findBySlug returned, with no retry against a same-slug sibling,
@@ -303,6 +330,105 @@ describe('handleDataLakeCommand', () => {
             );
           }
         }
+      });
+
+      it('resolves a foreign-org grant-held lake by slug, mirroring findBySlug (#2425)', async () => {
+        // A lake in an org the caller does not belong to still reaches `add` when the grants
+        // fallback resolves it - `list` must agree, or it omits exactly the lake `add` accepts.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-1', slug: 'granted', name: 'Granted Lake', canManage: true, organizationId: 'org-b' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue(['lake-1']);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('granted');
+        expect(reply).toContain('Granted Lake');
+      });
+
+      it('still omits a foreign-org lake with NO grant, even though listDataLakes returned it', async () => {
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-1', slug: 'ungranted', name: 'Ungranted Lake', canManage: true, organizationId: 'org-b' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue([]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toMatch(/cannot add to any data lakes/i);
+      });
+
+      it("prefers the caller's own-org lake over a same-slug foreign-org grant-held one", async () => {
+        // findBySlug never reaches its grant-fallback arm when an own-org match exists for the
+        // slug - the grant tier must lose the tie regardless of org-id string ordering.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-own', slug: 'notes', name: 'Own Org Notes', canManage: true, organizationId: 'org-a' },
+          { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue(['lake-foreign']);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('Own Org Notes');
+        expect(reply).not.toContain('Foreign Grant Notes');
+      });
+
+      it('prefers a personal (org-less) lake over a same-slug foreign-org grant-held one', async () => {
+        // The other new tie this change introduces: org-less (tier 1) still beats grant-held
+        // (tier 2), so a caller's own personal lake wins the slug over a lake transferred to them
+        // from a foreign org - decided by tier alone here, not by name/id ordering.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-personal', slug: 'notes', name: 'Personal Notes', canManage: true },
+          { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue(['lake-foreign']);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('Personal Notes');
+        expect(reply).not.toContain('Foreign Grant Notes');
+      });
+
+      it('picks the lower lake id between two same-slug foreign-org grant-held lakes', async () => {
+        // Mirrors DataLakeModel.findBySlugAmongIds' `.sort({_id: 1})`: two grant-held lakes across
+        // two different non-member orgs sharing a slug must resolve to the same winner every time.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-b', slug: 'shared-grant', name: 'From Org B', canManage: true, organizationId: 'org-b' },
+          { id: 'lake-a', slug: 'shared-grant', name: 'From Org A', canManage: true, organizationId: 'org-a-foreign' },
+        ]);
+        grantedLakeIdsFor.mockResolvedValue(['lake-b', 'lake-a']);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('From Org A');
+        expect(reply).not.toContain('From Org B');
+      });
+
+      it('resolves two same-slug org-less lakes deterministically (null vs empty-string organizationId)', async () => {
+        // #2425 review: null and '' are both stored as "org-less" but are distinct index keys, so
+        // two org-less lakes CAN share a slug - unlike own-org/grant-held, this had no tie-break at
+        // all before this fix. orgSortKey treats null/undefined (BSON Null) as sorting before any
+        // string, mirroring DataLakeModel's own `.sort({organizationId:1})` on this arm.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-empty', slug: 'orgless-tie', name: 'Empty String Org', canManage: true, organizationId: '' },
+          { id: 'lake-null', slug: 'orgless-tie', name: 'Null Org', canManage: true, organizationId: undefined },
+        ]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('Null Org');
+        expect(reply).not.toContain('Empty String Org');
+      });
+
+      it('slugTier ranks a foreign-org lake null (unaddressable) when no grant covers it', () => {
+        // Direct unit coverage of the exported ranker itself, not just through the Slack reply -
+        // the same function `list` and this guard both call, so nothing here can drift from it.
+        const scope: ListScope = { isAdmin: false, organizationIds: ['org-a'] };
+        const foreign = { id: 'x', slug: 'x', name: 'X', organizationId: 'org-z', canManage: true };
+
+        expect(slugTier(foreign, scope, new Set())).toBeNull();
+        expect(slugTier(foreign, scope, new Set(['x']))).toBe(2);
+        expect(slugTier({ ...foreign, organizationId: 'org-a' }, scope, new Set())).toBe(0);
+        expect(slugTier({ ...foreign, organizationId: undefined }, scope, new Set())).toBe(1);
       });
     });
   });

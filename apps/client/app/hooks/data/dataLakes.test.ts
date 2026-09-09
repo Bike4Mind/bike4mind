@@ -64,11 +64,14 @@ import {
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
   useAddFileToDataLake,
+  useRecordMembershipDecision,
   useRemoveFileFromDataLake,
   useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
   useArchiveDataLake,
+  useGetTransitionalDataLakes,
+  useRetryLakeLifecycle,
   useTransferLakeOwnership,
   usePurgeDataLakeDocument,
 } from './dataLakes';
@@ -448,6 +451,93 @@ describe('useAddFileToDataLake', () => {
  * while afterwards. That is why these tests mock the endpoint to keep returning BOTH lakes - a
  * refetch on the purge path is guaranteed to see the pre-sweep truth and put the row back (#1487).
  */
+describe('useRecordMembershipDecision', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRecordMembershipDecision(), { wrapper });
+  };
+
+  const decided = (removedFabFileIds: string[]) => ({
+    data: {
+      success: true,
+      fileName: 'policy.md',
+      decision: removedFabFileIds.length > 0 ? 'keep-newest' : 'keep-both',
+      tier: 'fileName',
+      bucket: 'differing',
+      removedFabFileIds,
+    },
+  });
+
+  beforeEach(() => {
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+  });
+
+  it('offers Undo on a replacement and restores EVERY copy the ruling removed', async () => {
+    // The dialog's copy promises an Undo and the server already mints a restore record per removed
+    // member; this toast is the only affordance that can spend them (see UNDO_TOAST_DURATION_MS -
+    // there is no list route and no "recently removed" panel). A plain success toast here left a
+    // destructive action with no way back for a non-owner.
+    const successMock = toast.success as ReturnType<typeof vi.fn>;
+    successMock.mockReturnValue('decision-toast');
+    apiPost.mockResolvedValueOnce(decided(['old-1', 'old-2']));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-newest' });
+    });
+
+    const call = successMock.mock.calls.find(c => c[1]?.action?.label === 'Undo') as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    expect(call[0]).toBe('Replaced: 2 older copies of "policy.md" left this lake.');
+
+    apiPost.mockResolvedValue({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+    act(() => {
+      call[1].action.onClick();
+    });
+
+    // One restore per removed member - a single-file Undo would have stranded the rest.
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/old-1');
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/old-2');
+    });
+  });
+
+  it('counts one replaced copy in the singular', async () => {
+    apiPost.mockResolvedValueOnce(decided(['old-1']));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-newest' });
+    });
+
+    expect((toast.success as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      'Replaced: 1 older copy of "policy.md" left this lake.'
+    );
+  });
+
+  it('offers no Undo for keep-both, and does not call a group of three "both copies"', async () => {
+    // QA hit a 3-copy group, where "both" reads as a miscount of what the ruling covered. There is
+    // also nothing to undo: keep-both removes nothing, so no restore record exists to spend.
+    apiPost.mockResolvedValueOnce(decided([]));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fileName: 'policy.md', decision: 'keep-both' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(
+      'Kept every copy of "policy.md". You will not be asked again unless they change.'
+    );
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('useCleanupDataLake queued purge', () => {
   const deletedLake = (id: string) => ({ id, name: `Lake ${id}`, fileTagPrefix: `${id}:` });
   const listing = (...ids: string[]) => ({ data: { data: ids.map(deletedLake) } });
@@ -1253,5 +1343,84 @@ describe('usePurgeDataLakeDocument', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith("Only the file's owner can permanently delete this document");
+  });
+});
+
+describe('the needs-attention list and its retry', () => {
+  const mountWith = () => {
+    // The api spies are module-scoped and shared, so a "never posted" assertion below would
+    // otherwise read a sibling case's call.
+    apiGet.mockClear();
+    apiPost.mockClear();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { wrapper, invalidate };
+  };
+  const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
+    invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
+
+  it('reads the transitional route and unwraps the data envelope', async () => {
+    const { wrapper } = mountWith();
+    const row = {
+      id: 'stuck',
+      name: 'Stuck',
+      slug: 'stuck',
+      fileTagPrefix: 'st:',
+      status: 'archiving',
+      retryAction: 'archive',
+    };
+    apiGet.mockResolvedValueOnce({ data: { data: [row] } });
+
+    const { result } = renderHook(() => useGetTransitionalDataLakes(), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual([row]));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/transitional');
+  });
+
+  it('posts the resolved action on the existing lifecycle endpoint', async () => {
+    const { wrapper } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useRetryLakeLifecycle(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', action: 'unarchive' });
+    });
+
+    // The same call that stranded the lake - not a repair endpoint.
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
+  });
+
+  it('refreshes the needs-attention list after a retry settles, so the row leaves it', async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useRetryLakeLifecycle(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', action: 'archive' });
+    });
+
+    const keys = invalidatedKeys(invalidate);
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'transitional']));
+    // And the same surfaces a fixed-action lifecycle hook refreshes: the retry SETTLES the lake,
+    // so the archived/deleted catalogs and the tag tree move with it.
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'archived']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'deleted']));
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it('a fixed-action lifecycle hook refreshes the needs-attention list too', async () => {
+    // Archiving a lake is what PUTS it in 'archiving'; if this list did not refresh, a lake that
+    // then stranded would only appear after an unrelated refetch.
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['data-lakes', 'transitional']));
   });
 });

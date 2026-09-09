@@ -11,11 +11,6 @@ import type { ManagerLake } from './shared';
 // rather than needing a QueryClientProvider.
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => ({ data: null, isError: false, isLoading: false }),
-  DRIVE_STATUS_BADGE: {
-    connected: { label: 'Connected', color: 'success' },
-    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-    credential_error: { label: 'Credential error', color: 'danger' },
-  },
 }));
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this
@@ -59,6 +54,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useLakeConvergencePlan: () => ({ data: undefined }),
     useConvergeDataLake: mutation,
     useGetDataLakeHealth: () => ({ data: undefined, isLoading: false }),
+    // Read by DuplicateAdmissionsChip, which this panel renders unconditionally. A factory mock
+    // replaces the whole module, so an unlisted export is `undefined` and every render here throws.
+    // Undefined data leaves the chip with no open groups, so it renders null and stays out of the way.
+    useGetLakeMembershipDuplicates: () => ({ data: undefined, isLoading: false }),
     useGetLakeMemoryHealth: (...args: unknown[]) => useGetLakeMemoryHealth(...(args as [])),
     useBuildLakeMemory: (id: string | null) => {
       buildHookSpy(id);

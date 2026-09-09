@@ -36,16 +36,15 @@ const convergeMutate = vi.fn((_vars?: { limit?: number; confirm?: boolean }, opt
 // empty-section rendering.
 const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+// The needs-attention list defaults to EMPTY, not in-flight: its section renders only when
+// non-empty, so an empty default is what keeps every other case in this file unaffected.
+const useGetTransitionalDataLakes = vi.fn(() => ({ data: [] as unknown[] | undefined }));
+const retryMutate = vi.fn();
 // LakeInfoPanel's Drive chip and the purge dialog's warning both read the connection. Default to
 // "no connection" so existing cases are unaffected; the Drive-specific cases override it.
 const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: false, isLoading: false }));
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => useLakeDriveConnection(),
-  DRIVE_STATUS_BADGE: {
-    connected: { label: 'Connected', color: 'success' },
-    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-    credential_error: { label: 'Credential error', color: 'danger' },
-  },
 }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
@@ -57,6 +56,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
     useGetArchivedDataLakes: () => useGetArchivedDataLakes(),
     useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
+    useGetTransitionalDataLakes: () => useGetTransitionalDataLakes(),
+    useRetryLakeLifecycle: () => ({ mutate: retryMutate, isPending: false }),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
     // LakeInfoPanel renders <LakeHealthBadge> unconditionally; the badge renders null on no data.
@@ -64,6 +65,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetLakeMemoryHealth: () => ({ data: undefined, isLoading: false }),
     useBuildLakeMemory: mutation,
     usePurgeLakeMemory: mutation,
+    // The duplicates chip in the info panel reads this. A factory mock replaces the whole module,
+    // so an unlisted export is `undefined` and every render here throws - not a missing assertion
+    // but 41 broken tests.
+    useGetLakeMembershipDuplicates: () => ({ data: undefined, isLoading: false }),
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),
@@ -286,6 +291,9 @@ beforeEach(() => {
   useGetArchivedDataLakes.mockReturnValue({ data: undefined });
   useGetDeletedDataLakes.mockReset();
   useGetDeletedDataLakes.mockReturnValue({ data: undefined });
+  useGetTransitionalDataLakes.mockReset();
+  useGetTransitionalDataLakes.mockReturnValue({ data: [] });
+  retryMutate.mockClear();
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
   useDataLakeWizardStore.setState({ managerTab: 'mine' });
@@ -1261,5 +1269,135 @@ describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
     expect(screen.getByTestId('datalake-converge-confirm')).toHaveTextContent(
       '4 file(s) are excluded because another data lake requires a different passage target'
     );
+  });
+});
+
+describe('DataLakeManagerPanel - needs-attention section', () => {
+  /** A lake stranded mid-lifecycle, as GET /api/data-lakes/transitional serves it. `retryAction`
+   *  is resolved server-side, so the fixture states it rather than deriving it from the status -
+   *  which is the point: for 'restoring' the two differ per axis. */
+  const strandedLake = (status: string, id = 'stuck', retryAction?: string) => ({
+    id,
+    name: `Stuck ${id}`,
+    slug: id,
+    fileTagPrefix: 'st:',
+    status,
+    updatedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+    retryAction,
+  });
+
+  it('renders no section at all when nothing is stranded', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [] });
+    renderPanel();
+    // Absent, not an empty "No files" header like Archived/Deleted: on a healthy install this
+    // section is not part of the app's furniture.
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+
+  it('renders no section while the list is still in flight', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: undefined });
+    renderPanel();
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+
+  it('shows a stranded lake with the status it is stuck in', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving', 'stuck', 'archive')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-section')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-transitional-section-toggle')).toHaveTextContent('Needs attention');
+    // The status is the row's whole point: without it the reader cannot tell what Retry will do.
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('archiving');
+  });
+
+  // The service deliberately lists a lake whose `updatedAt` it could not parse (an absent
+  // timestamp proves nothing about being busy), so the tooltip must not then advertise the gap.
+  it('drops the since clause for a lake with an unparseable timestamp', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({
+      data: [{ ...strandedLake('archiving', 'stuck', 'archive'), updatedAt: undefined }],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.hover(screen.getByTestId('datalake-transitional-status-stuck'));
+    expect(await screen.findByText("In 'archiving'")).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
+  });
+
+  it('retries with the action the row carries, not one derived from the status', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('deleting', 'stuck', 'delete')] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-stuck'));
+    const retry = screen.getByTestId('datalake-retry-btn-stuck');
+    // The action is named on the item, not left as a bare "Retry" - the reader is about to re-run
+    // a lifecycle operation and must see which one.
+    expect(retry).toHaveTextContent('Retry delete');
+    await user.click(retry);
+
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', action: 'delete' });
+  });
+
+  // 'restoring' is held by both reversal axes, so the row must post whatever the server resolved -
+  // a client that mapped the status to a fixed action would send an archive-axis lake through the
+  // delete-axis recovery, which strands it past any UI path back.
+  it.each([
+    ['unarchive', 'Retry unarchive'],
+    ['restore', 'Retry restore'],
+  ])('posts %s for a restoring row the server resolved that way', async (action, label) => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('restoring', 'stuck', action)] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-stuck'));
+    expect(screen.getByTestId('datalake-retry-btn-stuck')).toHaveTextContent(label);
+    await user.click(screen.getByTestId('datalake-retry-btn-stuck'));
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'stuck', action });
+  });
+
+  it('lists a restoring lake the server could not resolve an axis for, read-only', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('restoring')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('restoring');
+    expect(screen.queryByTestId('datalake-retry-btn-stuck')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-stuck')).not.toBeInTheDocument();
+  });
+
+  it('lists a purging lake read-only, with no retry and no dead menu trigger', () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('purging')] });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-transitional-status-stuck')).toHaveTextContent('purging');
+    // A purge is already accepted and its sweep irreversible, so there is nothing to retry - and
+    // the row must not offer a menu trigger that would open empty.
+    expect(screen.queryByTestId('datalake-retry-btn-stuck')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-stuck')).not.toBeInTheDocument();
+  });
+
+  it('keeps the retryable rows actionable when a purging lake is listed beside them', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({
+      data: [strandedLake('purging', 'purger'), strandedLake('archiving', 'archiver', 'archive')],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(screen.queryByTestId('datalake-transitional-section-menu-btn-purger')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-transitional-section-menu-btn-archiver'));
+    await user.click(screen.getByTestId('datalake-retry-btn-archiver'));
+    expect(retryMutate).toHaveBeenCalledWith({ id: 'archiver', action: 'archive' });
+  });
+
+  // The section gates on non-empty, and the sidebar search narrows it: gating on the unfiltered
+  // list would render a header with an empty body and no empty-state label.
+  it('drops the whole section when the search matches no stranded lake', async () => {
+    useGetTransitionalDataLakes.mockReturnValue({ data: [strandedLake('archiving', 'stuck', 'archive')] });
+    const user = userEvent.setup();
+    renderPanel();
+    expect(screen.getByTestId('datalake-transitional-section')).toBeInTheDocument();
+
+    await user.type(screen.getByTestId('datalake-manager-search').querySelector('input')!, 'zzz');
+    expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
   });
 });

@@ -313,6 +313,16 @@ export interface IAgentExecution {
    * subagent / DAG children so a delegating run cannot route around the opt-out.
    */
   enableArtifacts?: boolean;
+  /**
+   * The orchestration profile's deniedTools, persisted when the profile is resolved (new
+   * executions; the surface-scoped optimizer profile re-resolves every invocation and does
+   * not need this copy). Continuations re-read it because the profile itself does not
+   * survive a Lambda handoff - `startPayload.agentId` is gone on a resume, so a persisted
+   * agent's denials would otherwise evaporate from the first permission card or handoff.
+   * Same durability pattern as `enableLattice` above. Distinct from `deniedTools` below,
+   * which is the per-execution user-approval denial list.
+   */
+  profileDeniedTools?: string[];
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -675,6 +685,9 @@ const AgentExecutionSchema = new mongoose.Schema(
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
     enableArtifacts: { type: Boolean },
+    // `default: undefined` so an absent field stays absent (a bare [String] would
+    // materialize [] on every doc, indistinguishable from "profile denies nothing").
+    profileDeniedTools: { type: [String], default: undefined },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
@@ -1325,6 +1338,12 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async updateConnectionId(id: string, connectionId: string): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { connectionId } });
+  }
+
+  /** Written once when the orchestration profile resolves; continuations re-read it
+   *  (see IAgentExecution.profileDeniedTools). */
+  async persistProfileDeniedTools(id: string, profileDeniedTools: string[]): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { profileDeniedTools } });
   }
 
   async persistMementoIds(id: string, mementoIds: string[]): Promise<void> {

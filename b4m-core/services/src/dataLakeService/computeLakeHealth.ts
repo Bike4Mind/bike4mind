@@ -19,8 +19,7 @@ import {
   type LakeMembershipReport,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
-import { isFallbackLake } from './assertLakeAccess';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSetting';
 
 /**
@@ -28,7 +27,7 @@ import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSet
  * handful of numbers, so this is generous; it exists so a pathological lake degrades LOUDLY (a logged,
  * flagged partial report) instead of trying to load unbounded rows. Real lakes are far below it.
  */
-const MEMBER_SCAN_LIMIT = 25_000;
+export const MEMBER_SCAN_LIMIT = 25_000;
 /** How many failing members the report carries for the drill-down. The count is always exact. */
 const AFFECTED_MEMBERS_RETURNED = 200;
 /**
@@ -57,7 +56,7 @@ const MEMBERSHIP_GROUPS_RETURNED = 100;
  * objects. Mirrors AFFECTED_MEMBERS_RETURNED, and like it every group keeps an exact `memberCount`
  * beside the capped array so no reader can be told there are fewer.
  */
-const MEMBERSHIP_GROUP_MEMBERS_RETURNED = 200;
+export const MEMBERSHIP_GROUP_MEMBERS_RETURNED = 200;
 
 /**
  * Structural, not imported from `@bike4mind/database` (services cannot depend on it - see
@@ -138,9 +137,8 @@ export async function computeLakeHealth(
   // ONE scope for both reads and for the disclosure. A registry lake has no backing document, so its
   // `createdByUserId` is `''` (assertLakeAccess) and an `owned` scope would fail closed to
   // meta-tag-only - silently dropping the very arm those lakes are mostly made of, while the
-  // disclosure still named a prefix. Branch here exactly as the sibling read paths do (see
-  // GET /api/data-lakes/:id/articles), and never re-derive the disclosure from the lake document.
-  const scope = isFallbackLake(lake) ? registryMembershipScope(lake) : lakeMembershipScope(lake);
+  // disclosure still named a prefix. Never re-derive the disclosure from the lake document.
+  const scope = resolveLakeMembershipScope(lake);
 
   // Defense in depth: `datalakeTag` is `required: true` on the lake, but an absent one would serialize
   // to `null` in the membership `$match` and degrade the query to "files with no tags" across every
@@ -300,7 +298,7 @@ function storedInconsistency(
  * name an arm that did not run - which it did on every registry lake, and would again for any other
  * reason the filter drops a prefix (a reserved namespace, say).
  */
-function membershipScopeDisclosure(scope: DataLakeMembershipScope): LakeMembershipReport['scope'] {
+export function membershipScopeDisclosure(scope: DataLakeMembershipScope): LakeMembershipReport['scope'] {
   return {
     // Empty string rather than null is how a registry lake's synthetic document spells "no creator",
     // so `??` was not enough: it shipped `''`, which matches neither documented state. The polarity

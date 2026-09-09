@@ -81,7 +81,7 @@ export async function finalizeBatchIfComplete(
   if (!batch) return;
   if (batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles < batch.totalFiles) return;
 
-  const outcome = batch.failedFiles > 0 ? 'completed_with_errors' : 'completed';
+  const outcome = resolveBatchOutcome(batch);
   const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, outcome);
   if (!finalized) return; // another handler finalized first — don't double-recompute.
 
@@ -119,6 +119,33 @@ export async function finalizeBatchIfComplete(
 /** True once a batch has reached its completion threshold. */
 export function isBatchComplete(batch: IDataLakeBatchDocument | null): boolean {
   return !!batch && batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles >= batch.totalFiles;
+}
+
+/**
+ * Which terminal status a finished batch settles as. The single source of truth for that decision:
+ * the persisted transition above and the six `data_lake_batch_progress` websocket payloads that
+ * report it (objectCreated, fabFileChunk x3, fabFileVectorize x2) each open-coded this expression,
+ * so the record and the client's view of the same batch could disagree.
+ *
+ * `deferredFiles` counts candidates a multi-run Drive chain planned and then wrote off unfinished, so
+ * a batch carrying any is NOT a clean success even when nothing failed - the files are missing from
+ * the lake. It is deliberately absent from `isBatchComplete`'s threshold: a deferred candidate mints
+ * no manifest entry and no counter, so gating completion on it would strand every stopped-short batch
+ * in `processing` until the reconciler force-failed it. The threshold decides WHETHER a batch is
+ * done; this decides whether it went well (#2394).
+ */
+export function resolveBatchOutcome(batch: IDataLakeBatchDocument): 'completed' | 'completed_with_errors' {
+  return batch.failedFiles > 0 || (batch.deferredFiles ?? 0) > 0 ? 'completed_with_errors' : 'completed';
+}
+
+/**
+ * The terminal status to REPORT for a batch, or `undefined` while it has not finished - the shape the
+ * websocket progress payloads want, so they stay in lockstep with what was actually persisted.
+ */
+export function completedBatchStatus(
+  batch: IDataLakeBatchDocument | null
+): 'completed' | 'completed_with_errors' | undefined {
+  return batch && isBatchComplete(batch) ? resolveBatchOutcome(batch) : undefined;
 }
 
 /**

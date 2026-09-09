@@ -51,13 +51,32 @@ is pressed. It never runs on its own -- opening this page reads nothing.
 
 :::warning Re-check after a provider key rotation
 A rate limit belongs to the provider organization behind the key, so rotating that key can change
-the ceiling -- to a different tier, or to a different organization entirely. Nothing detects this on
-its own today: a value read once and typed into a lever stays there, silently describing an account
-that may no longer be the one doing the work.
+the ceiling -- to a different tier, or to a different organization entirely.
 
-Press **Check provider limits** again after any embedding key rotation and reconcile the levers with
-what it reports. This matters most on environments where the key is set by an operator and not held
-by anyone day to day, which is precisely where a stale number can sit unnoticed for a long time.
+On OpenAI you do not have to remember to look. Every OpenAI embedding call already carries the
+ceiling in its response headers, from ingest and from query alike, so workers report what they
+measure without being asked and without spending anything extra:
+
+- A key rotated to a **different provider organization** reports as a fresh `[embedding-limits] ...
+  ceiling measured` line at info level, naming an organization the log has not carried before. A new
+  organization appearing there is itself the signal that the account behind the key moved.
+- A ceiling that moves **on the organization you already had** -- a tier or quota change -- logs an
+  `[embedding-limits] ... ceiling CHANGED` warning naming the old figure and the new one.
+
+Every line names the provider account it describes. That matters because a user can store their own
+provider key under **Profile -> Settings -> API Keys**, and their embedding calls then report their
+own organization's ceiling rather than the platform account's. Check which account a line names
+before reconciling a platform lever against its figure.
+
+Automatic reporting is OpenAI-only today. VoyageAI publishes the same headers but reaches the
+provider through a different SDK call, so it reports nothing on its own -- **Check provider limits**
+still reads it on demand. Bedrock and Ollama publish no such headers at all; see [When it says the
+limits are unavailable](#when-it-says-the-limits-are-unavailable).
+
+That reporting tells you a reconciliation is due; it does not perform one. Press **Check provider
+limits** and bring the levers back in line with what it reports. This matters most on environments
+where the key is set by an operator and not held by anyone day to day, which is precisely where a
+stale number could otherwise sit unnoticed for a long time.
 :::
 
 ### When it says the limits are unavailable
@@ -77,8 +96,11 @@ job. The message names which one: a budget, the master switch, or a throughput l
 named lever, then re-index the file with **Re-process** on the file itself.
 
 **The measured ceiling changed since last time.** Expected after a provider key rotation - the new
-key may belong to a different tier or organization. Re-read the levers against the new figure; there
-is no automatic reconciliation.
+key may belong to a different tier or organization. Search the ingest logs for `[embedding-limits]`
+to see what each worker measured, when, and for which account. Confirm the line names the platform
+account before acting on it: a user with their own stored provider key reports their organization's
+ceiling, not yours. Then re-read the levers against the new figure - the change reports itself, but
+reconciling it is still a deliberate operator action.
 
 **A lever change did not take effect.** Settings are cached in-process for up to five minutes, so a
 running worker can keep using the previous value for a few minutes after a save. Wait it out before

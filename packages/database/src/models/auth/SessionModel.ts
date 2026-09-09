@@ -286,8 +286,17 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
 
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {
+    // Scope the match to the owner: the conversation id is client-controlled (it comes
+    // straight from the uploaded export), so without userId a forged id colliding with
+    // another user's session would match their row and re-own it via $set. Scoping is
+    // safe because no unique index exists on openaiConversationId, so a cross-tenant
+    // collision falls through to upsert and inserts a fresh row for this user.
+    const { userId } = update;
+    if (!userId) {
+      throw new Error('upsertByOpenaiConversationId requires userId in update to scope ownership');
+    }
     const query = this.sessionModel.findOneAndUpdate(
-      { openaiConversationId },
+      { openaiConversationId, userId },
       { $set: update },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -299,8 +308,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return query;
   }
   async upsertByClaudeConversationId(claudeConversationId: string, update: Partial<ISession>) {
+    // See `upsertByOpenaiConversationId` above: scope the match to the owner so a forged
+    // client-controlled conversation id cannot re-own another user's session.
+    const { userId } = update;
+    if (!userId) {
+      throw new Error('upsertByClaudeConversationId requires userId in update to scope ownership');
+    }
     const query = this.sessionModel.findOneAndUpdate(
-      { claudeConversationId },
+      { claudeConversationId, userId },
       { $set: update },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );

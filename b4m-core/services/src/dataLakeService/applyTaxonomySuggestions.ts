@@ -8,11 +8,13 @@ import type {
 import { BadRequestError, NotFoundError, folderTagForFile, tagsForFile } from '@bike4mind/common';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
-import { collidesWithRegistryPrefix } from './tagPrefixCollision';
+import { decideStampPrefix, stampRefusalMessage, UNVERIFIED_PREFIX_OVERLAP_REFUSAL } from './fallbackLakeTags';
 
 interface ApplyTaxonomySuggestionsAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById'>;
+    // `find` is not read directly here - `decideStampPrefix` needs it for the dynamic
+    // prefix-overlap lookup in the gate below.
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findById' | 'setTaxonomyStatusIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'findByBatchId' | 'bulkUpdateTags'>;
@@ -64,16 +66,28 @@ export const applyTaxonomySuggestions = async (
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to apply tag suggestions for this data lake');
   }
-  // A prefix colliding with a STATIC REGISTRY lake (e.g. opti:) has no owning document, so its
-  // read arm is an ownership BYPASS - stamping tags under it would expose this lake's files to
-  // everyone entitled to the registry lake. Create already refuses such a prefix (see
-  // createDataLake.ts); this only catches a row that predates that check.
-  if (collidesWithRegistryPrefix(lake.fileTagPrefix)) {
-    // No admin remedy exists today - there is no path to change a lake's fileTagPrefix after
-    // creation - so this refusal is not pointing anyone at a fix that doesn't exist.
-    throw new BadRequestError(
-      "This lake's tag prefix overlaps a built-in data lake, so new tags cannot be applied to it."
-    );
+  // The FULL prefix gate, the same one `setDataLakeFileTags` runs, from the same shared messages:
+  // this door writes caller-authored names under `lake.fileTagPrefix` across a whole batch, so
+  // every reason that makes a prefix unusable for one file makes it unusable for thousands. It
+  // previously checked only the static-registry collision and wrote anyway for the other three,
+  // which meant the same lake could accept a batch apply while refusing a single-file tag edit
+  // (#2398). Ahead of the claim below, so a refusal cannot strand the batch in 'applying'.
+  //
+  // FAILS CLOSED on `overlapCheckFailed` for the reason that door does: an unverified overlap must
+  // not let a curator mint prefix-arm membership - and therefore read access - in a lake they may
+  // hold no rights over. The live reconciler and the backfill migration each make their own call
+  // on that flag; see `LakeStampDecision`.
+  //
+  // No admin remedy exists today - there is no path to change a lake's fileTagPrefix after
+  // creation - so these refusals are not pointing anyone at a fix that doesn't exist. Create
+  // already rejects a colliding prefix (see createDataLake.ts), so only rows predating that check
+  // reach them.
+  const prefixDecision = await decideStampPrefix(lake, { dataLakes: db.dataLakes, logger });
+  if (!prefixDecision.stamp) {
+    throw new BadRequestError(stampRefusalMessage(prefixDecision));
+  }
+  if (prefixDecision.overlapCheckFailed) {
+    throw new BadRequestError(UNVERIFIED_PREFIX_OVERLAP_REFUSAL);
   }
 
   // Guarded claim: only a batch whose suggestions are 'ready' (and not already being applied

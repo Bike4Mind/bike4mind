@@ -115,7 +115,13 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
   });
 
   it('PUT strips returnValue for a sharee', async () => {
-    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'owner', users: [{ userId: 'jwt-user' }] });
+    // Holds update, because PUT is gated on update-level access; redaction still applies to any
+    // non-owner, which is what this asserts.
+    mockSessionFindById.mockResolvedValue({
+      id: 'sess-1',
+      userId: 'owner',
+      users: [{ userId: 'jwt-user', permissions: ['read', 'update'] }],
+    });
     const { req, res } = fire({ method: 'PUT', body: { reply: 'updated' } });
     await handler(req, res);
 

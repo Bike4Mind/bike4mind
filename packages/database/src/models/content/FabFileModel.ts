@@ -12,7 +12,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IFabFileVersion,
-  type MembershipArm,
+  type LakeMembershipMemberRow,
   FabFileSourceType,
   KnowledgeType,
   normalizeTagPrefix,
@@ -45,6 +45,43 @@ import {
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
 const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
+
+/**
+ * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
+ * (`findDataLakeMembershipMembers`) and the per-name sibling lookup
+ * (`findLakeMemberSiblingsByFileName`). One declaration because the two feed the SAME pure grouping:
+ * a field projected by one and not the other sends the identity refinement down a weaker tier on
+ * whichever path forgot it, with no type error and no visible failure - the admission checkpoint
+ * would just quietly stop distinguishing two `README.md` files that the health report does.
+ *
+ * Shape is pinned by `LakeMembershipMemberRow`.
+ */
+function lakeMembershipMemberProjection(scope: DataLakeMembershipScope): Record<string, unknown> {
+  return {
+    _id: 0,
+    fabFileId: { $toString: '$_id' },
+    fileName: 1,
+    // $ifNull collapses ABSENT to null here on purpose: at this layer both mean "no
+    // fingerprint", and the pure summarizer refuses to prove identity from either (see
+    // isFingerprint). The tri-state distinction matters in the datastore, not in this report.
+    serverTextHash: { $ifNull: ['$serverTextHash', null] },
+    fileSize: { $ifNull: ['$fileSize', null] },
+    createdAt: { $ifNull: ['$createdAt', null] },
+    // Neither arm carries an ownership conjunct for a registry lake, so a same-name group can
+    // span contributors. The repair arm gates deletion on that; without it here the payload
+    // cannot express the gate.
+    userId: { $ifNull: [{ $toString: '$userId' }, null] },
+    // The two stronger source-identity signals (#2238). Null on the doors that record neither,
+    // which is the file-name tier this report used before they existed.
+    relativePath: { $ifNull: ['$relativePath', null] },
+    driveFileId: { $ifNull: ['$driveFileId', null] },
+    // Which arm admitted this member. The meta-tag is authoritative when present; everything
+    // else reaching the caller's $match did so through the prefix arm.
+    arm: {
+      $cond: [{ $in: [scope.datalakeTag, { $ifNull: ['$tags.name', []] }] }, 'meta-tag', 'prefix'],
+    },
+  };
+}
 
 /**
  * Trim, then drop prefixes that cannot be anchored into a meaningful regex. A blank entry
@@ -757,9 +794,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const docs = await this.fabFileModel
       .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsByIds') } })
       .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized')
-      .lean<
-        ({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]
-      >();
+      .lean<({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]>();
     // `.lean()` skips the `id` virtual, so map it explicitly rather than leaning on toJSON (which
     // would defeat the projection by hydrating the document first).
     return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));
@@ -1592,17 +1627,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findDataLakeMembershipMembers(
     scope: DataLakeMembershipScope,
     limit = 25_000
-  ): Promise<
-    Array<{
-      fabFileId: string;
-      fileName?: string;
-      serverTextHash: string | null;
-      fileSize: number | null;
-      createdAt: Date | null;
-      userId: string | null;
-      arm: MembershipArm;
-    }>
-  > {
+  ): Promise<LakeMembershipMemberRow[]> {
     return this.fabFileModel.aggregate([
       {
         // buildDataLakeMembershipQuery, NOT a spread - the prefix arm is itself a top-level `$or`,
@@ -1618,28 +1643,49 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       // comparable to the next one.
       { $sort: { _id: 1 } },
       { $limit: limit + 1 },
+      { $project: lakeMembershipMemberProjection(scope) },
+    ]);
+  }
+
+  async findLakeMemberSiblingsByFileName(
+    scope: DataLakeMembershipScope,
+    fileName: string,
+    excludeFabFileId?: string | null,
+    limit = 50
+  ): Promise<LakeMembershipMemberRow[]> {
+    // An empty name matches nothing by design: `buildDuplicateGroups` skips a nameless member, so a
+    // lookup on one would fetch a set no caller can group. Guarded here rather than trusted, because
+    // an unguarded `fileName: ''` is a plain tag-range scan of the whole lake.
+    if (!fileName) return [];
+    // An id that cannot address a row is a caller bug, and the safe direction is "no siblings": the
+    // admission check is report-only, so no offer costs nothing, while skipping the exclusion below
+    // would report the admitted member as its own duplicate. `usableObjectIds` warns as it drops.
+    // A caller that passes NO id wants the whole group and is not affected.
+    const [excludeId] = usableObjectIds(excludeFabFileId ? [excludeFabFileId] : [], 'findLakeMemberSiblingsByFileName');
+    if (excludeFabFileId && !excludeId) return [];
+    return this.fabFileModel.aggregate([
       {
-        $project: {
-          _id: 0,
-          fabFileId: { $toString: '$_id' },
-          fileName: 1,
-          // $ifNull collapses ABSENT to null here on purpose: at this layer both mean "no
-          // fingerprint", and the pure summarizer refuses to prove identity from either (see
-          // isFingerprint). The tri-state distinction matters in the datastore, not in this report.
-          serverTextHash: { $ifNull: ['$serverTextHash', null] },
-          fileSize: { $ifNull: ['$fileSize', null] },
-          createdAt: { $ifNull: ['$createdAt', null] },
-          // Neither arm carries an ownership conjunct for a registry lake, so a same-name group can
-          // span contributors. The repair arm gates deletion on that; without it here the payload
-          // cannot express the gate.
-          userId: { $ifNull: [{ $toString: '$userId' }, null] },
-          // Which arm admitted this member. The meta-tag is authoritative when present; everything
-          // else reaching this $match did so through the prefix arm.
-          arm: {
-            $cond: [{ $in: [scope.datalakeTag, { $ifNull: ['$tags.name', []] }] }, 'meta-tag', 'prefix'],
-          },
-        },
+        // Same membership + liveness predicate as the lake-wide scan above, plus the name. The
+        // `fileName` equality is what the { 'tags.name', fileName, deletedAt } index serves; without
+        // it this is a tag-range fetch on the ingestion hot path.
+        $match: buildDataLakeMembershipQuery(scope, {
+          fileName,
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        }),
       },
+      // The candidate is normally already a member by the time the post-chunk checkpoint runs, and
+      // detectSameIdentityAdmission requires it to be absent - left in, it reports a member as its
+      // own duplicate. Excluded in the pipeline rather than by the caller so no caller can forget.
+      ...(excludeId ? [{ $match: { _id: { $ne: convertId(excludeId) } } }] : []),
+      // NEWEST first, unlike the lake-wide scan's `_id`-ascending order: this set is bounded per
+      // name, so a truncation must keep the generations a decision is actually about. The pure
+      // grouping re-sorts anyway (byNewestFirst), which is what makes the bound safe rather than
+      // merely tidy.
+      { $sort: { createdAt: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: lakeMembershipMemberProjection(scope) },
     ]);
   }
 
@@ -2728,6 +2774,21 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // those two ahead of tags.name would leave this index unable to bound the tag range for those
 // callers, only the userId equality.
 FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
+
+// Same-identity admission (#2238): findLakeMemberSiblingsByFileName, one name's members within one
+// lake, run PER ADMITTED FILE on the ingestion hot path. `fileName` appears above only inside a
+// compound TEXT index, which cannot serve an equality predicate, so without this one the best plan
+// is the `{ 'tags.name', archivedAt, deletedAt }` tag range plus an in-memory name filter - fine at
+// a few hundred members and not fine on a widely-shared tag, which is the connector-scale lake this
+// check exists for.
+//
+// `tags.name` leads for the same reason it leads on the two lake indexes above: the meta-tag arm and
+// the prefix arm both bound on it, and some callers filter on nothing else.
+//
+// Pre-built by 20260907000000_ensure-fabfile-tagname-filename-index rather than left to autoIndex:
+// prod runs DocumentDB, where the build takes a foreground lock, and autoIndex would take it lazily
+// on a cold boot of whichever Lambda touches this collection first.
+FabFileSchema.index({ 'tags.name': 1, fileName: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });

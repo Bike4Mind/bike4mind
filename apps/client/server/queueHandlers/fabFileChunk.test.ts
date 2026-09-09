@@ -53,7 +53,7 @@ const h = vi.hoisted(() => {
     getSettingsValue: vi.fn(),
     sendToClient: vi.fn(async () => undefined),
     finalizeBatchIfComplete: vi.fn(),
-    isBatchComplete: vi.fn(),
+    completedBatchStatus: vi.fn(),
     deferFailureIfRetryable: vi.fn(),
     fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
     userFindById: vi.fn(async () => ({ id: 'u1' })),
@@ -62,6 +62,7 @@ const h = vi.hoisted(() => {
     fabFileFindOneAndUpdate: vi.fn(async () => ({ _id: 'ff1' })),
     selfHostOpenSearchEnabled: vi.fn(() => false),
     recomputeFileChunkPolicyConflict: vi.fn(async () => null),
+    detectAdmissionDuplicates: vi.fn(async () => [] as unknown[]),
     resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
     sendToQueue: vi.fn(),
     fabFileUpdate: vi.fn(async () => null),
@@ -125,6 +126,10 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
     recomputeFileChunkPolicyConflict: h.recomputeFileChunkPolicyConflict,
+    // #2238. Declared here rather than omitted: an absent export arrives as `undefined`, the
+    // handler's call throws, and its own best-effort catch swallows it - so the "no [admission]
+    // warn" assertion below would keep passing while the check never ran.
+    detectAdmissionDuplicates: h.detectAdmissionDuplicates,
     deriveAdmissionStatus: (conflict: unknown) => (conflict ? 'quarantined' : 'admitted'),
     admissionDoorLabel: (sourceType: string | undefined) => sourceType ?? 'unknown',
   },
@@ -134,7 +139,7 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendTo
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
-  isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
+  completedBatchStatus: (...a: unknown[]) => h.completedBatchStatus(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
 vi.mock('@bike4mind/common', async () => {
@@ -197,7 +202,7 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
       vectorizedFiles: 0,
       totalFiles: 3,
     });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
     h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
   });
 
@@ -273,7 +278,7 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
       vectorizedFiles: 0,
       totalFiles: 3,
     });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
     h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
   });
 
@@ -497,6 +502,55 @@ describe('fabFileChunk handler - cross-lake chunk-policy conflict (#1662)', () =
     expect(admissionLine).toBeDefined();
     expect(admissionLine).toContain('quarantined');
     expect(admissionLine).toContain('google_drive');
+  });
+
+  it('runs the same-identity check with the fingerprint THIS run committed (#2238)', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    // The pre-chunk document still carries the PREVIOUS run's hash. Passing that would bucket the
+    // group against text the file no longer has.
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      userId: 'u1',
+      fileName: 'policy.md',
+      relativePath: 'docs/',
+      driveFileId: 'd1',
+      serverTextHash: 'stale-hash',
+      tags: [{ name: 'datalake:sales' }],
+    });
+    h.prepareFabFileChunks.mockImplementation(async (...args: unknown[]) => ({
+      args,
+      serverTextHash: 'fresh-hash',
+    }));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.detectAdmissionDuplicates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'ff1',
+        fileName: 'policy.md',
+        relativePath: 'docs/',
+        driveFileId: 'd1',
+        serverTextHash: 'fresh-hash',
+      }),
+      expect.anything()
+    );
+  });
+
+  it('a same-identity check failure does not fail the chunk run (#2238)', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.detectAdmissionDuplicates.mockRejectedValue(new Error('sibling read failed'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+
+  it('does not run the same-identity check for a zero-chunk file (#2238)', async () => {
+    // Nothing was fingerprinted, so a decision recorded now would be stamped over an identity that
+    // moves as soon as the file is re-processed.
+    h.chunkFabfile.mockResolvedValue([]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.detectAdmissionDuplicates).not.toHaveBeenCalled();
   });
 
   it('does not log an admission quarantine when the member honors every applicable policy (#1679)', async () => {
@@ -883,7 +937,7 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     h.incrementCounter.mockResolvedValue({ chunkedFiles: 1, failedFiles: 0, totalFiles: 1 });
     h.markFailedIfNotAlready.mockResolvedValue(true);
     h.incrementCounters.mockResolvedValue({ failedFiles: 1, processingFailedFiles: 1, totalFiles: 3 });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
     h.deferFailureIfRetryable.mockResolvedValue(false);
     h.findVectorlessChunkIds.mockResolvedValue([]);
     h.sendToQueue.mockResolvedValue(undefined);
@@ -1160,7 +1214,7 @@ describe('fabFileChunk handler - pre-flight failures are accounted', () => {
       vectorizedFiles: 0,
       totalFiles: 3,
     });
-    h.isBatchComplete.mockReturnValue(false);
+    h.completedBatchStatus.mockReturnValue(undefined);
   });
 
   it('marks the file errored (terminal for the rescue sweep) when the user is gone, and re-throws', async () => {

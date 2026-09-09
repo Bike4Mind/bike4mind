@@ -2870,3 +2870,124 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
     expect((quest.promptMeta as { warnings?: string[] }).warnings?.join(' ')).toContain('stopped advancing');
   });
 });
+
+/**
+ * Forced retrieval is the only always-on retrieval channel, so a corpus that disagrees with itself
+ * reaches the model here whether or not the model chose to search. The note is composed by
+ * retrievalConflictNote.ts (unit-tested there); this locks the WIRING and the column-0 placement.
+ */
+describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
+  const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+
+  const makeCtx = (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+    const files = [...new Set(chunks.map(c => c.fabFileId))].map(id => ({ id, fileName: `${id}.pdf`, tags: [] }));
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve(
+              chunks.map((c, i) => ({ id: `ch${i}`, fabFileId: c.fabFileId, text: c.text, vector: [1, 0] }))
+            )
+          ),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+    const ctx = makeCtx(chunks, hasMore);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'uptime'
+    );
+    return messages[0]?.content ?? '';
+  };
+
+  it('keeps the note at column 0, outside the untrusted block', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const note = content.indexOf(CONFLICT_NOTE);
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(note).toBeLessThan(content.indexOf(BEGIN));
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the section
+    // headings, so a looser assertion would pass on a note naming the wrong field entirely.
+    const noteText = content.slice(note, content.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement');
+    expect(noteText).toContain('across documents fileA, fileB.');
+    // The id the note names is the id the heading renders, so the model can resolve it.
+    expect(content).toContain('(ID: fileA)');
+  });
+
+  it('says nothing when the injected documents agree', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    expect(content).not.toContain(CONFLICT_NOTE);
+  });
+
+  it('renders after the capability note, nearest the content it describes', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    expect(content.indexOf('About this library:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
+  });
+
+  // The other column-0 note, which only a partial scan emits: `hasMore` is what makes coverage
+  // partial, and the note ordering is unasserted without a fixture that has it.
+  it('renders after the coverage note as well', async () => {
+    const content = await run(
+      [
+        { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+        { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+      ],
+      true
+    );
+
+    expect(content).toContain('Coverage note:');
+    expect(content.indexOf('Coverage note:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
+  });
+
+  // The note must describe the SERVED text, and this is the channel where that bites: the char
+  // budget saturates on most turns here, so detection fed the pre-clip text would routinely assert a
+  // conflict whose evidence the model was never shown. Candidates tie on score and sort by
+  // fabFileId, so fileA is injected whole and fileB's figure is what the budget cuts.
+  it('says nothing about a conflicting figure the char budget clipped away', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: `${'padding text. '.repeat(1000)} Uptime is 95%.` },
+    ]);
+
+    // Both halves matter: the first proves the padding actually reached the budget (without it the
+    // test passes on a fixture that was never clipped), the second that the surviving half is served.
+    expect(content).not.toContain('Uptime is 95%.');
+    expect(content).toContain('Uptime is 99.9%.');
+    expect(content).not.toContain(CONFLICT_NOTE);
+  });
+});

@@ -6,8 +6,8 @@
  * (tests asserting parity are the one exception).
  *
  * Key relationships (react-query prefix matching):
- * - `list` is a prefix of `public`/`archived`/`deleted`, so invalidating it refreshes those
- *   catalogs too.
+ * - `list` is a prefix of `public`/`archived`/`deleted`/`transitional`, so invalidating it
+ *   refreshes those catalogs too.
  * - `filesRoot`/`tagCountsRoot`/`articlesRoot` are bare prefixes: files are keyed by lake id
  *   + params, tag-counts/articles by a browse-source discriminator ('opti' | 'datalakes').
  *   Invalidate the root so every variant refreshes; a fully-specified key would refresh only
@@ -32,6 +32,8 @@ export const dataLakeKeys = {
   public: (search: string) => ['data-lakes', 'public', { search }] as const,
   archived: ['data-lakes', 'archived'] as const,
   deleted: ['data-lakes', 'deleted'] as const,
+  /** Lakes stranded mid-lifecycle (GET /api/data-lakes/transitional) - the needs-attention list. */
+  transitional: ['data-lakes', 'transitional'] as const,
   /** Batches still ingesting or in the background AI-tagging phase. */
   activeBatches: ['data-lake-batches', 'active'] as const,
   /** Query key for one lake's file list. `params` stays in the key for parity with the
@@ -49,6 +51,13 @@ export const dataLakeKeys = {
   /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
    *  is the moment a pending "indexing" badge should become measured (the message carries no lake id). */
   healthRoot: ['dataLakeHealth'] as const,
+  /**
+   * One lake's unanswered duplicate groups (GET /api/data-lakes/:id/membership-duplicates), #2238.
+   * Kept out of the `health` key even though both report duplicates: this one is manage-gated and
+   * ruling-aware, so a reader who may see `health` may get a 4xx here, and sharing a key would let
+   * one surface's permission rejection blank the other.
+   */
+  membershipDuplicates: (dataLakeId: string) => ['dataLakeMembershipDuplicates', dataLakeId] as const,
   /** One lake's count of under-chunked files (GET /api/data-lakes/:id/rechunk) - the "Rebuild
    *  passages" badge, polled while a rebuild drains. */
   rebuildStatus: (dataLakeId: string) => ['dataLakeRebuildStatus', dataLakeId] as const,

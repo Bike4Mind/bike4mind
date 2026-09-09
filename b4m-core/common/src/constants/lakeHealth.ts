@@ -530,11 +530,20 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    * upload generations of the same files - each generation genuinely is chunked and vectorized.
    *
    * OVERLAPS `duplicateMembers` below, which #2317 added independently while this was in review, and
-   * the two DISAGREE by construction: this grades over the membership population (which keeps
-   * chunkless members on purpose), `duplicateMembers` grades over the health population (which drops
-   * them). Two duplicate counts for one lake is not a shape to ship - one of them should go, and
-   * which one is a product decision (#2245 says it supersedes the report-only half of #2239). Kept
-   * side by side only so a merge did not silently delete either.
+   * the two DISAGREE by construction, now on two axes. POPULATION: this grades over the membership
+   * population (which keeps chunkless members on purpose), `duplicateMembers` grades over the health
+   * population (which drops them). GROUPING: this narrows each name group to the members sharing the
+   * newest generation's source identity (#2238), so two unrelated `README.md` under different folders
+   * stop being reported here, while `duplicateMembers` still groups by file name alone and reports
+   * them. So this report is the narrower of the two on grouping and the wider on population - it is
+   * not a subset either way. Two duplicate counts for one lake is not a shape to ship - one of them
+   * should go, and which one is a product decision (#2245 says it supersedes the report-only half of
+   * #2239). Kept side by side only so a merge did not silently delete either.
+   *
+   * Both are ruling-blind, and deliberately: this route admits `public` readers, and what an owner
+   * has decided about their lake is not their audience's business. `MembershipRepairPlanRead` (GET
+   * /api/data-lakes/:id/membership-duplicates, #2238) is the manage-gated, ruling-aware view, and it
+   * is what a surface offering a decision must read - not this.
    */
   membership: WireLakeMembershipReport;
   /**
@@ -542,7 +551,8 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    * group's `members`) are capped for payload size by the caller; `memberCount`/`groupCount` on the
    * report and `memberCount` on each group stay exact.
    *
-   * See the note on `membership` above: these two are redundant and expected to disagree.
+   * See the note on `membership` above: these two are redundant and expected to disagree, in group
+   * membership as well as in count.
    */
   duplicateMembers: LakeHealthDuplicatesReport;
   /**
