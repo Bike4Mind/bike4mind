@@ -54,6 +54,40 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
+  // Test code has no business in a production server bundle, and here it is not merely dead
+  // weight: the server function sits against Lambda's 262144000-byte UNZIPPED limit, which is
+  // not adjustable, and it crossed that limit on 2026-09-09 and blocked every staging deploy.
+  // Measured, these excludes drop it from 250.0 MB to 244.7 MB across 799 fewer files - the
+  // 5.3 MB that turned a rejected package into an accepted one.
+  //
+  // It is also a correctness hazard, not just a size one. Next compiles every file under
+  // `pages/` into a routable entry, including `__tests__/` subdirectories, and a preloaded test
+  // module executes its side effects: one of them calls aws-sdk-client-mock's
+  // `mockClient(S3Client)`, which replaces `S3Client.prototype.send` process-wide with a stub
+  // that resolves undefined. `apps/client/scripts/pruneTestRoutes.mjs` exists to strip those
+  // entries out of a built `.next` for exactly that reason; excluding them from the trace in the
+  // first place is the same fix applied one step earlier, and it covers every deploy target
+  // rather than only the one that remembers to run the pruner.
+  //
+  // A `**/`-prefixed glob matches wherever the base is resolved from, which is why the patterns
+  // below are written that way. The two `e2e` entries are deliberate: a monorepo-root-relative
+  // path did not match on its own (the Playwright fixtures survived the first measured run and
+  // only the `*.spec.ts` files went), so the package-relative form is listed alongside it rather
+  // than swapped in, since exactly one of them being inert costs nothing.
+  outputFileTracingExcludes: {
+    '*': [
+      '**/*.test.ts',
+      '**/*.test.tsx',
+      '**/*.spec.ts',
+      '**/*.spec.tsx',
+      '**/__tests__/**',
+      '**/__test__/**',
+      '**/__mocks__/**',
+      'e2e/**',
+      'apps/client/e2e/**',
+    ],
+  },
+
   transpilePackages: [
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',
