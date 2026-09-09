@@ -100,9 +100,19 @@ export const menuListSx = ({ gap = '4px', radius = MENU_SURFACE_RADIUS }: MenuLi
  *
  * Joy paints an Option's hover, its keyboard-highlighted row and its press from
  * --variant-plain*Bg, so pointing those variables at the colour is what wins - a bare `&:hover`
- * rule loses to Joy's own. The selected ground cannot go through a variable, because Joy's
- * Option (unlike its AutocompleteOption) has no rule for the selected row at all; it is a plain
- * declaration that outweighs Joy's `:active` on specificity.
+ * rule loses to Joy's own. The selected ground cannot go the same way, for exactly the reason
+ * menuItemListSx cannot either: Joy paints the selected row from the plainActive variant as well
+ * (ListItemButton.js:99), so pointing that variable at the hover ground would leave a selected
+ * row sitting on it. It is a declaration instead, and it lands because the descendant selector -
+ * not the fact that it is a declaration - outranks Joy's own rule on the row's class.
+ *
+ * That rule DOES reach an Option, which is easy to get wrong from the source: `selected` is MUI's
+ * global `Mui-selected` state class, so optionClasses.selected and listItemButtonClasses.selected
+ * are the same string and ListItemButton's rule is not scoped away from Option.
+ *
+ * Joy's AutocompleteOption additionally paints `[aria-selected="true"]` directly
+ * (AutocompleteOption.js:34) where Option leans on `.Mui-selected` alone - the divergence to know
+ * about if an upgrade ever brings the two in line.
  *
  * Scoped to [role="option"], so spreading it on a Joy Menu is inert - Menu rows are
  * role="menuitem" and take menuItemListSx, or menuRowSx per item where a row wants the fixed
