@@ -5,11 +5,12 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IChatHistoryItemDocument, redactPromptMetaForViewer } from '@bike4mind/common';
 import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
+import { dateParam } from '@server/utils/dateParam';
 
 // Query parameter schema
 const querySchema = z.object({
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
+  startDate: dateParam.optional(),
+  endDate: dateParam.optional(),
   model: z.string().optional(),
   search: z.string().optional(),
 });
