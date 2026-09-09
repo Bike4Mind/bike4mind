@@ -21,6 +21,7 @@ import {
   isDataLakeTagName,
   matchesTagPrefixArm,
   type IUserDocument,
+  isLakeIngestable,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
@@ -389,14 +390,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
-    // Same rule as the web/Slack upload doors: only a draft (first batch) or active lake takes new
-    // files. An archived/deleting (or any other transitional) lake is a no-op here, not a failure.
+    // A non-ingestable lake is a no-op here, not a failure.
     // This is also the convergence point for the enabled flag: the lifecycle transition disables
     // the connection write-time, but that only covers transitions after this shipped, and its port
     // is best-effort (see dataLakeService/ports.ts). Having proven the lake is not writable, heal
     // forward - the disable is idempotent, so one poll retires a connection archived before this
     // deploy, a lost best-effort disable, or a connect/archive race that re-stamped enabled.
-    if (lake.status !== 'draft' && lake.status !== 'active') {
+    if (!isLakeIngestable(lake.status)) {
       logger.info('[driveLakeIngest] target data lake is not writable; dropping', {
         connectionId,
         lakeStatus: lake.status,
