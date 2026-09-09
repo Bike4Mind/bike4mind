@@ -37,6 +37,15 @@ describe('refuseGrantWrite', () => {
     ).toMatch(/organization that owns it/i);
   });
 
+  it('refuses an org CURATOR grant: no principal exists that it could confer management on', () => {
+    // The only grantable org is the lake's own, and canManageLake's org-grant rung fires only for an
+    // org the actor administers - who already manage the lake by the rung above it. So the grant
+    // would change nobody's capability while auditing as though org-wide management was handed out.
+    expect(
+      refuseGrantWrite(lake('org1'), { principalType: 'organization', principalId: 'org1', role: 'curator' })
+    ).toMatch(/only be granted reader access/i);
+  });
+
   it('refuses every org grant on a personal lake', () => {
     expect(
       refuseGrantWrite(lake(undefined), { principalType: 'organization', principalId: 'org1', role: 'reader' })

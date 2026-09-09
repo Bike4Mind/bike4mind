@@ -41,7 +41,7 @@ const makeAdapters = (
           upsertGrant,
           removeGrant,
         },
-        users: { findByEmail: vi.fn(async () => over.userByEmail ?? null) },
+        users: { findByEmail: vi.fn(async () => (over.userByEmail === undefined ? { id: 'u1' } : over.userByEmail)) },
         lakeConfigChangeEvents: { record },
       },
     } as never,
@@ -56,7 +56,12 @@ describe('grantLakeAccess', () => {
   it('refuses a fallback (registry) lake before any write', async () => {
     const { adapters, upsertGrant } = makeAdapters({ lakeDoc: lake({ id: DATA_LAKES[0].id }) });
     await expect(
-      grantLakeAccess(owner, DATA_LAKES[0].id, { principalType: 'user', principalId: 'u1', role: 'reader' }, adapters)
+      grantLakeAccess(
+        owner,
+        DATA_LAKES[0].id,
+        { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' },
+        adapters
+      )
     ).rejects.toThrow(/built into the platform/i);
     expect(upsertGrant).not.toHaveBeenCalled();
   });
@@ -64,7 +69,7 @@ describe('grantLakeAccess', () => {
   it('refuses a lake that does not exist', async () => {
     const { adapters } = makeAdapters({ lakeDoc: null });
     await expect(
-      grantLakeAccess(owner, 'ghost', { principalType: 'user', principalId: 'u1', role: 'reader' }, adapters)
+      grantLakeAccess(owner, 'ghost', { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' }, adapters)
     ).rejects.toThrow(/not found/i);
   });
 
@@ -74,7 +79,7 @@ describe('grantLakeAccess', () => {
       grantLakeAccess(
         { userId: 'rdr', isAdmin: false },
         'lake1',
-        { principalType: 'user', principalId: 'u1', role: 'reader' },
+        { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' },
         adapters
       )
     ).rejects.toThrow(/do not have permission to manage access/i);
@@ -86,7 +91,7 @@ describe('grantLakeAccess', () => {
     const result = await grantLakeAccess(
       curator,
       'lake1',
-      { principalType: 'user', principalId: 'u1', role: 'reader' },
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' },
       adapters
     );
 
@@ -112,7 +117,7 @@ describe('grantLakeAccess', () => {
   it('refuses an owner grant, so a curator cannot escalate past the transfer gate', async () => {
     const { adapters, upsertGrant } = makeAdapters({ grants: curatorGrants });
     await expect(
-      grantLakeAccess(curator, 'lake1', { principalType: 'user', principalId: 'cur', role: 'owner' }, adapters)
+      grantLakeAccess(curator, 'lake1', { principalType: 'user', principalEmail: 'cur@b.c', role: 'owner' }, adapters)
     ).rejects.toThrow(/transfer ownership/i);
     expect(upsertGrant).not.toHaveBeenCalled();
   });
@@ -123,9 +128,106 @@ describe('grantLakeAccess', () => {
     const { adapters, upsertGrant } = makeAdapters({
       grants: curatorGrants,
       existing: grantRow({ principalId: 'theOwner', role: 'owner' }),
+      userByEmail: { id: 'theOwner' },
     });
     await expect(
-      grantLakeAccess(curator, 'lake1', { principalType: 'user', principalId: 'theOwner', role: 'curator' }, adapters)
+      grantLakeAccess(
+        curator,
+        'lake1',
+        { principalType: 'user', principalEmail: 'owner@b.c', role: 'curator' },
+        adapters
+      )
+    ).rejects.toThrow(/transfer ownership/i);
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('refuses naming a user by id, which the door cannot resolve to an account', async () => {
+    // An id is taken at face value, so a typo becomes a permanent unresolvable row and a padded or
+    // recased variant a second row for the same person. Email is the only checkable input.
+    const { adapters, upsertGrant } = makeAdapters();
+    await expect(
+      grantLakeAccess(owner, 'lake1', { principalType: 'user', principalId: 'u1', role: 'reader' }, adapters)
+    ).rejects.toThrow(/by email address/i);
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('refuses an org curator grant, which could confer management on nobody', async () => {
+    const { adapters, upsertGrant } = makeAdapters();
+    await expect(
+      grantLakeAccess(owner, 'lake1', { principalType: 'organization', principalId: 'org1', role: 'curator' }, adapters)
+    ).rejects.toThrow(/only be granted reader access/i);
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('clears a lapsed expiry on re-grant, and audits the restore as a fresh grant', async () => {
+    // Without the clear, upsertGrant leaves the past date alone: the write lands, the caller is told
+    // access was granted, and loadActiveLakeGrants still filters the row out.
+    const { adapters, upsertGrant, record } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader', expiresAt: new Date(Date.now() - 86_400_000) }),
+    });
+    const result = await grantLakeAccess(
+      owner,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'curator' },
+      adapters
+    );
+
+    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: null }));
+    // The lapsed role is not the honest `before`: it conferred nothing, so this restored access
+    // rather than downgrading it.
+    expect(result.previousRole).toBeUndefined();
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: [{ field: 'accessGrant', kind: 'literal', after: 'user:u1=curator' }],
+      })
+    );
+  });
+
+  it('audits a SAME-role re-grant over a lapsed row, which restores access', async () => {
+    // The role did not move, so this is the one case where an unchanged role is still a change -
+    // treating the lapsed row as `before` would make grantChange return null and lose the event.
+    const { adapters, record } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader', expiresAt: new Date(Date.now() - 1000) }),
+    });
+    await grantLakeAccess(
+      owner,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' },
+      adapters
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: [{ field: 'accessGrant', kind: 'literal', after: 'user:u1=reader' }],
+      })
+    );
+  });
+
+  it('leaves a still-current expiry alone', async () => {
+    const { adapters, upsertGrant } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader', expiresAt: new Date(Date.now() + 86_400_000) }),
+    });
+    await grantLakeAccess(
+      owner,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'curator' },
+      adapters
+    );
+    expect(upsertGrant.mock.calls[0]![0]).not.toHaveProperty('expiresAt');
+  });
+
+  it('refuses re-roling a LAPSED owner grant: an expiry says nothing about who owns the lake', async () => {
+    const { adapters, upsertGrant } = makeAdapters({
+      grants: curatorGrants,
+      existing: grantRow({ principalId: 'theOwner', role: 'owner', expiresAt: new Date(Date.now() - 1000) }),
+      userByEmail: { id: 'theOwner' },
+    });
+    await expect(
+      grantLakeAccess(
+        curator,
+        'lake1',
+        { principalType: 'user', principalEmail: 'owner@b.c', role: 'curator' },
+        adapters
+      )
     ).rejects.toThrow(/transfer ownership/i);
     expect(upsertGrant).not.toHaveBeenCalled();
   });
@@ -142,7 +244,12 @@ describe('grantLakeAccess', () => {
     const { adapters, upsertGrant, record } = makeAdapters({
       existing: grantRow({ principalId: 'u1', role: 'reader' }),
     });
-    await grantLakeAccess(owner, 'lake1', { principalType: 'user', principalId: 'u1', role: 'reader' }, adapters);
+    await grantLakeAccess(
+      owner,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' },
+      adapters
+    );
     // The write is still made (idempotent, and it re-stamps grantedBy/expiry); the AUDIT is not,
     // because nothing moved.
     expect(upsertGrant).toHaveBeenCalled();
@@ -154,7 +261,7 @@ describe('grantLakeAccess', () => {
     const result = await grantLakeAccess(
       owner,
       'lake1',
-      { principalType: 'user', principalId: 'u1', role: 'curator' },
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'curator' },
       adapters
     );
     expect(result.previousRole).toBe('reader');
@@ -185,7 +292,7 @@ describe('grantLakeAccess', () => {
     await grantLakeAccess(
       owner,
       'lake1',
-      { principalType: 'user', principalId: 'u1', role: 'reader', expiresAt },
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader', expiresAt },
       withExpiry.adapters
     );
     expect(withExpiry.upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ expiresAt }));
@@ -196,7 +303,7 @@ describe('grantLakeAccess', () => {
     await grantLakeAccess(
       owner,
       'lake1',
-      { principalType: 'user', principalId: 'u1', role: 'reader' },
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' },
       without.adapters
     );
     expect(without.upsertGrant.mock.calls[0]![0]).not.toHaveProperty('expiresAt');

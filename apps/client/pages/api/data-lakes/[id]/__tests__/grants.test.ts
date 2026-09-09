@@ -58,18 +58,24 @@ describe('/api/data-lakes/[id]/grants', () => {
     h.revokeLakeAccess.mockResolvedValue({ revoked: true });
   });
 
-  it('grants against the RESOLVED lake and wires the audit repos', async () => {
+  it('grants against the RESOLVED lake, trimming the principal, and wires the audit repos', async () => {
     // assertLakeAccess resolves id-or-slug, so the service must get lake.id, not the raw query value.
     const { res, json } = makeRes();
     await call(
-      { method: 'POST', query: { id: 'my-lake' }, body: { principalType: 'user', principalId: 'u2', role: 'reader' } },
+      {
+        method: 'POST',
+        query: { id: 'my-lake' },
+        // Trimmed at the boundary: this string is half of a grant's natural key, so a padded
+        // variant would address a second row for the same principal that no read could match.
+        body: { principalType: 'organization', principalId: ' org1 ', role: 'reader' },
+      },
       res
     );
 
     expect(h.grantLakeAccess).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', isAdmin: false }),
       'lake-oid-1',
-      expect.objectContaining({ principalType: 'user', principalId: 'u2', role: 'reader' }),
+      expect.objectContaining({ principalType: 'organization', principalId: 'org1', role: 'reader' }),
       // Not expect.anything(): the audit repos ride one shared helper, and a route that dropped
       // `adminSettings` would still compile while quietly pinning every event to the floor default.
       expect.objectContaining({
@@ -120,7 +126,10 @@ describe('/api/data-lakes/[id]/grants', () => {
 
   it('narrows a repeated query param rather than passing an array through', async () => {
     const { res } = makeRes();
-    await call({ method: 'DELETE', query: { id: 'lake1', principalType: ['user', 'user'], principalId: ['u2'] } }, res);
+    await call(
+      { method: 'DELETE', query: { id: 'lake1', principalType: ['user', 'user'], principalId: [' u2 '] } },
+      res
+    );
     expect(h.revokeLakeAccess).toHaveBeenCalledWith(
       expect.anything(),
       'lake-oid-1',
@@ -135,7 +144,11 @@ describe('/api/data-lakes/[id]/grants', () => {
     const { res } = makeRes();
     await expect(
       call(
-        { method: 'POST', query: { id: 'lake1' }, body: { principalType: 'user', principalId: 'u2', role: 'reader' } },
+        {
+          method: 'POST',
+          query: { id: 'lake1' },
+          body: { principalType: 'user', principalEmail: 'a@b.co', role: 'reader' },
+        },
         res
       )
     ).rejects.toThrow(/not found/i);

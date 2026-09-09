@@ -34,14 +34,15 @@ interface ManageLakeGrantAdapters extends LakeConfigAuditAdapters {
 
 export interface GrantLakeAccessInput {
   principalType: DataLakePrincipalType;
-  /** The principal's id. Optional only when `principalEmail` identifies a `user` principal. */
+  /** The principal's id. An `organization` principal only - see `principalEmail`. */
   principalId?: string;
   /**
-   * A `user` principal named by email instead of id - the only workable input for the cross-tenant
-   * sharing case this relation exists for, since a manager granting access outside their own org
-   * has no way to learn a userId. Resolved by EXACT lookup (`findByEmail`), never a search, so this
-   * adds no user-enumeration surface beyond the yes/no an exact address already answers; the door
-   * is manage-gated, so that oracle is never anonymous.
+   * A `user` principal, named by email. The ONLY way to name one, deliberately: it is the only
+   * workable input for the cross-tenant sharing case this relation exists for (a manager granting
+   * access outside their own org has no way to learn a userId), and it is the only one that cannot
+   * invent a principal. Resolved by EXACT lookup (`findByEmail`), never a search, so this adds no
+   * user-enumeration surface beyond the yes/no an exact address already answers; the door is
+   * manage-gated, so that oracle is never anonymous.
    */
   principalEmail?: string;
   role: DataLakeAccessRole;
@@ -100,7 +101,8 @@ async function loadManageableLake(
  *
  * Idempotent: `upsertGrant` is keyed on (lake, principalType, principalId), so re-granting the same
  * role converges and records NO audit event (`grantChange` returns null) - a request that changed
- * nothing is not a change.
+ * nothing is not a change. A re-grant over a LAPSED row is not that case: it clears the dead expiry
+ * and so restores access, which is audited even when the role is unchanged.
  *
  * ONE write, so no transaction is needed - contrast `transferLakeOwnership`'s explicit NOT ATOMIC
  * note, which covers a multi-write loop. The audit is still recorded LAST, so it can never claim a
@@ -126,14 +128,24 @@ export async function grantLakeAccess(
   }
 
   // The persisted row, not the ACTIVE grant set: a lapsed grant is still the row being overwritten,
-  // so it is the honest `before` for the audit and for the caller's result.
+  // so it is what the owner refusal and the expiry resolution below both have to be judged against.
   const existing = await db.dataLakeAccessGrants.findGrant(lake.id, input.principalType, principalId);
   // Checked against the ROW, not the request: refuseGrantWrite sees only the requested role, so a
-  // re-role of the owner down to curator would sail past it and quietly un-transfer the lake.
+  // re-role of the owner down to curator would sail past it and quietly un-transfer the lake. A
+  // LAPSED owner row still counts - the expiry says nothing about who owns the lake.
   const ownerRefusal = refuseOwnerGrantChange(existing);
   if (ownerRefusal) {
     throw new BadRequestError(ownerRefusal);
   }
+
+  // A lapsed row conferred nothing, so it is neither an expiry worth keeping nor an honest `before`.
+  // Keeping it would write the new role onto a past date, which `loadActiveLakeGrants` still filters
+  // out - the silent no-op `refuseGrantWrite` refuses to create outright. Reporting the lapsed role
+  // as the `before` would claim access was downgraded when in fact it was restored, and would make a
+  // same-role reactivation record nothing at all (`grantChange` returns null on before === after).
+  const lapsed = !!existing?.expiresAt && existing.expiresAt.getTime() <= Date.now();
+  const previousRole = lapsed ? undefined : existing?.role;
+  const expiresAt = input.expiresAt !== undefined ? input.expiresAt : lapsed ? null : undefined;
 
   await db.dataLakeAccessGrants.upsertGrant({
     dataLakeId: lake.id,
@@ -141,7 +153,7 @@ export async function grantLakeAccess(
     principalId,
     role: input.role,
     grantedByUserId: actor.userId,
-    ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
   });
 
   await recordLakeConfigChange(
@@ -152,12 +164,12 @@ export async function grantLakeAccess(
       // than collapsing to the creator arm.
       grants,
       action: 'grant-access',
-      changes: [grantChange(input.principalType, principalId, existing?.role, input.role)].filter(c => c !== null),
+      changes: [grantChange(input.principalType, principalId, previousRole, input.role)].filter(c => c !== null),
     },
     { db, logger }
   );
 
-  return { principalType: input.principalType, principalId, role: input.role, previousRole: existing?.role };
+  return { principalType: input.principalType, principalId, role: input.role, previousRole };
 }
 
 /**
@@ -203,14 +215,28 @@ export async function revokeLakeAccess(
 }
 
 /**
- * The granted principal's id, from `principalId` or - for a `user` principal - an exact email
- * lookup. Refused rather than defaulted when neither resolves: inventing a principal is the one
- * mistake an access write must not make.
+ * The granted principal's id: an exact email lookup for a `user`, the given id for an
+ * `organization`. Refused rather than defaulted when neither resolves: inventing a principal is the
+ * one mistake an access write must not make.
+ *
+ * A USER IS NOT NAMEABLE BY ID here, deliberately, and the reason is that this door has no way to
+ * check one. The grant's natural key is (lake, principalType, principalId) against a `type: String`
+ * field, so a mistyped id becomes a permanent row that `UserModel.findByIds` silently drops - an
+ * unresolvable opaque principal in the compliance export - and a whitespace or case variant of a
+ * real id becomes a SECOND row for the same person that no read can ever match. `findByEmail` is
+ * the only input that resolves to a real account before anything is written. An `organization` id
+ * needs no such check: `refuseGrantWrite` pins it to the lake's own org, so there is nothing to
+ * invent.
  */
 async function resolvePrincipalId(input: GrantLakeAccessInput, db: ManageLakeGrantAdapters['db']): Promise<string> {
-  if (input.principalId) return input.principalId;
-  if (input.principalType !== 'user' || !input.principalEmail) {
-    throw new BadRequestError('A grant must name a principal');
+  if (input.principalType !== 'user') {
+    if (!input.principalId) {
+      throw new BadRequestError('A grant must name a principal');
+    }
+    return input.principalId;
+  }
+  if (!input.principalEmail) {
+    throw new BadRequestError('A grant must name the person to share with by email address');
   }
   const user = await db.users.findByEmail(input.principalEmail);
   if (!user) {

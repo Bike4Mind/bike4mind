@@ -12,8 +12,11 @@ import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
 
 const GrantInput = z.object({
   principalType: z.enum(DATA_LAKE_PRINCIPAL_TYPES),
-  principalId: z.string().min(1).optional(),
-  /** A `user` principal named by email - the cross-tenant sharing case has no other usable input. */
+  /** An `organization` principal only; a `user` is named by email. Trimmed because this string is
+   *  half of a grant's natural key, so a padded variant would address a second row. */
+  principalId: z.string().trim().min(1).optional(),
+  /** A `user` principal named by email - the only usable input for the cross-tenant sharing case,
+   *  and the only one the service can resolve to a real account before writing. */
   principalEmail: z.string().email().optional(),
   // `owner` is accepted by the schema and refused by the service, deliberately: its refusal names
   // transfer-ownership as the way through, which a bare enum-validation error could not.
@@ -23,7 +26,7 @@ const GrantInput = z.object({
 
 const RevokeInput = z.object({
   principalType: z.enum(DATA_LAKE_PRINCIPAL_TYPES),
-  principalId: z.string().min(1),
+  principalId: z.string().trim().min(1),
 });
 
 /** Next merges the [id] route param into req.query alongside any real query string. */
@@ -43,7 +46,8 @@ interface GrantsQuery {
  *
  * Access-gated first with `assertLakeAccess`, so a caller who cannot even see the lake gets the
  * not-found-style denial and learns nothing; the service then applies the manage gate and the
- * grant-write rules (no `owner` role here, and an organization principal must be the lake's own).
+ * grant-write rules (no `owner` role here, an organization principal must be the lake's own, and it
+ * can only be a reader).
  *
  * DELETE takes the principal in the query rather than a body: the pair is an identifier, and a
  * request body on DELETE is unevenly supported by intermediaries.

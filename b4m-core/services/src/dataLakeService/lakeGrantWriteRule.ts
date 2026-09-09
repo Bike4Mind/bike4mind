@@ -26,6 +26,11 @@ export interface LakeGrantWriteInput {
  *     grant themselves `owner` and route around all three.
  *  2. An `organization` principal must be the lake's OWN org. Membership never crosses organizations
  *     (epic decision 12), and a personal lake has no org, so it can hold no org grant at all.
+ *  3. An `organization` principal can only be a READER. There is no principal such a grant could
+ *     confer management on: `canManageLake`'s org-grant rung fires only for an org the actor
+ *     ADMINISTERS, and by rule 2 that org is the lake's own - whose admins already passed the
+ *     rung above it. So an org curator grant changes nobody's capability at any enforcement
+ *     setting, while reading in the audit trail as though org-wide management had been handed out.
  *
  * USER principals are deliberately NOT org-checked: a cross-tenant user grant is the headline case
  * this relation exists for ("someone who is neither the creator nor a member of its organization"),
@@ -55,6 +60,9 @@ export function refuseGrantWrite(
     }
     if (lakeOrg !== input.principalId) {
       return 'A data lake can only be shared with the organization that owns it';
+    }
+    if (input.role === 'curator') {
+      return 'An organization can only be granted reader access; its admins already manage this data lake';
     }
   }
   return null;
