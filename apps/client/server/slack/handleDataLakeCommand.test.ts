@@ -13,7 +13,12 @@ const { listDataLakes, grantedLakeIdsFor } = vi.hoisted(() => ({
   grantedLakeIdsFor: vi.fn(),
 }));
 
-vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
+vi.mock('@bike4mind/slack', () => ({
+  parseDataLakeCommand,
+  // The real implementation, not a stub: some tests assert on exact reply text, and this is what
+  // neutralizes a Slack mrkdwn-injected fileName (e.g. "<!channel>") before it is interpolated.
+  escapeSlackMrkdwn: (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+}));
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeIdsFor } }));
 // Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
 // dispatch and reply composition only. Each path's own behavior has its own test file.
