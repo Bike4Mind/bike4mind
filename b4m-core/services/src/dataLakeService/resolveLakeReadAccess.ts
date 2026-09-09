@@ -48,10 +48,10 @@ export interface LakeAccessLogger {
  * row is honored unconditionally at read time.
  *
  * MUST STAY IN SYNC WITH THE WRITE PATH: this arm honors an org-principal grant with no same-org
- * check, because the grant row IS the authorization. So whoever builds the member-management write
- * path (grant a reader / grant an org - no such producer exists yet; only createDataLake seeds an
- * owner and transferLakeOwnership demotes to curator) MUST reject an org-principal grant whose org is
- * not the lake's own org. Without that, decision 12 is only as strong as the writer.
+ * check, because the grant row IS the authorization. The containment therefore lives entirely in
+ * `refuseGrantWrite` (`lakeGrantWriteRule.ts`), which rejects an org-principal grant whose org is not
+ * the lake's own - decision 12 is only as strong as that rule, so it is pinned by its own unit test.
+ * Any FUTURE producer of grant rows must apply the same rule.
  */
 export function resolveReadGrant(
   ctx: Pick<AccessContext, 'userId' | 'organizationIds'>,

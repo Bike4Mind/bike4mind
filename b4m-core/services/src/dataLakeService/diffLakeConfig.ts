@@ -1,4 +1,6 @@
 import type {
+  DataLakeAccessRole,
+  DataLakePrincipalType,
   IDataLake,
   ILakeConfigFieldChange,
   ILakeConfigLiteralChange,
@@ -140,4 +142,30 @@ export function ownershipChange(
   const before = priorOwnerUserIds.filter(Boolean).join(',');
   if (before === newOwnerUserId) return null;
   return literalChange('effectiveOwnerUserId', before === '' ? undefined : before, newOwnerUserId);
+}
+
+/**
+ * One grant write, as a change entry. Grants live in `DataLakeAccessGrant` rows, so - exactly like
+ * `ownershipChange` above - `diffLakeConfig` can never see this and it is synthesized onto the
+ * derived `accessGrant` field.
+ *
+ * The PRINCIPAL is encoded into both sides (`"user:<id>=reader"`) rather than carried separately,
+ * because the field's before/after pair is the only shape the history renders and "who" is the
+ * entire content of an access change - a bare `reader -> undefined` names no one. A revoke leaves
+ * the after side unset, which is how the differ already spells "cleared".
+ *
+ * Returns `null` when the role did not move: re-granting a principal the role they already hold is
+ * an accepted, idempotent request that changed nothing, and is not a change event - the same rule
+ * `ownershipChange` applies to a transfer to the current owner.
+ */
+export function grantChange(
+  principalType: DataLakePrincipalType,
+  principalId: string,
+  before: DataLakeAccessRole | undefined,
+  after: DataLakeAccessRole | undefined
+): ILakeConfigLiteralChange | null {
+  if (before === after) return null;
+  const encode = (role: DataLakeAccessRole | undefined) =>
+    role === undefined ? undefined : `${principalType}:${principalId}=${role}`;
+  return literalChange('accessGrant', encode(before), encode(after));
 }

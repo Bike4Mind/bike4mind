@@ -35,6 +35,7 @@ const FIELD_LABEL: Record<LakeConfigChangeField, string> = {
   status: 'Status',
   createdByUserId: 'Created by',
   effectiveOwnerUserId: 'Owner',
+  accessGrant: 'Access grant',
 };
 
 /** Total, for the same reason as FIELD_LABEL. */
@@ -50,6 +51,8 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   // sweep finishes, so 'Purged' would claim a completion this row cannot vouch for.
   purge: 'Permanent deletion accepted',
   'auto-activate': 'Activated automatically',
+  'grant-access': 'Access granted',
+  'revoke-access': 'Access revoked',
 };
 
 /**

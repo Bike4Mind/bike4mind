@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { IDataLake } from '@bike4mind/common';
 import { LAKE_CONFIG_VALUE_MAX_CHARS, lakeConfigTextFingerprint } from '@bike4mind/common';
-import { diffLakeConfig, ownershipChange } from './diffLakeConfig';
+import { diffLakeConfig, grantChange, ownershipChange } from './diffLakeConfig';
 
 const lake = (overrides: Partial<IDataLake> = {}): Partial<IDataLake> => ({
   name: 'Widget Docs',
@@ -186,5 +186,34 @@ describe('access-gate fields do not trim', () => {
   // Non-gate free text keeps trimming: a whitespace-only description is empty for every reader.
   it('still trims a non-gate field, where whitespace really is absence', () => {
     expect(diffLakeConfig({ description: ' ' }, { description: '' })).toEqual([]);
+  });
+});
+
+describe('grantChange', () => {
+  it('encodes the principal into both sides, so a history row names who', () => {
+    expect(grantChange('user', 'u1', 'reader', 'curator')).toEqual({
+      field: 'accessGrant',
+      kind: 'literal',
+      before: 'user:u1=reader',
+      after: 'user:u1=curator',
+    });
+  });
+
+  it('leaves the after side unset for a revoke and the before side unset for a new grant', () => {
+    expect(grantChange('organization', 'org1', 'reader', undefined)).toEqual({
+      field: 'accessGrant',
+      kind: 'literal',
+      before: 'organization:org1=reader',
+    });
+    expect(grantChange('user', 'u1', undefined, 'reader')).toEqual({
+      field: 'accessGrant',
+      kind: 'literal',
+      after: 'user:u1=reader',
+    });
+  });
+
+  it('returns null when the role did not move - a re-grant is not a change event', () => {
+    expect(grantChange('user', 'u1', 'reader', 'reader')).toBeNull();
+    expect(grantChange('user', 'u1', undefined, undefined)).toBeNull();
   });
 });

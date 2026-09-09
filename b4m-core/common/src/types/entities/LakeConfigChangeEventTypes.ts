@@ -80,6 +80,14 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    * record `system` for that too.
    */
   'auto-activate',
+  /**
+   * A grant WRITE on the lake's access-grant relation: `grant-access` creates or re-roles one
+   * principal's grant, `revoke-access` removes it. Split from `transfer-ownership` because that
+   * door moves ownership under its own narrower authority ladder and its own consent guard - these
+   * two are the routine reader/curator sharing door, which refuses the `owner` role outright.
+   */
+  'grant-access',
+  'revoke-access',
 ] as const;
 export type LakeConfigChangeAction = (typeof LAKE_CONFIG_CHANGE_ACTIONS)[number];
 
@@ -166,11 +174,24 @@ export const LAKE_CONFIG_FINGERPRINTED_FIELDS = ['systemPrompt'] as const satisf
  */
 export const LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER = 'effectiveOwnerUserId';
 
+/**
+ * A DERIVED field, like the effective owner above and for the same reason: a grant write moves a
+ * row in `DataLakeAccessGrant`, never a field on the lake, so `diffLakeConfig` can never see it.
+ * Its value names the principal as well as the role (see `grantChange`), because "who" is the
+ * whole content of an access change - a bare `reader -> undefined` would say nothing an owner
+ * could act on.
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT = 'accessGrant';
+
 export const LAKE_CONFIG_CHANGE_FIELDS: readonly LakeConfigChangeField[] = [
   ...LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER,
+  LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT,
 ];
-export type LakeConfigChangeField = LakeConfigDocumentField | typeof LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER;
+export type LakeConfigChangeField =
+  | LakeConfigDocumentField
+  | typeof LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER
+  | typeof LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT;
 
 /**
  * Compile-time pin: every field `UpdateDataLakeRequestInput` can write MUST be audited. Without it

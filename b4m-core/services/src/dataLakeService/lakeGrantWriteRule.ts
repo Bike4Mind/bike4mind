@@ -1,0 +1,76 @@
+import type { DataLakeAccessRole, DataLakePrincipalType, IDataLakeDocument } from '@bike4mind/common';
+import { normalizeId } from '@bike4mind/utils';
+
+/** What a caller asks this door to grant: one principal, one role on one lake. */
+export interface LakeGrantWriteInput {
+  principalType: DataLakePrincipalType;
+  principalId: string;
+  role: DataLakeAccessRole;
+  /** Absent leaves any existing expiry alone; `null` clears it. See `upsertGrant`. */
+  expiresAt?: Date | null;
+}
+
+/**
+ * The refusal rules for the routine grant door, as a pure sync function: the denial message, or
+ * `null` to allow. Kept out of the service so cross-org containment is pinned by a unit test rather
+ * than by review - `resolveReadGrant` honors an org-principal grant with NO same-org check of its
+ * own (see the "MUST STAY IN SYNC WITH THE WRITE PATH" note on `resolveLakeReadAccess`), so this
+ * function is the entirety of epic decision 12's enforcement.
+ *
+ * Two refusals, for two different reasons:
+ *
+ *  1. `owner` is not writable here. Ownership moves ONLY through `transferLakeOwnership`, which
+ *     carries a narrower authority ladder (`resolveLakeTransferAuthority` - a curator manages but
+ *     cannot hand ownership away), the org-admin self-grab consent guard, and the demote-priors
+ *     loop. This door gates on `canManageLake`, whose curator rung would otherwise let a curator
+ *     grant themselves `owner` and route around all three.
+ *  2. An `organization` principal must be the lake's OWN org. Membership never crosses organizations
+ *     (epic decision 12), and a personal lake has no org, so it can hold no org grant at all.
+ *
+ * USER principals are deliberately NOT org-checked: a cross-tenant user grant is the headline case
+ * this relation exists for ("someone who is neither the creator nor a member of its organization"),
+ * and `LakeAccessGrantView` already withholds email because a grant holder may be an arbitrary
+ * cross-tenant principal. Only the ORG arm is contained.
+ */
+export function refuseGrantWrite(
+  lake: Pick<IDataLakeDocument, 'organizationId'>,
+  input: LakeGrantWriteInput,
+  now: Date = new Date()
+): string | null {
+  if (!input.principalId) {
+    return 'A grant must name a principal';
+  }
+  if (input.role === 'owner') {
+    return 'Ownership cannot be granted here; use transfer ownership instead';
+  }
+  // A grant that has already lapsed is filtered out of every active read the moment it lands, so
+  // writing one would look to the manager like a silent no-op rather than a mistake.
+  if (input.expiresAt && input.expiresAt.getTime() <= now.getTime()) {
+    return 'A grant cannot expire in the past';
+  }
+  if (input.principalType === 'organization') {
+    const lakeOrg = normalizeId(lake.organizationId);
+    if (!lakeOrg) {
+      return 'This data lake belongs to no organization, so it cannot be shared with one';
+    }
+    if (lakeOrg !== input.principalId) {
+      return 'A data lake can only be shared with the organization that owns it';
+    }
+  }
+  return null;
+}
+
+/**
+ * The refusal rule for a revoke: an `owner`-role grant is the lake's ownership, so dropping it here
+ * would silently un-transfer the lake and leave it falling back to `createdByUserId` - a change of
+ * owner made through a door that never named one. Ownership moves by transfer, or not at all.
+ *
+ * Takes the EXISTING row rather than the request, because the caller cannot know a grant's role
+ * before loading it; a request for a principal with no grant is a no-op, not a refusal.
+ */
+export function refuseGrantRevoke(existing: Pick<LakeGrantWriteInput, 'role'>): string | null {
+  if (existing.role === 'owner') {
+    return 'This is an ownership grant; transfer ownership instead of revoking it';
+  }
+  return null;
+}
