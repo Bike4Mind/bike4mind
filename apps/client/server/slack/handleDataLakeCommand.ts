@@ -1,4 +1,9 @@
-import { parseDataLakeCommand, type ParsedDataLakeCommand, type SlackAttachment } from '@bike4mind/slack';
+import {
+  parseDataLakeCommand,
+  escapeSlackMrkdwn,
+  type ParsedDataLakeCommand,
+  type SlackAttachment,
+} from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
 import { STATIC_LAKE_IDS } from '@bike4mind/common';
 import type { AccessContext, IDataLakeRepository, ManageableDataLakeConfig } from '@bike4mind/common';
@@ -376,7 +381,10 @@ export function formatIngestOutcome(
   const lines: string[] = [];
 
   if (added.length > 0) {
-    const names = added.map(name => `"${name}"`).join(', ');
+    // A file's name can come from an attacker-controlled webpage <title> (the link-add path via
+    // createByUrl.ts) - escaped so a value like "<!channel> URGENT" cannot post as a real
+    // broadcast/mention.
+    const names = added.map(name => `"${escapeSlackMrkdwn(name)}"`).join(', ');
     // With enableAutoChunk off, objectCreated.ts never enqueues the chunk job, so the file is
     // stored but never indexed - promising searchability would be a lie the user cannot act on.
     const tail = autoChunkEnabled
@@ -386,7 +394,7 @@ export function formatIngestOutcome(
   }
 
   if (duplicates.length > 0) {
-    const names = duplicates.map(name => `"${name}"`).join(', ');
+    const names = duplicates.map(name => `"${escapeSlackMrkdwn(name)}"`).join(', ');
     lines.push(`Already in *${lakeName}*, skipped: ${names}.`);
   }
 
