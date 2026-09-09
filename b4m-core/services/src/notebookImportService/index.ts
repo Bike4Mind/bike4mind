@@ -462,11 +462,15 @@ export class NotebookImportService {
         const storageKeySuffix = this.adapters.generateId();
 
         let filePath: string;
+        // Server-measured size; falls back to the client-declared value only for the
+        // reference (contentUrl) path, where we hold no bytes to measure.
+        let measuredSize = file.size;
 
         // Handle embedded content vs. reference
         if (file.content) {
           // Decode base64 content and upload
           const content = Buffer.from(file.content, 'base64');
+          measuredSize = content.byteLength;
           filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
           await this.adapters.fileStorageService.uploadFile(filePath, content);
         } else if (file.contentUrl) {
@@ -481,7 +485,9 @@ export class NotebookImportService {
           userId: targetUserId,
           fileName: file.name,
           mimeType: file.mimeType,
-          fileSize: file.size,
+          // Server-measured bytes for embedded content, not the client-declared file.size, so a
+          // caller cannot understate size (measuredSize falls back to file.size only on contentUrl).
+          fileSize: measuredSize,
           filePath,
           type: toKnowledgeType(file.type),
           // The S3 scan that would flip this cannot see the row: it is written inside the import's
