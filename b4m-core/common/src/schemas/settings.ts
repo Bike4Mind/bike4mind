@@ -2037,9 +2037,9 @@ export const settingsMap = {
   EnforceLakeReadGrants: makeBooleanSetting({
     key: 'EnforceLakeReadGrants',
     name: 'Data Lakes: Enforce read-time grant resolution',
-    defaultValue: false,
+    defaultValue: true,
     description:
-      'Read-time grant cutover (#1673). OFF by default = report-only: the read gate resolves a persisted READER/org grant into an ephemeral membership view and logs where it WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision stays the legacy owner/org/tag/entitlement/public rule so no one gains or loses access. NOTE: turning this ON is currently a NO-OP guarded by a source-level interlock (READ_GRANT_ENFORCEMENT_READY) - enforcement will not activate until the follow-up code (member-management write path + retrieval arm) lands and flips it, and a premature toggle just logs a warning and stays report-only. This is deliberate so the setting cannot half-enable a half-wired gate. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
+      'Read-time grant cutover (#1673). ON: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so turning it on takes no access away; an ORG grant is contained to the lake own org, and expired rows never resolve. Turning it OFF returns to report-only: the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 94,
