@@ -1773,7 +1773,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    // `logger` is not optional in practice: getDynamicDataLakeAccess degrades closed on a failed
+    // grants or lakes read and reports it ONLY through this logger (setting lakeViewComplete false
+    // as the machine-readable half). Omitting it made every one of those catches silent on the main
+    // chat path, so "this user reaches no lakes" and "the grant read just failed" looked identical.
+    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys, logger: this.logger });
     // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
     // reaches this process after vetPreauthorizedLakeIds has established the two are the same
     // principal, and an unvetted path leaves the field unset.

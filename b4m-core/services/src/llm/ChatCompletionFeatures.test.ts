@@ -640,6 +640,11 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
         listActiveByLakes: vi
           .fn()
           .mockResolvedValue([{ dataLakeId: 'managed', principalType: 'user', principalId: grantee, role: 'curator' }]),
+        // Required, not decorative: getDynamicDataLakeAccess resolves its own grant arm through
+        // `listByPrincipal`, so omitting it throws a TypeError into that read's fail-closed catch
+        // and comes back with `lakeViewComplete: false` - these tests would then be asserting on a
+        // deliberately narrowed view while claiming to isolate the pre-authorization arm.
+        listByPrincipal: vi.fn().mockResolvedValue([]),
       },
       dataLakes: {
         findActiveByUserTags: vi.fn().mockResolvedValue([]),
@@ -648,6 +653,37 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       },
     },
     resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+  });
+
+  /**
+   * The fail-closed grant read in getDynamicDataLakeAccess reports itself ONLY through the logger
+   * this method hands it; `lakeViewComplete: false` is the machine-readable half. This pins that
+   * the logger is actually threaded, because without it both halves of that contract are invisible
+   * from the main chat path and a failed grant read is indistinguishable from "reaches no lakes".
+   */
+  it('surfaces a failed grant read through the logger, not just as a narrowed view', async () => {
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
+    const ctx = makeCtx(findById);
+    (ctx.db.dataLakeAccessGrants.listByPrincipal as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('grants down')
+    );
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakeViewComplete).toBe(false);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('access-grant lookup failed'),
+      expect.any(Error)
+    );
   });
 
   const MANAGED_LAKE = {
@@ -1646,9 +1682,17 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
             }
           : {}),
         // Wiring the grant reader is what lets the re-check trust a rung other than the creator's -
-        // see filterStillManagedLakes, which blanks the creator when this is absent.
+        // see filterStillManagedLakes, which blanks the creator when this is absent. `listByPrincipal`
+        // resolves EMPTY so these tests keep isolating the pre-authorization arm: the injection
+        // resolver reads it for its own owner/curator grant arm, which would otherwise admit the
+        // same lake for a different reason than the one under test.
         ...(opts.activeGrants
-          ? { dataLakeAccessGrants: { listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants) } }
+          ? {
+              dataLakeAccessGrants: {
+                listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants),
+                listByPrincipal: vi.fn().mockResolvedValue([]),
+              },
+            }
           : {}),
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
