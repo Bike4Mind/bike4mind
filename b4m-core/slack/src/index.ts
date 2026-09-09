@@ -47,7 +47,7 @@ export type {
 } from './di';
 
 // ─── Core Classes ────────────────────────────────────────────────────────────
-export { SlackClient } from './SlackClient';
+export { SlackClient, escapeSlackMrkdwn } from './SlackClient';
 export type { SlackMessage } from './SlackClient';
 export { SlackEvent } from './SlackEvent';
 export type { SlackEventData } from './SlackEvent';
