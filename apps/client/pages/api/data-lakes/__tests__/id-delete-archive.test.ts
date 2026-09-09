@@ -103,7 +103,11 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
   it('archives with the writability gate ahead of the service, as the lifecycle door does', async () => {
     const { res } = makeRes();
     await run(del({ user: { id: 'owner' } }), res);
-    expect(h.assertLakeWritable).toHaveBeenCalled();
+    // Order, not mere presence: a bare toHaveBeenCalled() pair also passes with the two inverted,
+    // which is the failure the title names.
+    expect(h.assertLakeWritable.mock.invocationCallOrder[0]).toBeLessThan(
+      h.archiveDataLake.mock.invocationCallOrder[0]
+    );
     expect(h.archiveDataLake).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'owner' }),
       'lake1',
