@@ -18,7 +18,11 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
-import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import {
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+} from '../constants/forcedRetrieval';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
@@ -387,6 +391,8 @@ export const SettingKeySchema = z.enum([
   'kbSearchDefaultResults',
   'kbSearchResultTokenBudget',
   'kbSearchMinRelevancePct',
+  'forcedRetrievalRelativeFloorPct',
+  'forcedRetrievalMinSimilarityPct',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -1528,6 +1534,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'kbSearchResultTokenBudget', order: 6 },
       { key: 'kbSearchMinRelevancePct', order: 7 },
       { key: 'lakeMemoryRecallK', order: 8 },
+      { key: 'forcedRetrievalRelativeFloorPct', order: 9 },
+      { key: 'forcedRetrievalMinSimilarityPct', order: 10 },
     ],
   },
   DATA_LAKE_COST: {
@@ -3546,6 +3554,54 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 8,
+  }),
+  forcedRetrievalRelativeFloorPct: makeNumberSetting({
+    key: 'forcedRetrievalRelativeFloorPct',
+    name: 'Forced Retrieval Relative Floor (%)',
+    defaultValue: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    description:
+      'How close to the best-scoring passage of the SAME turn a chunk must score to be injected on ' +
+      'a Data-Lake-mode turn, as a percent of that top score. This is the floor that ranks; the ' +
+      'absolute floor below only rejects. Unlike an absolute cosine line, it moves with the turn, so ' +
+      'it keeps working when a corpus or an embedding model puts the whole score band somewhere ' +
+      'else. Raising it injects fewer, more sharply-ranked passages and leaves char budget unspent; ' +
+      'lowering it admits more of the tail. 0 disables the relative floor and leaves the absolute ' +
+      'one as the only gate (the pre-#2497 behavior). The default is behavior-preserving rather ' +
+      'than tuned: it admits everything the absolute floor admitted on the measured band, so it ' +
+      'changes nothing until raised. Tune it AFTER an embedding-model change, never before - a ' +
+      'migration shifts the band any value fitted to today would have been chosen against.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 9,
+    // Organization/Owner only, no Lake rung - deliberately matching kbSearchMinRelevancePct rather
+    // than dataLakeSearchMaxChunks. A forced-retrieval turn scans an uncapped SET of lakes into one
+    // pool with one top score, so there is no single lake for a narrower rung to key on, and the
+    // relative floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  forcedRetrievalMinSimilarityPct: makeNumberSetting({
+    key: 'forcedRetrievalMinSimilarityPct',
+    name: 'Forced Retrieval Absolute Floor (%)',
+    defaultValue: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    description:
+      'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
+      'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
+      'gate - the relative floor above does the ranking. Measured over 166 injected chunks on a ' +
+      'production lake the 75 default never once bound (the whole band sat between 80 and 91), so ' +
+      'it currently reads like a quality gate while providing no protection. Lowering it toward ' +
+      '30-40 is the intended companion to raising the relative floor: it lets the relative rule ' +
+      'govern a corpus whose band sits low, which a 75 line would otherwise reject wholesale. ' +
+      'Cosine similarity is not comparable across embedding models, so a value tuned for one model ' +
+      'does not transfer to another.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 10,
+    // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',
