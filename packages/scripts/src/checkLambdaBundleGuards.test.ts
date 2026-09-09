@@ -46,8 +46,13 @@ describe('spoolRequestToFile keeps its temp path opaque to the file tracer', () 
 
   it('calls no path-building helper the tracer would have to fold', () => {
     const code = codeOnly(source);
-    expect(code).not.toMatch(/\bjoin\s*\(/);
-    expect(code).not.toMatch(/\bresolve\s*\(/);
+    expect(code, 'this module must build no path at all, so the tracer never has a call to fold').not.toMatch(
+      /\bjoin\s*\(/
+    );
+    expect(
+      code,
+      'the ban is scoped to this one small file, so a Promise resolve() here is a finding too, not a false positive'
+    ).not.toMatch(/\bresolve\s*\(/);
   });
 
   it('still sanitises the caller-supplied filename', () => {
