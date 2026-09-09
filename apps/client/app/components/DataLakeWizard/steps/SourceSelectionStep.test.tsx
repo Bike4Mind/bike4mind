@@ -24,7 +24,7 @@ vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
 // step-order/name-validation tests need no QueryClientProvider. Their own behavior is covered by
 // DriveConnectAction.test.tsx and DrivePendingConnectAction.test.tsx.
 vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
-  default: () => null,
+  default: () => <div data-testid="drive-connect-action" />,
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
   default: () => null,
@@ -141,12 +141,29 @@ describe('SourceSelectionStep - lake name', () => {
 
   it('offers no name field in append mode - the target lake owns its identity', () => {
     useDataLakeWizardStore.setState({
-      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:' },
+      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:', organizationId: undefined },
     });
 
     renderStep();
 
     expect(screen.queryByTestId('source-name-input')).toBeNull();
+  });
+
+  it.each([
+    ['an org target lake', 'org-1', true],
+    ['a personal target lake', undefined, false],
+  ])('renders the Drive connect action only for %s', (_label, organizationId, expectPresent) => {
+    useDataLakeWizardStore.setState({
+      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:', organizationId },
+    });
+
+    renderStep();
+
+    if (expectPresent) {
+      expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+    } else {
+      expect(screen.queryByTestId('drive-connect-action')).not.toBeInTheDocument();
+    }
   });
 });
 
@@ -220,7 +237,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
 
   it('offers no taxonomy opt-in in append mode, where the lake tags already exist', () => {
     useDataLakeWizardStore.setState({
-      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:' },
+      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:', organizationId: undefined },
     });
     const { container } = renderStep();
     selectFiles(container, [file('a.txt')]);

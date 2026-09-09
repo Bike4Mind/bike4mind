@@ -312,7 +312,7 @@ export default function SourceSelectionStep() {
             an org-lake capability server-side; a personal target lake has no working connect
             action to offer, so render nothing rather than a button that can only ever fail. */}
         {targetLake ? (
-          targetLake.organizationId && <DriveConnectAction lake={targetLake} />
+          !!targetLake.organizationId && <DriveConnectAction lake={targetLake} />
         ) : (
           <DrivePendingConnectAction />
         )}

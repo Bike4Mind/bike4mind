@@ -133,6 +133,16 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(h.connFindByDataLakeId).not.toHaveBeenCalled();
   });
 
+  it('DELETE 404s a personal (org-less) lake', async () => {
+    // DELETE goes through resolveOrgLake, the one path GET no longer exercises since it inlined
+    // its own org-less short-circuit - so this is the only remaining coverage of that guard.
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    const { res } = makeRes();
+    await expect(run(makeReq('DELETE'), res)).rejects.toThrow(/not found/i);
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.connFindByDataLakeId).not.toHaveBeenCalled();
+  });
+
   it('GET 404s when the lake itself does not exist', async () => {
     h.dlFindById.mockResolvedValue(null);
     const { res } = makeRes();
