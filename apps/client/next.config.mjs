@@ -113,14 +113,8 @@ const nextConfig = {
     '@aws-sdk/client-transcribe',
     '@aws-sdk/credential-provider-node',
     '@opensearch-project/opensearch',
-    // Serwist builds the service worker during `next build`, not at request time: the route
-    // that invokes it (app/serwist/[path]/route.ts) is `force-static` with `dynamicParams: false`
-    // and `revalidate: false`, so Next prerenders it and the handler is never re-invoked in the
-    // Lambda. Only `esbuild-wasm` is listed, because that is the branch serwist actually takes -
-    // `useNativeEsbuild` defaults to `process.platform === 'win32'`, false on the Linux runtime.
-    // Declaring the native `esbuild` here made the packager ship @esbuild/linux-x64 (10.9 MB) into
-    // the server function. An `outputFileTracingExcludes` glob does NOT undo that; measured, the
-    // bytes stay. The external declaration is what pulls it in, so that is what has to go.
+    // Serwist uses esbuild to bundle the service worker at runtime
+    'esbuild',
     'esbuild-wasm',
   ],
 
