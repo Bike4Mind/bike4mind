@@ -389,6 +389,11 @@ export const RetrievalSummarySchema = z.object({
    *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
    *   not the tempo: fix the outage or the host wiring, never re-index content. An unwired host
    *   reports continuously too, so "chronic" alone does not pick out 'not_indexed'.
+   *   NOT this: a model-supplied argument that is not a well-formed id. knowledgeBaseRetrieve
+   *   shape-checks `file_id` and answers a malformed one as a single-file miss ('ok'), because the
+   *   remedy is for the model to search for the right id - there is nothing for an operator to
+   *   fix. It is logged rather than counted here, so the rate stays observable without this field
+   *   reporting an outage that is not happening.
    * On multiple retrieval calls within one turn, merge priority is failed > not_indexed > ok >
    * no_lakes (see retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never
    * masked by a later success or abstain, an unsearchable corpus outranks a legitimate zero so a
