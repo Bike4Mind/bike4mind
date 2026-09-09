@@ -286,6 +286,14 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120/#215
         convergencePause: { platformPaused: true, paused: [], running },
       });
 
+    it('skips a stalled MEDIA file, so the recovery arm cannot re-enqueue what an operator paused', () => {
+      // The safety half of the rechunkPaused media door. The case below does NOT cover it: its
+      // `stalled()` fixture sets no mimeType, so the doc is admitted by the non-media arm and then
+      // excluded by the `$nor` - it exercises the non-media door. What holds a paused media file
+      // here is the pause exclusion, which is mime-independent, NOT the new arm.
+      expect(matches(stalled('rechunkPaused', { mimeType: 'audio/mpeg' }), filter())).toBe(false);
+    });
+
     it.each([
       ['the chunk-handler reason', 'rechunkPaused'],
       ['the never-chunked reason', 'unchunkedPaused'],

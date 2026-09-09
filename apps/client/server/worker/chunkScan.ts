@@ -72,18 +72,31 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * `noExtractableTextAt`. Query must stay in sync with isAudioMimeType and
  * SmartChunker.chunkImage / chunkFile's default branch.
  *
- * ONE exception, and it is why the exclusion is an `$or` arm rather than a flat key: a media file
- * carrying `chunkRebuildRequestedAt` (#1939) is swept anyway. That stamp means a reset took the
- * file's state away and the enqueue that should have followed never landed - and this sweep is the
- * only door that reaches a file outside every data lake, so excluding it by mimeType would leave
- * the stamp with no automatic exit at all. `partitionByIndexAvailability` withholds a stamped file,
- * so the cost of no exit is a search that reports the file as "being re-indexed, returns on its
- * own" forever: a permanently false partial-results warning, which is the cries-wolf failure this
- * whole feature is built to avoid, reached from the other side.
+ * TWO exceptions, and they are why the exclusion is an `$or` arm rather than a flat key.
  *
- * Bounded to one pass per file: the sweep enqueues, the chunker returns 0 chunks as it always would,
- * and `commitFabFileChunks` clears the stamp and writes the rollups - after which the handler's own
- * `noExtractableTextAt` stamp excludes the file here again.
+ * FIRST, a media file carrying `chunkRebuildRequestedAt` (#1939) is swept anyway. That stamp means a
+ * reset took the file's state away and the enqueue that should have followed never landed - and this
+ * sweep is the only door that reaches a file outside every data lake, so excluding it by mimeType
+ * would leave the stamp with no automatic exit at all. `partitionByIndexAvailability` withholds a
+ * stamped file, so the cost of no exit is a search that reports the file as "being re-indexed,
+ * returns on its own" forever: a permanently false partial-results warning, which is the cries-wolf
+ * failure this whole feature is built to avoid, reached from the other side.
+ *
+ * SECOND, a media file whose stall reason is `rechunkPaused` is swept once the pause clears. The
+ * halt write records that reason and nulls `chunkRebuildRequestedAt` in the same statement - correct
+ * in itself, since a file must never read as both "paused, needs an administrator" and "rebuilding,
+ * returns on its own", but for media that stamp was the only door above, so the halt stranded the
+ * file permanently. `rechunkPaused` is the durable record of the same fact the stamp carried:
+ * `markConvergencePaused` picks that reason precisely WHEN the stamp was set. Reading the reason
+ * instead recovers the file without reintroducing the ambiguous double state. Scoped to that reason
+ * alone - `unchunkedPaused` means the file arrived empty, so there is no rebuild to resume and
+ * admitting it would sweep every paused image in the install on every pass.
+ *
+ * Bounded to one pass per file, by either exit. The sweep enqueues, the chunker returns 0 chunks as
+ * it always would, and `commitFabFileChunks` clears BOTH the stamp and `chunkStallReason` and writes
+ * the rollups - after which the handler's own `noExtractableTextAt` stamp excludes the file here
+ * again. While the switch is still on, the pause exclusion above drops the file regardless, so the
+ * second exception cannot re-enqueue work an operator is trying to stop.
  */
 /**
  * A lake-membership predicate, built by the caller from `buildDataLakeMembershipFilter`
