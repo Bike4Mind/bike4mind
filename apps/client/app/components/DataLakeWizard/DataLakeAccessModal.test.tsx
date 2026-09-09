@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -9,18 +9,22 @@ import { DataLakeAccessModal } from './DataLakeAccessModal';
 
 const downloadCsv = vi.fn();
 let viewState: {
-  data?: { view: LakeAccessView; canTransferOwnership: boolean };
+  data?: { view: LakeAccessView; canTransferOwnership: boolean; readerGrantsEnforced: boolean };
   isLoading: boolean;
   isError: boolean;
   error?: unknown;
 };
 let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean; isError?: boolean };
 const transferMutate = vi.fn();
+const grantMutate = vi.fn();
+const revokeMutate = vi.fn();
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeAccessView: () => viewState,
   useLakeOwnershipCandidates: () => candidatesState,
   useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
+  useGrantLakeAccess: () => ({ mutateAsync: grantMutate, isPending: false }),
+  useRevokeLakeAccess: () => ({ mutate: revokeMutate, isPending: false }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
 }));
 
@@ -75,9 +79,11 @@ const fullView: LakeAccessView = {
 
 const lake = { id: 'lake1', name: 'Sales Intelligence' };
 
-/** A loaded access view. `canTransferOwnership` defaults off - the server decides it, not the client. */
-const loaded = (view: LakeAccessView, canTransferOwnership = false) => ({
-  data: { view, canTransferOwnership },
+/** A loaded access view. `canTransferOwnership` defaults off - the server decides it, not the client.
+ *  `readerGrantsEnforced` defaults ON here so the disclosure note is opt-in per test rather than
+ *  present in every unrelated assertion. */
+const loaded = (view: LakeAccessView, canTransferOwnership = false, readerGrantsEnforced = true) => ({
+  data: { view, canTransferOwnership, readerGrantsEnforced },
   isLoading: false,
   isError: false,
 });
@@ -313,5 +319,78 @@ describe('DataLakeAccessModal', () => {
       // this dialog's only job is not to close and not to throw.
       expect(onClose).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('DataLakeAccessModal grant writes', () => {
+  it('offers Revoke on a curator row and never on an ownership row', async () => {
+    // The server refuses to revoke an owner grant (it would silently un-transfer the lake), so the
+    // UI must not offer a control whose action the door rejects.
+    viewState = loaded({
+      ...fullView,
+      grants: [
+        { ...fullView.grants[0]!, principalId: 'owner1', role: 'owner' },
+        { ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' },
+      ],
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    expect(screen.queryByTestId('datalake-access-revoke-user-owner1')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('datalake-access-revoke-user-cur1'));
+    expect(revokeMutate).toHaveBeenCalledWith({ id: 'lake1', principalType: 'user', principalId: 'cur1' });
+  });
+
+  it('grants a reader by email, closing the form on success', async () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
+    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+
+    expect(grantMutate).toHaveBeenCalledWith({
+      id: 'lake1',
+      principalType: 'user',
+      principalEmail: 'new@example.com',
+      role: 'reader',
+    });
+    expect(screen.queryByTestId('datalake-grant-modal')).not.toBeInTheDocument();
+  });
+
+  it('keeps the form open when the server refuses, so the input is not lost', async () => {
+    // The mutation's own onError surfaces the refusal text; the form's job is only to stay put.
+    grantMutate.mockRejectedValueOnce(new Error('nope'));
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
+    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+
+    expect(screen.getByTestId('datalake-grant-modal')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-grant-email-input')).toHaveValue('new@example.com');
+  });
+
+  it('offers the organization only when the lake HAS an owning org', async () => {
+    // Membership never crosses organizations, so the only grantable org is the lake's own - and a
+    // personal lake has none at all.
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
+    expect(screen.getByTestId('datalake-grant-principal-org')).toHaveTextContent('Acme');
+
+    // A lake with no organization channel: the same form offers no organization option at all.
+    cleanup();
+    viewState = loaded({ ...fullView, channels: [{ kind: 'tag', value: 'vip' }] });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
+    expect(screen.queryByTestId('datalake-grant-principal-org')).not.toBeInTheDocument();
+  });
+
+  it('discloses that reader grants are recorded but not yet in force, and drops the note once they are', () => {
+    viewState = loaded(fullView, false, false);
+    const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-readers-not-enforced')).toHaveTextContent(/not yet in force/i);
+
+    viewState = loaded(fullView, false, true);
+    rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
+    expect(screen.queryByTestId('datalake-access-readers-not-enforced')).not.toBeInTheDocument();
   });
 });

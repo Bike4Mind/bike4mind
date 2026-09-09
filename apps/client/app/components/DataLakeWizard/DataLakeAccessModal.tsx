@@ -8,6 +8,10 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
+  FormLabel,
+  IconButton,
+  Input,
   Modal,
   ModalClose,
   ModalDialog,
@@ -20,6 +24,7 @@ import {
 } from '@mui/joy';
 import type {
   DataLakeAccessRole,
+  DataLakePrincipalType,
   LakeAccessChannel,
   LakeAccessGrantView,
   LakeAccessHistoryEntry,
@@ -29,8 +34,10 @@ import type {
 import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import type { ColorPaletteProp } from '@mui/joy';
 import {
+  useGrantLakeAccess,
   useLakeAccessView,
   useLakeOwnershipCandidates,
+  useRevokeLakeAccess,
   useTransferLakeOwnership,
   downloadLakeAccessCsv,
 } from '@client/app/hooks/data/dataLakes';
@@ -74,7 +81,7 @@ const ROLE_COLOR: Record<DataLakeAccessRole, ColorPaletteProp> = {
   reader: 'neutral',
 };
 
-function GrantRow({ grant }: { grant: LakeAccessGrantView }) {
+function GrantRow({ grant, onRevoke }: { grant: LakeAccessGrantView; onRevoke?: () => void }) {
   return (
     <tr data-testid="datalake-access-grant-row">
       <td>
@@ -106,6 +113,22 @@ function GrantRow({ grant }: { grant: LakeAccessGrantView }) {
       </td>
       <td>
         <Typography level="body-sm">{grant.expiresAt ? fmtDate(grant.expiresAt) : 'Never'}</Typography>
+      </td>
+      <td>
+        {/* Absent on an ownership row: the server refuses to revoke one (it would silently
+            un-transfer the lake), and the UI must not offer what the door rejects. */}
+        {onRevoke && (
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="danger"
+            onClick={onRevoke}
+            aria-label={`Revoke access for ${grant.principalName ?? grant.principalId}`}
+            data-testid={`datalake-access-revoke-${grant.principalType}-${grant.principalId}`}
+          >
+            Revoke
+          </IconButton>
+        )}
       </td>
     </tr>
   );
@@ -278,8 +301,144 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
   );
 }
 
-function AccessViewBody({ view, canTransferOwnership }: { view: LakeAccessView; canTransferOwnership: boolean }) {
+/** Tomorrow, as the `min` for an expiry picker: an already-lapsed grant is refused by the server
+ *  (it would be filtered out of every active read the moment it landed). */
+const tomorrowInputDate = (): string => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * Grant one principal access to this lake.
+ *
+ * `owner` is deliberately absent from the role choices: ownership moves only through
+ * transfer-ownership, and the server refuses it here. The organization option appears only when the
+ * lake HAS an owning org - read off the view's own organization channel rather than fetched, since
+ * a grant may name no other org (membership never crosses organizations).
+ *
+ * A user is named by EMAIL, which is the only identifier a manager sharing outside their own org
+ * has; the server resolves it by exact lookup.
+ */
+function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () => void }) {
+  const grant = useGrantLakeAccess();
+  const ownOrg = view.channels.find(c => c.kind === 'organization');
+  const [principalType, setPrincipalType] = useState<DataLakePrincipalType>('user');
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<Exclude<DataLakeAccessRole, 'owner'>>('reader');
+  const [expiresOn, setExpiresOn] = useState('');
+
+  const canSubmit = principalType === 'organization' ? !!ownOrg?.value : email.trim().length > 0;
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    try {
+      await grant.mutateAsync({
+        id: view.lakeId,
+        principalType,
+        ...(principalType === 'organization' ? { principalId: ownOrg!.value } : { principalEmail: email.trim() }),
+        role,
+        // End of the chosen day, so a grant dated today does not lapse the instant it is written.
+        ...(expiresOn ? { expiresAt: `${expiresOn}T23:59:59.999Z` } : {}),
+      });
+      onClose();
+    } catch {
+      // The mutation's onError already surfaced the server's refusal - which is the actionable text
+      // here ("use transfer ownership instead", "no account was found") - so keep the form open with
+      // the manager's input intact rather than making them retype it.
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose}>
+      <ModalDialog data-testid="datalake-grant-modal" sx={{ width: { xs: '95%', sm: '26rem' } }}>
+        <ModalClose data-testid="datalake-grant-close" />
+        <DialogTitle>Grant access</DialogTitle>
+        <DialogContent>
+          <Stack gap={2} sx={{ pt: 1 }}>
+            <FormControl>
+              <FormLabel>Grant to</FormLabel>
+              <Select
+                value={principalType}
+                onChange={(_e, value) => value && setPrincipalType(value)}
+                slotProps={{ button: { 'data-testid': 'datalake-grant-principal-select' } }}
+              >
+                <Option value="user" data-testid="datalake-grant-principal-user">
+                  A person
+                </Option>
+                {/* Only the lake OWN organization can be granted - membership never crosses orgs -
+                    so a personal lake offers no organization option at all. */}
+                {ownOrg && (
+                  <Option value="organization" data-testid="datalake-grant-principal-org">
+                    Everyone in {ownOrg.label ?? 'the owning organization'}
+                  </Option>
+                )}
+              </Select>
+            </FormControl>
+
+            {principalType === 'user' && (
+              <FormControl>
+                <FormLabel>Email address</FormLabel>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="teammate@example.com"
+                  slotProps={{ input: { 'data-testid': 'datalake-grant-email-input' } }}
+                />
+              </FormControl>
+            )}
+
+            <FormControl>
+              <FormLabel>Role</FormLabel>
+              <Select
+                value={role}
+                onChange={(_e, value) => value && setRole(value)}
+                slotProps={{ button: { 'data-testid': 'datalake-grant-role-select' } }}
+              >
+                <Option value="reader">Reader - can read this lake</Option>
+                <Option value="curator">Curator - can also manage its files and settings</Option>
+              </Select>
+            </FormControl>
+
+            <FormControl>
+              <FormLabel>Expires (optional)</FormLabel>
+              <Input
+                type="date"
+                value={expiresOn}
+                onChange={e => setExpiresOn(e.target.value)}
+                slotProps={{ input: { min: tomorrowInputDate(), 'data-testid': 'datalake-grant-expiry-input' } }}
+              />
+            </FormControl>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            color="primary"
+            disabled={!canSubmit}
+            loading={grant.isPending}
+            onClick={handleSubmit}
+            data-testid="datalake-grant-confirm-btn"
+          >
+            Grant
+          </Button>
+          <Button variant="plain" color="neutral" onClick={onClose} data-testid="datalake-grant-cancel-btn">
+            Cancel
+          </Button>
+        </DialogActions>
+      </ModalDialog>
+    </Modal>
+  );
+}
+
+function AccessViewBody({
+  view,
+  canTransferOwnership,
+  readerGrantsEnforced,
+}: {
+  view: LakeAccessView;
+  canTransferOwnership: boolean;
+  readerGrantsEnforced: boolean;
+}) {
   const [transferring, setTransferring] = useState(false);
+  const [granting, setGranting] = useState(false);
+  const revoke = useRevokeLakeAccess();
   return (
     <Stack gap={3} data-testid="datalake-access-body">
       {/* Who can see this: explicit grants */}
@@ -288,18 +447,30 @@ function AccessViewBody({ view, canTransferOwnership }: { view: LakeAccessView; 
           <Typography level="title-sm">Members and grants</Typography>
           {/* Shown on the server's say-so, never re-derived here: transferring is NARROWER than the
               manage gate that opened this modal, so a curator sees the table without this control. */}
-          {canTransferOwnership && (
+          <Box sx={{ display: 'flex', gap: 1 }}>
             <Button
               size="sm"
               variant="outlined"
               color="neutral"
-              onClick={() => setTransferring(true)}
-              data-testid="datalake-access-transfer-btn"
+              onClick={() => setGranting(true)}
+              data-testid="datalake-access-grant-btn"
             >
-              Transfer ownership
+              Grant access
             </Button>
-          )}
+            {canTransferOwnership && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={() => setTransferring(true)}
+                data-testid="datalake-access-transfer-btn"
+              >
+                Transfer ownership
+              </Button>
+            )}
+          </Box>
         </Box>
+        {granting && <GrantAccessForm view={view} onClose={() => setGranting(false)} />}
         {transferring && <TransferOwnershipDialog lakeId={view.lakeId} onClose={() => setTransferring(false)} />}
         {view.grants.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="datalake-access-grants-empty">
@@ -316,15 +487,42 @@ function AccessViewBody({ view, canTransferOwnership }: { view: LakeAccessView; 
                   <th>Granted by</th>
                   <th>Granted</th>
                   <th>Expires</th>
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
                 {view.grants.map(g => (
-                  <GrantRow key={`${g.principalType}:${g.principalId}`} grant={g} />
+                  <GrantRow
+                    key={`${g.principalType}:${g.principalId}`}
+                    grant={g}
+                    onRevoke={
+                      g.role === 'owner'
+                        ? undefined
+                        : () =>
+                            revoke.mutate({
+                              id: view.lakeId,
+                              principalType: g.principalType,
+                              principalId: g.principalId,
+                            })
+                    }
+                  />
                 ))}
               </tbody>
             </Table>
           </Sheet>
+        )}
+        {/* The honest disclosure while the read arm is still code-gated off: a reader grant is
+            RECORDED and admits nobody, which without this note would look identical to a live one. */}
+        {!readerGrantsEnforced && (
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            sx={{ mt: 1 }}
+            data-testid="datalake-access-readers-not-enforced"
+          >
+            Reader grants are recorded but not yet in force - a reader cannot open this lake until grant-based reading
+            is enabled for the platform. Owner and curator grants take effect immediately.
+          </Typography>
         )}
       </Box>
 
@@ -486,7 +684,11 @@ export function DataLakeAccessModal({ lake, onClose }: { lake: AccessViewLake | 
                   Export CSV
                 </Button>
               </Box>
-              <AccessViewBody view={data.view} canTransferOwnership={data.canTransferOwnership} />
+              <AccessViewBody
+                view={data.view}
+                canTransferOwnership={data.canTransferOwnership}
+                readerGrantsEnforced={data.readerGrantsEnforced}
+              />
             </Stack>
           ) : null}
         </DialogContent>
