@@ -1,6 +1,5 @@
-import { FabFileSourceType, type IFabFileDocument } from '@bike4mind/common';
+import { FabFileSourceType, isDuplicateFabFileError, type IFabFileDocument } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { fabFilesService } from '@bike4mind/services';
 import {
   authorizeLakeForWrite,
   refuseMockActor,
@@ -100,20 +99,6 @@ function sanitizeUrlForRecord(raw: string): string {
     // Unparseable by URL despite passing the scheme check - record nothing rather than guess.
     return '[unparseable url]';
   }
-}
-
-/**
- * A plain `instanceof` check against `fabFilesService.DuplicateFabFileError` can miss under test
- * isolation, where a module loaded twice yields two distinct class references for the same error -
- * `err` would be an instance of one, this import the other. Falls back to `err.name`, which
- * `DuplicateFabFileError`'s constructor always sets, so the error is still recognized correctly
- * regardless of which module instance constructed it.
- */
-function isDuplicateFabFileError(err: unknown): err is fabFilesService.DuplicateFabFileError {
-  return (
-    err instanceof fabFilesService.DuplicateFabFileError ||
-    (err instanceof Error && err.name === 'DuplicateFabFileError')
-  );
 }
 
 export async function ingestSlackLinkIntoLake(
