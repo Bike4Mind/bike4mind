@@ -114,6 +114,7 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../identify';
 import { ApiKeyScope } from '@bike4mind/common';
+import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 const VALID_KEY = 'b4m_live_0123456789abcdef0123456789abcdef';
 
@@ -246,6 +247,24 @@ describe('GET /api/identify', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockIssueSession).not.toHaveBeenCalled();
       expect(res._getJSONData().accessToken).toBe('live-jwt');
+    });
+
+    // Regression guard: previousKey is stored encrypted at rest, so this reader must
+    // decryptAtRest it before handing it to the verifier. A plaintext fixture cannot
+    // catch a dropped decrypt (plaintext passes through); this holds real ciphertext and
+    // asserts the verifier receives the decrypted secret, not the stored blob.
+    it('decrypts the rotated previousKey before verifying a grace-window token', async () => {
+      const PREV_SECRET = 'the-outgoing-signing-secret';
+      configureSecretsAtRest(generateEncryptionKey());
+      try {
+        mockFindByKeyName.mockResolvedValue({ rotatedAt: new Date(), previousKey: encryptAtRest(PREV_SECRET) });
+        const { req, res } = fire({ bearer: 'live-jwt' });
+        await handler(req, res);
+
+        expect(mockVerifyToken).toHaveBeenCalledWith('live-jwt', PREV_SECRET);
+      } finally {
+        configureSecretsAtRest(undefined);
+      }
     });
 
     it('is sanitized too - the raw document never leaves this route', async () => {
