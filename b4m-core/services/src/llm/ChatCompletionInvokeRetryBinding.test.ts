@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { NotFoundError } from '@bike4mind/utils';
 
 // Only the two collaborators that reach out of process need mocking; the error classes and
 // helpers from @bike4mind/utils stay real so the code under test behaves normally.
@@ -60,10 +61,16 @@ describe('ChatCompletionInvoke retry path session binding', () => {
   it('refuses to overwrite a quest that belongs to a different session', async () => {
     const { invoke, questsUpdate } = makeHarness({ id: 'quest-1', sessionId: 'someone-elses-session' });
 
-    const result = await invoke.invoke({ body: body as never, userId: 'user-A' });
+    // Guard throws (not a silent no-op) before the retry overwrite; the foreign quest is untouched.
+    // A generic NotFound keeps the refusal from leaking that the quest exists.
+    await expect(invoke.invoke({ body: body as never, userId: 'user-A' })).rejects.toBeInstanceOf(NotFoundError);
+    expect(questsUpdate).not.toHaveBeenCalled();
+  });
 
-    // Guard returns null -> invoke bails before the retry overwrite; the foreign quest is untouched.
-    expect(result).toBeUndefined();
+  it('surfaces a NotFound when the retried quest no longer exists (same error, no enumeration)', async () => {
+    const { invoke, questsUpdate } = makeHarness(null);
+
+    await expect(invoke.invoke({ body: body as never, userId: 'user-A' })).rejects.toBeInstanceOf(NotFoundError);
     expect(questsUpdate).not.toHaveBeenCalled();
   });
 
