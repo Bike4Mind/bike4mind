@@ -385,8 +385,10 @@ export interface IFabFile {
    * SHA-256 (hex) over the file's normalized server-extracted text, computed at chunk time by the
    * admission contract (`computeServerTextHash`). Hashed over the CANONICAL EXTRACTED TEXT, not the
    * chunk output, so it is stable across chunk-policy/embedding-model changes - the trustworthy dedup
-   * input for #1671, distinct from `contentHash` (client-side raw BYTES, unverified, absent on
-   * connector files). Tri-state: absent = never chunked (treat as UNKNOWN, never "no text"); null =
+   * input for #1671, distinct from `contentHash` (unverified, and NOT universal: every
+   * `createFabFileByUrl` caller stamps it since #2027 - the web URL door, the Slack link door, and
+   * proposal admission - but the Google Drive connector ingest, which calls `createFabFile` directly,
+   * still does not). Tri-state: absent = never chunked (treat as UNKNOWN, never "no text"); null =
    * chunked with no extractable text; hex = fingerprint. Nulled by FAB_FILE_CONTENT_REWRITE_PATCH on
    * a byte rewrite and by the chunk pass on a text-less re-chunk, so it never outlives its text.
    */
@@ -413,6 +415,14 @@ export interface IFabFile {
 
   /** Soft-archive marker set when the file's data lake is archived (reversible). */
   archivedAt?: Date;
+
+  /**
+   * Set the first time the "finished indexing" Slack reply is claimed for this file (#2027) -
+   * an atomic unset->set guard, not just a record of when the post happened, so a redelivered or
+   * concurrent vectorize-completion message never posts the same reply twice. See
+   * `fabFileRepository.claimSlackIndexNotification` and `notifySlackIndexingComplete.ts`.
+   */
+  slackIndexNotifiedAt?: Date;
 
   /**
    * Non-destructive AI-edit history for binary Office documents (docx/xlsx). Absent for
@@ -848,6 +858,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
+  /**
+   * Atomic claim: sets `slackIndexNotifiedAt` only if it is not already set, succeeding only for
+   * the FIRST caller. The redelivery-safety primitive for the "finished indexing" Slack reply
+   * (#2027) - a redelivered or concurrent vectorize-completion message for the same file must
+   * post that reply at most once. Mirrors `dataLakeBatchRepository.claimFileStatus`'s shape.
+   */
+  claimSlackIndexNotification(fabFileId: string): Promise<boolean>;
 
   /**
    * Search for files.
