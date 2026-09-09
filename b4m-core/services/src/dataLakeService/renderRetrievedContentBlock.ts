@@ -63,12 +63,14 @@ export const RETRIEVED_CONTENT_FOOTER = [
  *           `[Organization Context - ...]` header that would outrank the policy we defer to.
  *   `---`   the section separator both channels join on: content could otherwise split itself
  *           into two documents, or close its own section and continue outside its attribution.
- *   `NOTE:` the truncation and comparability notices the search channel composes, which say how
- *           much of the corpus was reached - forgeable into "this search covered everything".
+ *   `NOTE:` the notices our own code composes at column 0 - the search channel's truncation and
+ *           comparability lines, which say how much of the corpus was reached, and the
+ *           cross-document conflict note all three channels emit (retrievalConflictNote.ts).
+ *           Forgeable into "this search covered everything", or into a conflict that is not there.
  * The last two are the per-item headers, one per channel, and both attribute text to a named file -
  * forge one and the model credits a passage to a document the reader trusts more:
  *   `### `        the retrieve channel's `### <name> (ID: ...) - dated <date>`.
- *   `<n>. **`     the search channel's `<n>. **<name>** (relevance X) - dated <date>`.
+ *   `<n>. **`     the search channel's `<n>. **<name>** (ID: ..., relevance X) - dated <date>`.
  * Both are matched with their trailing shape (a space, an opening `**`) rather than the bare token,
  * so an ordinary `## Heading` or numbered list in a document is left alone.
  *

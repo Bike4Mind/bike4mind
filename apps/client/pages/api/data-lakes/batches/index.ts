@@ -115,6 +115,7 @@ const handler = baseApi()
       failedFiles: 0,
       processingFailedFiles: 0,
       skippedFiles: 0,
+      deferredFiles: 0,
       uploadedSizeBytes: 0,
       files: [],
       appliedTags: data.appliedTags || [],

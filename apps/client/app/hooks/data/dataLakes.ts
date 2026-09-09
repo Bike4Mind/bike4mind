@@ -19,6 +19,8 @@ import type {
   LakeConfigHistoryView,
   ManageableDataLakeConfig,
   TaxonomyTag,
+  TransitionalDataLakeSummary,
+  TransitionalRetryAction,
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
@@ -484,23 +486,33 @@ async function postLifecycle(id: string, action: LifecycleAction) {
   return response.data;
 }
 
+/**
+ * Every cache key a settled lifecycle move invalidates. Shared by the fixed-action hooks and the
+ * status-driven retry so the two cannot drift - a retry settles a lake exactly as the original
+ * action would have, so it must refresh exactly the same surfaces.
+ */
+function invalidateAfterLifecycle(queryClient: ReturnType<typeof useQueryClient>, id: string) {
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.transitional });
+  // A lifecycle move changes what is BROWSABLE, not just which lakes are listed: archiving
+  // stamps archivedAt on the lake's files, which both tag counters exclude. Without this the
+  // lake list and the tag tree disagree - the page's lake rail (sourced from `list`) drops the
+  // row while the tree beside it still shows that lake's branches and counts it in the totals.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+  // Every lifecycle action records a config-history row. Invalidated for all five rather than
+  // only the reversible ones: for delete/cleanup the history observer is already unmounted, so
+  // the extra key is inert, and enumerating which actions qualify would rot as actions are added.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+}
+
 function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postLifecycle(id, action),
     onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
-      // A lifecycle move changes what is BROWSABLE, not just which lakes are listed: archiving
-      // stamps archivedAt on the lake's files, which both tag counters exclude. Without this the
-      // lake list and the tag tree disagree - the page's lake rail (sourced from `list`) drops the
-      // row while the tree beside it still shows that lake's branches and counts it in the totals.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
-      // Every lifecycle action records a config-history row. Invalidated for all five rather than
-      // only the reversible ones: for delete/cleanup the history observer is already unmounted, so
-      // the extra key is inert, and enumerating which actions qualify would rot as actions are added.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+      invalidateAfterLifecycle(queryClient, id);
       toast.success(successMessage);
     },
     onError: (error: Error) => {
@@ -605,6 +617,45 @@ export function useCleanupDataLake() {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to clean up data lake');
+    },
+  });
+}
+
+/**
+ * Lists lakes stranded mid-lifecycle (needs-attention view). The server already scopes this to
+ * lakes the caller can MANAGE and withholds ones still inside the staleness cutoff, so every row
+ * this returns is one the caller can actually act on.
+ */
+export function useGetTransitionalDataLakes(enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.transitional,
+    enabled,
+    queryFn: async () => {
+      const response = await api.get<{ data: TransitionalDataLakeSummary[] }>('/api/data-lakes/transitional');
+      return response.data.data;
+    },
+  });
+}
+
+/**
+ * Re-runs the lifecycle action that settles a stranded lake. Not a repair path: each lifecycle
+ * service re-admits its own transitional status for exactly this crash re-entry, so this posts the
+ * SAME action that stranded the lake.
+ *
+ * Takes the action, not the status: the server resolved it (see `resolveRetryAction`, which for
+ * `restoring` reads sweep marks this view does not carry), and a row whose DTO names no action
+ * must not offer Retry at all.
+ */
+export function useRetryLakeLifecycle() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: TransitionalRetryAction }) => postLifecycle(id, action),
+    onSuccess: (_data, { id }) => {
+      invalidateAfterLifecycle(queryClient, id);
+      toast.success('Retrying the data lake operation');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to retry the data lake operation');
     },
   });
 }

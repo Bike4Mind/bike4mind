@@ -26,6 +26,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { __marker: 'dataLakeRepository' },
+  dataLakeAccessGrantRepository: { __marker: 'dataLakeAccessGrantRepository' },
   organizationRepository: { __marker: 'organizationRepository', findMembershipOrgIds: mockFindMembershipOrgIds },
 }));
 vi.mock('@server/entitlements', () => ({
@@ -38,7 +39,7 @@ import {
   resolveRetrievalLakeScopeForUser,
   withStaticRegistryBypass,
 } from './resolveRetrievalLakeScope';
-import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
+import { dataLakeAccessGrantRepository, dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 
 type Scope = Parameters<typeof withStaticRegistryBypass>[0];
@@ -213,6 +214,7 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
       },
       user: { id: 'u1', tags: ['Opti'] },
@@ -266,6 +268,7 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
       },
       user: { id: 'u1', tags: [] },
@@ -284,6 +287,7 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
       },
       user: { id: 'u1', tags: ['Opti'] },

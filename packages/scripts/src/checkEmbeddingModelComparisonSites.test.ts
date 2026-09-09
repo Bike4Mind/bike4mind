@@ -67,6 +67,11 @@ const SITES: { path: string; matches: number; note: string }[] = [
     matches: 1,
     note: 'Client badge: reddens the session-toolbar file count. Same tier as FilesSection',
   },
+  {
+    path: 'packages/scripts/help/ingestHelpDatalake.ts',
+    matches: 1,
+    note: 'system-help mirror reuse gate. Deliberately STRICTER; divergence churns re-embeds, not content',
+  },
 ];
 
 /**

@@ -70,6 +70,8 @@ import {
   useRechunkDataLake,
   useSetLakeVisibility,
   useArchiveDataLake,
+  useGetTransitionalDataLakes,
+  useRetryLakeLifecycle,
   useTransferLakeOwnership,
   usePurgeDataLakeDocument,
 } from './dataLakes';
@@ -1341,5 +1343,84 @@ describe('usePurgeDataLakeDocument', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith("Only the file's owner can permanently delete this document");
+  });
+});
+
+describe('the needs-attention list and its retry', () => {
+  const mountWith = () => {
+    // The api spies are module-scoped and shared, so a "never posted" assertion below would
+    // otherwise read a sibling case's call.
+    apiGet.mockClear();
+    apiPost.mockClear();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { wrapper, invalidate };
+  };
+  const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
+    invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
+
+  it('reads the transitional route and unwraps the data envelope', async () => {
+    const { wrapper } = mountWith();
+    const row = {
+      id: 'stuck',
+      name: 'Stuck',
+      slug: 'stuck',
+      fileTagPrefix: 'st:',
+      status: 'archiving',
+      retryAction: 'archive',
+    };
+    apiGet.mockResolvedValueOnce({ data: { data: [row] } });
+
+    const { result } = renderHook(() => useGetTransitionalDataLakes(), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual([row]));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/transitional');
+  });
+
+  it('posts the resolved action on the existing lifecycle endpoint', async () => {
+    const { wrapper } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useRetryLakeLifecycle(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', action: 'unarchive' });
+    });
+
+    // The same call that stranded the lake - not a repair endpoint.
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
+  });
+
+  it('refreshes the needs-attention list after a retry settles, so the row leaves it', async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useRetryLakeLifecycle(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', action: 'archive' });
+    });
+
+    const keys = invalidatedKeys(invalidate);
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'transitional']));
+    // And the same surfaces a fixed-action lifecycle hook refreshes: the retry SETTLES the lake,
+    // so the archived/deleted catalogs and the tag tree move with it.
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'archived']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'deleted']));
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it('a fixed-action lifecycle hook refreshes the needs-attention list too', async () => {
+    // Archiving a lake is what PUTS it in 'archiving'; if this list did not refresh, a lake that
+    // then stranded would only appear after an unrelated refetch.
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['data-lakes', 'transitional']));
   });
 });

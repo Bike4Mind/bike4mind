@@ -176,10 +176,10 @@ export interface EmbeddingLabeledFile {
  * layer down: fab-pipeline keys its Atlas index registry with a Map, so an unknown model yields
  * no index target and the search degrades to the brute-force scan instead of querying a bogus one.
  *
- * CANONICAL LIST - six other readers compare this same field to the query's as an exact string, and
- * each holds its OWN copy of the rule rather than calling this function. So relaxing the comparison
- * HERE does not propagate to them - it makes them DIVERGE, which is the actual hazard: the rule
- * moves across all seven in lockstep or not at all.
+ * CANONICAL LIST - seven other readers compare this same field to the query's as an exact string,
+ * and each holds its OWN copy of the rule rather than calling this function. So relaxing the
+ * comparison HERE does not propagate to them - it makes them DIVERGE, which is the actual hazard:
+ * the rule moves across all eight in lockstep or not at all.
  *
  * Retrieval path - divergence drops content from results, silently:
  *  - the corpus defer gate (b4m-core/services/src/llm/ChatCompletionProcess.ts),
@@ -191,6 +191,11 @@ export interface EmbeddingLabeledFile {
  * Client badges - divergence misleads rather than loses, prompting a reprocess for a healthy file:
  *  - apps/client/app/components/Session/AISettings/FilesSection.tsx (per-file affordance),
  *  - apps/client/app/hooks/useEmbeddingMismatchStatus.ts (reddens the session-toolbar file count).
+ *
+ * Write path - divergence churns rather than loses, but it never stops:
+ *  - the system-help lake mirror (packages/scripts/help/ingestHelpDatalake.ts) reuses an existing
+ *    member only if its label still matches, so a relaxation HERE without one THERE would re-embed
+ *    the whole help corpus on every scheduled run forever, against files retrieval is happy with.
  *
  * The first two retrieval sites are deliberately STRICTER than this predicate (they count an
  * unlabeled file as unreachable where this one scores it), and their own comments explain why they
