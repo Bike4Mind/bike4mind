@@ -7,6 +7,7 @@ import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { User, userRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getOAuthWorkspaceWithCredentials, buildUserLinkRedirectUri, verifyUserLinkStateToken } from '@bike4mind/slack';
+import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { encryptToken } from '@server/security/tokenEncryption';
 import { randomUUID } from 'crypto';
@@ -67,7 +68,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     return res.redirect('/profile?tab=integrations&slack_error=invalid_params');
   }
 
-  const stateResult = verifyUserLinkStateToken(state as string);
+  // Enforce browser-binding: the state's nonce hash must match this browser's cookie.
+  const stateResult = verifyUserLinkStateToken(state as string, readStateNonceHash(req));
+  clearStateNonce(res); // burn on exit - the nonce is single-use per flow
   if (!stateResult.valid) {
     auditLogger.failure(stateResult.error || 'invalid_state');
     return res.redirect(`/profile?tab=integrations&slack_error=${stateResult.error}`);

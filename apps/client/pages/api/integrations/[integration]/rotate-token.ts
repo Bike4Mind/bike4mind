@@ -20,6 +20,8 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Config } from '@server/utils/config';
 import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@server/utils/cloudwatch';
+import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import type { Response } from 'express';
 
 function isRotatableIntegration(value: string): value is RotatableIntegration {
   return (ROTATABLE_INTEGRATIONS as readonly string[]).includes(value);
@@ -82,7 +84,7 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     // Generate the provider OAuth URL first - only stamp rotation if URL generation succeeds
-    const authUrl = await generateAuthUrl(integration, userId, req);
+    const authUrl = await generateAuthUrl(integration, userId, req, res);
 
     // Stamp rotation record on the user - best-effort, don't block the auth URL response.
     // Use dot-notation $set for atomicity so concurrent rotations of different
@@ -129,7 +131,8 @@ const handler = baseApi().post(async (req, res) => {
 async function generateAuthUrl(
   integration: RotatableIntegration,
   userId: string,
-  req: { headers: Record<string, string | string[] | undefined> }
+  req: { headers: Record<string, string | string[] | undefined> },
+  res: Response
 ): Promise<string> {
   // Prefer APP_URL for consistent redirect_uri matching with registered OAuth apps
   let baseUrl = process.env.APP_URL?.replace(/\/$/, '');
@@ -200,7 +203,8 @@ async function generateAuthUrl(
 
       const workspace = workspaceResult.workspace;
       if (!workspace.slackClientId) throw new Error('Slack OAuth not configured: missing client ID');
-      const state = generateUserLinkStateToken(userId);
+      // Bind this reauth flow to the browser: the user-link callback enforces the nonce.
+      const state = generateUserLinkStateToken(userId, issueStateNonce(res));
       const redirectUri = buildUserLinkRedirectUri(workspace, req as Parameters<typeof buildUserLinkRedirectUri>[1]);
       return buildSlackOAuthUrl(workspace.slackClientId, redirectUri, state, workspace.slackTeamId);
     }

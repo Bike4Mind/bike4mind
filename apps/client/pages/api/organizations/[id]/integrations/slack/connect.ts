@@ -20,6 +20,7 @@ import {
   generateOrgSlackConnectStateToken,
   buildOrgSlackOAuthUrl,
 } from '@bike4mind/slack';
+import { issueStateNonce } from '@server/auth/oauthFlowCookie';
 
 const handler = baseApi().post(
   asyncHandler<{}, { url: string }, unknown, { id?: string }>(async (req, res) => {
@@ -46,7 +47,9 @@ const handler = baseApi().post(
       throw new BadRequestError('Slack integration is not configured. Please contact support.');
     }
 
-    const state = generateOrgSlackConnectStateToken(orgId, user.id);
+    // Bind the flow to this browser: the state carries the nonce-cookie hash the
+    // callback re-checks (issueStateNonce sets the cookie on res).
+    const state = generateOrgSlackConnectStateToken(orgId, user.id, issueStateNonce(res));
 
     const baseUrl = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;
     const redirectUri = `${baseUrl}/api/slack/oauth/org-connect/callback`;
