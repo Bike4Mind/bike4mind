@@ -51,6 +51,14 @@ export interface HandleDataLakeCommandParams {
    * bot token to post the indexing-done reply, rather than guessing via the lake's org.
    */
   teamId: string;
+  /**
+   * The Slack app this message arrived on, stamped alongside `teamId` for the same reason: a
+   * dev-OAuth workspace is looked up by the (apiAppId, teamId) PAIR
+   * (`slackDevWorkspaceRepository.findBySlackAppIdAndTeamId`, mirroring `events.ts`'s own inbound
+   * resolution) because `slackTeamId` alone is not unique - more than one app can be installed to
+   * the same team. `teamId` alone would let the notifier resolve an arbitrary one of them.
+   */
+  apiAppId: string;
   deps: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   /**
    * Whether the `enableAutoChunk` admin setting is on. Only affects the wording of the success
@@ -296,6 +304,7 @@ async function handleAdd(
         channel: params.channel,
         messageTs: params.messageTs,
         teamId: params.teamId,
+        apiAppId: params.apiAppId,
       },
       params.deps
     );
@@ -314,6 +323,7 @@ async function handleAdd(
         channel: params.channel,
         messageTs: params.messageTs,
         teamId: params.teamId,
+        apiAppId: params.apiAppId,
       },
       params.deps
     );
@@ -402,7 +412,9 @@ export function formatIngestOutcome(
 
   if (rejected.length > 0) {
     // Warning sign, escaped so this source file stays ASCII.
-    lines.push(...rejected.map(reason => `\u26a0\ufe0f ${reason}`));
+    // Escaped like the `added`/`duplicates` arms above: rejection reasons embed the attempted file
+    // name (dataLakeFileIngest.ts), which any channel member controls by naming a file `<!channel>`.
+    lines.push(...rejected.map(reason => `\u26a0\ufe0f ${escapeSlackMrkdwn(reason)}`));
   }
 
   if (lines.length === 0) {
@@ -423,6 +435,8 @@ export interface RunDataLakeSlackCommandDeps {
   threadTs?: string;
   /** Forwarded to `handleDataLakeCommand` - see its own field doc. */
   teamId: string;
+  /** Forwarded to `handleDataLakeCommand` - see its own field doc. */
+  apiAppId: string;
   adminSettings: {
     getSettingsValue(
       key: 'EnableDataLakes' | 'EnableDataLakeSlackAdd' | 'enableAutoChunk'
@@ -471,6 +485,7 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
       channel: deps.channel,
       messageTs: deps.messageTs,
       teamId: deps.teamId,
+      apiAppId: deps.apiAppId,
       deps: deps.ingest,
       autoChunkEnabled,
     });
