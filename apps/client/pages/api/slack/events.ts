@@ -49,6 +49,7 @@ import {
   buildImageModelPicker,
   isDataLakeCommand,
   looksLikeBareDataLakeMention,
+  BARE_DATA_LAKE_MENTION_PATTERN,
 } from '@bike4mind/slack';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { runDataLakeSlackCommand, formatBareDataLakeMentionHint } from '@server/slack/handleDataLakeCommand';
@@ -574,10 +575,21 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     return res.status(200).json({ message: 'Event skipped: no timestamp' });
   }
 
+  // #2027: `shouldProcess`'s default pattern only admits `@`-prefixed agent commands (plus DMs and
+  // app-mentions), so a bare "datalake list" (no `@`) sent in a channel is dropped right here,
+  // before it ever reaches the bare-mention hint below - the hint would otherwise only ever fire
+  // in a DM. Widen the pre-filter to also admit a bare mention, but only when the flag is on, so
+  // the parent EnableDataLakes gate keeps this whole surface dormant, not just the ingest work
+  // behind it.
+  const enableDataLakes = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+  const commandPattern = enableDataLakes
+    ? new RegExp(`(?:${AGENT_COMMAND_PATTERN.source})|(?:${BARE_DATA_LAKE_MENTION_PATTERN.source})`, 'i')
+    : AGENT_COMMAND_PATTERN;
+
   // Check if event should be processed (includes filtering AND deduplication)
   const { shouldProcess: shouldProcessEvent, reason } = await slackEvent.shouldProcess(
     event_id,
-    AGENT_COMMAND_PATTERN,
+    commandPattern,
     logger
   );
 
@@ -741,15 +753,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       logger,
     });
     return res.status(200).json({ message: 'Data Lake command handled' });
-  } else if (
-    looksLikeBareDataLakeMention(commandHandler.parsedCommand) &&
-    (await adminSettingsRepository.getSettingsValue('EnableDataLakes'))
-  ) {
+  } else if (looksLikeBareDataLakeMention(commandHandler.parsedCommand) && enableDataLakes) {
     // #2027: a bare "datalake" mention (no `@`) previously fell through past this point straight
-    // to the LLM assistant path. Same short-circuit-before-LLM shape as the real command above -
-    // never routes through selectAgent, never reaches the notebook/LLM path below. Gated on the
-    // same parent flag `runDataLakeSlackCommand` enforces, so the hint stays dormant on any
-    // deployment that has never turned Data Lakes on.
+    // to the LLM assistant path - and, in a channel, never even got this far, since `shouldProcess`
+    // above only widens its pre-filter to admit it when `enableDataLakes` is true. Same
+    // short-circuit-before-LLM shape as the real command above - never routes through selectAgent,
+    // never reaches the notebook/LLM path below. Gated on the same parent flag
+    // `runDataLakeSlackCommand` enforces, so the hint stays dormant on any deployment that has
+    // never turned Data Lakes on. Reuses the `enableDataLakes` value fetched above rather than
+    // querying it again.
     await slackClient.sendMessage({
       channel: slackEvent.channel,
       text: formatBareDataLakeMentionHint(),
