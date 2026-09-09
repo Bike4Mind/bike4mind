@@ -43,6 +43,26 @@ import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStat
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 /**
+ * The server's own refusal text, if it sent one. The body key is `error`, per
+ * server/middlewares/errorHandler.ts - every data-lake surface that shows a refusal to a human
+ * reads it through here so none of them can drift back onto `message` and silently show only
+ * their fallback.
+ *
+ * Why this matters on every mutation below: axios rejects with `.message` set to the generic
+ * "Request failed with status code 400", so a handler that toasts `error.message` discards the
+ * one sentence that tells the user what to do about it. These doors refuse for reasons the user
+ * can act on - "choose a different prefix", "Make it private first", "try again" - and a status
+ * code is the single least useful thing to show instead.
+ *
+ * Declared here rather than beside its first caller so all of them can read it without a
+ * forward reference.
+ */
+function serverRefusalMessage(error: unknown): string | undefined {
+  if (!isAxiosError(error)) return undefined;
+  return (error.response?.data as { error?: string } | undefined)?.error || undefined;
+}
+
+/**
  * True for a 4xx, which on the manage-gated lake reads (spend, proposals) means "you may see this
  * lake but not this surface". Callers hide the surface on it rather than painting an error, so it
  * must not widen to 5xx - a server fault is a real error and should read as one.
@@ -257,11 +277,9 @@ export function useTransferLakeOwnership() {
       toast.success('Data lake ownership transferred');
     },
     onError: (error: Error) => {
-      // Surface the server's own refusal text. This endpoint's rejections are the actionable kind
-      // ("name another member", "must belong to the organization that owns this data lake"), and
-      // axios would otherwise replace them with "Request failed with status code 400". The body key
-      // is `error`, per the API error handler (server/middlewares/errorHandler.ts).
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      // This endpoint's rejections are the actionable kind ("name another member", "must belong to
+      // the organization that owns this data lake").
+      const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to transfer ownership');
     },
   });
@@ -344,7 +362,7 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
       options?.onSuccess?.(data);
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to create data lake');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to create data lake');
     },
   });
 }
@@ -375,7 +393,7 @@ export function useUpdateDataLake() {
       toast.success('Data lake updated');
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to update data lake');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to update data lake');
     },
   });
 }
@@ -398,7 +416,7 @@ export function useUpdateFallbackLakeSettings() {
       toast.success('Data lake settings updated');
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to update data lake settings');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to update data lake settings');
     },
   });
 }
@@ -441,7 +459,7 @@ export function useSetLakeVisibility() {
       toast.success(VISIBILITY_TOAST[visibility]);
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to change visibility');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to change visibility');
     },
   });
 }
@@ -516,7 +534,7 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
       toast.success(successMessage);
     },
     onError: (error: Error) => {
-      toast.error(error.message || errorMessage);
+      toast.error(serverRefusalMessage(error) || error.message || errorMessage);
     },
   });
 }
@@ -616,7 +634,7 @@ export function useCleanupDataLake() {
       toast.success('Data lake permanently purged');
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to clean up data lake');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to clean up data lake');
     },
   });
 }
@@ -655,7 +673,7 @@ export function useRetryLakeLifecycle() {
       toast.success('Retrying the data lake operation');
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to retry the data lake operation');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to retry the data lake operation');
     },
   });
 }
@@ -788,7 +806,7 @@ export function useApplyTaxonomySuggestions(batchId: string) {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to apply tag suggestions');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to apply tag suggestions');
     },
   });
 }
@@ -807,7 +825,7 @@ export function useReanalyzeTaxonomy(batchId: string) {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to re-analyze tags');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to re-analyze tags');
     },
   });
 }
@@ -828,7 +846,7 @@ export function useDismissTaxonomy(batchId: string) {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to dismiss tag suggestions');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to dismiss tag suggestions');
     },
   });
 }
@@ -887,7 +905,7 @@ export function useReprocessFabFile(dataLakeId: string | null) {
       }
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to re-process file');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to re-process file');
     },
   });
 }
@@ -982,13 +1000,11 @@ export function useAddFileToDataLake() {
       if (toastId !== undefined) toast.success('File restored to data lake.', { id: toastId });
     },
     onError: (error: Error, { toastId }) => {
-      // Surface the server's own refusal text, not axios' `"Request failed with status code N"`.
       // Every actionable rejection on this door lands here - "You do not have permission to add
       // files to this data lake", "Data lake not found", the built-in-lake refusal - and this is
       // the toast the non-owner confirmation copy calls their only way back, so a status string is
-      // the one message that cannot help them. Body key is `error` (server/middlewares/
-      // errorHandler.ts); same extraction as useTransferLakeOwnership above.
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      // the one message that cannot help them.
+      const refusal = serverRefusalMessage(error);
       const message = refusal || error.message || 'Failed to restore the file to the data lake';
       toast.error(message, toastId !== undefined ? { id: toastId } : undefined);
     },
@@ -1077,10 +1093,9 @@ export function useRecordMembershipDecision() {
       );
     },
     onError: (error: Error) => {
-      // Surface the server's own refusal text: "You do not have permission to resolve duplicates in
-      // this data lake" and "That file name no longer has duplicate members in this data lake" are
-      // both actionable, and a status string is the one message that cannot help.
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      // "You do not have permission to resolve duplicates in this data lake" and "That file name no
+      // longer has duplicate members in this data lake" are both actionable.
+      const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to record the decision');
     },
   });
@@ -1136,7 +1151,7 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       // dialog, so leaving this one bare would give Undo the server's reason and Remove a status
       // code. `Only the creator can remove files from this data lake` is exactly the text a
       // curator needs here.
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to remove file from data lake');
     },
   });
@@ -1196,7 +1211,7 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
       // failure is exactly the case where "Request failed with status code 500" is the one message
       // that cannot tell the owner whether their document is half destroyed. Body key is `error`
       // (server/middlewares/errorHandler.ts).
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to permanently delete this file');
     },
   });
@@ -1316,7 +1331,7 @@ export function useRechunkDataLake(dataLakeId: string | null) {
       }
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to start rebuild');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to start rebuild');
     },
   });
 }
@@ -1378,7 +1393,7 @@ export function useBuildLakeMemory(dataLakeId: string | null) {
       }
     },
     onError: (error: Error) => {
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const refusal = serverRefusalMessage(error);
       if (refusal) {
         toast.error(refusal);
         return;
@@ -1412,7 +1427,7 @@ export function usePurgeLakeMemory(dataLakeId: string | null) {
       }
     },
     onError: (error: Error) => {
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || "Failed to erase this lake's memory profile");
     },
   });
@@ -1557,7 +1572,7 @@ export function useConvergeDataLake(dataLakeId: string | null) {
       }
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to start convergence');
+      toast.error(serverRefusalMessage(error) || error.message || 'Failed to start convergence');
     },
   });
 }
@@ -1610,7 +1625,7 @@ export function useAddFilesToLake() {
       );
     },
     onError: (error: Error) => {
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const refusal = serverRefusalMessage(error);
       if (refusal) {
         toast.error(refusal);
         return;
@@ -1878,17 +1893,6 @@ export function useDataLakeProposals(
  */
 export function reviewProposalFailureMessage(error: unknown): string {
   return serverRefusalMessage(error) || 'Could not record that decision. Try again shortly.';
-}
-
-/**
- * The server's own refusal text, if it sent one. The body key is `error`, per
- * server/middlewares/errorHandler.ts - every data-lake surface that shows a refusal to a human
- * reads it through here so none of them can drift back onto `message` and silently show only
- * their fallback.
- */
-function serverRefusalMessage(error: unknown): string | undefined {
-  if (!isAxiosError(error)) return undefined;
-  return (error.response?.data as { error?: string } | undefined)?.error || undefined;
 }
 
 /**
