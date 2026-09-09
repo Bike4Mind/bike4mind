@@ -17,7 +17,7 @@ import {
 import { effectiveChunkTokenLimit } from '@bike4mind/fab-pipeline';
 import { Logger } from '@bike4mind/observability';
 import { buildLakeRequirements, findMemberLakesForFile } from './chunkPolicyConflict';
-import { lakeMembershipScope } from './lakeMembershipScope';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSetting';
 
 /**
@@ -369,7 +369,13 @@ export async function planLakeConvergenceRun(
     return { report: emptyReport(null), wave: [] };
   }
 
-  const rows = await db.fabFiles.findLakeConvergenceMembers(lakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
+  // Resolving builder, not `lakeMembershipScope`: a registry lake can reach this line. The
+  // `policyInherited` gate above only turns it back when the lake declares no target, and
+  // `PREMIUM_DATA_LAKES` is an unvalidated `as DataLakeConfig[]` cast that `resolveFallbackLake`
+  // spreads verbatim, so an overlay entry carrying `requiredPassageTokenTarget` arrives here as a
+  // creator-less `owned` scope - which fails closed to meta-tag-only and drops the prefix arm the
+  // lake is mostly made of, the same defect this door's sibling had.
+  const rows = await db.fabFiles.findLakeConvergenceMembers(resolveLakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
   const scanTruncated = rows.length > MEMBER_SCAN_LIMIT;
   const members = scanTruncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows;
   if (scanTruncated) {

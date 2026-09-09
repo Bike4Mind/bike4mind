@@ -3,6 +3,7 @@ import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './s
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
+import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -221,6 +222,16 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * in-app completion wants. See PROMPT_MODE_SOURCES in services/llm/systemPromptSources.
    */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /**
+   * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
+   * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm.
+   *
+   * This cap is the universal backstop, not a duplicate of a route check: the parse that opens
+   * invoke() runs outside any try and before a quest row is written, so it holds for every caller
+   * including ones that pass through no route schema. Do not drop it on the assumption that
+   * whoever called validated first.
+   */
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */

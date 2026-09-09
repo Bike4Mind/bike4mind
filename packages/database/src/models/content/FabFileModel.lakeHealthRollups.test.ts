@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { KnowledgeType } from '@bike4mind/common';
+import { CHUNKLESS_STALL_REASONS, KnowledgeType } from '@bike4mind/common';
 import { FabFile, FabFileChunk, fabFileChunkRepository, fabFileRepository } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -191,6 +191,34 @@ describe('lake-health rollup primitives (#1666)', () => {
 
       const converge = await fabFileRepository.findLakeConvergenceMembers(scope);
       expect(converge.map(m => m.fileName).sort()).toEqual(['mine-by-prefix-paused.txt', 'mine-paused.txt']);
+    });
+
+    // The other dimension of that same `$or` arm: WHICH reasons it admits. Driven from the shared
+    // subset because an `$in` that drifts back to a single literal fails SILENTLY - it just selects
+    // the wrong set, with no type error and no runtime error, which is how a chunkless member
+    // disappears from health and from the convergence plan at once.
+    it('admits every chunk-arm reason into both reads, and no chunkless member of the vectorize arm', async () => {
+      for (const chunkStallReason of CHUNKLESS_STALL_REASONS) {
+        await makeFile(`mine-${chunkStallReason}.txt`, {
+          chunkCount: 0,
+          chunkStallReason,
+          tags: [{ name: tag, strength: 1 }],
+        });
+      }
+      // A vectorize-paused file still HAS its passages, so `chunkCount > 0` is what admits it and this
+      // arm must not: folding the arms together here would grade it as chunkless.
+      await makeFile('mine-vectorize-paused.txt', {
+        chunkCount: 0,
+        chunkStallReason: 'vectorizePaused',
+        tags: [{ name: tag, strength: 1 }],
+      });
+
+      const expected = CHUNKLESS_STALL_REASONS.map(reason => `mine-${reason}.txt`).sort();
+      const health = await fabFileRepository.findDataLakeHealthMembers(scope);
+      expect(health.map(m => m.fileName).sort()).toEqual(expected);
+
+      const converge = await fabFileRepository.findLakeConvergenceMembers(scope);
+      expect(converge.map(m => m.fileName).sort()).toEqual(expected);
     });
 
     // #1939's arm of the same `$or`, with the same scoping obligation. A member mid-rebuild is

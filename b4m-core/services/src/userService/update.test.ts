@@ -470,8 +470,88 @@ describe('updateUser', () => {
     // The benign field is applied; the injected tags are stripped (untouched).
     expect(result.name).toBe('Renamed');
     expect(result.tags).toEqual(['Customer']);
+    // Targeted write: an unchanged field is not written at all. `tags` is left untouched
+    // in the DB rather than round-tripped, which is also what stops a concurrent admin
+    // tag change from being reverted by a self-service profile save.
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.tags).toEqual(['Customer']);
+    expect(persisted).not.toHaveProperty('tags');
+    expect(persisted.name).toBe('Renamed');
+  });
+
+  it('strips `photoUrl` from a self-update - cannot point the profile photo at a foreign S3 key', async () => {
+    // photoUrl is an S3 key that upload-photo.ts later dereferences for deletion. A self-set
+    // value could target a file the caller does not own; it was removed from updateUserSchema,
+    // so secureParameters drops it here while leaving any pre-existing value untouched.
+    const user = {
+      id: 'user-photo',
+      username: 'photouser',
+      name: 'Photo User',
+      email: 'photo@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      photoUrl: 'profile-photos/user-photo/own.png',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    const result = await updateUser(
+      'user-photo',
+      { name: 'Renamed', photoUrl: 'profile-photos/victim/secret.png' } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    expect(result.name).toBe('Renamed');
+    // The injected foreign key is stripped, so it is not a changed field and the targeted
+    // write never touches photoUrl - the caller's own stored key is left untouched in the DB.
+    expect(result.photoUrl).toBe('profile-photos/user-photo/own.png');
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted).not.toHaveProperty('photoUrl');
+    expect(persisted.name).toBe('Renamed');
+  });
+
+  it('strips `preferences.docxTemplateFileId` from a self-update - cannot point the template at a foreign file', async () => {
+    // docxTemplateFileId is an AppFile id docx-template.ts later dereferences. A self-set value
+    // could target a foreign file; it was removed from the preferences schema, so it is stripped
+    // while the caller's own stored value is preserved by the preferences merge.
+    const user = {
+      id: 'user-docx',
+      username: 'docxuser',
+      name: 'Docx User',
+      email: 'docx@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      preferences: { docxTemplateFileId: 'own-file-id', language: 'en' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    await updateUser(
+      'user-docx',
+      { preferences: { docxTemplateFileId: 'victim-file-id', showHelp: true } } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    // The injected foreign id is stripped; the benign pref applies and the own id is preserved.
+    expect(persisted.preferences?.docxTemplateFileId).toBe('own-file-id');
+    expect(persisted.preferences?.showHelp).toBe(true);
+    expect(persisted.preferences?.language).toBe('en');
   });
 
   it('coerces an ISO-string contextTelemetryConsentedAt on write (telemetry level is not write-once)', async () => {

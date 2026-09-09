@@ -832,7 +832,8 @@ describe('driveLakeIngest consumer', () => {
 
       await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1 });
 
-      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 2);
+      // Narrowed to what the chain produced, with the 7 planned-but-unfinished recorded alongside it.
+      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 2, 7);
     });
 
     it('starts a fresh batch when the batch it was told to resume has already been settled', async () => {
@@ -871,12 +872,95 @@ describe('driveLakeIngest consumer', () => {
 
       expect(h.sendToQueue).not.toHaveBeenCalled();
       // Settled rather than stranded, the claim released, and the operator told why it stopped short.
-      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 1);
+      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 1, 2);
       expect(h.releaseSyncClaim).toHaveBeenCalledWith(
         'conn1',
         'token-claim',
         expect.stringContaining('continuation runs')
       );
+    });
+
+    it('defers the rest of the slice on a Drive rate limit instead of silently short-changing the batch', async () => {
+      // The bug this exists for: a 429 used to come back as reason 'error', which the loop recorded
+      // as a PERMANENT skip. recordSkippedDriveFile is idempotent per chain, so the file was
+      // subtracted from every later walk - gone from the lake for good - while `skippedFiles` carried
+      // the batch over the finalize gate and the whole sync reported success.
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2', 'd3'));
+      h.fetchDriveFileContent
+        .mockResolvedValueOnce(okBytes())
+        .mockResolvedValueOnce({ ok: false, reason: 'rate_limited', detail: 'Rate Limit Exceeded' });
+
+      await run({ connectionId: 'conn1' });
+
+      // The throttled file keeps its candidacy: no skip recorded, so the continuation's walk still
+      // sees it. d3 is never even attempted - the quota is exhausted, not this one file.
+      expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+      expect(h.fetchDriveFileContent).toHaveBeenCalledTimes(2);
+      expect(h.upload).toHaveBeenCalledTimes(1);
+
+      // And the batch is handed on rather than settled, so nothing can report this run complete.
+      expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+      expect(h.setTotalFilesIfActive).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'token-renew' },
+        expect.any(Number)
+      );
+      // Unlike the deadline yield, a throttled slice delays its continuation - coming straight back
+      // would hit the same exhausted quota.
+      expect(h.sendToQueue.mock.calls[0][2]).toBeGreaterThanOrEqual(60);
+    });
+
+    it('tells the operator the sync was rate-limited when a throttled chain hits the ceiling', async () => {
+      // lastError is the only account of a chain that stopped short that reaches a user (the lake's
+      // Drive chip surfaces it - describeDriveConnection), and the large-folder advice ("split into
+      // subfolders") is both wrong and unactionable for a quota problem.
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
+      h.fetchDriveFileContent.mockResolvedValue({ ok: false, reason: 'rate_limited', detail: '429' });
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 2,
+        skippedFiles: 0,
+        files: [],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: MAX_INGEST_SLICES - 1 });
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+      const [, , lastError] = h.releaseSyncClaim.mock.calls[0];
+      expect(lastError).toContain('rate-limiting');
+      expect(lastError).not.toContain('subfolders');
+    });
+
+    it('records the write-off when a chain ends having ingested nothing at all', async () => {
+      // The degenerate chain: throttled before the first file on the last slice, nothing produced.
+      // Settling re-plans totalFiles DOWN to what the chain produced so the finalize gate is reachable
+      // at all - which on its own turns "0 of 2 ingested" into an indistinguishable "0 of 0", i.e. a
+      // clean success over an empty folder. The shortfall has to ride on that same update.
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
+      h.fetchDriveFileContent.mockResolvedValue({ ok: false, reason: 'rate_limited', detail: '429' });
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 2,
+        skippedFiles: 0,
+        files: [],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: MAX_INGEST_SLICES - 1 });
+
+      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 0, 2);
+      // Nothing was permanently skipped, which is what keeps the files re-walkable by the next poll.
+      expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
     });
 
     it('tolerates a release that loses its CAS when the claim was taken away mid-slice', async () => {
@@ -1057,7 +1141,8 @@ describe('driveLakeIngest consumer', () => {
       await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
 
       // Correct: 1 non-skipped manifest entry + 1 skippedFiles = 2, not files.length(2) + skippedFiles(1) = 3.
-      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 2);
+      // The deferred count is derived from the SAME produced figure, so the double-count guard covers both.
+      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 2, 3);
     });
 
     it('settles an adopted batch when a later slice pushes the folder over the candidate cap', async () => {
@@ -1082,8 +1167,9 @@ describe('driveLakeIngest consumer', () => {
       await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
 
       // Re-planned to what the chain actually produced (1 manifest entry) and nudged toward finalize,
-      // instead of being left open with no owner once the cap refusal returns.
-      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 1);
+      // instead of being left open with no owner once the cap refusal returns. The 4 candidates the
+      // refusal wrote off are recorded rather than vanishing into the narrowed total.
+      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 1, 4);
       expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
       expect(h.batchCreate).not.toHaveBeenCalled();
       expect(h.createFabFile).not.toHaveBeenCalled();

@@ -390,6 +390,14 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
+    "dataLakeResearchQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "dataLakeResearchQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeTaxonomyQueue": {
       "type": "sst.aws.Queue"
       "url": string

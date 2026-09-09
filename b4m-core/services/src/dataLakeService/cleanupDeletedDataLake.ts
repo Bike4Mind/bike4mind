@@ -1,6 +1,8 @@
 import type {
   IDataLakeAccessGrantRepository,
   IDataLakeProposalRepository,
+  IDataLakeResearchConfigRepository,
+  IDataLakeResearchRunRepository,
   ILakeMembershipDecisionRepository,
   IDataLakeRepository,
   IDataLakeBatchRepository,
@@ -29,6 +31,12 @@ interface CleanupDeletedDataLakeAdapters {
      * are lake-scoped, and a host that never wired the repair has no rows to sweep.
      */
     lakeMembershipDecisions?: Pick<ILakeMembershipDecisionRepository, 'deleteForLake'>;
+    /**
+     * Optional for the same reason again: research configs and their run history (#1682) are
+     * lake-scoped, and a host that never wired the producer has no rows to sweep.
+     */
+    dataLakeResearchConfigs?: Pick<IDataLakeResearchConfigRepository, 'deleteForLake'>;
+    dataLakeResearchRuns?: Pick<IDataLakeResearchRunRepository, 'deleteForLake'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByIds' | 'findById' | 'pullTagsByFabFileId'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
@@ -185,6 +193,12 @@ export const cleanupDeletedDataLake = async (
   // duplicated name in a lake that no longer exists is unreadable by every surface and guards
   // nothing. Idempotent.
   await db.lakeMembershipDecisions?.deleteForLake(dataLakeId);
+
+  // 4e. And the research configs plus their run history (#1682). A config targets a lake that no
+  // longer exists, so it could only ever fail; a run row's only reader is a proposal's `runId`, and
+  // those went with 4c. Idempotent.
+  await db.dataLakeResearchConfigs?.deleteForLake(dataLakeId);
+  await db.dataLakeResearchRuns?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

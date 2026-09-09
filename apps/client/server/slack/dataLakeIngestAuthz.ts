@@ -47,7 +47,7 @@ export interface LakeWriteRefusal {
 
 export interface LakeAuthzDeps {
   // `find` is required by the fallback tagger, the others by the write gate.
-  dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find'>;
+  dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds' | 'findByDatalakeTag' | 'find'>;
   /**
    * The lake's access grants, which `assertLakeWriteAccess` resolves so a CURATOR or a transferred
    * owner may ingest and not only the original creator. Declared on the shared prologue rather than

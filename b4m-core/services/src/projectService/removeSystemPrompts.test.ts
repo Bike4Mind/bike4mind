@@ -32,7 +32,7 @@ describe('projectService - removeSystemPrompts', () => {
 
   it('removes multiple prompts in a single update', async () => {
     const project = projectWith(['a', 'b', 'c']);
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(project);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(project);
 
     const result = await removeSystemPrompts(user, { projectId: 'project-1', fileIds: ['a', 'c'] }, adapters);
 
@@ -42,7 +42,7 @@ describe('projectService - removeSystemPrompts', () => {
 
   it('supports a single-id array (legacy path)', async () => {
     const project = projectWith(['a', 'b']);
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(project);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(project);
 
     const result = await removeSystemPrompts(user, { projectId: 'project-1', fileIds: ['a'] }, adapters);
 
@@ -51,7 +51,7 @@ describe('projectService - removeSystemPrompts', () => {
 
   it('is idempotent when an id is not present', async () => {
     const project = projectWith(['a', 'b']);
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(project);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(project);
 
     const result = await removeSystemPrompts(user, { projectId: 'project-1', fileIds: ['missing'] }, adapters);
 
@@ -63,7 +63,7 @@ describe('projectService - removeSystemPrompts', () => {
   });
 
   it('throws when the project is not accessible', async () => {
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(null);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(null);
 
     await expect(removeSystemPrompts(user, { projectId: 'missing', fileIds: ['a'] }, adapters)).rejects.toThrow(
       'Project not found'

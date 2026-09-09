@@ -29,6 +29,7 @@ import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -127,7 +128,11 @@ const handler = baseApi()
     // from a resend, and `reconcileLakeTags` (inside `updateFabFile` below) runs the admission
     // contract over every lake this write actually JOINS - meta-tag and prefix-arm alike - with the
     // file already in hand. Naming members here would re-read the file to check a strict subset.
-    await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
+    // Full actor, not a `{ userId, isAdmin }` literal: `canManageLake`'s org-admin rung reads
+    // `administeredOrgIds`, which cannot be derived from the user document, so a literal here
+    // makes this gate strictly narrower than every other lake-management gate in the app.
+    const ctx = await toAccessContext(req);
+    await dataLakeService.assertCanWriteDataLakeTags(ctx, candidateTagNames, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -167,6 +172,10 @@ const handler = baseApi()
               ...lakeConfigAuditDb,
               scopedSettings: scopedSettingsRepository,
             },
+            // `reconcileLakeTags` re-gates every lake this write JOINS, so its actor has to stay as
+            // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived
+            // from the user document this service is handed.
+            administeredOrgIds: ctx.administeredOrgIds,
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {

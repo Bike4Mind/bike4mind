@@ -51,6 +51,20 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: { name: 'scopedSettings' },
 }));
 
+// The route resolves its actor via toAccessContext so the gate sees `administeredOrgIds`; stub it
+// so the real one's entitlement + org-admin Mongo reads stay out of this unit test. The behavioural
+// coverage of the org-admin rung reaching the gate lives in toggle.lakeAuthz.test.ts.
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
+    userId: req.user.id,
+    isAdmin: !!req.user.isAdmin,
+    userTags: [],
+    organizationIds: [],
+    entitlementKeys: [],
+    administeredOrgIds: [],
+  })),
+}));
+
 import handler from '../toggle';
 
 const makeRes = () => {
@@ -136,7 +150,7 @@ describe('POST /api/files/tags/toggle', () => {
     await call(req({ ids: ['f1'], tags: ['datalake:lake'], userId: 'attacker', isAdmin: true }), res);
 
     expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith(
-      { userId: 'u1', isAdmin: false },
+      expect.objectContaining({ userId: 'u1', isAdmin: false }),
       ['datalake:lake'],
       expect.anything()
     );
@@ -148,6 +162,10 @@ describe('POST /api/files/tags/toggle', () => {
 
     await call(req({ ids: ['f1'], tags: 'not-an-array' }), res);
 
-    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith({ userId: 'u1', isAdmin: false }, [], expect.anything());
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', isAdmin: false }),
+      [],
+      expect.anything()
+    );
   });
 });

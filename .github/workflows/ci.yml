@@ -534,8 +534,13 @@ jobs:
           - name: data
             filter: '--filter @bike4mind/common --filter @bike4mind/database --filter @bike4mind/db-core --filter @bike4mind/core'
             workers: '25%'
+          # The catch-all: every workspace package the buckets above do not name. A `filter`
+          # value reaches the step as an env var and is split on whitespace into argv, so the
+          # tokens here must be BARE. Quotes around a pattern are not shell quoting at this
+          # point, they are characters inside the argument pnpm receives, and pnpm then matches
+          # nothing. `!` needs no quoting either: history expansion is interactive-only.
           - name: misc
-            filter: "--filter '!@bike4mind/client' --filter '!@bike4mind/services' --filter '!@bike4mind/cli' --filter '!@bike4mind/slack' --filter '!@bike4mind/voice' --filter '!@bike4mind/common' --filter '!@bike4mind/database' --filter '!@bike4mind/db-core' --filter '!@bike4mind/core'"
+            filter: '--filter !@bike4mind/client --filter !@bike4mind/services --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
             workers: '25%'
 
     steps:
@@ -635,12 +640,32 @@ jobs:
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+          SHARD_NAME: ${{ matrix.shard.name }}
           SHARD_FILTER: ${{ matrix.shard.filter }}
           SHARD_SCRIPT: ${{ matrix.shard.script || 'test' }}
           SHARD_ARGS: ${{ matrix.shard.args }}
         run: |
-          # shellcheck disable=SC2086 # each carries several args; word splitting is the point
-          pnpm --recursive --workspace-concurrency=4 $SHARD_FILTER $SHARD_SCRIPT $SHARD_ARGS
+          # Split each env var on whitespace into a real argv array, so every token arrives at
+          # pnpm as its own argument. The matrix values stay in `env:` and are never interpolated
+          # into this command line, and there is no `eval`, so a matrix value is only ever data.
+          # `read -ra` does no quote processing - the tokens in the matrix must be bare, and
+          # checkClientTestShards.test.ts fails the build if one grows a quote character.
+          read -ra filter_args <<< "$SHARD_FILTER"
+          read -ra script_args <<< "$SHARD_ARGS"
+
+          # A filter set matching no project is not an error to pnpm: it prints "No projects
+          # matched the filters" and exits 0, so the leg runs nothing and still reports green -
+          # the same silent-success shape the `--dir` note below exists to close. Resolve the set
+          # up front and fail loudly when it is empty. `pnpm ls` counts the workspace root as a
+          # match where `pnpm run` does not, so drop it: only real packages count.
+          matched=$(pnpm --recursive "${filter_args[@]}" ls --depth -1 --parseable | grep -cvxF "$PWD" || true)
+          echo "${SHARD_NAME} matches ${matched} package(s)"
+          if [ "$matched" -eq 0 ]; then
+            echo "::error title=Empty test shard::The ${SHARD_NAME} leg's filters match no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
+            exit 1
+          fi
+
+          pnpm --recursive --workspace-concurrency=4 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so

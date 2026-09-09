@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  findAccessibleById: vi.fn(),
+  findUpdateAccessById: vi.fn(),
   update: vi.fn(),
   findByDatalakeTag: vi.fn(),
   // `findById` backs reconcileLakeTags' prefix-arm owner resolution; the mutable `store` in
@@ -18,6 +18,9 @@ const h = vi.hoisted(() => ({
   recordConfigChange: vi.fn().mockResolvedValue({}),
   findBySettingNames: vi.fn().mockResolvedValue([]),
   findAll: vi.fn().mockResolvedValue([]),
+  // The acting principal's org-admin set, as a test input rather than a Mongo read. The gate that
+  // consumes it below is the real one.
+  administeredOrgIds: [] as string[],
 }));
 
 // Callable chain routed by req.method, same shape as the batch/generate-presigned-urls-batch
@@ -43,7 +46,7 @@ vi.mock('@server/utils/storage', () => ({
 
 // Only `dataLakeRepository.findByDatalakeTag` and the fabFile persistence collaborators are
 // stubbed. `fabFileRepository` here is a bare object (not the real repository) since the route
-// only reaches `.shareable.findAccessibleById` and `.update` on the PUT path under test.
+// only reaches `.shareable.findUpdateAccessById` and `.update` on the PUT path under test.
 // Spread the real module first so a transitively-loaded model (Subscription, via the route's
 // dataLakes -> entitlements chain) still finds `mongoose`/`executeFacetCompatible`/BaseRepository
 // at import time - a full-replace mock omits those and fails the suite to load depending on which
@@ -73,7 +76,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   },
   fabFileChunkRepository: {},
   fabFileRepository: {
-    shareable: { findAccessibleById: h.findAccessibleById },
+    shareable: { findUpdateAccessById: h.findUpdateAccessById },
     update: h.update,
     findById: h.findById,
     pullTagsByFabFileId: h.pullTagsByFabFileId,
@@ -89,6 +92,19 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   userRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
   User: {},
+}));
+
+// Stubbed so the real one's entitlement + org-admin Mongo reads stay out of this spec; the actor
+// identity still comes from req.user, never the body.
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: async (req: { user: { id: string; isAdmin?: boolean } }) => ({
+    userId: req.user.id,
+    isAdmin: !!req.user.isAdmin,
+    userTags: [],
+    organizationIds: [],
+    entitlementKeys: [],
+    administeredOrgIds: h.administeredOrgIds,
+  }),
 }));
 
 import handler from '../index';
@@ -115,10 +131,10 @@ const makeRes = () => {
 // a real 24-hex ObjectId string rather than a readable slug.
 const FILE_ID = '507f1f77bcf86cd799439011';
 
-const req = (body: unknown, id: string = FILE_ID) =>
+const req = (body: unknown, id: string = FILE_ID, userId = 'u1') =>
   ({
     method: 'PUT',
-    user: { id: 'u1', isAdmin: false },
+    user: { id: userId, isAdmin: false },
     ability: {},
     query: { id },
     body,
@@ -127,6 +143,9 @@ const req = (body: unknown, id: string = FILE_ID) =>
 
 const run = (body: unknown, res: unknown, id?: string) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, id), res);
+
+const runAs = (userId: string, body: unknown, res: unknown) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, FILE_ID, userId), res);
 
 const fabFile = (overrides: Record<string, unknown> = {}) => ({
   id: FILE_ID,
@@ -175,7 +194,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
   });
 
   it('stamps the lake prefix when the update keeps the meta-tag with no tag under that prefix', async () => {
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: [{ name: META, strength: 1 }] }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [{ name: META, strength: 1 }] }));
     makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [{ name: META, strength: 1 }] });
     const { res, json } = makeRes();
 
@@ -191,7 +210,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
   });
 
   it('preserves lake membership when a whole-array write drops the meta-tag', async () => {
-    h.findAccessibleById.mockResolvedValue(
+    h.findUpdateAccessById.mockResolvedValue(
       fabFile({
         tags: [
           { name: META, strength: 1 },
@@ -227,7 +246,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
   // the activation branch that emits the row.
   it('records the auto-activate when a joining file publishes a draft lake', async () => {
     h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: [] }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [] }));
     makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [] });
     // A lake with a member is by definition no longer a draft - fileCount > 0 is what makes the
     // flip eligible, which is why the suite default of 0 leaves every other case unaffected.
@@ -253,7 +272,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
     const previousTags = [{ name: 'notes', strength: 1 }];
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: previousTags }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
     const { res } = makeRes();
 
     await run({ fileName: 'renamed.txt' }, res);
@@ -269,7 +288,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
 
   it('stamps nothing for a body carrying only primaryTag and no tags', async () => {
     const previousTags = [{ name: 'notes', strength: 1 }];
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: previousTags }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
     const { res } = makeRes();
 
     await run({ primaryTag: META }, res);
@@ -291,5 +310,64 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     expect(res.status).toHaveBeenCalledWith(404);
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The route's lake-write gate, run for real against the fake repos above. `canManageLake`'s
+ * org-admin rung reads `administeredOrgIds`, which a hand-built `{ userId, isAdmin }` actor does
+ * not carry - so without the full `AccessContext` this PUT refuses a caller every other
+ * lake-management gate in the app admits.
+ */
+describe('PUT /api/files/[id] - lake write authorization', () => {
+  // Created by someone else and scoped to an org, so neither the creator nor the admin rung can be
+  // what admits the caller.
+  const ORG_LAKE = { ...LAKE, createdByUserId: 'someone-else', organizationId: 'org-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.administeredOrgIds = [];
+    h.findByDatalakeTag.mockResolvedValue(ORG_LAKE);
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
+    h.find.mockResolvedValue([]);
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ userId: 'u2' }));
+    makeStatefulFabFile({ id: FILE_ID, userId: 'u2', tags: [] });
+  });
+
+  it('admits an org admin of the lake org who holds no grant and did not create it', async () => {
+    h.administeredOrgIds = ['org-1'];
+    const { res } = makeRes();
+
+    await runAs('u2', { tags: [{ name: META, strength: 1 }] }, res);
+
+    expect(h.update).toHaveBeenCalled();
+    expect(tagNamesOf()).toContain(META);
+  });
+
+  it('still refuses a caller with no manage rung at all', async () => {
+    const { res } = makeRes();
+
+    await expect(runAs('u2', { tags: [{ name: META, strength: 1 }] }, res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  // The org-admin rung joins through the same reconciler as any other caller, so it can trigger
+  // the one-way draft -> active flip too, not only the join gate itself.
+  it('lets an org admin activate a draft org lake by joining it', async () => {
+    h.administeredOrgIds = ['org-1'];
+    h.findByDatalakeTag.mockResolvedValue({ ...ORG_LAKE, status: 'draft' });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 12, totalChunkedChars: 0 });
+    h.activateIfDraft.mockResolvedValue(true);
+    const { res } = makeRes();
+
+    await runAs('u2', { tags: [{ name: META, strength: 1 }] }, res);
+
+    expect(h.recordConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
+      })
+    );
   });
 });

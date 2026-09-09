@@ -43,11 +43,12 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
  * carries a different stamp and stays deleted. A lake torn down before that field existed has no
  * mark and restores unbounded, which is the old behavior and errs toward a file reappearing.
  *
- * Also clears `archivedAt` on the restored batch, bounded by `filesArchivedAt`: every UI-driven
- * delete goes active -> archive -> delete (there is no delete-without-archiving control), so
- * without this an archive->delete->restore lake comes back active but with its files still
- * archived and invisible. A lake with no `filesArchivedAt` stamp leaves archivedAt untouched -
- * the pre-existing, known behavior for a lake archived before that field existed.
+ * Also clears `archivedAt` on the restored batch, bounded by `filesArchivedAt`: the common UI route
+ * is active -> archive -> delete, so without this an archive->delete->restore lake comes back
+ * active but with its files still archived and invisible. A lake carrying no `filesArchivedAt` -
+ * a direct active -> delete (the lifecycle 'delete' action has no archived-status precondition),
+ * or one archived before that field existed - gets a no-op here and keeps `archivedAt` untouched,
+ * the pre-existing, known behavior.
  */
 export const restoreDeletedDataLake = async (
   actor: ManageActor,
