@@ -238,6 +238,28 @@ describe('@datalake command', () => {
       expect(looksLikeBareDataLakeMention(parseCommand('please datalake help'))).toBe(false);
     });
 
+    it('is false for declarative prose that starts with the phrase but is not command-shaped', () => {
+      // Regression: position-only anchoring let this fire on ordinary sentences that merely START
+      // with "datalake"/"data lake" - which a DM or app-mention (always admitted by shouldProcess,
+      // regardless of command pattern) would previously have routed to the assistant, per main.
+      // A command-shaped tail (nothing else, or a known subcommand) is required instead.
+      expect(looksLikeBareDataLakeMention(parseCommand('data lake costs are rising this quarter'))).toBe(false);
+      expect(
+        looksLikeBareDataLakeMention(parseCommand('<@UBOT> data lake permissions are confusing, can you explain?'))
+      ).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('Datalake ingestion failed last night - any idea why?'))).toBe(
+        false
+      );
+      expect(looksLikeBareDataLakeMention(parseCommand('Data Lake 101 notes'))).toBe(false);
+    });
+
+    it('is true for a subcommand with trailing args, not just a bare subcommand word', () => {
+      // A command-shaped tail only requires the subcommand word itself - "add" is normally followed
+      // by "to <lake> <link>", which must not be mistaken for prose and refused.
+      expect(looksLikeBareDataLakeMention(parseCommand('datalake add to sales https://example.com'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('datalake list please'))).toBe(true);
+    });
+
     it('is false for a real @datalake command, so the two are never double-handled', () => {
       expect(looksLikeBareDataLakeMention(parseCommand('@datalake add to sales https://x.com'))).toBe(false);
       expect(looksLikeBareDataLakeMention(parseCommand('@datalake'))).toBe(false);
