@@ -36,6 +36,31 @@ describe('sessionAccess', () => {
     it('denies when users is undefined', () => {
       expect(canAccessSession({ userId: userB } as any, userA)).toBe(false);
     });
+
+    it('grants read on a globally-readable session', () => {
+      expect(canAccessSession({ userId: userB, users: [], isGlobalRead: true } as any, userA)).toBe(true);
+    });
+
+    it('does NOT grant write on a globally-readable session', () => {
+      expect(canAccessSession({ userId: userB, users: [], isGlobalRead: true } as any, userA, 'write')).toBe(false);
+    });
+
+    it('grants both read and write on a globally-writable session', () => {
+      const session = { userId: userB, users: [], isGlobalWrite: true } as any;
+      expect(canAccessSession(session, userA)).toBe(true);
+      expect(canAccessSession(session, userA, 'write')).toBe(true);
+    });
+
+    it('grants write to a user-share carrying update', () => {
+      const session = { userId: userB, users: [{ userId: userA, permissions: ['update'] }] } as any;
+      expect(canAccessSession(session, userA, 'write')).toBe(true);
+    });
+
+    it('reads but does not write on a read-only user-share', () => {
+      const session = { userId: userB, users: [{ userId: userA, permissions: ['read'] }] } as any;
+      expect(canAccessSession(session, userA)).toBe(true);
+      expect(canAccessSession(session, userA, 'write')).toBe(false);
+    });
   });
 
   describe('assertSessionAccess', () => {
@@ -71,6 +96,17 @@ describe('sessionAccess', () => {
       const session = { userId: userB, users: [{ userId: userA, permissions: [] }] };
       mockSessionFindById.mockResolvedValue(session);
       await expect(assertSessionAccess(sessionId, userA)).resolves.toBe(session);
+    });
+
+    it('returns the session for a viewer of a globally-readable session (no over-denial)', async () => {
+      const session = { userId: userB, users: [], isGlobalRead: true };
+      mockSessionFindById.mockResolvedValue(session);
+      await expect(assertSessionAccess(sessionId, userA)).resolves.toBe(session);
+    });
+
+    it('denies a write when the caller only holds a read-level share', async () => {
+      mockSessionFindById.mockResolvedValue({ userId: userB, users: [{ userId: userA, permissions: ['read'] }] });
+      await expect(assertSessionAccess(sessionId, userA, 'write')).rejects.toThrow(NotFoundError);
     });
   });
 

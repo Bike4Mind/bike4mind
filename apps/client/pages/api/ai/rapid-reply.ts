@@ -57,17 +57,20 @@ const handler = baseApi()
 
     req.logger.info(`🚀 [RapidReply] Endpoint invoked for quest ${questId || 'new quest'}${isOpti ? ' (opti)' : ''}`);
 
-    // Object-level authz: bind the caller-supplied sessionId (and questId when present) to the
-    // caller before we persist a rapid-reply row or stream it over the websocket. Outside the try
-    // below so a cross-tenant attempt surfaces as a real 403/404 rather than a soft {success:false}.
-    if (sessionId) {
-      await assertSessionAccess(sessionId, userId);
-      if (questId) {
-        const quest = await questRepository.findById(questId);
-        if (quest && quest.sessionId !== sessionId) {
-          throw new NotFoundError('Quest not found');
-        }
-      }
+    // Object-level authz: bind the caller-supplied ids to the caller before we persist a
+    // rapid-reply row or stream it over the websocket. Resolve the quest first so a supplied
+    // questId is always validated - even when sessionId is omitted, because the row persisted below
+    // is keyed on questId and a spoofed one would otherwise be a cross-tenant write. The session
+    // gate falls back to the quest's own session, so dropping sessionId from the body cannot skip
+    // it. Outside the try below so a cross-tenant attempt surfaces as a real 403/404 rather than a
+    // soft {success:false}.
+    const quest = questId ? await questRepository.findById(questId) : null;
+    if (questId && !quest) {
+      throw new NotFoundError('Quest not found');
+    }
+    await assertSessionAccess(sessionId ?? quest?.sessionId, userId);
+    if (quest && sessionId && quest.sessionId !== sessionId) {
+      throw new NotFoundError('Quest not found');
     }
 
     try {

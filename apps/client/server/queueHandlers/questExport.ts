@@ -320,15 +320,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'assembling', 20, 'Loading responses...');
 
-    // Batch fetch all ChatHistoryItems, then drop any whose session is not owned by (or shared
-    // with) the plan owner: a doctored subQuest.questId could otherwise pull another user's quest
-    // into this export. The plan is already owner/shares-gated above, so gate quests by the plan
-    // owner's session access (falling back to the caller for legacy plans with no userId).
-    const planOwnerId = plan.userId || userId;
+    // Batch fetch all ChatHistoryItems, then drop any whose session the CALLER cannot read: a
+    // doctored subQuest.questId could otherwise pull another user's quest into this export. Gating
+    // by the caller (not the plan owner) means a sharee sees their own quests, and never the owner's
+    // quests in sessions the sharee cannot reach.
     const chatItems =
       questIds.length > 0
-        ? await filterReadableQuests(await Quest.find({ _id: { $in: questIds } }).lean(), planOwnerId)
+        ? await filterReadableQuests(await Quest.find({ _id: { $in: questIds } }).lean(), userId)
         : [];
+    const droppedQuestCount = questIds.length - chatItems.length;
+    if (droppedQuestCount > 0) {
+      Logger.globalInstance.info(`[questExport] Dropped ${droppedQuestCount} quest(s) not readable by the caller`);
+    }
     const chatItemMap = new Map<string, Record<string, unknown>>();
     for (const item of chatItems) {
       chatItemMap.set((item._id as { toString(): string }).toString(), item as Record<string, unknown>);

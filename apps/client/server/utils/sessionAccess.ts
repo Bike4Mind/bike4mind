@@ -6,29 +6,51 @@
  * questMasterPlanAccess.ts convention: throw typed HTTPError subclasses that
  * baseApi's errorHandler maps to a status code.
  *
- * Owner+shares predicate kept in sync with the inline check at
- * sessions/[id]/chat/[messageId]/index.ts:
- *   session.userId === userId || session.users?.some(u => u.userId === userId)
+ * canAccessSession mirrors the arms the shareable-document mixin and CASL already apply to
+ * sessions (findAccessibleById / findUpdateAccessById plus the isGlobalRead/isGlobalWrite flags
+ * updateSharing.ts writes and ability.ts honors), so it does not over-deny a globally-shared
+ * session on these routes.
  *
  * Security: a missing session and a forbidden session both surface as
  * NotFoundError so a caller cannot probe which session ids exist.
  */
 
 import { sessionRepository } from '@bike4mind/database';
-import { ISessionDocument, BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
+import { ISessionDocument, BadRequestError, NotFoundError, UnauthorizedError, Permission } from '@bike4mind/common';
 import { Types } from 'mongoose';
+
+/** Read routes accept a read-or-write grant; write routes require an update-level grant. */
+export type SessionAccessLevel = 'read' | 'write';
 
 function isValidObjectId(id: string): boolean {
   return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
 }
 
-/** Owner or any direct user-share may access a session. */
-export function canAccessSession(session: Pick<ISessionDocument, 'userId' | 'users'>, userId: string): boolean {
-  return session.userId === userId || (session.users?.some(u => u.userId === userId) ?? false);
+/**
+ * May `userId` access `session` at the requested level?
+ * - read:  owner, any direct user-share, isGlobalRead, or isGlobalWrite
+ * - write: owner, a user-share carrying `update`, or isGlobalWrite
+ *
+ * Group-shares (session.groups) are a latent arm - nothing in the repo writes them yet; add a
+ * groups check here, resolved against the caller's group ids, when session group-sharing ships.
+ */
+export function canAccessSession(
+  session: Pick<ISessionDocument, 'userId' | 'users' | 'isGlobalRead' | 'isGlobalWrite'>,
+  userId: string,
+  level: SessionAccessLevel = 'read'
+): boolean {
+  if (session.userId === userId) return true;
+  if (session.isGlobalWrite) return true;
+  if (level === 'read' && session.isGlobalRead) return true;
+  return (
+    session.users?.some(
+      u => u.userId === userId && (level === 'read' || (u.permissions?.includes(Permission.update) ?? false))
+    ) ?? false
+  );
 }
 
 /**
- * Verify the caller owns or shares a session before any read/write on a
+ * Verify the caller may access a session at the requested level before any read/write on a
  * caller-supplied session id. Returns the session document on success.
  *
  * @throws UnauthorizedError when userId is missing
@@ -37,7 +59,8 @@ export function canAccessSession(session: Pick<ISessionDocument, 'userId' | 'use
  */
 export async function assertSessionAccess(
   sessionId: string | undefined,
-  userId: string | undefined
+  userId: string | undefined,
+  level: SessionAccessLevel = 'read'
 ): Promise<ISessionDocument> {
   if (!userId) {
     throw new UnauthorizedError('Unauthorized');
@@ -47,7 +70,7 @@ export async function assertSessionAccess(
   }
 
   const session = await sessionRepository.findById(sessionId);
-  if (!session || !canAccessSession(session, userId)) {
+  if (!session || !canAccessSession(session, userId, level)) {
     throw new NotFoundError('Session not found');
   }
 

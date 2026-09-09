@@ -21,11 +21,20 @@ const USER_A = 'user-a';
 const USER_B = 'user-b';
 const SESSION_ID = '507f1f77bcf86cd799439011'; // valid ObjectId owned by user B below
 
-const { mockFindById, mockFindRotation, mockSessionFindById, mockTryIncrement } = vi.hoisted(() => ({
+const {
+  mockFindById,
+  mockFindRotation,
+  mockSessionFindById,
+  mockTryIncrement,
+  mockQuestFindById,
+  mockGetSettingsValue,
+} = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindRotation: vi.fn(),
   mockSessionFindById: vi.fn(),
   mockTryIncrement: vi.fn(),
+  mockQuestFindById: vi.fn(),
+  mockGetSettingsValue: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', async orig => {
@@ -38,6 +47,14 @@ vi.mock('@bike4mind/database', async orig => {
     sessionRepository: {
       ...(actual.sessionRepository as object),
       findById: (...a: unknown[]) => mockSessionFindById(...a),
+    },
+    questRepository: {
+      ...(actual.questRepository as object),
+      findById: (...a: unknown[]) => mockQuestFindById(...a),
+    },
+    adminSettingsRepository: {
+      ...(actual.adminSettingsRepository as object),
+      getSettingsValue: (...a: unknown[]) => mockGetSettingsValue(...a),
     },
     cacheRepository: {
       ...(actual.cacheRepository as object),
@@ -113,30 +130,54 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     });
     // The target session is owned by user B and not shared with A.
     mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_B, users: [] });
+    // A quest whose session is B's - used by the rapid-reply questId branch.
+    mockQuestFindById.mockResolvedValue({ _id: 'quest-b', sessionId: SESSION_ID });
+    // RapidReply feature off by default, so the owned-session positive control returns early.
+    mockGetSettingsValue.mockResolvedValue(false);
   });
 
+  // Assert the error BODY, not just the status: the POST agents route has a second
+  // NotFoundError('Agent not found') just past the guard, so a bare-404 assertion would still pass
+  // if the session guard were deleted and the agent lookup stubbed. 'Session not found' proves the
+  // denial came from the session guard.
   it("GET /api/sessions/[id]/agents -> 404 (not B's agents)", async () => {
     const { req, res } = fire('GET', `/api/sessions/${SESSION_ID}/agents`, undefined, { id: SESSION_ID });
     await agentsHandler(req, res);
     expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Session not found');
   });
 
   it("POST /api/sessions/[id]/agents -> 404 (cannot attach to B's session)", async () => {
     const { req, res } = fire('POST', `/api/sessions/${SESSION_ID}/agents`, { agentId: 'agent-1' }, { id: SESSION_ID });
     await agentsHandler(req, res);
     expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Session not found');
+  });
+
+  it("DELETE /api/sessions/[id]/agents -> 404 (cannot detach from B's session)", async () => {
+    const { req, res } = fire(
+      'DELETE',
+      `/api/sessions/${SESSION_ID}/agents`,
+      { agentId: 'agent-1' },
+      { id: SESSION_ID }
+    );
+    await agentsHandler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Session not found');
   });
 
   it("POST /api/sessions/[id]/auto-rename -> 404 (cannot rename B's session)", async () => {
     const { req, res } = fire('POST', `/api/sessions/${SESSION_ID}/auto-rename`, {}, { id: SESSION_ID });
     await autoRenameHandler(req, res);
     expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Session not found');
   });
 
   it("POST /api/roll -> 404 (cannot write a quest into B's session)", async () => {
     const { req, res } = fire('POST', '/api/roll', { diceSpec: '1d20', sessionId: SESSION_ID });
     await rollHandler(req, res);
     expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Session not found');
   });
 
   it("POST /api/ai/rapid-reply -> 404 (cannot plant a rapid reply on B's session)", async () => {
@@ -147,5 +188,46 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     });
     await rapidReplyHandler(req, res);
     expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Session not found');
+  });
+
+  // P1-2 regression: dropping sessionId must NOT skip the guard. With only a questId that resolves
+  // to B's session, the handler must still gate on that session and deny.
+  it('POST /api/ai/rapid-reply with only a questId (no sessionId) -> 404 (gate falls back to the quest session)', async () => {
+    const { req, res } = fire('POST', '/api/ai/rapid-reply', {
+      questId: 'quest-b',
+      message: 'hello',
+      model: 'some-model',
+    });
+    await rapidReplyHandler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Session not found');
+  });
+
+  it('POST /api/ai/rapid-reply with a questId that resolves to nothing -> 404 Quest not found', async () => {
+    mockQuestFindById.mockResolvedValue(null);
+    const { req, res } = fire('POST', '/api/ai/rapid-reply', {
+      questId: 'ghost',
+      message: 'hello',
+      model: 'some-model',
+    });
+    await rapidReplyHandler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Quest not found');
+  });
+
+  // Positive control through the real chain: on the caller's OWN session the guard passes and the
+  // request reaches business logic (RapidReply is disabled here, so a 200 {reason:'disabled'}). A
+  // guard that denied everyone would 404 this too.
+  it('POST /api/ai/rapid-reply on the caller-owned session -> 200 (guard passes, no over-denial)', async () => {
+    mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_A, users: [] });
+    const { req, res } = fire('POST', '/api/ai/rapid-reply', {
+      sessionId: SESSION_ID,
+      message: 'hello',
+      model: 'some-model',
+    });
+    await rapidReplyHandler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().reason).toBe('disabled');
   });
 });

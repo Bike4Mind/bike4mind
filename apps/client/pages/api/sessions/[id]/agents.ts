@@ -41,7 +41,7 @@ const handler = baseApi()
         throw new BadRequestError('Agent ID is required');
       }
 
-      await assertSessionAccess(sessionId, req.user!.id);
+      await assertSessionAccess(sessionId, req.user!.id, 'write');
 
       // Object-level authz honoring owner + user-shares + group-shares
       const agent = await agentRepository.shareable.findAccessibleById(req.user!, agentId);
@@ -67,7 +67,7 @@ const handler = baseApi()
         throw new BadRequestError('Agent ID is required');
       }
 
-      await assertSessionAccess(sessionId, req.user!.id);
+      await assertSessionAccess(sessionId, req.user!.id, 'write');
 
       const updatedSession = await sessionRepository.detachAgent(sessionId, agentId);
 
