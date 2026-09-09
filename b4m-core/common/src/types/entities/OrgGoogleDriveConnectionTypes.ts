@@ -194,8 +194,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * `findByDataLakeId`'s enabled-only view would leave exactly the strand this exists to prevent;
    * the lake-lifecycle disable/enable seam and the per-lake disconnect route likewise have to see an
    * already-disabled row. Excludes credentials.
-   * SECURITY: server-side only. A caller that answers a tenant must apply its own org check against
-   * the returned row (see the drive-connection route); never hand it to a cross-org caller.
+   * SECURITY: server-side only; never hand it to a cross-org caller. A caller that answers a tenant
+   * must authorize the CALLER against the owning lake's org first - the drive-connection route does
+   * that in resolveOrgLake via verifyOrgAccess. Comparing the returned row's organizationId to a
+   * server-derived one is a consistency check, not an authorization boundary; on its own it would
+   * hand any org's connection to anyone who can name a lake id.
    */
   findByDataLakeIdAny(targetDataLakeId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 

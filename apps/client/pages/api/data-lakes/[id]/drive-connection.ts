@@ -44,8 +44,12 @@ async function resolveOrgLake(req: Request): Promise<{ lakeId: string; organizat
  * lake now DISABLES its connection rather than destroying it (disableDriveConnectionForLake), so an
  * enabled-only lookup would report the connection absent while the row still holds the live Google
  * grant and the globally-unique driveFolderId claim - the DELETE below would answer 204 without
- * revoking anything, and the folder would stay unclaimable by anyone. findByDataLakeIdAny is
- * deliberately global (server-side only), so the org check here is what scopes the result.
+ * revoking anything, and the folder would stay unclaimable by anyone.
+ *
+ * findByDataLakeIdAny is deliberately global (server-side only). The tenant boundary is
+ * resolveOrgLake's verifyOrgAccess, which has already run; the comparison below is defence in depth
+ * against inconsistent data - both sides derive from the same lake - and is NOT what scopes the
+ * caller. A route that copies this finder needs the verifyOrgAccess, not just the comparison.
  */
 async function findLakeConnection(lakeId: string, organizationId: string) {
   const conn = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(lakeId);
