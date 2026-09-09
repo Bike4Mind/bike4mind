@@ -8,10 +8,11 @@ type FabFileAccessDb = { db: { fabFiles: Pick<IFabFileRepository, 'shareable'> }
  * downloads, or reads a file from an id/key taken off the request body/query must call this before
  * touching the object, or an authenticated caller can reach another user's file (IDOR).
  *
- * Reuses `shareable.findAccessibleById` - the SAME predicate `getFabFile` serves single files by
- * (owner OR per-user share OR per-group share; see SharableDocumentModel) - so this guard and the
- * file-viewer never disagree about who may read a file. `NotFoundError` on missing-or-not-yours
- * (never Forbidden) so a probe can't tell "doesn't exist" from "exists but isn't mine".
+ * Reuses `shareable.findAccessibleById`, the core per-file ACL (owner OR per-user share OR
+ * per-group share; see SharableDocumentModel). That is the ACL arm of `getFabFile`, not full parity:
+ * `getFabFile` additionally admits a global-system-prompt file and a data-lake fallback that this
+ * guard deliberately omits, so the guard is STRICTER and fails closed. `NotFoundError` on
+ * missing-or-not-yours (never Forbidden) so a probe can't tell "doesn't exist" from "isn't mine".
  *
  * Companion to dataLakeService.assertBatchOwnership; the shared home for file object-level authz.
  */
