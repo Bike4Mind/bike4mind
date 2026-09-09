@@ -2788,6 +2788,16 @@ export class ChatCompletionProcess {
         // this reads the offered set for the same reason blog_draft and navigate_view do above.
         hasWebSearch: offeredToolNames.includes('web_search'),
         webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
+        // Same offered-set check that seeds `promptMeta.retrieval.mode` above, so the nudge covers
+        // the optional-path turns that fold measures. Two caveats a reader re-running that
+        // measurement needs: the seed splits this set by `forcedRetrievalEnabled`, so forced turns
+        // are nudged too and land in a different bucket; and the seed does NOT see the guidance
+        // string, so clearing the `KnowledgeBaseRetrievalPrompt` setting (the section's documented
+        // off switch) leaves those turns counted in `offeredTurns` with no nudge shipped. Nothing
+        // in promptMeta records that the section was injected - so an A/B driven by clearing the
+        // field cannot be read off the fold alone.
+        hasKnowledgeBase: knowledgeToolOffered,
+        knowledgeBaseGuidance: getSettingsValue('KnowledgeBaseRetrievalPrompt', defaultAdminSettings),
         userTimezone,
         mcpTools: directMcpTools,
         sessionId,

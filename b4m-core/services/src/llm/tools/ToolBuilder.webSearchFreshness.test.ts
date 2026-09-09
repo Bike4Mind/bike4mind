@@ -29,6 +29,7 @@ describe('buildToolPrompt web-search freshness section', () => {
       hasContentTransform: false,
       hasChessEngine: false,
       hasCurrentDateTime: false,
+      hasKnowledgeBase: false,
       mcpTools: [],
       sessionId: 's1',
       message: 'what is the current price',
