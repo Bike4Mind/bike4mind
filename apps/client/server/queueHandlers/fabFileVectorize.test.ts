@@ -113,8 +113,7 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 // #2027: its own dedicated unit tests (notifySlackIndexingComplete.test.ts) cover the resolution
-// chain and every skip case - mocked here so this suite's already-heavy @bike4mind/common mock
-// (no FabFileSourceType) doesn't have to grow just to satisfy a transitive import.
+// chain and every skip case - mocked here so this suite doesn't have to exercise the real thing.
 vi.mock('@server/queueHandlers/notifySlackIndexingComplete', () => ({
   notifySlackIndexingComplete: (...a: unknown[]) => h.notifySlackIndexingComplete(...a),
 }));
@@ -127,6 +126,9 @@ vi.mock('@bike4mind/common', async () => {
   return {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
+    // Real enum, not a stub: the sourceType gate around the Slack notification claim compares
+    // against this directly, so a fake value here would make every test pass for the wrong reason.
+    FabFileSourceType: actual.FabFileSourceType,
     // Pulled from the real module rather than retyped, for the provenance vocabulary
     // convergenceProvenance.ts re-exports from common:
     // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
@@ -158,6 +160,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { fabFileChunkRepository, User } from '@bike4mind/database';
+import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { dispatch } from './fabFileVectorize';
@@ -560,6 +563,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     vectorized: false,
     chunkCount: 1,
     vectorizedChunkCount: 0,
+    sourceType: FabFileSourceType.SLACK,
   });
 
   beforeEach(() => {
@@ -626,6 +630,23 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('never claims or sends the Slack notification for a non-Slack-origin file', async () => {
+    // The claim write and the notifier both cost something for a file that will never be
+    // Slack-notified anyway (notifySlackIndexingComplete no-ops on sourceType); this proves the
+    // sourceType gate skips both up front instead of paying for a claim nothing will use.
+    h.findAccessibleById.mockResolvedValue({
+      ...unvectorizedFile('batch-1'),
+      sourceType: FabFileSourceType.GOOGLE_DRIVE,
+    });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimSlackIndexNotification).not.toHaveBeenCalled();
     expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
