@@ -36,7 +36,7 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import { toast } from 'sonner';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
@@ -195,18 +195,7 @@ export function LakeInfoPanel({
                 color="primary"
                 startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
                 data-testid={`datalake-addfiles-btn-${lake.id}`}
-                onClick={() =>
-                  openWizardForLake({
-                    id: lake.id,
-                    slug: lake.slug,
-                    name: lake.name,
-                    fileTagPrefix: lake.fileTagPrefix,
-                    requiredUserTag: lake.requiredUserTag,
-                    requiredEntitlement: lake.requiredEntitlement,
-                    organizationId: lake.organizationId ?? null,
-                    canManage: lake.canManage ?? false,
-                  })
-                }
+                onClick={() => openWizardForLake(toWizardTargetLake(lake))}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >
                 Add files

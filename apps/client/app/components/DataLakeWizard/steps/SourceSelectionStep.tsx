@@ -30,6 +30,7 @@ import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
 import DriveConnectAction from './DriveConnectAction';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
 
@@ -47,8 +48,7 @@ export default function SourceSelectionStep() {
   const config = useDataLakeWizardStore(s => s.config);
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
-  // Same expression as SelectedLakeHeader's, deliberately - see the render site below.
-  const canConnectDrive = !!targetLake?.organizationId && !!targetLake?.canManage;
+  const canConnectDrive = !!targetLake && canConnectLakeDrive(targetLake);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const setOptionalStep = useDataLakeWizardStore(s => s.setOptionalStep);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -310,13 +310,7 @@ export default function SourceSelectionStep() {
         </Box>
 
         {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
-            does not, so the selection is parked and connected on commit (#1916).
-
-            Gated on the SAME condition as the other render site (SelectedLakeHeader): connecting
-            Drive is an org-lake, owner/manager capability server-side - the status route 404s on a
-            personal lake and 403s for a non-manager. Ungated, opening Add files on a personal lake
-            fired a guaranteed-404 `GET /drive-connection` and rendered a permanently disabled
-            Connect button. The two sites must keep agreeing; this one was simply missed. */}
+            does not, so the selection is parked and connected on commit. */}
         {targetLake ? canConnectDrive && <DriveConnectAction lake={targetLake} /> : <DrivePendingConnectAction />}
       </Stack>
 

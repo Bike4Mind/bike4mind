@@ -170,6 +170,34 @@ export interface WizardTargetLake {
   canManage: boolean;
 }
 
+/**
+ * The one projection from a fetched lake (a `useGetDataLakes` element or a `ManageableDataLakeConfig`)
+ * to the wizard's narrower target. Every "Add files" entry point maps through here, so a new field on
+ * `WizardTargetLake` is one edit rather than one per call site.
+ *
+ * Both nullable fields fail closed: an absent scope reads as personal and an absent manage status as
+ * not-manageable, which is the safe side of the Drive connect gate.
+ */
+export const toWizardTargetLake = (lake: {
+  id: string;
+  slug: string;
+  name: string;
+  fileTagPrefix: string;
+  requiredUserTag?: string;
+  requiredEntitlement?: string;
+  organizationId?: string | null;
+  canManage?: boolean;
+}): WizardTargetLake => ({
+  id: lake.id,
+  slug: lake.slug,
+  name: lake.name,
+  fileTagPrefix: lake.fileTagPrefix,
+  requiredUserTag: lake.requiredUserTag,
+  requiredEntitlement: lake.requiredEntitlement,
+  organizationId: lake.organizationId ?? null,
+  canManage: lake.canManage ?? false,
+});
+
 interface DataLakeWizardStore {
   // State
   isOpen: boolean;

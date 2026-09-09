@@ -33,7 +33,7 @@ import {
 } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { RemoveFileFromLakeCopy } from '@client/app/components/DataLakeWizard/RemoveFileFromLakeDialog';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { toast } from 'sonner';
 import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
@@ -428,16 +428,7 @@ export default function DataLakeExplorer({
 
   const addFilesToSelectedLake = useCallback(() => {
     if (!selectedLake) return;
-    openWizardForLake({
-      id: selectedLake.id,
-      slug: selectedLake.slug,
-      name: selectedLake.name,
-      fileTagPrefix: selectedLake.fileTagPrefix,
-      requiredUserTag: selectedLake.requiredUserTag,
-      requiredEntitlement: selectedLake.requiredEntitlement,
-      organizationId: selectedLake.organizationId ?? null,
-      canManage: selectedLake.canManage ?? false,
-    });
+    openWizardForLake(toWizardTargetLake(selectedLake));
   }, [selectedLake, openWizardForLake]);
 
   // Switching lake scope invalidates the breadcrumb: it names a path in the OUTGOING lake's tree,

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useDataLakeWizardStore, type WizardTargetLake } from '@client/app/stores/useDataLakeWizardStore';
 import SourceSelectionStep from './SourceSelectionStep';
 
 const { lakes, selectedAccount, toastInfo } = vi.hoisted(() => ({
@@ -249,7 +249,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
     // on a personal lake and 403s for a non-manager. This render site was ungated, so opening Add
     // files on a personal lake fired a guaranteed-404 GET /drive-connection and rendered a
     // permanently disabled Connect button. SelectedLakeHeader already gates on exactly this.
-    const appendTo = (over: Record<string, unknown>) =>
+    const appendTo = (over: Partial<WizardTargetLake> = {}) =>
       useDataLakeWizardStore.setState({
         targetLake: {
           id: 'lake-1',
@@ -259,7 +259,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
           organizationId: 'org-1',
           canManage: true,
           ...over,
-        } as never,
+        },
       });
 
     it('renders NO connect control on a personal lake', () => {
