@@ -24,12 +24,16 @@ import { computeCosineSimilarity, COSINE_SEARCH_TOP_K } from '@bike4mind/utils';
 import { aggregate, scoreQuestion, type Aggregate } from './metrics';
 
 /**
- * How deep the ranking is inspected: the shipped retrieval depth, not a copy of it.
+ * How deep the ranking is inspected: a shipped retrieval depth rather than a literal, and the 10 the
+ * published prod band is a rank-1..rank-10 spread over.
  *
- * It happens to be the 10 the published prod band is a rank-1..rank-10 spread over, but the reason
- * to take it from `@bike4mind/utils` is the claim at the top of this file - scoring goes through the
- * shipped cosine so harness and product cannot diverge. A private 10 here would be exactly that
- * divergence, in the depth the band is measured at rather than in the comparison function.
+ * BE PRECISE ABOUT WHICH DEPTH IT IS. `COSINE_SEARCH_TOP_K`'s only production use is
+ * `similaritySelectChunks` - top-k within ONE attached file - and the lake path this instrument
+ * measures derives its own depth in `knowledgeBaseSearch`. Both are 10 today, so the number is right,
+ * but the coupling is to a neighbouring knob and not to the one the harness mirrors: a change to
+ * either constant alone would move exactly one of them. Taking the shipped value still beats a
+ * private literal (it is a value someone maintains, and it is greppable from both sides); it just
+ * does not make divergence impossible the way routing every score through the shipped cosine does.
  */
 export const RANK_DEPTH = COSINE_SEARCH_TOP_K;
 
@@ -144,6 +148,22 @@ export type ArmRow = {
   positiveTopScore: number;
   negativeTopScore: number;
   /**
+   * The same band over the POSITIVE questions only.
+   *
+   * The pooled `band` above includes the deliberate negatives; the published prod figure this block
+   * is shaped to sit beside (0.8272-0.8856, width 0.058) was measured over its three RELEVANT
+   * queries. Pooling a negative's top score into a min or a max is exactly the kind of difference an
+   * extreme carries, so the instrument check needs the comparable population printed next to the
+   * corpus-level one. Label-dependent, like posTop/negTop: meaningless when the ground truth does not
+   * describe the corpus, and rendered `n/a` there.
+   */
+  positiveBand: ScoreBand;
+  /**
+   * Deliberate negatives in the question set (`supporting: []`), so the pooled band can say what it
+   * pooled. The prod figure had none.
+   */
+  negativeQueries: number;
+  /**
    * Per-query rank-1 minus rank-N, in query order. The published prod row lists these individually
    * (0.0294, 0.0172, 0.0139) rather than averaged, and the go signal is stated against them - so
    * they are kept rather than collapsed, and `meanSpread` is the summary rather than the datum.
@@ -171,9 +191,11 @@ export type ArmRow = {
    */
   groundTruthCoverage: { matched: number; total: number };
   /**
-   * How deep the ranking actually went, which is `min(RANK_DEPTH, chunks)`. Carried so the spread
-   * label states the depth that was inspected rather than the depth that was asked for - on a lake
-   * smaller than RANK_DEPTH those differ.
+   * How deep the ranking actually went: the DEEPEST query's returned count, i.e. `max` over the
+   * queries of `min(RANK_DEPTH, chunks scored)`. Carried so the spread label states a depth that was
+   * inspected rather than the depth that was asked for - on a lake smaller than RANK_DEPTH they
+   * differ. `max` and not `min` on purpose: the label claims "we looked this deep somewhere", which
+   * is the true statement when queries see different chunk counts.
    */
   rankDepth: number;
 };
@@ -205,6 +227,8 @@ export function buildArmRow(args: {
     filesUnreachable: args.filesUnreachable,
     queries: distributions.length,
     band: scoreBand(distributions),
+    positiveBand: scoreBand(distributions.filter((_, i) => args.queries[i].supporting.length > 0)),
+    negativeQueries: args.queries.filter(q => q.supporting.length === 0).length,
     meanTopScore: mean(distributions.map(d => d.topScores[0] ?? 0)),
     positiveTopScore: mean(
       distributions.filter((_, i) => args.queries[i].supporting.length > 0).map(d => d.topScores[0] ?? 0)
@@ -221,12 +245,21 @@ export function buildArmRow(args: {
   };
 }
 
+/** A band, or `n/a` when it is partitioned by labels the corpus does not carry. See groundTruthApplies. */
+const band = (row: ArmRow, b: ScoreBand) =>
+  row.groundTruthApplies ? `${b.min.toFixed(4)} - ${b.max.toFixed(4)} (width ${b.width.toFixed(4)})` : 'n/a';
+
 /** How many per-query spreads to print before eliding, so a 30-question run stays one line. */
 const SPREAD_SAMPLE = 6;
 
 /**
  * Render one arm in the shape of the published prod probe block, so a reader can set the two
  * side by side without re-deriving anything.
+ *
+ * TWO bands, not one. `overall band` is pooled across every query including the deliberate
+ * negatives - the corpus-level statement. `positives-only band` is the same statistic over the
+ * relevant queries alone, which is the population the published prod figure was measured over, so
+ * the instrument check compares like with like instead of silently differing by the negatives.
  *
  * `retrieval_unavailable` is the capture's own reachability drop count (`isCapturableFile`), because
  * the capture enumerates the lake with the lifecycle-sweep reader and therefore genuinely sees that
@@ -247,7 +280,10 @@ export function formatArmSummary(row: ArmRow): string {
     `retrieval_unavailable: ${row.filesUnreachable} files unreachable by the served path (archived / not fully vectorized / excluded)`,
     `superseded           : n/a (no collapse pass offline)`,
     `r1-r${row.rankDepth} spread`.padEnd(21) + `: ${spreads}${elided}`,
-    `overall band         : ${row.band.min.toFixed(4)} - ${row.band.max.toFixed(4)} (width ${row.band.width.toFixed(4)})`,
+    `overall band         : ${row.band.min.toFixed(4)} - ${row.band.max.toFixed(4)} (width ${row.band.width.toFixed(4)})` +
+      ` over all ${row.queries} queries${row.negativeQueries > 0 ? `, ${row.negativeQueries} of them negatives` : ''}`,
+    `positives-only band  : ${band(row, row.positiveBand)}` +
+      ' <- the population the published prod band was measured over',
   ].join('\n');
 }
 

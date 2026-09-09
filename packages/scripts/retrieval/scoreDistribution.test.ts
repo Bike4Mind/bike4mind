@@ -118,6 +118,36 @@ describe('buildArmRow', () => {
     expect(row.quality.precision).toBeCloseTo(1 / 3, 6);
   });
 
+  it('bands the positives separately, because the published prod figure had no negatives in it', () => {
+    // The pooled band is `max - min`, an extreme, so a negative question whose scores sit outside the
+    // positives' range moves it. Chunks at 0/30/60 degrees score 1.0 / 0.866 / 0.5 against QUERY, and
+    // -0.866 / -0.5 / 0.0 against a query at 150 degrees - two disjoint ranges.
+    const spread = [chunk('c1', 'docA', AT(0)), chunk('c2', 'docB', AT(30)), chunk('c3', 'docC', AT(60))];
+    const row = buildArmRow({
+      arm: 'arm',
+      chunks: spread,
+      filesInScope: 3,
+      chunksExcluded: 0,
+      filesExcluded: 0,
+      filesUnreachable: 0,
+      queries: [
+        { id: 'q1', vector: QUERY, supporting: ['docA'] },
+        { id: 'q2', vector: AT(150), supporting: [] },
+      ],
+      depth: 3,
+    });
+    expect(row.negativeQueries).toBe(1);
+    expect(row.band.min).toBeCloseTo(-0.866, 3);
+    expect(row.band.max).toBeCloseTo(1, 6);
+    expect(row.positiveBand.min).toBeCloseTo(0.5, 6);
+    expect(row.positiveBand.max).toBeCloseTo(1, 6);
+    expect(row.positiveBand.width).toBeCloseTo(0.5, 6);
+    expect(row.band.width).toBeGreaterThan(row.positiveBand.width);
+    const summary = formatArmSummary(row);
+    expect(summary).toContain('2 queries, 1 of them negatives');
+    expect(summary).toContain('positives-only band  : 0.5000 - 1.0000 (width 0.5000)');
+  });
+
   it('scores a negative question through falsePositiveRate, not recall', () => {
     const row = buildArmRow({
       arm: 'arm',

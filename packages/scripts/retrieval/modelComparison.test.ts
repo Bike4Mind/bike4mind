@@ -140,6 +140,26 @@ describe('compareArms', () => {
     expect(rows.map(r => r.arm)).toEqual(['synthetic-eval-embedding@16', 'other-embedder@16']);
   });
 
+  it('scores two model arms independently when their vectors genuinely differ', () => {
+    // The relabelled-fixture test above pins the LABELS. It cannot pin the scoring, because both arms
+    // hold byte-identical vectors - and this repository has been bitten by exactly that shape before
+    // (b4m-core/memory/src/eval/dimensions.test.ts records an earlier "512 == 1536" claim that passed
+    // tautologically because it compared identical vectors). A shared orthogonal transform would be
+    // the same trap: cosine is invariant under one. So each chunk gets its OWN cyclic shift, which
+    // keeps every vector unit-norm while changing the geometry between chunks.
+    const shift = (v: number[], k: number) => [...v.slice(k % v.length), ...v.slice(0, k % v.length)];
+    const secondModel = other({
+      model: 'other-embedder',
+      chunks: fixture.chunks.map((c, i) => ({ ...c, vector: shift(c.vector, i + 1) })),
+    });
+    const [base, arm] = compareArms([fixture, secondModel], [16]);
+    expect(arm.arm).toBe('other-embedder@16');
+    expect(arm.chunksScored).toBe(base.chunksScored);
+    expect(arm.band.width).not.toBeCloseTo(base.band.width, 6);
+    expect(arm.meanTopScore).not.toBeCloseTo(base.meanTopScore, 6);
+    expect(arm.spreads).not.toEqual(base.spreads);
+  });
+
   it('throws on a fixture with no queries rather than rendering an empty row', () => {
     expect(() => compareArms([other({ queries: [] })], [16])).toThrow(/no queries/);
   });
