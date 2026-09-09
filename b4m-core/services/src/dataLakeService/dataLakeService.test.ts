@@ -3371,6 +3371,10 @@ describe('removeFileFromDataLake — single-file removal', () => {
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
       },
+      // Stubbed so these exercise a WORKING restore write. Omitted, the call threw on an undefined
+      // repo and the door's catch swallowed it, so every test here silently covered the degraded
+      // path - invisible until `restoreTokenMinted` made the difference observable.
+      lakeMembershipRemovals: { upsertRemoval: vi.fn().mockResolvedValue(undefined) },
     },
   });
 
@@ -3382,7 +3386,13 @@ describe('removeFileFromDataLake — single-file removal', () => {
     // removal) and never a soft-delete. The other lake's tags are untouched.
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalled();
-    expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
+    expect(result).toEqual({
+      success: true,
+      fileCount: 0,
+      totalSizeBytes: 0,
+      totalChunkedChars: 0,
+      restoreTokenMinted: true,
+    });
   });
 
   it('removes a file whose only membership signal is a prefixed tag', async () => {
@@ -3493,7 +3503,13 @@ describe('removeFileFromDataLake — single-file removal', () => {
     // Same tag-pull path as the multi-lake case - the service has no cascade-delete branch,
     // so "last lake" is not special: the tag is pulled and the file is left to exist.
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
-    expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
+    expect(result).toEqual({
+      success: true,
+      fileCount: 0,
+      totalSizeBytes: 0,
+      totalChunkedChars: 0,
+      restoreTokenMinted: true,
+    });
   });
 
   it('allows an admin who is not the creator', async () => {
