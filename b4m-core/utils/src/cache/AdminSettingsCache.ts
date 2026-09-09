@@ -1,6 +1,19 @@
 import { IAdminSettingsRepository, IAdminSettings } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
+/**
+ * A structural subset of `Logger` with every method optional, matching how this file actually
+ * calls it (`this.logger.debug?.()`, see the comment on `logger` below) rather than the promise
+ * `Logger` itself makes (all three required). A full `Logger` still satisfies this - it is a
+ * superset - so every real construction site is unaffected; this only stops the FIELD from
+ * claiming a guarantee the class deliberately does not rely on.
+ */
+interface PartialAdminSettingsLogger {
+  debug?: Logger['debug'];
+  info?: Logger['info'];
+  warn?: Logger['warn'];
+}
+
 interface CacheEntry {
   data: Record<string, string>;
   timestamp: number;
@@ -20,7 +33,17 @@ interface IndividualSettingCache {
 export class AdminSettingsCache {
   private cache: Map<string, CacheEntry> = new Map();
   private individualCache: Map<string, IndividualSettingCache> = new Map();
-  private logger: Logger;
+  /**
+   * Every call through this field is optional-chained (`this.logger.debug?.()`).
+   *
+   * A cache must not throw because it could not log, and this one is uniquely exposed to that: it is
+   * a process-wide singleton created with whichever logger happens to reach `getSettingsCache`
+   * first, and its callers (`getSettingsByNames`, the scoped-settings resolver) all wrap reads in a
+   * never-throw guard that degrades to coded defaults. So a logger missing a quieter level turned a
+   * successful settings read into a silent fallback - a wrong VALUE, reported nowhere, rather than
+   * an error anyone could see.
+   */
+  private logger: PartialAdminSettingsLogger;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private maxCacheSize: number = 1000; // Prevent memory leaks
 
@@ -40,7 +63,7 @@ export class AdminSettingsCache {
   private startCleanupTimer(): void {
     // Only start cleanup in persistent environments (not serverless)
     if (process.env.NODE_ENV !== 'production' || process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-      this.logger.debug('Skipping cleanup timer in serverless environment');
+      this.logger.debug?.('Skipping cleanup timer in serverless environment');
       return;
     }
 
@@ -48,7 +71,7 @@ export class AdminSettingsCache {
       this.performCleanup();
     }, AdminSettingsCache.CLEANUP_INTERVAL);
 
-    this.logger.debug('Started cache cleanup timer');
+    this.logger.debug?.('Started cache cleanup timer');
   }
 
   /**
@@ -58,7 +81,7 @@ export class AdminSettingsCache {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
-      this.logger.debug('Stopped cache cleanup timer');
+      this.logger.debug?.('Stopped cache cleanup timer');
     }
   }
 
@@ -97,11 +120,11 @@ export class AdminSettingsCache {
         removedCount++;
       }
 
-      this.logger.warn(`Emergency cache cleanup: removed ${toRemove} entries due to size limit`);
+      this.logger.warn?.(`Emergency cache cleanup: removed ${toRemove} entries due to size limit`);
     }
 
     if (removedCount > 0) {
-      this.logger.debug(
+      this.logger.debug?.(
         `Cache cleanup removed ${removedCount} expired entries (${beforeSize} → ${this.cache.size + this.individualCache.size})`
       );
     }
@@ -132,7 +155,7 @@ export class AdminSettingsCache {
 
     // Return cached data if valid
     if (cached && this.isValid(cached.timestamp, cached.ttl)) {
-      this.logger.debug('📦 Admin settings cache HIT');
+      this.logger.debug?.('📦 Admin settings cache HIT');
       return cached.data;
     }
 
@@ -142,7 +165,7 @@ export class AdminSettingsCache {
     }
 
     // Cache miss - fetch from database
-    this.logger.debug('🔍 Admin settings cache MISS - fetching from database');
+    this.logger.debug?.('🔍 Admin settings cache MISS - fetching from database');
     const fetchStart = Date.now();
 
     const settings = await db.adminSettings.findAll();
@@ -155,7 +178,7 @@ export class AdminSettingsCache {
     );
 
     const fetchTime = Date.now() - fetchStart;
-    this.logger.info(`📦 Cached ${Object.keys(settingsMap).length} admin settings in ${fetchTime}ms`);
+    this.logger.info?.(`📦 Cached ${Object.keys(settingsMap).length} admin settings in ${fetchTime}ms`);
 
     // Store in cache
     const ttl = this.getTTL();
@@ -190,7 +213,7 @@ export class AdminSettingsCache {
 
     // Return cached data if valid
     if (cached && this.isValid(cached.timestamp, cached.ttl)) {
-      this.logger.debug(`📦 Individual setting '${settingName}' cache HIT`);
+      this.logger.debug?.(`📦 Individual setting '${settingName}' cache HIT`);
       return cached.value;
     }
 
@@ -200,7 +223,7 @@ export class AdminSettingsCache {
     }
 
     // Cache miss - fetch from database
-    this.logger.debug(`🔍 Individual setting '${settingName}' cache MISS - fetching from database`);
+    this.logger.debug?.(`🔍 Individual setting '${settingName}' cache MISS - fetching from database`);
     const fetchStart = Date.now();
 
     const setting = await db.adminSettings.findBySettingName(settingName);
@@ -210,7 +233,7 @@ export class AdminSettingsCache {
     const value = setting?.settingValue ?? null;
 
     const fetchTime = Date.now() - fetchStart;
-    this.logger.debug(`📦 Cached individual setting '${settingName}' in ${fetchTime}ms`);
+    this.logger.debug?.(`📦 Cached individual setting '${settingName}' in ${fetchTime}ms`);
 
     // Store in cache
     this.individualCache.set(settingName, {
@@ -252,7 +275,7 @@ export class AdminSettingsCache {
 
     // Fetch uncached settings from database
     if (uncachedSettings.length > 0) {
-      this.logger.debug(
+      this.logger.debug?.(
         `🔍 Batch fetching ${uncachedSettings.length} uncached settings: ${uncachedSettings.join(', ')}`
       );
       const fetchStart = Date.now();
@@ -260,7 +283,7 @@ export class AdminSettingsCache {
       const settings = await db.adminSettings.findBySettingNames(uncachedSettings);
       const fetchTime = Date.now() - fetchStart;
 
-      this.logger.debug(`📦 Batch fetched ${settings.length} settings in ${fetchTime}ms`);
+      this.logger.debug?.(`📦 Batch fetched ${settings.length} settings in ${fetchTime}ms`);
 
       // Cache and add to result
       const ttl = this.getTTL();
@@ -285,7 +308,7 @@ export class AdminSettingsCache {
       });
     }
 
-    this.logger.debug(
+    this.logger.debug?.(
       `📦 Returned ${Object.keys(result).length} settings (${settingNames.length - uncachedSettings.length} from cache, ${uncachedSettings.length} from DB)`
     );
     return result;
@@ -297,7 +320,7 @@ export class AdminSettingsCache {
   invalidateSetting(settingName: string): void {
     this.individualCache.delete(settingName);
     this.cache.delete('all_settings'); // Invalidate full cache too
-    this.logger.info(`🗑️ Invalidated cache for setting: ${settingName}`);
+    this.logger.info?.(`🗑️ Invalidated cache for setting: ${settingName}`);
   }
 
   /**
@@ -306,7 +329,7 @@ export class AdminSettingsCache {
   invalidateAll(): void {
     this.cache.clear();
     this.individualCache.clear();
-    this.logger.info('🗑️ Invalidated all admin settings cache');
+    this.logger.info?.('🗑️ Invalidated all admin settings cache');
   }
 
   /**
@@ -355,9 +378,9 @@ export class AdminSettingsCache {
    * Warm up the cache by fetching all settings
    */
   async warmUp(db: any): Promise<void> {
-    this.logger.info('🔥 Warming up admin settings cache...');
+    this.logger.info?.('🔥 Warming up admin settings cache...');
     await this.getSettingsMap(db);
-    this.logger.info('✅ Admin settings cache warmed up');
+    this.logger.info?.('✅ Admin settings cache warmed up');
   }
 
   /**
@@ -365,6 +388,6 @@ export class AdminSettingsCache {
    */
   public shutdown(): void {
     this.stopCleanupTimer();
-    this.logger.info('🛑 Admin settings cache shutdown complete');
+    this.logger.info?.('🛑 Admin settings cache shutdown complete');
   }
 }
