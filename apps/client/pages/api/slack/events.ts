@@ -48,9 +48,10 @@ import {
   TOKEN_EXPIRATION_MS,
   buildImageModelPicker,
   isDataLakeCommand,
+  looksLikeBareDataLakeMention,
 } from '@bike4mind/slack';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { runDataLakeSlackCommand } from '@server/slack/handleDataLakeCommand';
+import { runDataLakeSlackCommand, formatBareDataLakeMentionHint } from '@server/slack/handleDataLakeCommand';
 import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
@@ -728,6 +729,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       channel: slackEvent.channel,
       messageTs: slackEvent.ts,
       threadTs: replyThreadTs,
+      // Stamped into the created FabFile's sourceMetadata so the post-indexing Slack notification
+      // can resolve the RIGHT workspace's bot token later - see notifySlackIndexingComplete.ts.
+      teamId,
       adminSettings: adminSettingsRepository,
       ingest: buildSlackLakeIngestDeps({
         downloadFile: (url, fileName) => slackClient.downloadFile(url, fileName),
@@ -737,6 +741,21 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       logger,
     });
     return res.status(200).json({ message: 'Data Lake command handled' });
+  } else if (
+    looksLikeBareDataLakeMention(commandHandler.parsedCommand) &&
+    (await adminSettingsRepository.getSettingsValue('EnableDataLakes'))
+  ) {
+    // #2027: a bare "datalake" mention (no `@`) previously fell through past this point straight
+    // to the LLM assistant path. Same short-circuit-before-LLM shape as the real command above -
+    // never routes through selectAgent, never reaches the notebook/LLM path below. Gated on the
+    // same parent flag `runDataLakeSlackCommand` enforces, so the hint stays dormant on any
+    // deployment that has never turned Data Lakes on.
+    await slackClient.sendMessage({
+      channel: slackEvent.channel,
+      text: formatBareDataLakeMentionHint(),
+      threadTs: replyThreadTs,
+    });
+    return res.status(200).json({ message: 'Data Lake bare-mention hint sent' });
   }
 
   const notebookId = await getOrCreateNotebookForSlackUser(
