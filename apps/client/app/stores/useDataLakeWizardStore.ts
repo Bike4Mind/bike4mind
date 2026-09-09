@@ -155,9 +155,48 @@ export interface WizardTargetLake {
   fileTagPrefix: string;
   requiredUserTag?: string;
   requiredEntitlement?: string;
-  /** Drive connect is an org-lake capability; undefined (personal lake) disables that action. */
-  organizationId: string | undefined;
+  /**
+   * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive
+   * connect control the way `SelectedLakeHeader` does: connecting is an org-lake capability
+   * server-side, so offering it on a personal lake is a button that can only ever fail.
+   *
+   * REQUIRED-and-nullable rather than optional, matching `isOwn` on ManageableDataLakeConfig and for
+   * the same reason: an absent field would read as "personal" and silently hide the control on a
+   * real org lake, with a green typecheck. Required makes a call site that forgets it a compile
+   * error instead.
+   */
+  organizationId: string | null;
+  /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
+  canManage: boolean;
 }
+
+/**
+ * The one projection from a fetched lake (a `useGetDataLakes` element or a `ManageableDataLakeConfig`)
+ * to the wizard's narrower target. Every "Add files" entry point maps through here, so a new field on
+ * `WizardTargetLake` is one edit rather than one per call site.
+ *
+ * Both nullable fields fail closed: an absent scope reads as personal and an absent manage status as
+ * not-manageable, which is the safe side of the Drive connect gate.
+ */
+export const toWizardTargetLake = (lake: {
+  id: string;
+  slug: string;
+  name: string;
+  fileTagPrefix: string;
+  requiredUserTag?: string;
+  requiredEntitlement?: string;
+  organizationId?: string | null;
+  canManage?: boolean;
+}): WizardTargetLake => ({
+  id: lake.id,
+  slug: lake.slug,
+  name: lake.name,
+  fileTagPrefix: lake.fileTagPrefix,
+  requiredUserTag: lake.requiredUserTag,
+  requiredEntitlement: lake.requiredEntitlement,
+  organizationId: lake.organizationId ?? null,
+  canManage: lake.canManage ?? false,
+});
 
 interface DataLakeWizardStore {
   // State

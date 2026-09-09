@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { NotebookExportService } from './index';
 import type { NotebookExportAdapters } from './index';
+import { NotebookImportService } from '../notebookImportService';
+import type { NotebookImportAdapters } from '../notebookImportService';
 
 /**
  * These pin the emitted JSON, because the fields they cover were all silently wrong before the
@@ -51,15 +53,18 @@ function makeAdapters(over: AdapterOverrides = {}) {
     artifactContentRepository: none,
     toolRepository: none,
     agentRepository: none,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    ...over,
+    // Merged rather than replaced, and placed after the spread so it wins: a test overriding
+    // getFileContent alone still gets the uploadFile that captures the emitted file.
     fileStorageService: {
       getFileContent: vi.fn().mockResolvedValue(null),
       uploadFile: vi.fn(async (_path: string, content: Buffer) => {
         uploaded.push(content.toString('utf-8'));
       }),
       getSignedUrl: vi.fn().mockResolvedValue('https://example.test/export.json'),
+      ...(over.fileStorageService as Record<string, unknown> | undefined),
     },
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    ...over,
   } as unknown as NotebookExportAdapters;
   return { adapters, uploaded };
 }
@@ -84,6 +89,8 @@ const OPTIONS = {
   includeKnowledge: true,
   includeTools: true,
   includeAgents: true,
+  // Matches the route's own default, so processImages runs here as it does in production.
+  includeImages: true,
   maxFileSize: 1_000_000,
 } as unknown as Parameters<NotebookExportService['exportNotebooks']>[1];
 
@@ -162,6 +169,48 @@ describe('notebook export', () => {
     expect(ids).not.toContain(undefined);
     expect(ids[ids.length - 1]).toBe('msg-151');
     expect(find.mock.calls.map(([, opts]) => opts?.skip)).toEqual([0, 100]);
+  });
+
+  it('stores the export at an unguessable key, not the predictable filename', async () => {
+    let uploadedPath = '';
+    const { adapters } = makeAdapters({
+      fileStorageService: {
+        getFileContent: vi.fn().mockResolvedValue(null),
+        uploadFile: vi.fn(async (p: string) => {
+          uploadedPath = p;
+        }),
+        getSignedUrl: vi.fn().mockResolvedValue('https://example.test/export.json'),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    // A random uuid segment sits between `exports/` and the readable filename, so the object is no
+    // longer at the guessable `exports/notebooks-<userid8>-<date>.json` a sign endpoint could reach.
+    expect(uploadedPath).toMatch(/^exports\/[0-9a-f-]{36}\/notebooks-user-1-\d{4}-\d{2}-\d{2}\.json$/);
+    expect(uploadedPath).not.toMatch(/^exports\/notebooks-/);
+  });
+
+  it('draws a fresh random path segment per export (shape alone would pass a fixed placeholder)', async () => {
+    const paths: string[] = [];
+    const { adapters } = makeAdapters({
+      fileStorageService: {
+        getFileContent: vi.fn().mockResolvedValue(null),
+        uploadFile: vi.fn(async (p: string) => {
+          paths.push(p);
+        }),
+        getSignedUrl: vi.fn().mockResolvedValue('https://example.test/export.json'),
+      },
+    });
+
+    const service = new NotebookExportService(adapters);
+    await service.exportNotebooks('user-1', OPTIONS);
+    await service.exportNotebooks('user-1', OPTIONS);
+
+    // The uuid segment sits between `exports/` and the readable filename. A fixed placeholder
+    // (e.g. an all-zeros uuid) would satisfy the shape assertion above but repeat across exports.
+    const uuidSegment = (p: string) => p.split('/')[1];
+    expect(paths).toHaveLength(2);
+    expect(uuidSegment(paths[0])).not.toBe(uuidSegment(paths[1]));
   });
 
   it('finds artifacts by their own id, not by _id', async () => {
@@ -524,5 +573,149 @@ describe('notebook export - log level', () => {
     });
 
     expect(adapters.logger.error).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A real PDF header followed by bytes that are not valid UTF-8. Decoding these into a string
+ * before base64 replaces each one with U+FFFD, and no downstream consumer can undo that - the
+ * bytes are gone by the time base64 runs.
+ */
+const PDF_BYTES = Buffer.from([
+  0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10,
+]);
+
+/** Escaped rather than literal: this file is ASCII-only, and the multi-byte run is the point. */
+const TEXT_BYTES = Buffer.from('notes with an accent: caf\u00e9 and a snowman \u2603\n', 'utf-8');
+
+const PDF_FILE = {
+  id: GOOD,
+  fileName: 'report.pdf',
+  fileSize: PDF_BYTES.length,
+  mimeType: 'application/pdf',
+  type: 'FILE',
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  filePath: 'knowledge/user-1/report.pdf',
+  fileUrl: 'https://example.test/report.pdf',
+  // isImageServeable gates every mime type on moderationStatus, images or not.
+  moderationStatus: 'clean',
+};
+
+const TEXT_FILE = { ...PDF_FILE, fileName: 'notes.txt', mimeType: 'text/plain', fileSize: TEXT_BYTES.length };
+
+async function exportWithKnowledge(bytes: Buffer, file: Record<string, unknown> = PDF_FILE) {
+  return exportOnce({
+    sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: [GOOD] }]) },
+    knowledgeRepository: {
+      find: vi.fn().mockResolvedValue([file]),
+      findOne: vi.fn().mockResolvedValue(null),
+    },
+    fileStorageService: { getFileContent: vi.fn().mockResolvedValue(bytes) },
+  });
+}
+
+describe('notebook export - knowledge file bytes', () => {
+  it('embeds a binary knowledge file as base64 that decodes back byte-identical', async () => {
+    const payload = await exportWithKnowledge(PDF_BYTES);
+    const [knowledge] = payload.notebooks[0].knowledge;
+
+    // Compared against the fixture, not against a re-run of the production expression, so an
+    // encoder that mangles the bytes cannot satisfy this by mangling both sides the same way.
+    expect(Buffer.from(knowledge.content, 'base64').equals(PDF_BYTES)).toBe(true);
+  });
+
+  // The branch the `!== null` change deliberately rewrote, pinned in both directions. A zero-byte
+  // file now embeds an empty `content` where it used to emit a `contentUrl` reference, because an
+  // empty Buffer is truthy while the empty string it replaced was falsy. Neither shape round trips
+  // (the import cannot tell empty-but-present from absent), so this records what the export emits
+  // rather than blessing it.
+  it('embeds an empty knowledge file as empty content, not a url reference', async () => {
+    const payload = await exportWithKnowledge(Buffer.alloc(0));
+    const [knowledge] = payload.notebooks[0].knowledge;
+
+    expect(knowledge.content).toBe('');
+    expect(knowledge.contentUrl).toBeUndefined();
+  });
+
+  it('embeds a UTF-8 text file unchanged', async () => {
+    const payload = await exportWithKnowledge(TEXT_BYTES, TEXT_FILE);
+    const [knowledge] = payload.notebooks[0].knowledge;
+
+    expect(Buffer.from(knowledge.content, 'base64').toString('utf-8')).toBe(TEXT_BYTES.toString('utf-8'));
+  });
+
+  it('round trips a binary knowledge file through import with the stored bytes intact', async () => {
+    const payload = await exportWithKnowledge(PDF_BYTES);
+
+    const uploads: Buffer[] = [];
+    const importAdapters = {
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([]),
+        create: vi.fn(async (data: Record<string, unknown>) => ({ ...data, id: 'new-session-id' })),
+        updateById: vi.fn(),
+      },
+      chatHistoryRepository: { bulkCreate: vi.fn(), deleteMany: vi.fn() },
+      knowledgeRepository: { create: vi.fn().mockResolvedValue({ id: 'new-knowledge-id' }) },
+      artifactRepository: { create: vi.fn() },
+      toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
+      agentRepository: { create: vi.fn() },
+      userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
+      fileStorageService: {
+        uploadFile: vi.fn(async (_path: string, content: Buffer) => {
+          uploads.push(content);
+        }),
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      generateId: () => 'generated-id',
+    } as unknown as NotebookImportAdapters;
+
+    const result = await new NotebookImportService(importAdapters).importNotebooks('user-2', payload, {
+      conflictResolution: 'rename',
+      importKnowledge: true,
+      importArtifacts: false,
+      importTools: false,
+      importAgents: false,
+    } as never);
+
+    expect(result.warnings).toEqual([]);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0].equals(PDF_BYTES)).toBe(true);
+  });
+});
+
+describe('notebook export - image bytes', () => {
+  async function exportWithImage(bytes: Buffer | null) {
+    return exportOnce({
+      chatHistoryRepository: {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce([
+            { id: 'msg-1', timestamp: new Date('2026-01-01T00:00:00Z'), images: ['images/user-1/shot.png'] },
+          ])
+          .mockResolvedValue([]),
+      },
+      fileStorageService: { getFileContent: vi.fn().mockResolvedValue(bytes) },
+    });
+  }
+
+  it('embeds an image as base64 that decodes back byte-identical', async () => {
+    // Same guard as the knowledge path: this call site encodes separately, so it needs its own
+    // fixture comparison rather than inheriting the other one's coverage.
+    const payload = await exportWithImage(PDF_BYTES);
+    const [image] = payload.notebooks[0].chatHistory[0].images;
+
+    expect(Buffer.from(image, 'base64').equals(PDF_BYTES)).toBe(true);
+  });
+
+  // Pins CURRENT, KNOWN-BROKEN behaviour, not desired behaviour: `images` is a flat string[] that
+  // holds base64 on success and a raw storage path on failure, with nothing to tell them apart, so
+  // a consumer decoding every element gets plausible garbage from the path entries (Node's base64
+  // decoder does not reject them). Giving images the content/contentUrl split knowledge files
+  // already have is the fix; when that lands, this expectation SHOULD change - it is not a
+  // regression guard for the string[] shape.
+  it('exports the path instead when the image cannot be read', async () => {
+    const payload = await exportWithImage(null);
+
+    expect(payload.notebooks[0].chatHistory[0].images).toEqual(['images/user-1/shot.png']);
   });
 });

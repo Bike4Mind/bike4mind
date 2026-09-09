@@ -7,7 +7,7 @@ import type { ILakeUsageSummary } from './UsageEventTypes';
 
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
- * states (archiving/restoring/deleting/purging) that exist to drive UI and make a crashed
+ * states (archiving/unarchiving/restoring/deleting/purging) that exist to drive UI and make a crashed
  * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
  * holds its first member file (see `activateIfDraft` below), and unconditionally when an
  * archived or deleted lake is restored, which is how an empty lake can end up active.
@@ -43,8 +43,154 @@ export const DATA_LAKE_STATUSES = [
  */
 export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
-/** Stable (non-transitional) lake statuses. */
-export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
+/**
+ * Stable (non-transitional) lake statuses - a lake sitting in one of these is at rest, not
+ * mid-operation. Load-bearing as the INPUT to `DATA_LAKE_TRANSITIONAL_STATUSES` below, which is
+ * what drives the needs-attention list; it is not itself a filter any list path applies.
+ */
+export const DATA_LAKE_STABLE_STATUSES = [
+  'draft',
+  'active',
+  'archived',
+  'deleted',
+] as const satisfies readonly DataLakeStatus[];
+
+/**
+ * Derived as the complement of the stable set, NOT a hand-listed second tuple: a status added to
+ * `DATA_LAKE_STATUSES` without being declared stable becomes transitional by construction, so it
+ * shows up in the needs-attention list rather than falling out of every list. Every list path asks
+ * for a disjoint set of stable statuses, so a lake left here by a crashed lifecycle call renders
+ * nowhere else.
+ */
+export const DATA_LAKE_TRANSITIONAL_STATUSES: readonly DataLakeStatus[] = DATA_LAKE_STATUSES.filter(
+  s => !(DATA_LAKE_STABLE_STATUSES as readonly DataLakeStatus[]).includes(s)
+);
+
+export type TransitionalRetryAction = 'archive' | 'unarchive' | 'restore' | 'delete';
+
+/**
+ * The lifecycle action that re-enters and settles a lake stranded in each transitional status. Each
+ * of these services re-admits its own transitional status for exactly this crash re-entry, so the
+ * retry is the SAME call that stranded it, not a repair path.
+ *
+ * Two statuses are deliberately absent, and both mean "do not offer a retry":
+ * - `purging`, per the irreversibility note on `DATA_LAKE_STATUSES` above - its sweep is already
+ *   accepted and the cleanup route refuses it, so there is nothing to retry.
+ * - `restoring`, which is not axis-unique. Both reversal axes admit it as a claim SOURCE
+ *   (claimRestoring and claimUnarchiving), so the status alone cannot say which one stranded the
+ *   lake, and the two recoveries are not interchangeable - see `resolveRetryAction`.
+ *
+ * Read it through `resolveRetryAction` below rather than indexing this table directly.
+ */
+export const TRANSITIONAL_RETRY_ACTION = {
+  archiving: 'archive',
+  unarchiving: 'unarchive',
+  deleting: 'delete',
+} as const satisfies Partial<Record<DataLakeStatus, TransitionalRetryAction>>;
+
+/**
+ * The retry action a transitional status implies on its own, or `undefined` when the status alone
+ * does not determine one. Not for callers deciding whether to offer Retry - use
+ * `resolveRetryAction`, which also answers for `restoring`.
+ */
+const retryActionForStatus = (status: DataLakeStatus): TransitionalRetryAction | undefined =>
+  (TRANSITIONAL_RETRY_ACTION as Partial<Record<DataLakeStatus, TransitionalRetryAction>>)[status];
+
+/**
+ * The action that settles a stranded lake, or `undefined` when no safe retry exists and the row
+ * must be listed read-only. The single predicate both "may this row offer Retry" and "what does
+ * Retry post" read, so a lake can never be offered a retry the service would then misapply.
+ *
+ * Resolved from the lake, not from the status, because of `restoring`: it is the pre-split shared
+ * value, so a lake holding it may be stranded on EITHER axis, and running the wrong recovery is
+ * unrecoverable rather than merely refused. The delete-axis restore gates its file update on
+ * `deletedAt` while clearing the lake's `filesArchivedAt` regardless, so an archive-axis lake put
+ * through it keeps every file's `archivedAt` and loses the stamp naming them - a lake reading
+ * `active` whose files nothing can reach, with no route back (unarchive refuses an `active` lake).
+ * The mirror holds on the other axis.
+ *
+ * The sweep marks are the axis evidence, and they are read in ORDER, not compared: `filesDeletedAt`
+ * decides on its own. That mark is written only by `claimFilesDeletedAt`, reached only from
+ * `deleteDataLake`, which settles the lake to `deleted`; it is cleared only by
+ * `restoreDeletedDataLake`'s settle, which lands the lake on `active`. So an `archived` lake - the
+ * only source an archive-axis `restoring` can have come from - cannot be carrying it. Both marks
+ * together is therefore not ambiguous but the ORDINARY archive-then-delete lake, and `restore` is
+ * the call built for it: it clears `deletedAt` bounded by `filesDeletedAt` and `archivedAt` bounded
+ * by `filesArchivedAt` in the same pass.
+ *
+ * Only NEITHER mark is unprovable (a crash before the mark claim, or a pre-mark-field lake), and
+ * such a lake gets NO retry - it is still surfaced, so a human can look, which is the whole point
+ * of the needs-attention list.
+ */
+export const resolveRetryAction = (lake: {
+  status: DataLakeStatus;
+  filesArchivedAt?: Date | null;
+  filesDeletedAt?: Date | null;
+}): TransitionalRetryAction | undefined => {
+  if (lake.status !== 'restoring') return retryActionForStatus(lake.status);
+  if (lake.filesDeletedAt) return 'restore';
+  return lake.filesArchivedAt ? 'unarchive' : undefined;
+};
+
+/**
+ * How long a lake may sit in this transitional status before it counts as stranded rather than
+ * busy. Measured against `updatedAt`, which is the only status-move signal on the document today -
+ * any other write to the lake bumps it too, so a background writer touching a mid-transition lake
+ * can reset this clock. A dedicated `statusChangedAt` stamped by each lifecycle claim is the
+ * durable fix.
+ *
+ * Two values, because the transitional statuses do not share one execution ceiling. Four of them
+ * run inline in the request Lambda, capped at 60 seconds (infra/web.ts), so five minutes is well
+ * past any window in which one can still legitimately be in flight. `purging` is the exception: it
+ * is claimed at accept time and swept on the data-lake cleanup consumer, whose queue allows a
+ * 12-minute visibility timeout x 3 attempts (infra/queues.ts), so a healthy sweep of a large lake -
+ * or one SQS is legitimately retrying - can still be running more than half an hour in. Flagging
+ * that would cry wolf on a normal path in a list whose whole value is that a row in it means
+ * something is wrong, and `purging` is offered no retry to act on anyway.
+ */
+export const strandedCutoffMsFor = (status: DataLakeStatus): number =>
+  status === 'purging' ? 40 * 60_000 : 5 * 60_000;
+
+/**
+ * One lake stranded mid-lifecycle, as `listTransitionalDataLakes` and the needs-attention list
+ * render it. Deliberately narrower than the archived/deleted views' redacted documents: the only
+ * affordance offered on such a row is a retry, so the consumer needs the name to recognize the
+ * lake, the status to know what to retry, and the id to retry with - nothing else, and so nothing
+ * to redact.
+ *
+ * `updatedAt` is a `Date` in-process and an ISO string once it has crossed the wire; both shapes
+ * are declared because both are real and `new Date(...)` takes either.
+ *
+ * `retryAction` is resolved SERVER-side (see `resolveRetryAction`) because for `restoring` it needs
+ * the lake's sweep marks, which this narrow shape deliberately does not carry. Absent means the row
+ * is read-only: either the operation cannot be retried at all, or its axis is not provable.
+ */
+export interface TransitionalDataLakeSummary {
+  id: string;
+  name: string;
+  slug: string;
+  fileTagPrefix: string;
+  status: DataLakeStatus;
+  updatedAt: Date | string;
+  retryAction?: TransitionalRetryAction;
+}
+
+/**
+ * The statuses that may take NEW files: a draft (its first batch) or an active lake. Every ingest
+ * door shares this one list - the web batch-create and presign doors, the Slack door, the Drive
+ * connect door, the Drive ingest queue guard, and proposal approval - so admitting a future status
+ * is a decision made here, once, rather than at six call sites that each open-coded it.
+ */
+export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
+
+type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
+
+/**
+ * Narrows, so a caller that has proven a lake ingestable keeps that in the type. The cast is on the
+ * ARRAY, not the value: casting the value would erase the guard this exists to provide.
+ */
+export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngestableStatus =>
+  (LAKE_INGESTABLE_STATUSES as readonly (DataLakeStatus | undefined)[]).includes(status);
 
 /**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
@@ -366,6 +512,17 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * org-less lakes match.
    */
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
+  /**
+   * Resolve a lake by slug, restricted to a specific candidate id set (#2425). The caller's
+   * last-resort arm: when `findBySlug`'s own-org/org-less lookup misses, a real owner/curator
+   * grant on a lake in a non-member org is still legitimate access, so the caller (typically
+   * `assertLakeAccess`, via `grantedLakeReachFor`) resolves the grant-held id set itself and tries
+   * it here - keeping the decision of WHEN to pay for that extra grants lookup in the service
+   * layer, not hidden inside this repository method. Sorted by `_id` so two candidates sharing a
+   * slug (e.g. two independent `transferLakeOwnership` calls into different non-member orgs)
+   * resolve to the same winner every time.
+   */
+  findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
   /**
@@ -390,20 +547,23 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
    * omit only for owner-agnostic lookups (then gateless org-less lakes match no one).
    *
-   * `grantedLakeIds` is the explicit-grant arm, mirroring `findAccessible`'s: a lake the caller
-   * holds an active grant on is reachable by that grant alone, so retrieval agrees with browse for
-   * a transferred/delegated lake. Pre-resolved by the caller (`grantedLakeIdsFor`); an empty or
-   * absent list adds no arm and cannot widen anything. Not every retrieval caller supplies it:
-   * getDataLakePrompts.ts deliberately omits it, since folding grants into the injection-trust
-   * decision is a separate piece of work (#1673) - an org-less transferred lake is denied by that
-   * trust gate regardless, so wiring the arm there today would be dead code.
+   * `opts.grantedLakeIds` / `opts.orgGrantedLakes` are the explicit-grant arms, resolved by the
+   * caller exactly as `findAccessible`'s are (`grantedLakeReachFor`) and keeping retrieval in step
+   * with browse: a transferred/delegated owner who can open a lake can also ground on it. A
+   * USER-principal grant IS the authorization and bypasses the org and requirement constraints;
+   * `orgGrantedLakes` is keyed by the GRANTING org and bypasses only the requirement, so an org
+   * grant can never reach a lake outside the org that issued it. Empty/absent adds no arm and
+   * cannot widen anything. Not every retrieval caller supplies them: getDataLakePrompts.ts
+   * deliberately omits them, since folding grants into the injection-trust decision is a separate
+   * piece of work (#1673) - an org-less transferred lake is denied by that trust gate regardless,
+   * so wiring the arm there today would be dead code.
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    grantedLakeIds?: string[] | null
+    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
@@ -421,7 +581,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
+    opts?: {
+      statuses?: DataLakeStatus[];
+      includePublic?: boolean;
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+    }
   ): Promise<IDataLakeDocument[]>;
   /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
@@ -430,8 +595,9 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * `requiredEntitlement` after being published is hidden from callers who lack the gate but
    * still discoverable by the ones who hold it (plus its owner, its grant holders and admins).
    * Without that, an entitled user could open such a lake from their own lake list while discover
-   * insisted no such public lake existed. `grantedLakeIds` mirrors `findAccessible`'s grant arm
-   * and is resolved by the caller the same way (`grantedLakeIdsFor`). `total` is therefore
+   * insisted no such public lake existed. `grantedLakeIds`/`orgGrantedLakes` mirror
+   * `findAccessible`'s grant arms and are resolved by the caller the same way
+   * (`grantedLakeReachFor`). `total` is therefore
    * per-caller too. `search` matches name or description case-insensitively. Returns one page
    * plus the unpaged `total` for the UI.
    */
@@ -442,6 +608,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       limit?: number;
       offset?: number;
       grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
@@ -671,6 +838,19 @@ export interface IDataLakeBatch {
   processingFailedFiles: number;
   skippedFiles: number;
   /**
+   * Candidates a multi-run Drive chain PLANNED to ingest and then wrote off unfinished - the chain hit
+   * its slice ceiling, was throttled, lost its claim, or had its connection/lake deleted mid-flight.
+   * Deliberately NOT part of the `vectorized + failed + skipped >= totalFiles` finalize gate: a
+   * deferred candidate mints no manifest entry and no counter, so folding it into that sum would strand
+   * every stopped-short batch in `processing` until the reconciler force-failed it. It is the record
+   * that a `completed` batch is nonetheless SHORT - without it, settling re-plans totalFiles down to
+   * what the chain produced and a 3-of-500 run finalizes as a clean 3-of-3 (#2394).
+   *
+   * Optional because every batch written before this field existed genuinely lacks it; read it as
+   * `?? 0`. Not a `BatchCounterField` either - it is set once when a chain ends, not $inc'd per file.
+   */
+  deferredFiles?: number;
+  /**
    * Drive-ingest-only: driveFileIds skip() has already counted into `skippedFiles` for THIS batch.
    * A skip mints no FabFile, so it is invisible to the ordinary alreadyIngested subtraction
    * (findDriveFileIdsByBatchId) - without recording it here, a chain re-diffing the same
@@ -856,8 +1036,17 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * the expected total is only known progressively - it is raised whenever a later slice re-walks a
    * folder that grew, and set exactly when the chain ends, which is what lets the finalize gate
    * (`vectorized + failed + skipped === totalFiles`) still be reached exactly.
+   *
+   * That end-of-chain set is a NARROWING, and `deferredFiles` is how it stays honest: pass the
+   * shortfall being written off so the same update records it, rather than leaving a short chain
+   * indistinguishable from one that ingested everything it planned (see the field's doc). Omit it on
+   * the mid-chain RAISE, which writes nothing off and must not claim otherwise.
    */
-  setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null>;
+  setTotalFilesIfActive(
+    batchId: string,
+    totalFiles: number,
+    deferredFiles?: number
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is

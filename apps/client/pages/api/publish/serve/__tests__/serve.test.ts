@@ -712,6 +712,135 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
   });
 });
 
+describe('GET /api/publish/serve - inline artifact fallback and lead-artifact hero', () => {
+  // A script-free document renders identically whether it is fetched as a `?a=` sub-document or
+  // inlined as a srcdoc, so a Bearer-gated reply (no header on a sub-request) inlines instead of
+  // showing a card. HERO_CLASS is the frame marker; the class name also appears in the page CSS,
+  // so assertions match the attribute, never the bare token.
+  const HERO_CLASS = 'class="b4m-artifact b4m-hero"';
+  const CARD_ELEMENT = '<div class="b4m-artifact-card"';
+  const SCRIPT_FREE_HTML =
+    '<artifact identifier="rep" type="text/html" title="Report">' +
+    '<!DOCTYPE html><html><head><style>h1{color:red}</style></head>' +
+    '<body><h1>QUARTERLY_REPORT</h1></body></html>' +
+    '</artifact>';
+  const SCRIPTED_HTML =
+    '<artifact identifier="tip" type="text/html" title="Tip">' +
+    '<body><h1>SCRIPTED_BODY</h1><script>window.ok=1</script></body>' +
+    '</artifact>';
+
+  const reply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'rinline',
+    title: 'Report reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: SCRIPT_FREE_HTML,
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'rinline',
+    ...over,
+  });
+
+  const gatedReply = (over: Record<string, unknown> = {}) =>
+    reply({
+      publicId: 'r-gated-inline',
+      slug: 'r-gated-inline',
+      visibility: 'organization',
+      tier: 'organization',
+      scopeId: 'org_42',
+      ...over,
+    });
+
+  const member = { id: 'member', organizationId: 'org_42' };
+
+  it('inlines a script-free artifact as srcdoc on a Bearer-gated reply (the shell ?raw=1 re-fetch)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated-inline'], { raw: true, user: member });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // An iframe navigation cannot send the Authorization header, so the document travels
+    // WITH the page instead of being fetched from `?a=` - same opaque-origin sandbox.
+    expect(data).toContain('class="b4m-artifact');
+    expect(data).toContain('srcdoc="');
+    expect(data).toContain(`sandbox="${VIEWER_SANDBOX}"`);
+    expect(data).toContain('QUARTERLY_REPORT');
+    expect(data).not.toContain(CARD_ELEMENT);
+    expect(data).not.toContain('?a=0');
+  });
+
+  it('keeps the placeholder card for a SCRIPTED artifact on a Bearer-gated reply', async () => {
+    // The page's inherited `script-src 'none'` would leave an inlined scripted artifact
+    // half-broken (markup and CSS, dead JS), so it stays a card that points at the app.
+    mockArtifactFindOne.mockReturnValue(gatedReply({ renderedBody: SCRIPTED_HTML }));
+    const { res, promise } = run(['r', 'r-gated-inline'], { raw: true, user: member });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain(CARD_ELEMENT);
+    expect(data).not.toContain('srcdoc=');
+    expect(data).not.toContain('window.ok=1');
+    expect(data).not.toContain('SCRIPTED_BODY');
+  });
+
+  it('leads with a full-bleed hero frame when the reply OPENS with an artifact, prose after it', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      reply({
+        publicId: 'rhero',
+        slug: 'rhero',
+        renderedBody: `${SCRIPT_FREE_HTML}\n\nSome *fallback* prose.\n\n<artifact type="text/html" title="Appendix"><body><h1>APPENDIX</h1></body></artifact>`,
+      })
+    );
+    const { res, promise } = run(['r', 'rhero']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    const hero = data.indexOf(HERO_CLASS);
+    const prose = data.indexOf('<em>fallback</em>');
+    const appendix = data.indexOf('src="/p/r/rhero?a=1"');
+    expect(hero).toBeGreaterThan(-1);
+    expect(prose).toBeGreaterThan(hero);
+    expect(appendix).toBeGreaterThan(prose);
+    // Hoisting reorders blocks, it never renumbers them: the lead artifact keeps index 0.
+    expect(data).toContain('src="/p/r/rhero?a=0"');
+    expect(data.split(HERO_CLASS).length - 1).toBe(1); // only the lead block is a hero
+  });
+
+  it('keeps prose-then-artifact order (no hero) when the reply does not open with an artifact', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      reply({ publicId: 'rprose', slug: 'rprose', renderedBody: `Intro *prose* first.\n\n${SCRIPT_FREE_HTML}` })
+    );
+    const { res, promise } = run(['r', 'rprose']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).not.toContain(HERO_CLASS);
+    expect(data.indexOf('<em>prose</em>')).toBeLessThan(data.indexOf('src="/p/r/rprose?a=0"'));
+  });
+
+  it('inlines AND heroes a leading artifact in a standalone ?export=html download', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      reply({ publicId: 'rexport', slug: 'rexport', renderedBody: `${SCRIPT_FREE_HTML}\n\nFallback prose.` })
+    );
+    const { res, promise } = run(['r', 'rexport'], { exportAs: 'html' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain(HERO_CLASS);
+    expect(data).toContain('srcdoc="');
+    expect(data).toContain('QUARTERLY_REPORT');
+    expect(data).not.toContain('?a=0');
+  });
+});
+
 describe('GET /api/publish/serve - fabfile embedded HTML artifact (#722)', () => {
   // A fabfile is literal file text (kept as escaped <pre>), but an embedded <artifact> block frames
   // via the same sandboxed ?a= path as the reply viewer. The leading text uses markdown syntax to
@@ -2358,5 +2487,69 @@ describe('GET /api/publish/serve - export affordances on the viewer surfaces (is
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData() as string).not.toContain('?export=');
+  });
+});
+
+describe('GET /api/publish/serve - Save as PDF', () => {
+  const bundleHtml = Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>');
+
+  it('offers the bar button and ships the widget even with comments disabled', async () => {
+    // The button prints the LIVE frame, so it needs no re-authorization and is offered
+    // regardless of `?export=` eligibility. The widget is the only script the wrapper CSP
+    // admits, so it must ship for every non-embed wrapper, not just commented artifacts.
+    mockArtifactFindOne.mockReturnValue(bundle()); // no commentPolicy -> 'none'
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('class="b4m-bar-print"');
+    expect(data).toContain('<script src="/api/publish/widget" defer></script>');
+    expect(data).not.toContain('b4m-annotate-root'); // the comment mount stays opt-in
+    // Shipped hidden: the widget reveals it, so no-JS viewers never see a dead button.
+    expect(data).toContain('<button class="b4m-bar-print" type="button" hidden>');
+    expect(res.getHeader('Content-Security-Policy')).toContain('/api/publish/widget');
+  });
+
+  it('offers the floating variant on a share-token view, which has no lead-gen bar', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private' }));
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<div class="b4m-actions">');
+    expect(data).toContain('class="b4m-print"');
+    expect(data).not.toContain('class="b4m-bar-print"');
+  });
+
+  it('drops the button AND the widget in chrome-less embed mode', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+    await promise;
+
+    const data = res._getData() as string;
+    // Assert on the ELEMENTS - the CSS rules for these classes always ship in <style>.
+    expect(data).not.toContain('<button class="b4m-bar-print"');
+    expect(data).not.toContain('<button class="b4m-print"');
+    expect(data).not.toContain('/api/publish/widget');
+  });
+
+  it('puts the in-frame print trigger in the bundle document, not the wrapper', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(bundleHtml);
+
+    const wrapper = run(['u', 'scope123', 'my-slug']);
+    await wrapper.promise;
+    const isolated = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await isolated.promise;
+
+    // The wrapper cannot call print() on the frame, so the trigger rides inside it.
+    expect(isolated.res._getData() as string).toContain('window.print');
+    expect(wrapper.res._getData() as string).not.toContain('window.print');
   });
 });

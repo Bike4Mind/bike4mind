@@ -1,30 +1,17 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { DriveConnectionStatus } from '@client/app/hooks/data/driveConnectionDisplay';
 
 /** Safe, credential-free view returned by GET /api/data-lakes/:id/drive-connection. */
 export type LakeDriveConnection = {
   id: string;
   driveFolderId: string;
   folderName: string | null;
-  status: 'connected' | 'needs_reconnect' | 'credential_error';
+  status: DriveConnectionStatus;
   enabled: boolean;
   lastError: string | null;
   lastUsedAt: string | null;
   connectedAt: string | null;
-};
-
-/**
- * User-facing label + severity per connection status. Lives beside the type so every surface that
- * renders a Drive connection (the wizard's connect action, the lake detail panel, the page header)
- * reads the SAME wording - three hand-synced copies would drift the moment a status is added.
- */
-export const DRIVE_STATUS_BADGE: Record<
-  LakeDriveConnection['status'],
-  { label: string; color: 'success' | 'warning' | 'danger' }
-> = {
-  connected: { label: 'Connected', color: 'success' },
-  needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-  credential_error: { label: 'Credential error', color: 'danger' },
 };
 
 const lakeDriveConnectionKey = (dataLakeId?: string) => ['lake-drive-connection', dataLakeId];

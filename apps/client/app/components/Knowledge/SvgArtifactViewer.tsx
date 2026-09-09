@@ -51,10 +51,8 @@ const generateSanitizedSVG = (svgContent: string) => {
       'linearGradient',
       'radialGradient',
       'stop',
-      'animate',
-      'animateTransform',
-      'animateMotion',
-      'set',
+      // SMIL animation tags (animate/animateTransform/animateMotion/set) are deliberately
+      // NOT allowed: they can rewrite an <a href> to javascript: at runtime (stored XSS).
       'filter',
       'feOffset',
       'feFlood',

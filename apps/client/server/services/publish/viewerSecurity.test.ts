@@ -291,9 +291,13 @@ describe('buildBundleScriptSrc hosted regression (byte-identical, B4M_SELF_HOST 
 });
 
 describe('VIEWER_SANDBOX', () => {
-  it('grants scripts + escaping popups and never allow-same-origin', () => {
-    expect(VIEWER_SANDBOX).toBe('allow-scripts allow-popups allow-popups-to-escape-sandbox');
+  it('grants scripts + escaping popups + modals and never allow-same-origin', () => {
+    expect(VIEWER_SANDBOX).toBe('allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals');
     // The opaque-origin invariant: reclaiming the app origin here is an ATO.
     expect(VIEWER_SANDBOX.split(' ')).not.toContain('allow-same-origin');
+  });
+
+  it('carries allow-modals, without which window.print() is a silent no-op in the frame', () => {
+    expect(VIEWER_SANDBOX.split(' ')).toContain('allow-modals');
   });
 });

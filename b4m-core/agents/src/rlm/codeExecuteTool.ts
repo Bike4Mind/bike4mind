@@ -1,6 +1,7 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { BudgetExceededError, type ReplSession } from './ReplSession';
+import { ReplSandboxRetiredError } from './replExecutor';
 
 /**
  * Factory for the `code_execute` tool exposed to a ReAct agent.
@@ -101,12 +102,22 @@ export function makeCodeExecuteTool(deps: CodeExecuteToolDeps): ICompletionOptio
           logger?.warn?.(`[code_execute] error: ${result.error.split('\n')[0]}`);
         }
 
+        // A run that breached the host deadline or the memory limit RETURNS
+        // (carrying whatever stdout was captured before the kill) rather than
+        // throwing, so the terminal signal arrives on the result. Without this
+        // the breaching call read as an ordinary failure and only the NEXT one
+        // reported the sandbox gone - one wasted iteration, at the point the
+        // agent most needs to stop calling.
+        if (result.sandboxRetired) {
+          logger?.error?.(`[code_execute] sandbox retired on this run: ${result.error ?? 'no error reported'}`);
+        }
         return formatObservation({
           ok: result.error === null,
           stdout: result.stdout,
           error: result.error,
           truncated: result.truncated,
           durationMs: result.durationMs,
+          sandboxRetired: result.sandboxRetired,
         });
       } catch (e) {
         if (e instanceof BudgetExceededError) {
@@ -118,6 +129,23 @@ export function makeCodeExecuteTool(deps: CodeExecuteToolDeps): ICompletionOptio
             truncated: false,
             durationMs: 0,
             budgetExceeded: true,
+          });
+        }
+        if (e instanceof ReplSandboxRetiredError) {
+          // The sandbox is gone for good - a memory-limit breach, or a host
+          // deadline that could only preempt a pending run by killing the
+          // isolate. Say so in terminal language: the previous wording
+          // ("[unexpected] ... has been disposed") read as transient, so the
+          // agent kept re-calling code_execute and spending an iteration on
+          // each attempt for the rest of the loop.
+          logger?.error?.(`[code_execute] sandbox retired: ${e.message}`);
+          return formatObservation({
+            ok: false,
+            stdout: '',
+            error: e.message,
+            truncated: false,
+            durationMs: 0,
+            sandboxRetired: true,
           });
         }
         // Unexpected - propagate as a string so the agent can see it
@@ -159,6 +187,7 @@ interface ObservationFields {
   truncated: boolean;
   durationMs: number;
   budgetExceeded?: boolean;
+  sandboxRetired?: boolean;
 }
 
 /**
@@ -172,6 +201,26 @@ function formatObservation(o: ObservationFields): string {
   if (o.budgetExceeded) {
     lines.push(`[code_execute] BUDGET EXCEEDED: ${o.error}`);
     lines.push('Cannot execute more code in this session. Provide your final answer now.');
+    return lines.join('\n');
+  }
+
+  if (o.sandboxRetired) {
+    lines.push(`[code_execute] SANDBOX UNAVAILABLE: ${o.error}`);
+    lines.push(
+      'The code sandbox has been shut down for this session and will not come back. ' +
+        'Do not call code_execute again. Continue with your other tools, or answer from what you already have.'
+    );
+    // Output captured before the sandbox died is still the agent's best
+    // material for the answer it now has to give without the REPL - and this
+    // is the branch most likely to be short of it, so the truncation flag has
+    // to be rendered HERE too. It used to be plumbed all the way from the
+    // backend and then dropped one line above the `| stdout truncated` on the
+    // ordinary path, so an agent answering from a partial buffer had no way
+    // to know it was partial.
+    if (o.stdout) {
+      lines.push(`--- stdout (captured before shutdown${o.truncated ? ', truncated' : ''}) ---`);
+      lines.push(o.stdout);
+    }
     return lines.join('\n');
   }
 

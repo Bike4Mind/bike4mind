@@ -37,7 +37,7 @@ import {
 import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
-  isBatchComplete,
+  completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
@@ -117,9 +117,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // fanned out before it flipped. Placed AFTER the already-vectorized guard above so a completed
   // file is never touched, and before the embedding work (user work short-circuits in
   // isConvergenceHalted before any settings read). Unlike a chunk message, a dropped vectorize
-  // message does NOT auto-resume - fabFileChunk is its only producer and it early-returns on an
-  // already-chunked file - so flag the file so the abandoned, chunked-but-unvectorized state is
-  // enumerable and reprocessable (POST /api/files/reprocess re-drives it and clears the note).
+  // message does NOT auto-resume - not because a chunk message could not resume it (any redelivery
+  // for an already-chunked file does, via resumeVectorizeEnqueue in fabFileChunk) but because
+  // nothing produces one: the only automatic producer is the stranded sweep, and it selects on
+  // vectorizeEnqueueFailedAt (buildStrandedVectorizeScanFilter), which this branch never stamps.
+  // So flag the file, to keep the abandoned, chunked-but-unvectorized state enumerable and
+  // reprocessable (POST /api/files/reprocess re-drives it and clears the note).
   if (
     await isConvergenceHalted(
       { origin: payload.origin, lakeId: payload.lakeId },
@@ -526,12 +529,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'vectorizedFiles');
             await finalizeBatchIfComplete(batch, logger);
 
-            const isComplete = isBatchComplete(batch);
             await sendToClient(userId, Resource.websocket.managementEndpoint, {
               action: 'data_lake_batch_progress',
               batchId: fabFile.batchId,
               vectorizedFiles: batch?.vectorizedFiles ?? 1,
-              status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+              status: completedBatchStatus(batch),
             });
           }
         } catch (error) {
@@ -614,13 +616,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
         await finalizeBatchIfComplete(batch, logger);
 
-        const isComplete = isBatchComplete(batch);
         await sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'data_lake_batch_progress',
           batchId: existingFabFile.batchId,
           failedFiles: batch?.failedFiles ?? 1,
           processingFailedFiles: batch?.processingFailedFiles ?? 1,
-          status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+          status: completedBatchStatus(batch),
         });
       } catch (innerErr) {
         logger.error(`Error reporting batch failure: ${innerErr}`);

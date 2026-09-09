@@ -9,7 +9,8 @@
     "./migrate/migrationManager": "./migrate/migrationManager.ts",
     "./help/types": "./help/types.ts",
     "./help/utils": "./help/utils.ts",
-    "./help/loadHelpArticles": "./help/loadHelpArticles.ts"
+    "./help/loadHelpArticles": "./help/loadHelpArticles.ts",
+    "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -53,7 +54,9 @@
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
-    "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts"
+    "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts",
+    "retrieval:capture-embeddings": "tsx retrieval/capture-embeddings.ts",
+    "retrieval:model-comparison": "tsx retrieval/model-comparison.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

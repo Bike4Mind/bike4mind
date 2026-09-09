@@ -25,10 +25,12 @@ import { CONTENT_READ_TOOL } from './agentExecutor.firstIterationQuery';
 /**
  * Tools that reach the user's own agent roster. `session.disableUserIntegrations` promises "no
  * user MCP servers, no agent delegation" (see `IDataLakeSession.disableUserIntegrations` in
- * SessionTypes), and the chat path enforces the delegation half by refusing to build an
- * agentStore. The agent path uses its agentStore for run-as-agent resolution too, so it enforces
- * the same contract by denying the delegation TOOLS rather than by tearing down the store: an
- * explicit `@agent` run stays possible, but the loop cannot fan out on its own.
+ * SessionTypes). Both paths now enforce the delegation half the same way - by withholding the
+ * dependency the tool injection keys off (`agentStore` / `dagDispatcher`), because these two
+ * tools are pushed as objects and never registered by name (issue #1829): the chat path refuses
+ * to build an agentStore, and the agent path withholds it from `ToolBuilderDeps` via
+ * `delegationOffer` below. The name entries here remain as defense in depth for anything that
+ * does arrive by name, and as the canonical spelling of the two tool names.
  */
 export const DELEGATION_TOOLS = ['delegate_to_agent', 'coordinate_task'] as const;
 
@@ -134,8 +136,13 @@ export function delegationOffer(input: {
   if (input.session.disableUserIntegrations) {
     for (const tool of DELEGATION_TOOLS) denied.add(tool);
   }
+  const [delegateTool, dagTool] = DELEGATION_TOOLS;
+  const offerDelegate = !denied.has(delegateTool);
   return {
-    offerDelegate: !denied.has('delegate_to_agent'),
-    offerDag: !denied.has('coordinate_task'),
+    offerDelegate,
+    // Subsumed by the delegate gate: coordinate_task's injection requires deps.agentStore
+    // too, so a run that withholds the store cannot offer the DAG surface regardless -
+    // reporting offerDag: true there would describe a state production cannot produce.
+    offerDag: offerDelegate && !denied.has(dagTool),
   };
 }

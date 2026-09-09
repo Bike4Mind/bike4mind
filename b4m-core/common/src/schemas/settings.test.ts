@@ -13,6 +13,8 @@ import {
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
   ABSTENTION_PROMPT,
+  WEB_SEARCH_FRESHNESS_PROMPT,
+  KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -24,6 +26,7 @@ import {
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
 } from '../constants/lakeAccessAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
@@ -629,6 +632,77 @@ describe('kbSearchMinRelevancePct (#1955)', () => {
   });
 });
 
+describe('lakeMemoryRecallK agrees with the lake-memory recall fallback (#2496)', () => {
+  // Same drift class as forcedRetrievalCharBudget above: before this setting existed the belief
+  // budget was a literal 8 in recallLakeMemory.ts. The setting's default and the coded fallback a
+  // settings outage returns to now both import LAKE_RECALL_K_DEFAULT, so this pins that they
+  // cannot silently diverge.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.lakeMemoryRecallK.defaultValue).toBe(LAKE_RECALL_K_DEFAULT);
+    // Pin the literal too, and say why: the whole point of the change is that the budget is no
+    // longer 8, so a default that drifted back down to the old value should fail here.
+    expect(settingsMap.lakeMemoryRecallK.defaultValue).toBeGreaterThan(8);
+  });
+
+  it('is platform-only, like its sibling forcedRetrievalCharBudget', () => {
+    // Deliberate, not an oversight - see the setting's own description. LakeMemoryFeature reads it
+    // directly rather than through the scoped-settings resolver, so a settableAt block here would
+    // be inert at best and could arm the resolver's fail-loud owner check at worst.
+    expect(settingsMap.lakeMemoryRecallK.scope).toBeUndefined();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    // 0 would be worse than the old hardcoded 8: it disables the card outright, and silently.
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(undefined)).toBe(LAKE_RECALL_K_DEFAULT);
+  });
+
+  it('rejects 0 and negatives at write time', () => {
+    expect(settingsMap.lakeMemoryRecallK.min).toBe(1);
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(0)).toThrow();
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(-1)).toThrow();
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(1)).toBe(1);
+  });
+
+  it('rejects a value above the declared ceiling at write time', () => {
+    // A fat-fingered extra zero (24 -> 240) otherwise passes validation cleanly and then sheds
+    // conversation history via the overflow-recovery loop, which looks nothing like a
+    // misconfigured setting. Same reasoning as forcedRetrievalCharBudget's max.
+    expect(settingsMap.lakeMemoryRecallK.max).toBe(LAKE_RECALL_K_MAX);
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(LAKE_RECALL_K_MAX + 1)).toThrow();
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(LAKE_RECALL_K_MAX)).toBe(LAKE_RECALL_K_MAX);
+  });
+
+  it('rejects a fractional budget rather than letting a reader floor it', () => {
+    // A belief count has no fractional meaning, so 1.5 is a typo, not a lower setting. Without the
+    // `int` flag it passes min/max cleanly and is then floored to 1 by positiveIntOr at read time -
+    // a 24x cut to lake grounding that reports as a successful save. Verified live: the real
+    // PUT /api/settings/update returns 422 for 1.5 and leaves the stored value untouched.
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(1.5)).toThrow();
+    // The admin UI submits its number field as a string, so coercion must still work.
+    expect(settingsMap.lakeMemoryRecallK.schema.parse('24')).toBe(24);
+  });
+
+  it('does not make integrality the default for every number setting', () => {
+    // `int` is opt-in on makeNumberSetting precisely because genuine fractions exist. If a future
+    // change flips it to the factory default, this fails instead of silently rejecting every
+    // fraction setting's own default value.
+    expect(settingsMap.ContextVerbatimWindowFraction.schema.parse(0.55)).toBe(0.55);
+  });
+
+  it('is registered in the EMBEDDING group at the order the admin UI actually sorts by', () => {
+    // Two surfaces that can disagree: AdminSettingsTab buckets by `settingsMap[key].group` and
+    // sorts by `settingsMap[key].order`, while API_SERVICE_GROUPS.settings is the declared
+    // manifest. A setting present in only one, or carrying two different orders, renders somewhere
+    // nobody intended - so pin that both agree and the order is still unique in the group.
+    const entry = API_SERVICE_GROUPS.EMBEDDING.settings.find(s => s.key === 'lakeMemoryRecallK');
+    expect(entry).toBeDefined();
+    expect(settingsMap.lakeMemoryRecallK.group).toBe(API_SERVICE_GROUPS.EMBEDDING.id);
+    expect(settingsMap.lakeMemoryRecallK.order).toBe(entry!.order);
+    const orders = API_SERVICE_GROUPS.EMBEDDING.settings.map(s => s.order);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+});
+
 describe('EMBEDDING settings group registration (#1955)', () => {
   it('lists kbSearchDefaultResults, kbSearchResultTokenBudget and kbSearchMinRelevancePct with unique order values', () => {
     const keys = ['kbSearchDefaultResults', 'kbSearchResultTokenBudget', 'kbSearchMinRelevancePct'];
@@ -682,6 +756,85 @@ describe('AbstentionPrompt default carries the anti-invention licence', () => {
 
   it('ships as the AbstentionPrompt setting default (no drift between const and setting)', () => {
     expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
+  });
+});
+
+describe('WebSearchFreshnessPrompt default tells the model when to search', () => {
+  // The measured failure it exists to fix is under-SELECTION, not weak search: web_search was
+  // offered on every turn of a 200-question internal eval and called on 16% of them, and the
+  // tool prompt instructed the model about clock time and chess and nothing about staleness.
+  // Two clauses carry the whole effect, so pin both.
+  it('directs the model to search before answering a time-sensitive question', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/web_search/);
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/training data has a cutoff/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a search it did
+  // not need; on the same eval it held the rate to 31% on questions with nothing to look up.
+  it('names the cases that do NOT need a search', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/do not need to search/i);
+  });
+
+  it('requires an as-of date on any time-sensitive fact it reports', () => {
+    // Not /as of/i - that also matches "as of today" in the search-trigger list, so the pin would
+    // survive deleting the reporting clause this test is named for.
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/state what it is as of/i);
+  });
+
+  it('ships as the WebSearchFreshnessPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.WebSearchFreshnessPrompt.defaultValue).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
+  });
+});
+
+describe('KnowledgeBaseRetrievalPrompt default tells the model when to retrieve', () => {
+  // Same shape of failure as the web-search nudge, measured the same way: search_knowledge_base
+  // was offered on 1,591 optional-path production turns over 30 days and called on 319 of them
+  // (20.1%), while its tool description covered only HOW to search and never WHEN. Two clauses
+  // carry the whole effect, so pin both.
+  it('directs the model to search before answering from its weights', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/search_knowledge_base/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/labels, not content/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a retrieval it did
+  // not need - the same failure global forced retrieval already showed on out-of-corpus questions,
+  // arriving by a different route.
+  it('names the cases that do NOT need a search', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/do not search when/i);
+  });
+
+  // A small attached corpus is INLINED rather than deferred to retrieval, and forced retrieval
+  // steps aside entirely on an attached-files turn. Without these two clauses the section sends
+  // the model searching for text already sitting in its context, and its opening paragraph asserts
+  // the documents are invisible - which on that path is simply false.
+  it('exempts content already placed in the conversation', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/from an attached document/i);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/unless its content has been placed in this conversation/i);
+  });
+
+  // On a forced turn that retrieved nothing, forcedRetrievalNoContextPrompt instructs the model to
+  // say the library does not cover the question. Without this clause the nudge invites a second
+  // identical search: a billed query embedding, and a chance to hedge out of a correct abstention.
+  it('forbids re-searching a library already searched this turn', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/already been searched on this turn/i);
+  });
+
+  // The abstention half. Without it a nudge to search converts a clean "I could not find that"
+  // into an ungrounded answer wearing the corpus's authority.
+  it('requires saying so when the corpus does not cover the question', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/does not turn up what was asked for/i);
+  });
+
+  // Naming retrieve_knowledge_content here would instruct the model to call a tool a session
+  // denylist can strip while search survives (ChatCompletionProcess warns on exactly that pair),
+  // and a model told to call a tool it was not given emits the call as leaked JSON text.
+  it('names no knowledge tool the gate does not guarantee', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/retrieve_knowledge_content/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/count_knowledge_base/);
+  });
+
+  it('ships as the KnowledgeBaseRetrievalPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.KnowledgeBaseRetrievalPrompt.defaultValue).toBe(KNOWLEDGE_BASE_RETRIEVAL_PROMPT);
   });
 });
 

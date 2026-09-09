@@ -80,7 +80,7 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
   // would pass the gate post-cutover and still be invisible here.
   //
   // `listAllDataLakes` (admin branch) gets neither adapter: it never calls
-  // `resolveEnforceReadGrants`/`grantedLakeIdsFor`, so an admin already sees every draft/active
+  // `resolveEnforceReadGrants`/`grantedLakeReachFor`, so an admin already sees every draft/active
   // lake regardless, and the one grant read that adapter would trigger only feeds the `isOwn`
   // label - which this content-scope path never reads (see the return-type comment above).
   const dynamic = ctx.isAdmin

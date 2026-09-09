@@ -319,6 +319,24 @@ export interface BuildToolPromptArgs {
   hasContentTransform: boolean;
   hasChessEngine: boolean;
   hasCurrentDateTime: boolean;
+  hasWebSearch: boolean;
+  /**
+   * Resolved `WebSearchFreshnessPrompt` setting. Resolved by the caller, which owns the
+   * settings reader, so the injected text and its telemetry cannot disagree.
+   */
+  webSearchGuidance?: string;
+  /**
+   * Whether `search_knowledge_base` survived into the offered tool set. Read from the offered list
+   * rather than the requested one for the same reason `hasWebSearch` is: the tool is auto-offered
+   * server-side from attached documents or an accessible lake, and a session denylist can still
+   * strip it afterwards - so only the post-build list says what the model actually got.
+   */
+  hasKnowledgeBase: boolean;
+  /**
+   * Resolved `KnowledgeBaseRetrievalPrompt` setting. Resolved by the caller, which owns the
+   * settings reader, so the injected text and its telemetry cannot disagree.
+   */
+  knowledgeBaseGuidance?: string;
   /**
    * User's IANA timezone (from the browser) when known, so the current-time
    * nudge can tell the model which timezone to pass to `current_datetime`.
@@ -921,6 +939,10 @@ export class ToolBuilder {
     hasContentTransform,
     hasChessEngine,
     hasCurrentDateTime,
+    hasWebSearch,
+    webSearchGuidance,
+    hasKnowledgeBase,
+    knowledgeBaseGuidance,
     userTimezone,
     mcpTools,
     sessionId,
@@ -1042,6 +1064,26 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
           `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
       );
+    }
+
+    // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
+    // date context tells the model what today is, but nothing otherwise tells it when its own
+    // knowledge is too old to answer from.
+    if (hasWebSearch && webSearchGuidance) {
+      sections.push(webSearchGuidance);
+    }
+
+    // 3d. Knowledge-base retrieval nudge. Same gate and same reason as 3c: the tool description
+    // says how to search and never when, so on the optional path nothing tells the model that the
+    // user's library is outside its weights.
+    //
+    // Injected on forced-retrieval turns too, rather than gated off them. The section carries its
+    // own "already been searched on this turn" and "from an attached document" clauses for that
+    // case (see KNOWLEDGE_BASE_RETRIEVAL_PROMPT's docblock, which spells out which co-resident
+    // prompt each one is defending against) - prompt-level rather than a second gate here, because
+    // the tool stays callable on those turns and the model needs to know when NOT to call it.
+    if (hasKnowledgeBase && knowledgeBaseGuidance) {
+      sections.push(knowledgeBaseGuidance);
     }
 
     // 4. MCP integration guidance (if MCP tools are available)

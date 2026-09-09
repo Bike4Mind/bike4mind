@@ -20,6 +20,9 @@ const h = vi.hoisted(() => ({
   buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({
     vectorizeEnqueueFailedAt: { $lt: cutoff },
   })),
+  // A getter, so a test can make the RESOURCE READ itself fault - which is the thing that used to be
+  // swallowed once per candidate. Defaults to the working url.
+  queueResourceThrows: false,
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -67,7 +70,14 @@ vi.mock('@bike4mind/services', () => ({
       }),
   },
 }));
-vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
+vi.mock('sst', () => ({
+  Resource: {
+    get fabFileChunkQueue() {
+      if (h.queueResourceThrows) throw new Error('Resource "fabFileChunkQueue" is not linked');
+      return { url: 'http://elasticmq/fabFileChunkQueue' };
+    },
+  },
+}));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 // Only the filters are stubbed; buildChunkRescueMessage stays real so the payload shape this
 // sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
@@ -86,6 +96,22 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 /** The sweep only ever calls info/error on it; the real Logger's surface is irrelevant here. */
 const SELF_HOST_LIMIT = 50;
 const runSweep = (limit = SELF_HOST_LIMIT) => runChunkRescueSweep({ limit, logger: logger as never });
+
+/**
+ * Makes each send hold open across a macrotask so overlapping ones are actually observable: an
+ * immediately-resolving stub would report a peak of 1 even for an unbounded fan-out.
+ */
+const trackSendConcurrency = () => {
+  let inFlight = 0;
+  let peak = 0;
+  h.sendToQueue.mockImplementation(async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    inFlight -= 1;
+  });
+  return () => peak;
+};
 
 const limitSpy = vi.fn();
 const withCandidates = (candidates: Candidate[]) => {
@@ -239,6 +265,18 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
   });
+
+  it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+    // The bound is what keeps the per-file catch affordable (see the ENQUEUE_CONCURRENCY docblock),
+    // so it is worth pinning as a number: a sequential loop peaks at 1 and an unbounded
+    // Promise.all over the whole pass peaks at 25, and both leave every other assertion green.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+    const peak = trackSendConcurrency();
+
+    await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
+
+    expect(peak()).toBe(10);
+  });
 });
 
 describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () => {
@@ -246,8 +284,29 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
 
   beforeEach(() => {
     vi.clearAllMocks();
+    h.queueResourceThrows = false;
     h.sendToQueue.mockResolvedValue(undefined);
     withCandidates([]);
+  });
+
+  it('lets an unlinked queue fail the pass ONCE rather than per candidate', async () => {
+    // The resource read used to sit inside the per-file `try`, so a config fault was caught once per
+    // candidate: up to CHUNK_SCAN_BATCH identical error lines a minute on the 60s tick, `sent` stuck
+    // at 0, and the summary log gated on `sent > 0` so nothing aggregate fired. A hard misconfiguration
+    // was indistinguishable from ordinary SQS throttling. Hoisted above the fan-out, it escapes to the
+    // driver's catch.
+    h.queueResourceThrows = true;
+    withCandidates([
+      { _id: 'ff1', userId: 'u1' },
+      { _id: 'ff2', userId: 'u2' },
+      { _id: 'ff3', userId: 'u3' },
+    ]);
+
+    await expect(runRescue()).rejects.toThrow(/not linked/);
+
+    // Not once per file, which is the whole point.
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('runs regardless of auto-chunk', async () => {
@@ -321,6 +380,28 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
 
     expect(logger.info).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('attempts every candidate across concurrency waves, not just the first wave', async () => {
+    // The fan-out runs in fixed-size waves; an off-by-one in the slice window would silently drop
+    // the tail of a full pass, which is indistinguishable from "the backlog was small" in the logs.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+
+    await expect(runRescue()).resolves.toBe(25);
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+
+  it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+    // This pass shares the 60s non-reentrant tick with runChunkRescueSweep, so its sends are
+    // bounded for the same reason that sweep's are - and must stay bounded, since a sequential loop
+    // (peak 1) or an unbounded Promise.all (peak 25) both keep every other assertion here green.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+    const peak = trackSendConcurrency();
+
+    await expect(runRescue()).resolves.toBe(25);
+
+    expect(peak()).toBe(10);
   });
 });
 

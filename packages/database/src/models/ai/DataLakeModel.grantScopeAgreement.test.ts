@@ -13,7 +13,7 @@ import { setupMongoTest } from '../../__test__/utils';
  * transferred-owner lake listed and browsed but never grounded a chat answer.
  *
  * Both predicates are exercised with the SAME grant-resolved id set, which is how the production
- * callers get theirs (`grantedLakeIdsFor` in @bike4mind/services, unreachable from this package -
+ * callers get theirs (`grantedLakeReachFor` in @bike4mind/services, unreachable from this package -
  * hence the local mirror of its owner/curator filter below). The lake here is deliberately gated by
  * a tag its grantee does not hold, so neither query can return it by any arm other than the grant.
  */
@@ -39,22 +39,29 @@ const context = (userId: string): AccessContext => ({
 });
 
 /**
- * The owner/curator half of `grantedLakeIdsFor` (@bike4mind/services). Reader and org-principal rows
- * are excluded on both sides of the agreement, because the read-grant cutover is still report-only
- * (READ_GRANT_ENFORCEMENT_READY) - so the two queries must agree on excluding them too.
+ * The USER owner/curator half of `grantedLakeReachFor` (@bike4mind/services), which is the half that
+ * resolves whatever the read-grant cutover says. Reader and org-principal rows are left out on BOTH
+ * sides on purpose: this file pins the agreement between the two queries for a given id set, not the
+ * role/principal split that decides the set - that is pinned at the resolver
+ * (b4m-core/services/src/dataLakeService/getDynamicDataLakeTags.test.ts) and, for the org half's
+ * per-issuer containment, in DataLakeModel.test.ts.
  */
-const grantedLakeIdsFor = async (userId: string): Promise<string[]> =>
+const grantedUserLakeIdsFor = async (userId: string): Promise<string[]> =>
   (await dataLakeAccessGrantRepository.listByPrincipal('user', userId, { activeAsOf: new Date() }))
     .filter(g => g.role === 'owner' || g.role === 'curator')
     .map(g => g.dataLakeId);
 
 const browsableSlugs = async (userId: string) =>
-  (await dataLakeRepository.findAccessible(context(userId), { grantedLakeIds: await grantedLakeIdsFor(userId) }))
+  (await dataLakeRepository.findAccessible(context(userId), { grantedLakeIds: await grantedUserLakeIdsFor(userId) }))
     .map(l => l.slug)
     .sort();
 
 const retrievableSlugs = async (userId: string) =>
-  (await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], [], userId, await grantedLakeIdsFor(userId)))
+  (
+    await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], [], userId, {
+      grantedLakeIds: await grantedUserLakeIdsFor(userId),
+    })
+  )
     .map(l => l.slug)
     .sort();
 
@@ -109,7 +116,7 @@ describe('data-lake grant scope: chat retrieval agrees with browse', () => {
     expect(await retrievableSlugs('stranger')).toEqual([]);
   });
 
-  it('excludes a reader-only grant from both reads while the cutover is report-only', async () => {
+  it('excludes a reader-only grant from both reads when the resolved id set omits it', async () => {
     const lake = await dataLakeRepository.create(gatedLake('reader-only', 'owner'));
     await dataLakeAccessGrantRepository.upsertGrant({
       dataLakeId: lake.id,

@@ -4,6 +4,7 @@ import {
   type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
   type IDataLakeRepository,
+  isLakeIngestable,
 } from '@bike4mind/common';
 import { SLACK_MOCK_USER_ID } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
@@ -46,7 +47,7 @@ export interface LakeWriteRefusal {
 
 export interface LakeAuthzDeps {
   // `find` is required by the fallback tagger, the others by the write gate.
-  dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find'>;
+  dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds' | 'findByDatalakeTag' | 'find'>;
   /**
    * The lake's access grants, which `assertLakeWriteAccess` resolves so a CURATOR or a transferred
    * owner may ingest and not only the original creator. Declared on the shared prologue rather than
@@ -198,9 +199,7 @@ export async function authorizeLakeForWrite(
     throw err;
   }
 
-  // Same rule as the web upload doors: only a draft (first batch) or active lake takes new files,
-  // so an archived/deleting one cannot be topped up through Slack either.
-  if (lake.status !== 'draft' && lake.status !== 'active') {
+  if (!isLakeIngestable(lake.status)) {
     return {
       ok: false,
       reason: 'lake_not_writable',

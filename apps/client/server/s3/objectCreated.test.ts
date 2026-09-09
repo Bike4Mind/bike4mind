@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
   recomputeUploaded: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
-  isBatchComplete: vi.fn(),
+  completedBatchStatus: vi.fn(),
 }));
 
 // withContext just threads a logger; the handler body is the subject.
@@ -50,7 +50,7 @@ vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
-  isBatchComplete: h.isBatchComplete,
+  completedBatchStatus: h.completedBatchStatus,
 }));
 vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://test' }, fabFileChunkQueue: { url: 'http://sqs/chunk' } },
@@ -111,7 +111,8 @@ describe('objectCreated - data lake stats (#1342)', () => {
     const file = metadata({ batchId: 'b1' });
     h.findOne.mockResolvedValue(file);
     h.incrementCounter.mockResolvedValue({ id: 'b1', skippedFiles: 1, failedFiles: 0 });
-    h.isBatchComplete.mockReturnValue(true);
+    // The batch crosses its threshold on this skip, so the payload reports a terminal status.
+    h.completedBatchStatus.mockReturnValue('completed');
 
     await run();
 

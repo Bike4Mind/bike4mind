@@ -154,6 +154,9 @@ export default function EmailPreviewModal({ open, onClose, attemptId }: EmailPre
                 >
                   <iframe
                     srcDoc={attempt.renderedHtml}
+                    // Opaque-origin, no scripts: email HTML plus recipient-derived substitutions
+                    // must not run with the admin's app-origin session.
+                    sandbox=""
                     style={{
                       width: '100%',
                       height: '100%',

@@ -134,6 +134,10 @@ export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
 
+export const replSandboxUnavailableAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -1042,6 +1046,44 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: the REPL sandbox could not be constructed
+   *
+   * Both callers fail closed when `isolated-vm` will not load: the agent wake
+   * drops code_execute and answers anyway, rlm-answer returns 503. Neither is
+   * visible upstream - a wake without its compute lever looks like a wake, and
+   * a 503 on one route looks transient. The cause this guards against (the
+   * native addon missing from a deploy bundle) is total for a build, so this
+   * fires on the first occurrence rather than a volume threshold. Page.
+   *
+   * Metric emitted by: b4m-core/agents/src/rlm/replSandboxMetrics.ts. Alarms
+   * match one exact dimension set, so this uses the Stage-only datapoint; the
+   * Caller dimension ('wake' | 'rlm-answer') is for attribution once notified.
+   *
+   * Metric names MUST STAY IN SYNC with that file; its tests pin the literals.
+   */
+  new aws.cloudwatch.MetricAlarm('replSandboxUnavailable', {
+    name: `${$app.name}-${$app.stage}-repl-sandbox-unavailable`,
+    alarmDescription:
+      'The isolated REPL sandbox failed to construct - code_execute is dropped on wakes and rlm-answer is returning 503',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'SandboxUnavailable',
+    namespace: 'Lumina5/ReplSandbox',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0, // Alert on any occurrence
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [replSandboxUnavailableAlarm!.arn],
+    tags: {
+      Application: 'ReplSandbox',
+      Severity: 'High',
+    },
+  });
+
+  /**
    * Alarm: Data Lake stuck-batch count
    *
    * The reconciler (hosted cron + self-host worker) samples the stuck-batch gauge once per
@@ -1069,6 +1111,53 @@ if (isMonitoredStage) {
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: taxonomy tag-apply skips
+   *
+   * Counts files whose optimistic-concurrency check LOST during a taxonomy apply - tags the user
+   * asked for that were never written. A single skip is benign and expected under load (two writers
+   * touched one file's tags), which is why this alarms on a SUSTAINED rate rather than on any skip
+   * at all: three consecutive hours with a non-zero sum. The expected steady state is zero, so a
+   * burst inside one hour stays quiet and a persistent contention problem does not.
+   *
+   * `Sum` over `Maximum` because the metric is deliberately dimensionless (matching the
+   * low-cardinality convention in applyTaxonomySuggestions) and its value is the per-call skip
+   * count - so the aggregate rate is the signal, and there is no per-lake breakdown to take a max
+   * over. Threshold is a starting point to tune once there is a baseline.
+   *
+   * This became worth watching when #2274 shipped PUT /api/data-lakes/:id/files/:fabFileId/tags, a
+   * second door mutating tags under the same `fileTagPrefix` a taxonomy apply merges into and
+   * documented as "last-writer-partially-wins, deliberately" - so the contention this counts is now
+   * reachable by ordinary use rather than by an unusual overlap. Until now nothing watched it, and
+   * the only other trace was a logger.warn nothing alarms on.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
+   * pages/api/data-lakes/batches/[batchId]/apply-taxonomy.ts.
+   * Namespace: Lumina5/DataLakeBatch / TaxonomyTagsApplySkipped
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeTaxonomyTagsApplySkippedSustained', {
+    name: `${$app.name}-${$app.stage}-data-lake-taxonomy-tags-apply-skipped-sustained`,
+    alarmDescription:
+      'Taxonomy tag applies have been losing their concurrency check for three hours running - tags users asked for are not being written',
+    comparisonOperator: 'GreaterThanThreshold',
+    // Three periods with the default all-must-breach rule, so this needs three CONSECUTIVE
+    // breaching hours. Left implicit rather than spelling out datapointsToAlarm, which no other
+    // alarm in this file sets.
+    evaluationPeriods: 3,
+    metricName: 'TaxonomyTagsApplySkipped',
+    namespace: 'Lumina5/DataLakeBatch',
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 0,
+    // No emission means no applies ran, which is not a problem. Steady state is zero either way.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    tags: {
+      Application: 'DataLakeBatch',
+      Severity: 'Low',
     },
   });
 

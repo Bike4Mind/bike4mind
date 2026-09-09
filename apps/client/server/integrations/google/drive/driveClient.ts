@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { google, drive_v3 } from 'googleapis';
+import { auth as googleAuth, drive as driveApi, drive_v3 } from '@googleapis/drive';
 
 export type DriveFile = {
   id: string;
@@ -17,6 +17,39 @@ export const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 export function isFolder(file: DriveFile): boolean {
   return file.mimeType === FOLDER_MIME_TYPE;
+}
+
+// The `errors[].reason` values Drive uses for a throttle. A 403 carries these as often as a 429
+// does, and the reason is the ONLY thing separating such a 403 from a genuine permission denial.
+const DRIVE_RATE_LIMIT_REASONS = new Set(['userRateLimitExceeded', 'rateLimitExceeded', 'quotaExceeded']);
+
+/**
+ * Is this error Drive telling us to slow down, rather than a permanent failure?
+ *
+ * Read structurally off the GaxiosError (status plus `errors[].reason`, at both the shapes
+ * googleapis surfaces them) rather than by matching the message, which carries no stable marker.
+ * Callers MUST treat a true here as retryable: a throttle misread as permanent drops the file and
+ * still reports the run a success (#2394).
+ */
+export function isDriveRateLimitError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  const data = response?.data as { error?: { errors?: unknown } } | undefined;
+
+  for (const raw of [err.code, err.status, response?.status]) {
+    if ((typeof raw === 'string' ? Number(raw) : raw) === 429) return true;
+  }
+
+  for (const list of [err.errors, data?.error?.errors]) {
+    if (!Array.isArray(list)) continue;
+    for (const detail of list) {
+      const reason = (detail as { reason?: unknown } | null)?.reason;
+      if (typeof reason === 'string' && DRIVE_RATE_LIMIT_REASONS.has(reason)) return true;
+    }
+  }
+
+  return false;
 }
 
 // Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
@@ -41,9 +74,9 @@ const MAX_LIST_PAGES = 100;
  * concurrent multi-tenant syncs on one process would race and bleed tokens across tenants.
  */
 export function createDriveClient(accessToken: string): drive_v3.Drive {
-  const auth = new google.auth.OAuth2();
+  const auth = new googleAuth.OAuth2();
   auth.setCredentials({ access_token: accessToken });
-  return google.drive({ version: 'v3', auth });
+  return driveApi({ version: 'v3', auth });
 }
 
 /**

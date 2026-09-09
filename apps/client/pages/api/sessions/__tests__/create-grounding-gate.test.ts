@@ -38,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   organizationRepository: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
   projectRepository: {},
+  agentRepository: {},
   sessionRepository: {},
   fabFileRepository: {},
   fallbackLakeSettingsRepository: {},
