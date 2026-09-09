@@ -37,6 +37,9 @@ vi.mock('@bike4mind/slack', () => ({
     ) {}
     sendMessage = sendMessage;
   },
+  // The real implementation, not a stub: these tests assert on exact message text, and this
+  // module is what neutralizes a Slack mrkdwn-injected fileName (e.g. "<!channel>").
+  escapeSlackMrkdwn: (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 }));
 
 import { notifySlackIndexingComplete } from './notifySlackIndexingComplete';
