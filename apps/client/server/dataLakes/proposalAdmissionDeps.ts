@@ -33,6 +33,13 @@ import { getFilesStorage } from '@server/utils/storage';
  * omits becomes a reviewer who is authorized to approve but cannot complete an approval. Both the
  * grant repo and `administeredOrgIds` below exist for that reason; the same shape is still missing
  * on the Slack link door (`server/slack/dataLakeIngestDeps.ts`), which is a live gap there.
+ *
+ * No `checkDuplicate` here, unlike the Slack link door (#2027) - deliberately, not a gap: this
+ * candidate already passed through the acquisition queue's own dedup, keyed on canonical source
+ * identity (`proposeDataLakeContent.ts`'s `canonicalSourceKey`), before a human ever approved it.
+ * A second, content-hash-keyed check here would be redundant at best and could refuse an approval
+ * the queue already decided was distinct. `createFabFileByUrl` still stamps `contentHash`
+ * unconditionally (as of #2027) even without `checkDuplicate` wired - it is just never CHECKED here.
  */
 export function admitProposedSource(
   actor: AccessContext,
