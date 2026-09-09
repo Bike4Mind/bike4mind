@@ -312,9 +312,16 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
   );
 }
 
-/** Tomorrow, as the `min` for an expiry picker: an already-lapsed grant is refused by the server
- *  (it would be filtered out of every active read the moment it landed). */
-const tomorrowInputDate = (): string => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+/**
+ * The earliest date the expiry picker may offer: an already-lapsed grant is refused by the server
+ * (it would be filtered out of every active read the moment it landed).
+ *
+ * Computed in UTC because the value this form composes is UTC - `<date>T23:59:59.999Z` - so the
+ * current UTC date is exactly the earliest one whose composed instant is still in the future. A
+ * local-clock "tomorrow" is the wrong bound in both directions: west of UTC it hides a date the
+ * server would have accepted, and east of it, it offers one the server refuses.
+ */
+const earliestExpiryInputDate = (): string => new Date().toISOString().slice(0, 10);
 
 /** The `YYYY-MM-DD` a date input wants, from a grant row's stored expiry. */
 const inputDate = (d: Date | string): string => new Date(d).toISOString().slice(0, 10);
@@ -508,7 +515,9 @@ function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () 
                   type="date"
                   value={expiresOn}
                   onChange={e => setExpiresOn(e.target.value)}
-                  slotProps={{ input: { min: tomorrowInputDate(), 'data-testid': 'datalake-grant-expiry-input' } }}
+                  slotProps={{
+                    input: { min: earliestExpiryInputDate(), 'data-testid': 'datalake-grant-expiry-input' },
+                  }}
                 />
               </FormControl>
             )}
