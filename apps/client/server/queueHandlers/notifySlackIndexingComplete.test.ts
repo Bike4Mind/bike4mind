@@ -221,4 +221,20 @@ describe('notifySlackIndexingComplete (#2027)', () => {
     // The ambiguity is a warning, not a refusal - the reply still goes out for the first match.
     expect(sendMessage).toHaveBeenCalled();
   });
+
+  it('teamId path: uses the first matching lake and logs a warning when a file matches more than one (resolveLake is shared with the legacy path)', async () => {
+    findBySlackTeamIdWithTokenDev.mockResolvedValue({ slackBotToken: 'encrypted-dev-token' });
+    findByDatalakeTags.mockResolvedValue([
+      { id: 'lake-1', name: 'Sales Lake', organizationId: 'org-1' },
+      { id: 'lake-2', name: 'Support Lake', organizationId: 'org-2' },
+    ]);
+
+    await notifySlackIndexingComplete(slackFabFile(), logger);
+
+    expect(logger.warn).toHaveBeenCalled();
+    // Same ambiguity handling as the legacy path: warn, but still name the first match.
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('*Sales Lake*') })
+    );
+  });
 });
