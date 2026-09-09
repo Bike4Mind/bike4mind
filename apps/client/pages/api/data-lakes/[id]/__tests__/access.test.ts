@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   loadActiveLakeGrants: vi.fn(),
   canManageLake: vi.fn(),
   resolveLakeTransferAuthority: vi.fn(),
+  resolveEnforceReadGrants: vi.fn(async () => false),
   assembleLakeAccessView: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
 }));
@@ -27,10 +28,12 @@ vi.mock('@bike4mind/services', () => ({
     loadActiveLakeGrants: h.loadActiveLakeGrants,
     canManageLake: h.canManageLake,
     resolveLakeTransferAuthority: h.resolveLakeTransferAuthority,
+    resolveEnforceReadGrants: h.resolveEnforceReadGrants,
     assembleLakeAccessView: h.assembleLakeAccessView,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   lakeAccessEventRepository: {},
@@ -85,6 +88,8 @@ describe('GET /api/data-lakes/[id]/access', () => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
     h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', name: 'Sales Intelligence' });
+    // clearAllMocks keeps implementations, so this must be re-armed or the enforced-true case leaks.
+    h.resolveEnforceReadGrants.mockResolvedValue(false);
     h.loadActiveLakeGrants.mockResolvedValue(GRANTS);
     h.canManageLake.mockReturnValue(true);
     h.resolveLakeTransferAuthority.mockReturnValue({ allowed: false, viaOrgAdminOnly: false });
@@ -99,7 +104,10 @@ describe('GET /api/data-lakes/[id]/access', () => {
       expect.objectContaining({ id: 'lake-oid-1' }),
       expect.anything()
     );
-    expect(json).toHaveBeenCalledWith({ data: view, meta: { canTransferOwnership: false } });
+    expect(json).toHaveBeenCalledWith({
+      data: view,
+      meta: { canTransferOwnership: false, readerGrantsEnforced: false },
+    });
     // The whole view is serialized, so candidate-cap pressure reaches JSON consumers with no
     // route-level projection to keep in sync.
     const body = json.mock.calls[0][0] as { data: LakeAccessView };
@@ -157,7 +165,10 @@ describe('GET /api/data-lakes/[id]/access', () => {
     h.resolveLakeTransferAuthority.mockReturnValue({ allowed: true, viaOrgAdminOnly: false });
     const { res, json } = makeRes();
     await call(req({ id: 'lake1' }), res);
-    expect(json).toHaveBeenCalledWith({ data: view, meta: { canTransferOwnership: true } });
+    expect(json).toHaveBeenCalledWith({
+      data: view,
+      meta: { canTransferOwnership: true, readerGrantsEnforced: false },
+    });
     // The capability is per-VIEWER; the artifact must not absorb it, or the CSV would claim it too.
     expect(json.mock.calls[0][0].data).not.toHaveProperty('canTransferOwnership');
   });
@@ -170,6 +181,16 @@ describe('GET /api/data-lakes/[id]/access', () => {
     // snapshots, and offering a transfer control the write path then refuses is the drift to avoid.
     expect(h.canManageLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), GRANTS);
     expect(h.resolveLakeTransferAuthority).toHaveBeenCalledWith(expect.anything(), expect.anything(), GRANTS);
+  });
+
+  it('reports whether reader grants are actually enforced yet, outside the artifact', async () => {
+    // Until READ_GRANT_ENFORCEMENT_READY flips, a reader grant is recorded and admits nobody. The
+    // UI needs to say so; the CSV must not, since this is platform state, not a fact about the lake.
+    h.resolveEnforceReadGrants.mockResolvedValue(true);
+    const { res, json } = makeRes();
+    await call(req({ id: 'lake1' }), res);
+    expect(json.mock.calls[0][0].meta.readerGrantsEnforced).toBe(true);
+    expect(json.mock.calls[0][0].data).not.toHaveProperty('readerGrantsEnforced');
   });
 
   it('keeps the per-viewer capability out of the CSV artifact', async () => {
