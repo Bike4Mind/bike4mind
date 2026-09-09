@@ -209,6 +209,33 @@ export async function releaseDriveConnectionForLake(dataLakeId: string): Promise
 }
 
 /**
+ * Flip a lake's Drive connection `enabled`, WITHOUT touching Google or the row itself - the disable
+ * side of the lake-lifecycle guard (archive/soft-delete disables, unarchive/restore re-enables), kept
+ * strictly separate from releaseDriveConnectionForLake's hard teardown: that one revokes at Google and
+ * deletes the row, which would leave nothing for a later unarchive/restore to re-enable.
+ *
+ * Resolved via findByDataLakeIdAny (not findByDataLakeId, which filters enabled: true and so could
+ * never find a row to re-enable). Returns whether a connection was found and flipped; false means the
+ * lake has no Drive connection, the ordinary case for most lakes.
+ */
+async function setDriveConnectionEnabledForLake(dataLakeId: string, enabled: boolean): Promise<boolean> {
+  const connection = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(dataLakeId);
+  if (!connection) return false;
+  await orgGoogleDriveConnectionRepository.update({ id: connection.id, enabled });
+  return true;
+}
+
+/** Disable a lake's Drive connection (archive/soft-delete) so the hourly poll stops enqueueing it. */
+export async function disableDriveConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return setDriveConnectionEnabledForLake(dataLakeId, false);
+}
+
+/** Re-enable a lake's Drive connection (unarchive/restore), reversing disableDriveConnectionForLake. */
+export async function enableDriveConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return setDriveConnectionEnabledForLake(dataLakeId, true);
+}
+
+/**
  * Resolve a valid Google Drive access token for a user from their stored (encrypted) OAuth
  * credential, refreshing + persisting it if expired. Throws if the user has no connection or the
  * refresh fails - the caller decides whether to surface a re-auth prompt.

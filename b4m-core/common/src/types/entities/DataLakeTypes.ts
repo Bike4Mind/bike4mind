@@ -176,6 +176,23 @@ export interface TransitionalDataLakeSummary {
 }
 
 /**
+ * The statuses that may take NEW files: a draft (its first batch) or an active lake. Every ingest
+ * door shares this one list - the web batch-create and presign doors, the Slack door, the Drive
+ * connect door, the Drive ingest queue guard, and proposal approval - so admitting a future status
+ * is a decision made here, once, rather than at six call sites that each open-coded it.
+ */
+export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
+
+type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
+
+/**
+ * Narrows, so a caller that has proven a lake ingestable keeps that in the type. The cast is on the
+ * ARRAY, not the value: casting the value would erase the guard this exists to provide.
+ */
+export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngestableStatus =>
+  (LAKE_INGESTABLE_STATUSES as readonly (DataLakeStatus | undefined)[]).includes(status);
+
+/**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
  * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
  * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would

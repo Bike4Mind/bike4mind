@@ -141,7 +141,11 @@ class OrgGoogleDriveConnectionRepository
   extends BaseRepository<IOrgGoogleDriveConnectionDocument & IMongoDocument>
   implements IOrgGoogleDriveConnectionRepository
 {
-  /** All enabled connections for an org (excludes credentials). */
+  /**
+   * All ENABLED connections for an org (excludes credentials). `enabled: false` is a real state now
+   * that archiving/soft-deleting a lake disables its connection, so this silently omits those rows;
+   * a caller that must see them (admin/management views) wants findByOrganizationIdAny.
+   */
   async findByOrganizationId(organizationId: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument)[]> {
     return this.find({ organizationId, enabled: true });
   }
@@ -153,7 +157,14 @@ class OrgGoogleDriveConnectionRepository
     return this.find({ organizationId });
   }
 
-  /** The enabled connection feeding a given lake in a given org, if any. */
+  /**
+   * The ENABLED connection feeding a given lake in a given org, if any. `enabled: false` is a real
+   * state now that archiving/soft-deleting a lake disables its connection, so a caller that must
+   * still reach the row - anything that revokes the grant, releases the folder claim, or re-enables
+   * - wants findByDataLakeIdAny plus its own org check instead of this one. That leaves this one
+   * with no production callers today; it survives as the enabled-only semantic the e2e uses to
+   * assert a disabled row really is invisible to the poll's view of the world.
+   */
   async findByDataLakeId(
     targetDataLakeId: string,
     organizationId: string
@@ -162,10 +173,12 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
-   * The connection bound to a lake regardless of `enabled`, and deliberately GLOBAL. The caller is
-   * the lake-purge teardown: it runs after the lake's org is no longer resolvable, and a disabled row
-   * still holds the unique driveFolderId claim, so neither the org scope nor the enabled filter of
-   * findByDataLakeId can be applied without stranding the folder. SECURITY: server-side only.
+   * The connection bound to a lake regardless of `enabled`, and deliberately GLOBAL. Two kinds of
+   * caller need both of those: the lake-purge teardown runs after the lake's org is no longer
+   * resolvable, and a disabled row still holds the unique driveFolderId claim, so neither the org
+   * scope nor the enabled filter of findByDataLakeId can be applied without stranding the folder;
+   * the lake-lifecycle disable/enable seam (disableDriveConnectionForLake and its twin) has to see
+   * an already-disabled row or an unarchive could never re-enable one. SECURITY: server-side only.
    */
   async findByDataLakeIdAny(
     targetDataLakeId: string
@@ -240,6 +253,14 @@ class OrgGoogleDriveConnectionRepository
    * is in flight must not flip 'syncing' -> 'connected', or claimForSync would let the re-triggered
    * run claim ON TOP of the live one and both would walk the folder (duplicate FabFiles). Leaving the
    * status 'syncing' makes the new run defer behind the running one instead.
+   *
+   * `enabled` is re-stamped true as well: the lifecycle transitions disable a connection when their
+   * lake is archived or soft-deleted and re-enable it on unarchive/restore, and a re-enable that was
+   * lost (the write failed, or the transition's process died after settling the lake) has no other
+   * repair path - `findDueForPoll` is the only reader that ACTS on it and nothing else writes it
+   * back. The reconnect door is where a user goes when sync looks broken, so it heals `enabled` the
+   * same way it heals `status`. Safe only because that door refuses a non-draft/active lake up front
+   * (drive-sync.ts); without that gate this would re-enable an archived lake's connection.
    */
   async updateCredential(
     id: string,
@@ -254,6 +275,7 @@ class OrgGoogleDriveConnectionRepository
           $set: {
             oauthRefreshToken: encryptedRefreshToken,
             connectedBy,
+            enabled: true,
             status: { $cond: [{ $eq: ['$status', 'syncing'] }, '$status', 'connected'] },
             lastError: { $cond: [{ $eq: ['$status', 'syncing'] }, '$lastError', null] },
           },

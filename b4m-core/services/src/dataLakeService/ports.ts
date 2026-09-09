@@ -85,3 +85,44 @@ export async function strictIndexRemove(
   if (!retrievalIndex) return;
   await retrievalIndex.removeForDataLake(input);
 }
+
+/**
+ * Optional port: flip `enabled` on whatever Drive connection feeds a lake - disable on
+ * archive/delete, re-enable on unarchive/restore. Injected because the connection lookup + write
+ * lives in the app layer (see disableDriveConnectionForLake/enableDriveConnectionForLake), same
+ * reason `releaseDriveConnection` is injected into cleanupDeletedDataLake. Absent -> a host
+ * without the Drive integration is unaffected.
+ */
+export type DriveConnectionEnablePort = (args: { dataLakeId: string }) => Promise<void>;
+
+/**
+ * Archive/delete/unarchive/restore: a failure here is logged, not fatal - failing a whole lifecycle
+ * transition over a Drive hiccup would be a worse outcome than a connection briefly out of sync with
+ * its lake. The two directions are swallowed for DIFFERENT reasons, and neither is "the ingest guard
+ * covers it":
+ *
+ * - A lost DISABLE is genuinely backstopped: the ingest-level status guard (driveLakeIngest.ts)
+ *   refuses to sync a lake that is not draft/active, so the poll keeps enqueueing work that is always
+ *   dropped. Wasteful, never incorrect.
+ * - A lost ENABLE has no backstop - `findDueForPoll` is the only reader that ACTS on the flag (the
+ *   enabled-only finders and the per-lake GET read it too, but none of them resumes a poll) - so it
+ *   is swallowed only because it is REPAIRABLE: the reconnect door re-stamps `enabled: true`
+ *   (OrgGoogleDriveConnection.updateCredential), which is where a user goes when sync looks broken.
+ *   The GET does report `enabled` truthfully, but no UI reads it - the connection chip renders from
+ *   `status` alone - so this state is inspectable over the API, not in the product. Do not remove
+ *   that re-stamp without making this direction fatal instead.
+ */
+export async function bestEffortSetDriveConnectionEnabled(
+  port: DriveConnectionEnablePort | undefined,
+  dataLakeId: string,
+  // Optional `warn` (not the required shape bestEffortIndexRemove takes): unarchive/restore only
+  // inherit LakeConfigAuditAdapters's LakeConfigAuditLogger, which declares it optional.
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void }
+): Promise<void> {
+  if (!port) return;
+  try {
+    await port({ dataLakeId });
+  } catch (error) {
+    logger?.warn?.(`Failed to update Drive connection enabled state for lake ${dataLakeId}:`, error);
+  }
+}
