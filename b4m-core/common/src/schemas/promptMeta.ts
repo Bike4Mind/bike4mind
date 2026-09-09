@@ -173,6 +173,13 @@ const PromptMetaContextSchema = z.object({
   lakeMemory: z
     .object({
       beliefCount: z.number(),
+      // The `lakeMemoryRecallK` budget in force for the turn (#2496). Without it `beliefCount`
+      // is ambiguous on exactly the question the knob exists to answer: a row reading 8 could be
+      // "the cap bound" or "only 8 beliefs qualified", and telling those apart used to mean
+      // knowing what the setting happened to be when the turn ran. beliefCount === beliefBudget
+      // is now a readable saturation signal. Optional: turns recorded before this field existed
+      // have none, and it must not fail their Zod re-parse.
+      beliefBudget: z.number().optional(),
       dataLakeTags: z.array(z.string()),
     })
     .optional(),
