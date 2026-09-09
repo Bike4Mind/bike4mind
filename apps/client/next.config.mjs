@@ -54,6 +54,19 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
+  // Admin help bodies live OUTSIDE public/ (so Next cannot serve them unauthenticated) and are
+  // read at runtime via path.join(process.cwd(), ADMIN_HELP_CONTENT_DIR). Next's file tracing
+  // already resolves that string literal and picks the directory up on its own - the invariant is
+  // recorded at packages/scripts/help/utils.ts - but that is a static-analysis heuristic, and
+  // `output: 'standalone'` above is only set for self-host, so the hosted OpenNext bundle packages
+  // by a different mechanism. Declaring the include makes it explicit for both paths: a future
+  // refactor of content.ts that computes the path instead of naming it cannot silently reduce
+  // every admin help article to a 404 with a green build.
+  outputFileTracingIncludes: {
+    '/api/help/content': ['./app/generated/help-content-admin/**/*'],
+    '/api/help/chat': ['./app/generated/help-content-admin/**/*'],
+  },
+
   transpilePackages: [
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',

@@ -1,9 +1,10 @@
 /**
  * Shared help-content retrieval.
  *
- * Extracted from `pages/api/help/chat.ts` so it can be reused by BOTH the help chat endpoint
- * (which wraps the retrieved context in a help-assistant system prompt and calls an LLM) and the
- * retrieval-only `pages/api/help/search.ts` endpoint (consumed by the chat `help_search` tool).
+ * Extracted from `pages/api/help/chat.ts`, which wraps the retrieved context in a help-assistant
+ * system prompt and calls an LLM. That is the only consumer today - the second one this was split
+ * for, a retrieval-only `pages/api/help/search.ts` behind a `help_search` chat tool, no longer
+ * exists. The split is still worth keeping for the reason below, not for a second caller.
  *
  * Retrieval stays in the Next.js app on purpose: the embeddings index (`app/generated/
  * help-embeddings.json`) and the bundled markdown are app assets read via `process.cwd()`. The

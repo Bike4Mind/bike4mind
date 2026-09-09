@@ -152,6 +152,12 @@ const handler = baseApi(API_OPTIONS).get(async (req, res) => {
   // The allowlist above declares the type; nosniff stops a browser overriding it (an .md body
   // sniffed as HTML would execute same-origin).
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  // proxy.ts's CSP block excludes `/api/` while its matcher does cover `/help-content/*`, so an
+  // SVG that used to be served statically under the app CSP no longer gets one here - and a
+  // top-level navigation to `image/svg+xml` renders as a same-origin document. Forcing a download
+  // costs the viewer nothing: it fetches media through `fetch` into a blob URL
+  // (useAuthedMediaSrc in HelpContent.tsx), which ignores Content-Disposition.
+  if (extension === '.svg') res.setHeader('Content-Disposition', 'attachment');
 
   return res.status(200).send(data);
 });

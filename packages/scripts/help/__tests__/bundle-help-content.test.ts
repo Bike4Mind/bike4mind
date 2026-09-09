@@ -183,6 +183,20 @@ describe('bundleHelpContent access-level split', () => {
     expect(fs.existsSync(outFile('admin/overview.md'))).toBe(false);
   });
 
+  it('routes an unrecognised access level to the admin root, not the public one', async () => {
+    // Pins the DIRECTION of the predicate, which the 'public'/'admin' cases alone do not: written
+    // as `accessLevel !== 'admin'` every case above still passes, while a value added to
+    // HelpAccessLevel later would be published as unauthenticated static content.
+    writeArticle('admin/future.md', '# Future\n');
+    writeArticle('admin/media/future.png', 'png-bytes');
+    writeIndex([{ filePath: 'admin/future.md', accessLevel: 'internal' as HelpAccessLevel }]);
+
+    await bundleHelpContent(opts());
+
+    expect(fs.existsSync(adminFile('admin/future.md'))).toBe(true);
+    expect(fs.existsSync(outFile('admin/future.md'))).toBe(false);
+  });
+
   it('leaves no admin root behind for an all-public corpus', async () => {
     writeArticle('features/a.md', '# A\n');
     writeIndex(['features/a.md']);
