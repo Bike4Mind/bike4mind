@@ -67,6 +67,8 @@ export interface SlackLinkIngestParams {
   messageTs: string;
   /** The Slack workspace this message arrived on - see `notifySlackIndexingComplete.ts`. */
   teamId: string;
+  /** The Slack app this message arrived on, stamped alongside `teamId` - see the same doc. */
+  apiAppId: string;
 }
 
 export type SlackLinkIngestRefusal = LakeWriteRefusalReason | 'no_link' | 'link_rejected' | 'link_fetch_failed';
@@ -105,7 +107,7 @@ export async function ingestSlackLinkIntoLake(
   params: SlackLinkIngestParams,
   deps: SlackLinkIngestDeps
 ): Promise<SlackLinkIngestOutcome> {
-  const { actor, lakeSlug, link, channel, messageTs, teamId } = params;
+  const { actor, lakeSlug, link, channel, messageTs, teamId, apiAppId } = params;
 
   const mockRefusal = refuseMockActor(actor, lakeSlug, deps);
   if (mockRefusal) return mockRefusal;
@@ -148,7 +150,7 @@ export async function ingestSlackLinkIntoLake(
         sourceType: FabFileSourceType.SLACK,
         // `sourceUrl` alongside the Slack origin: for a link the message is where it was ASKED for
         // and the URL is where the content actually came from, and an auditor needs both.
-        sourceMetadata: { channel, messageTs, sourceUrl: recordedUrl, teamId },
+        sourceMetadata: { channel, messageTs, sourceUrl: recordedUrl, teamId, apiAppId },
       },
       administeredOrgIds: ctx.administeredOrgIds ?? [],
       datalakeTag,
