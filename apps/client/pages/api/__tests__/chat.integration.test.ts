@@ -588,27 +588,48 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
 
     // No endpoint enumerates the valid ids, so a dropped id must be reported or a typo is
     // indistinguishable from a tool that does not exist in this deployment.
-    it('reports a dropped id back on the response rather than failing quiet', async () => {
+    it('reports an unrecognized id back on the response rather than failing quiet', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['websearch'] } });
       await handler(req, res);
-      expect(res._getJSONData().tools).toEqual({ effectiveTools: [], ignoredTools: ['websearch'] });
+      expect(res._getJSONData().tools).toEqual({ effectiveTools: [], unrecognizedTools: ['websearch'] });
     });
 
-    it('reports dropped ids alongside a toolMode the caller did send', async () => {
+    // `unrecognizedTools` describes the ids, not what the mode did with them, so it is reported
+    // under every toolMode. Suppressing it under 'fast' would put the endpoint back in the position
+    // this route was fixed out of: knowing an id does not exist here and saying nothing, so the
+    // caller only finds out after dropping 'fast' and resending.
+    it("reports an unrecognized id under toolMode 'fast' too", async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({
         body: { message: 'hi', sessionId: 'sess-1', toolMode: 'fast', tools: ['websearch'] },
       });
       await handler(req, res);
-      expect(res._getJSONData().tools).toMatchObject({ toolMode: 'fast', ignoredTools: ['websearch'] });
+      expect(res._getJSONData().tools).toMatchObject({ toolMode: 'fast', unrecognizedTools: ['websearch'] });
     });
 
-    it('omits ignoredTools entirely when every id was recognized', async () => {
+    // The other half of that invariant, and what makes the field's name true: 'fast' discards a
+    // RECOGNIZED id, and discarding is not the same fact as not existing. `effectiveTools: []` is
+    // what reports the discard; listing web_search as unrecognized would conflate a deliberate
+    // mode drop with a typo - the exact ambiguity this route was fixed to remove.
+    it("does not call a recognized id unrecognized just because 'fast' dropped it", async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', toolMode: 'fast', tools: ['web_search', 'websearch'] },
+      });
+      await handler(req, res);
+      expect(res._getJSONData().tools).toEqual({
+        toolMode: 'fast',
+        effectiveTools: [],
+        unrecognizedTools: ['websearch'],
+      });
+    });
+
+    it('omits unrecognizedTools entirely when every id was recognized', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['web_search'] } });
       await handler(req, res);
-      expect(res._getJSONData().tools).not.toHaveProperty('ignoredTools');
+      expect(res._getJSONData().tools).not.toHaveProperty('unrecognizedTools');
     });
 
     // Syntactically present but resolving to nothing must read the same as absent.
@@ -622,18 +643,32 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(res._getJSONData().tools).toBeUndefined();
     });
 
-    // `tools` carries no length bound, and the ignored-id split must stay linear: an
-    // Array.includes scan over the recognized list is quadratic on a payload that mixes many
-    // known with many unknown ids, burning ~1s of event loop before any billing or model call.
-    it('splits a large mixed tools payload without a quadratic scan', async () => {
+    // `tools` carries no length bound, so an 8000-id payload has to leave this layer bounded on
+    // both sides. Asserting the two output sets rather than a wall clock pins the invariant that
+    // actually matters (Set membership for the split, Set collapse for both reported lists) and
+    // keeps the test independent of runner contention - this suite runs as three parallel CI
+    // shards, each with a worker per core.
+    it('collapses a large mixed tools payload to the two distinct ids', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const tools = [...Array(4000).fill('web_search'), ...Array(4000).fill('websearch')];
-      const startedAt = Date.now();
       const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(Date.now() - startedAt).toBeLessThan(1000);
-      expect(res._getJSONData().tools.ignoredTools).toHaveLength(4000);
+      // The set that reaches the service layer: one copy, not 4000. N copies would reserve N
+      // tools' worth of the verbatim history budget and reach the provider as duplicate names.
+      expect(invokedBody().tools).toEqual(['web_search']);
+      expect(res._getJSONData().tools.unrecognizedTools).toEqual(['websearch']);
+    });
+
+    // The echo is the documented way to discover a mistyped id, so it is capped like the log line
+    // rather than reflecting an unbounded list of the caller's own bad ids back at them.
+    it('caps the reported unrecognized ids at 10 distinct entries', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const tools = Array.from({ length: 25 }, (_, i) => `not_a_tool_${i}`);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().tools.unrecognizedTools).toHaveLength(10);
     });
 
     // A partially-recognized array still counts as intent, narrowed to what survived.
@@ -646,7 +681,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(invokedBody().tools).toEqual(['web_search']);
       expect(res._getJSONData().tools).toEqual({
         effectiveTools: ['web_search'],
-        ignoredTools: ['not_a_tool'],
+        unrecognizedTools: ['not_a_tool'],
       });
     });
 

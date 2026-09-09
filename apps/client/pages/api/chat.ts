@@ -23,6 +23,11 @@ import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.gener
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
+// How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
+// Both are bounded by the same number so the response is no less bounded than the log; the cap is
+// part of the documented contract (see the `tools` description in schemas/chat.ts).
+const UNRECOGNIZED_TOOL_REPORT_LIMIT = 10;
+
 // Auth mode, required scopes, and request validation all come from chatContract
 // (the single source of truth also driving the OpenAPI spec). `req.validated` is
 // the parsed, typed body. Rate limit is passed as an option so the adapter orders
@@ -79,16 +84,24 @@ const handler = nextRouteForContract(chatContract, {
   // is - both the invoked body and the response metadata need it. No public endpoint enumerates
   // the valid ids, so a dropped id has to be reported back or a typo is indistinguishable from
   // a tool that does not exist here.
-  // Set membership, not Array.includes: `tools` has no length bound of its own, so a payload
-  // mixing many known with many unknown ids makes a linear scan quadratic (~1s of blocked event
-  // loop at the 1MB body cap, before any billing or model call - a free amplification).
-  const requestedTools = filterKnownTools(simplifiedRequest.tools);
+  //
+  // Every quantity below is a Set, because `tools` carries no length bound of its own:
+  //  - Set membership, not Array.includes, for the split - a payload mixing many known with many
+  //    unknown ids makes a linear scan quadratic (~1s of blocked event loop at the 1MB body cap,
+  //    before any billing or model call).
+  //  - The recognized ids are deduped before they leave this layer. Nothing downstream collapses
+  //    repeats (`resolveEnabledTools` only appends), and a repeated id would consume a per-tool
+  //    slice of the verbatim history budget per copy and reach the provider as a duplicate tool
+  //    name. The other branches already deduped: `smart` via `mergeTools`, `fast` via `[]`.
+  //  - The unrecognized ids are deduped too: what a caller debugging a typo needs is the SET of
+  //    ids that are not tools here, not one entry per occurrence.
+  const requestedTools = Array.from(new Set(filterKnownTools(simplifiedRequest.tools)));
   const recognized = new Set<string>(requestedTools);
-  const ignoredTools = (simplifiedRequest.tools ?? []).filter(id => !recognized.has(id));
-  if (ignoredTools.length > 0) {
-    // Cap what reaches the log line: `tools` carries no length bound of its own.
+  const unrecognizedIds = new Set((simplifiedRequest.tools ?? []).filter(id => !recognized.has(id)));
+  const unrecognizedTools = Array.from(unrecognizedIds).slice(0, UNRECOGNIZED_TOOL_REPORT_LIMIT);
+  if (unrecognizedIds.size > 0) {
     req.logger.warn(
-      `POST /api/chat dropped ${ignoredTools.length} unrecognized tool id(s): ${ignoredTools.slice(0, 10).join(', ')}`
+      `POST /api/chat dropped ${unrecognizedIds.size} unrecognized tool id(s): ${unrecognizedTools.join(', ')}`
     );
   }
 
@@ -115,7 +128,7 @@ const handler = nextRouteForContract(chatContract, {
     toolMode: simplifiedRequest.toolMode,
     effectiveTools: internalRequest.tools,
     autoSelectedTools: recommendations.map(r => r.tool),
-    ignoredTools,
+    unrecognizedTools,
   });
 
   // Shared options for ChatCompletionInvoke and ChatCompletionProcess
@@ -248,7 +261,16 @@ const handler = nextRouteForContract(chatContract, {
 /**
  * The tool decision this layer made, echoed back as the response's `tools` field so a caller can
  * see what was offered - and what was thrown away. `toolMode` is absent when the caller named
- * tools without sending a mode; `ignoredTools` is present only when some id was unrecognized.
+ * tools without sending a mode.
+ *
+ * `unrecognizedTools` is deliberately NOT conditioned on `toolMode`: it states a fact about this
+ * deployment's tool registry ("these ids are not tools here"), which is true whatever the mode did
+ * with the array. `effectiveTools` is the separate, turn-level answer to "what was actually
+ * offered" - under 'fast' that is `[]`, which is what tells a caller their array was discarded. The
+ * two are orthogonal, so the mode-dropped set stays derivable (requested minus effective minus
+ * unrecognized) without conflating a typo with a deliberate drop. Naming it for the registry rather
+ * than the outcome is what keeps it honest under 'fast', where a recognized id is dropped too and
+ * an outcome-shaped name (`ignoredTools`, `droppedTools`) would under-report.
  *
  * Undefined only when the layer made no decision AND had nothing to report: the enableTools path,
  * where the service layer resolves the set.
@@ -257,23 +279,23 @@ function buildToolMeta({
   toolMode,
   effectiveTools,
   autoSelectedTools,
-  ignoredTools,
+  unrecognizedTools,
 }: {
   toolMode: 'fast' | 'smart' | undefined;
   effectiveTools: B4MLLMTools[] | undefined;
   autoSelectedTools: B4MLLMTools[];
-  ignoredTools: string[];
+  unrecognizedTools: string[];
 }) {
-  const ignored = ignoredTools.length > 0 ? { ignoredTools } : {};
+  const unrecognized = unrecognizedTools.length > 0 ? { unrecognizedTools } : {};
 
   if (toolMode === 'smart') {
-    return { toolMode, autoSelectedTools, effectiveTools: effectiveTools ?? [], ...ignored };
+    return { toolMode, autoSelectedTools, effectiveTools: effectiveTools ?? [], ...unrecognized };
   }
   if (toolMode === 'fast') {
-    return { toolMode, effectiveTools: [], ...ignored };
+    return { toolMode, effectiveTools: [], ...unrecognized };
   }
-  if (effectiveTools?.length || ignoredTools.length > 0) {
-    return { effectiveTools: effectiveTools ?? [], ...ignored };
+  if (effectiveTools?.length || unrecognizedTools.length > 0) {
+    return { effectiveTools: effectiveTools ?? [], ...unrecognized };
   }
   return undefined;
 }
@@ -306,8 +328,9 @@ function transformToInternalFormat(
   userId: string,
   organizationId?: string,
   recommendations: ReturnType<typeof recommendTools> = [],
-  // Already filtered to known ids by the caller (unknowns are dropped there so the wire
-  // schema stays OpenAPI-representable, and so they can be reported back on the response).
+  // Already filtered to known ids AND deduped by the caller: unknowns are dropped there so the
+  // wire schema stays OpenAPI-representable and so they can be reported back on the response,
+  // and repeats are collapsed there because nothing downstream of this layer collapses them.
   requestedTools: B4MLLMTools[] = []
 ) {
   // Compute effective tools. `tools` is a top-level field with nothing marking it conditional on
