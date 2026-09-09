@@ -2794,6 +2794,7 @@ describe('ChatCompletionProcess', () => {
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
       promptMode?: 'raw';
+      requestTools?: string[];
       fabPromptMessages?: IMessage[];
       fabFileNotices?: FabFileNotice[];
     }) => {
@@ -2859,7 +2860,7 @@ describe('ChatCompletionProcess', () => {
       const body = {
         ...startQuestParams,
         ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
-        tools: [],
+        tools: opts.requestTools ?? [],
         projectId: undefined,
         organizationId: undefined,
       };
@@ -3094,6 +3095,25 @@ describe('ChatCompletionProcess', () => {
           });
           expect(retrieval?.knowledgeBaseGuidanceInjected).toBe(false);
           expect(retrieval).toHaveProperty('knowledgeBaseGuidanceInjected');
+        });
+
+        // The gate ToolBuilder does not own. A promptMode caller cannot receive the section at
+        // all - filterByPromptMode admits `toolPrompt` under no mode - but naming the tool itself
+        // still gets it OFFERED, since resolveEnabledTools unions requestTools ahead of
+        // skipAutoOffers. `raw` also leaves forced retrieval off, so the turn lands in the
+        // optional fold: recording `true` here would credit the treatment arm with a turn that
+        // saw no guidance, the one contamination the three-arm split exists to prevent.
+        it('records false under promptMode, where the tool prompt is filtered out entirely', async () => {
+          withGuidance('# KNOWLEDGE BASE\n\nsearch when it would settle the question.');
+          const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+            promptMode: 'raw',
+            requestTools: ['search_knowledge_base'],
+          });
+
+          expect(enabledToolsArg).toContain('search_knowledge_base');
+          expect(retrieval).toMatchObject({ mode: 'optional', knowledgeBaseGuidanceInjected: false });
         });
       });
 

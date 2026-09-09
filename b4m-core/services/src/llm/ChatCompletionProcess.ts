@@ -150,6 +150,7 @@ import {
   filterByPromptMode,
   filterFeaturesByPromptMode,
   markShareablePrefixBoundary,
+  PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
@@ -2715,9 +2716,20 @@ export class ChatCompletionProcess {
       // whether the guidance section actually shipped. Read 2-arg on purpose: a cleared setting
       // returns '' and the section drops out, which is its documented off switch.
       const knowledgeBaseGuidance = getSettingsValue('KnowledgeBaseRetrievalPrompt', defaultAdminSettings);
-      // Mirrors ToolBuilder.buildToolPrompt's gate exactly. One const feeds both the seed and the
-      // call below so the recorded flag and the actual injection cannot drift apart.
-      const knowledgeBaseGuidanceInjected = knowledgeToolOffered && Boolean(knowledgeBaseGuidance);
+      // ToolBuilder's gate is not the last word: its output is tagged `toolPrompt`, which
+      // filterByPromptMode admits under no promptMode. A promptMode caller naming
+      // search_knowledge_base itself still gets knowledgeToolOffered (resolveEnabledTools unions
+      // requestTools before skipAutoOffers is consulted), so without this a `raw` turn - forced
+      // retrieval off, hence in the optional fold - would record `true` having received no
+      // section, biasing the exact arm the flag exists to measure. Read off PROMPT_MODE_SOURCES
+      // rather than `!promptMode` so admitting `toolPrompt` to a mode moves the flag with it.
+      const toolPromptAdmitted = !promptMode || PROMPT_MODE_SOURCES[promptMode].includes('toolPrompt');
+      // Mirrors ToolBuilder.buildToolPrompt's gate, narrowed by the prompt-mode filter above. The
+      // two ToolBuilder conditions are the same consts handed to the call below, so the recorded
+      // flag and the actual emission cannot drift; the third sits downstream of that call and has
+      // no ToolBuilder input to mirror.
+      const knowledgeBaseGuidanceInjected =
+        toolPromptAdmitted && knowledgeToolOffered && Boolean(knowledgeBaseGuidance);
       if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,

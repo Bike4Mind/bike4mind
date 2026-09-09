@@ -428,9 +428,11 @@ export const RetrievalSummarySchema = z.object({
    * explicit `false` rather than collapse it into absent - see mergeRetrievalSummary, which uses
    * `??` and deliberately not `||` for that reason.
    *
-   * MUST STAY IN SYNC with the gate in ToolBuilder.buildToolPrompt: the section ships iff the tool
-   * is offered AND the guidance string is non-empty, and this records that same conjunction. The
-   * two are computed from one const at the ChatCompletionProcess seed site so they cannot drift.
+   * MUST STAY IN SYNC with TWO gates, not one. ToolBuilder.buildToolPrompt emits the section iff
+   * the tool is offered AND the guidance string is non-empty; filterByPromptMode then drops the
+   * whole `toolPrompt` source, which no promptMode admits, so an offered tool is not sufficient.
+   * The ChatCompletionProcess seed site conjoins all three, and hands the first two to
+   * buildToolPrompt as the same consts, so the flag and the actual emission cannot drift.
    */
   knowledgeBaseGuidanceInjected: z.boolean().optional(),
   /**

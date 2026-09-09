@@ -16,16 +16,6 @@ type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
  * write a retrieval summary through persistRunAsQuest but never pass the seed site and so would
  * otherwise land in the denominator with no offer behind them.
  */
-/**
- * One arm of the guidance A/B. Same numerator as the headline rate (the model choosing to
- * retrieve), over the subset of offered turns in that arm.
- */
-export type GuidanceArm = {
-  turns: number;
-  retrievedTurns: number;
-  rate: number | null;
-};
-
 export type OptionalPathRetrievalRate = {
   /** Turns the model was offered retrieval on, with nothing forcing it. */
   offeredTurns: number;
@@ -86,6 +76,16 @@ export type OptionalPathRetrievalRate = {
    * it is worth telling them apart before concluding it is all agent mode.
    */
   unclassifiedTurns: number;
+};
+
+/**
+ * One arm of the guidance A/B. Same numerator as the headline rate (the model choosing to
+ * retrieve), over the subset of offered turns in that arm.
+ */
+export type GuidanceArm = {
+  turns: number;
+  retrievedTurns: number;
+  rate: number | null;
 };
 
 const emptyRate = (): OptionalPathRetrievalRate => ({
