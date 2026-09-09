@@ -10,6 +10,7 @@ import {
   parseImageModelOverride,
   parseDataLakeCommand,
   isDataLakeCommand,
+  looksLikeBareDataLakeMention,
   AGENT_REGISTRY,
 } from './agent-parser';
 import { ImageModels } from '@bike4mind/common';
@@ -222,6 +223,36 @@ describe('@datalake command', () => {
     // not a leading mention, and word-boundary guard
     expect(isDataLakeCommand(parseCommand('hey @datalake'))).toBe(false);
     expect(isDataLakeCommand(parseCommand('@datalaked add'))).toBe(false);
+  });
+
+  describe('looksLikeBareDataLakeMention (#2027 usage hint)', () => {
+    it('is true for the literal word with no leading @, anchored to message-start', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datalake list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('DataLake'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('<@U12345> datalake list'))).toBe(true);
+    });
+
+    it('is false when "datalake" appears mid-message rather than at the start', () => {
+      // Anchored the same way as DATA_LAKE_MENTION_PATTERN - an ordinary sentence that happens to
+      // mention the product by name partway through is not an attempt to invoke it.
+      expect(looksLikeBareDataLakeMention(parseCommand('please datalake help'))).toBe(false);
+    });
+
+    it('is false for a real @datalake command, so the two are never double-handled', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('@datalake add to sales https://x.com'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('@datalake'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('<@U12345> @datalake list'))).toBe(false);
+    });
+
+    it('is false when the word never appears at all', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('summarize this thread'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('@dev create an issue'))).toBe(false);
+    });
+
+    it('does not fire on a mere substring - word boundary only, no fuzzy match', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datalakes are cool'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('metadatalake'))).toBe(false);
+    });
   });
 
   it('selectAgent never routes @datalake to an LLM persona (falls back to the general agent)', () => {
