@@ -89,7 +89,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     } as never);
     expect(findActive).toHaveBeenCalledWith([], [], ['org-a', 'org-b'], 'u1', {
       grantedLakeIds: [],
-      orgGrantedLakeIds: [],
+      orgGrantedLakes: {},
     });
   });
 
@@ -102,7 +102,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       entitlementKeys: ['k:pro'],
     });
     expect(findMembershipOrgIds).toHaveBeenCalledWith('u1');
-    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], ['org123'], 'u1', { grantedLakeIds: [], orgGrantedLakeIds: [] });
+    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], ['org123'], 'u1', { grantedLakeIds: [], orgGrantedLakes: {} });
   });
 
   it('resolves an empty membership set (never calling db.organizations) for an id-less caller', async () => {
@@ -115,7 +115,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     // An id-less caller is a member of nothing - the resolver must not even ask, since there is
     // no id to resolve membership for.
     expect(findMembershipOrgIds).not.toHaveBeenCalled();
-    expect(spy).toHaveBeenCalledWith([], [], [], undefined, { grantedLakeIds: [], orgGrantedLakeIds: [] });
+    expect(spy).toHaveBeenCalledWith([], [], [], undefined, { grantedLakeIds: [], orgGrantedLakes: {} });
   });
 
   it('string-coerces an ObjectId-like id before resolving membership and querying', async () => {
@@ -127,7 +127,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       user: { id: { toString: () => 'user-oid' }, tags: [] },
     });
     expect(findMembershipOrgIds).toHaveBeenCalledWith('user-oid');
-    expect(spy).toHaveBeenCalledWith([], [], [], 'user-oid', { grantedLakeIds: [], orgGrantedLakeIds: [] });
+    expect(spy).toHaveBeenCalledWith([], [], [], 'user-oid', { grantedLakeIds: [], orgGrantedLakes: {} });
   });
 
   it('passes the resolved membership set through to the collection query unchanged', async () => {
@@ -141,7 +141,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     });
     expect(spy).toHaveBeenCalledWith([], [], ['org-hex', 'org-hex-2'], 'u1', {
       grantedLakeIds: [],
-      orgGrantedLakeIds: [],
+      orgGrantedLakes: {},
     });
   });
 
@@ -475,7 +475,7 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     // The id reaches the datastore pre-filter too, not only the in-memory restoration.
     expect(ctxWithGrant.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith([], [], [], 'grantee', {
       grantedLakeIds: ['theirs'],
-      orgGrantedLakeIds: [],
+      orgGrantedLakes: {},
     });
   });
 

@@ -295,6 +295,21 @@ const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): 
 // `.select()`; the `find` OVERRIDE covers the inherited one, which is published on
 // IDataLakeRepository and is how every service outside this file reads lakes - except when that
 // caller names a projection itself, in which case the override steps aside entirely.
+/**
+ * Mongo mirror of the gate's `containedGrants` (b4m-core/services `resolveLakeReadAccess`): ONE arm
+ * per granting org, so an org-principal grant reaches only a lake inside the org that issued it. The
+ * granting org has to be compared here because it is the only place the lake's own org is known; a
+ * flat id list under the caller's own org constraint asks the weaker question "is the lake in ANY of
+ * my orgs", which a caller belonging to two orgs passes with a grant from the wrong one. An org-less
+ * lake matches no arm, matching the writer's refusal to grant an org a lake that has none.
+ *
+ * Each arm bypasses the requirement gate and Private-by-default, never the org.
+ */
+const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string, unknown>[] =>
+  Object.entries(orgGrantedLakes ?? {})
+    .filter(([orgId, lakeIds]) => !!orgId && lakeIds.length > 0)
+    .map(([orgId, lakeIds]) => ({ organizationId: orgId, _id: { $in: lakeIds } }));
+
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
 
@@ -385,7 +400,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: { grantedLakeIds?: string[]; orgGrantedLakeIds?: string[] }
+    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
   ): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
@@ -411,14 +426,6 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (keys.length > 0) {
       nonOwnerArms.push({ requiredEntitlement: { $in: keys } });
     }
-    // ORG-principal grant arm. A nonOwnerArm on purpose: these are ANDed with the org prerequisite
-    // below, which IS decision 12 (an org grant may not reach outside its own org) asserted where
-    // the lake's org actually lives. So it bypasses the gate and Private-by-default, not the org.
-    const orgGrantedLakeIds = opts?.orgGrantedLakeIds ?? [];
-    if (orgGrantedLakeIds.length > 0) {
-      nonOwnerArms.push({ _id: { $in: orgGrantedLakeIds } });
-    }
-
     // Org prerequisite (hard): org-less lakes OR lakes in one of the caller's orgs. null/'' form
     // for DocumentDB safety. Combined with the grants via $and - two top-level $or keys collide.
     const orgConstraint =
@@ -440,9 +447,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // extended to a transferred/delegated owner-curator-reader, and it is MEANT to cross orgs).
     // Ids are pre-resolved by the caller from listByPrincipal (grantedLakeReachFor); an empty list
     // adds no arm. This is what keeps RETRIEVAL in step with browse - without it a transferred
-    // owner can open a lake but not ground on it. The org-principal half is a nonOwnerArm above.
+    // owner can open a lake but not ground on it.
     const grantedLakeIds = opts?.grantedLakeIds ?? [];
     if (grantedLakeIds.length > 0) accessArms.push({ _id: { $in: grantedLakeIds } });
+
+    // The ORG-principal half. Each arm carries its own `organizationId: <granting org>` conjunct, so
+    // it needs no separate org prerequisite - see `orgGrantArms`.
+    accessArms.push(...orgGrantArms(opts?.orgGrantedLakes));
 
     // Owner bypass (mirrors findAccessible): the creator always retrieves their own lakes,
     // including private gateless ones. Only when a userId is supplied.
@@ -475,7 +486,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       statuses?: DataLakeStatus[];
       includePublic?: boolean;
       grantedLakeIds?: string[];
-      orgGrantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
     }
   ): Promise<IDataLakeDocument[]> {
     const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
@@ -532,13 +543,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     const grantedLakeIds = opts?.grantedLakeIds ?? [];
     if (grantedLakeIds.length > 0) nonOwnerArms.push({ _id: { $in: grantedLakeIds } });
 
-    // ORG-principal grant arm: bypasses the gate and Private-by-default, NOT the org prerequisite.
-    // That conjunct is decision 12 (an org grant may not reach outside its own org) asserted where
-    // the lake's org lives - the id path's counterpart to `containedGrants` at the read gate.
-    const orgGrantedLakeIds = opts?.orgGrantedLakeIds ?? [];
-    if (orgGrantedLakeIds.length > 0) {
-      nonOwnerArms.push({ $and: [orgConstraint, { _id: { $in: orgGrantedLakeIds } }] });
-    }
+    // ORG-principal grant arms, one per granting org (see `orgGrantArms`). Suppressed alongside the
+    // public arm in the archived/deleted MANAGEMENT views: an org grant carries no role here, so a
+    // reader-level one must not surface someone else's lake in a restore/cleanup list.
+    if (includePublic) nonOwnerArms.push(...orgGrantArms(opts?.orgGrantedLakes));
 
     const filter: Record<string, unknown> = ctx.isAdmin
       ? { status: { $in: statuses } }
@@ -558,7 +566,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       limit?: number;
       offset?: number;
       grantedLakeIds?: string[];
-      orgGrantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }> {
     // Clamp paging here (defense in depth) even though the route also validates: a caller
@@ -586,21 +594,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
         requirementConstraint(viewer.userTags, viewer.entitlementKeys),
       ];
       if (grantedLakeIds.length > 0) reachArms.push({ _id: { $in: grantedLakeIds } });
-      // The org-principal half carries the org prerequisite the user half does not - decision 12,
-      // same rule as findAccessible's. A public lake is not exempt: its gate still binds here, and
-      // an org grant must not be the thing that lifts it for a member of some other org.
-      const orgGrantedLakeIds = opts?.orgGrantedLakeIds ?? [];
-      const memberOrgIds = viewer.organizationIds ?? [];
-      if (orgGrantedLakeIds.length > 0) {
-        reachArms.push({
-          $and: [
-            { _id: { $in: orgGrantedLakeIds } },
-            memberOrgIds.length > 0
-              ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
-              : { organizationId: { $in: [null, ''] } },
-          ],
-        });
-      }
+      // The org-principal half carries the granting-org conjunct the user half does not, same rule as
+      // findAccessible's. A public lake is not exempt: its gate still binds here, and an org grant
+      // must not be the thing that lifts it for a member of some other org.
+      reachArms.push(...orgGrantArms(opts?.orgGrantedLakes));
       (filter.$and as Record<string, unknown>[]).push({ $or: reachArms });
     }
 

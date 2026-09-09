@@ -49,9 +49,7 @@ interface BrowsePublicDataLakesAdapters {
 /**
  * The discover/browse catalog of public data lakes. Returns one page of the public lakes this
  * caller can reach (the repo enforces public + active + the same gate and grant arms
- * `findAccessible` applies, so discover and the list/read gate never disagree; retrieval via
- * `findActiveByUserTagsAndEntitlements` has no grant arm yet - see the interlock in
- * `resolveLakeReadAccess.ts`) enriched with the preview
+ * `findAccessible` applies, so discover and the list/read gate never disagree) enriched with the preview
  * metadata the catalog renders: owner display name, file count, total size, plus per-caller
  * `isOwn`/`canManage` so the UI can gate management affordances. This is a read-only discovery
  * surface - it grants nothing; access is already ambient once a lake is public (a public
@@ -70,7 +68,7 @@ export const browsePublicDataLakes = async (
   // terms it lists on - the arms `listDataLakes` already passes to findAccessible. Both the flag
   // read and the grant lookup cost one query per page on this load-more path.
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     actor.userId,
     actor.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -82,7 +80,7 @@ export const browsePublicDataLakes = async (
     limit: opts.limit,
     offset: opts.offset,
     grantedLakeIds,
-    orgGrantedLakeIds,
+    orgGrantedLakes,
   });
 
   // Batch-resolve owners in one round-trip. Dedupe ids and drop blanks so a lake with a

@@ -302,7 +302,7 @@ export const listDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -313,7 +313,7 @@ export const listDataLakes = async (
     dynamicLakes = await db.dataLakes.findAccessible(ctx, {
       statuses: ['draft', 'active'],
       grantedLakeIds,
-      orgGrantedLakeIds,
+      orgGrantedLakes,
     });
   } catch {
     // DB may not have the collection yet - fall through to hardcoded
@@ -418,7 +418,7 @@ export const listArchivedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -428,7 +428,7 @@ export const listArchivedDataLakes = async (
     statuses: ['archived'],
     includePublic: false,
     grantedLakeIds,
-    orgGrantedLakeIds,
+    orgGrantedLakes,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
@@ -444,7 +444,7 @@ export const listDeletedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const { grantedLakeIds, orgGrantedLakeIds } = await grantedLakeReachFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -454,7 +454,7 @@ export const listDeletedDataLakes = async (
     statuses: ['deleted'],
     includePublic: false,
     grantedLakeIds,
-    orgGrantedLakeIds,
+    orgGrantedLakes,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);

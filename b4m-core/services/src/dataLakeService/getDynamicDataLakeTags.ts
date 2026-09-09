@@ -268,7 +268,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     // of the access model cannot drift: owner/curator always, reader + org principals only under
     // the enforced cutover. Failing closed to no grants rather than propagating - a grant lookup
     // that cannot be read must narrow retrieval, never throw a whole chat turn away.
-    let reach: LakeGrantReach = { grantedLakeIds: [], orgGrantedLakeIds: [] };
+    let reach: LakeGrantReach = { grantedLakeIds: [], orgGrantedLakes: {} };
     if (userId && context.db.dataLakeAccessGrants) {
       try {
         const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger);
@@ -301,7 +301,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       }
       // Intersected with what the query actually returned, so a stale grant naming a deleted or
       // archived lake cannot put an id into the restoration set below.
-      const grantedIdSet = new Set([...reach.grantedLakeIds, ...reach.orgGrantedLakeIds]);
+      const grantedIdSet = new Set([...reach.grantedLakeIds, ...Object.values(reach.orgGrantedLakes).flat()]);
       for (const dl of dbLakes) {
         if (grantedIdSet.has(dl.id)) grantedDynamicIds.add(dl.id);
       }

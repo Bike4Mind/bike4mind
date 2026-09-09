@@ -151,20 +151,24 @@ describe('resolveLakeReadAccess - report-only vs enforce', () => {
   });
 
   it('org grant to a member: diverges in report-only, opens under enforce', () => {
+    // The lake must live in the granting org - an org grant is contained to it, so an org-less lake
+    // is the wrong fixture for the membership question (see containedGrants).
+    const orgLake = lake({ organizationId: 'orgA', requiredUserTag: 'TagMemberLacks' });
     const memberCtx = ctx({ userId: 'm1', organizationIds: ['orgA'] });
     const orgGrant = [grant('reader', 'orgA', 'organization')];
-    expect(resolveLakeReadAccess(lake(), memberCtx, orgGrant, { enforceReadGrants: false })).toMatchObject({
+    expect(resolveLakeReadAccess(orgLake, memberCtx, orgGrant, { enforceReadGrants: false })).toMatchObject({
       allowed: false,
       readGrantAllows: true,
       diverges: true,
       enforced: false,
     });
-    expect(resolveLakeReadAccess(lake(), memberCtx, orgGrant, { enforceReadGrants: true }).allowed).toBe(true);
+    expect(resolveLakeReadAccess(orgLake, memberCtx, orgGrant, { enforceReadGrants: true }).allowed).toBe(true);
   });
 
   it('org grant to a NON-member: no divergence, stays denied', () => {
+    const orgLake = lake({ organizationId: 'orgA', requiredUserTag: 'TagOutsiderLacks' });
     const outsider = ctx({ userId: 'x1', organizationIds: ['orgB'] });
-    const d = resolveLakeReadAccess(lake(), outsider, [grant('reader', 'orgA', 'organization')], {
+    const d = resolveLakeReadAccess(orgLake, outsider, [grant('reader', 'orgA', 'organization')], {
       enforceReadGrants: true,
     });
     expect(d).toMatchObject({ allowed: false, readGrantAllows: false, diverges: false });
@@ -222,7 +226,7 @@ describe('resolveEnforceReadGrants - fail-safe flag read', () => {
   });
 });
 
-describe('containedGrants - decision 12 asserted at read time', () => {
+describe('containedGrants - org containment asserted at read time', () => {
   const orgGrant = (orgId: string) => grant('reader', orgId, 'organization');
 
   it('drops an ORG grant naming an org that is not the lake own org', async () => {
@@ -231,10 +235,13 @@ describe('containedGrants - decision 12 asserted at read time', () => {
     expect(containedGrants(lake({ organizationId: 'orgA' }), rows)).toEqual(rows);
   });
 
-  it('honors an ORG grant on an org-less (personal) lake - there is no boundary to cross', () => {
+  it('drops an ORG grant on an org-less (personal) lake - the writer refuses to create one', () => {
+    // The read side matches the writer rather than being laxer than it: otherwise moving a lake
+    // org -> personal leaves behind a grant this gate would honor forever, and lake deletion is the
+    // only grant-removal path in the tree.
     const rows = [orgGrant('orgA')];
-    expect(containedGrants(lake({ organizationId: undefined }), rows)).toEqual(rows);
-    expect(containedGrants(lake({ organizationId: '' }), rows)).toEqual(rows);
+    expect(containedGrants(lake({ organizationId: undefined }), rows)).toEqual([]);
+    expect(containedGrants(lake({ organizationId: '' }), rows)).toEqual([]);
   });
 
   it('never touches USER grants - those are meant to cross orgs (a transferred owner who moved)', () => {
@@ -289,10 +296,10 @@ describe('grantedLakeReachFor - the two reach sets earn different bypasses', () 
     );
 
     const reportOnly = await grantedLakeReachFor('u1', ['orgA'], grants, false);
-    expect(reportOnly).toEqual({ grantedLakeIds: ['owned'], orgGrantedLakeIds: [] });
+    expect(reportOnly).toEqual({ grantedLakeIds: ['owned'], orgGrantedLakes: {} });
 
     const enforced = await grantedLakeReachFor('u1', ['orgA'], grants, true);
-    expect(enforced).toEqual({ grantedLakeIds: ['owned', 'read'], orgGrantedLakeIds: ['shared'] });
+    expect(enforced).toEqual({ grantedLakeIds: ['owned', 'read'], orgGrantedLakes: { orgA: ['shared'] } });
   });
 
   it('gives a lake reached both ways the stronger (unconditional) arm only', async () => {
@@ -305,11 +312,28 @@ describe('grantedLakeReachFor - the two reach sets earn different bypasses', () 
 
     expect(await grantedLakeReachFor('u1', ['orgA'], grants, true)).toEqual({
       grantedLakeIds: ['both'],
-      orgGrantedLakeIds: [],
+      orgGrantedLakes: {},
+    });
+  });
+
+  it('keys each org grant by the org that ISSUED it, for a caller who belongs to two', async () => {
+    // The containment the repo arms rest on: flattening these into one id list asks the datastore
+    // only "is the lake in ANY of my orgs", which an orgA grant on an orgB lake passes.
+    const byOrg: Record<string, unknown[]> = {
+      orgA: rows({ dataLakeId: 'lake-a', role: 'reader', principalType: 'organization', principalId: 'orgA' }),
+      orgB: rows({ dataLakeId: 'lake-b', role: 'reader', principalType: 'organization', principalId: 'orgB' }),
+    };
+    const grants = {
+      listByPrincipal: vi.fn(async (type: string, id: string) => (type === 'user' ? [] : (byOrg[id] ?? []))) as never,
+    };
+
+    expect(await grantedLakeReachFor('u1', ['orgA', 'orgB'], grants, true)).toEqual({
+      grantedLakeIds: [],
+      orgGrantedLakes: { orgA: ['lake-a'], orgB: ['lake-b'] },
     });
   });
 
   it('an unwired grant repo reaches nothing', async () => {
-    expect(await grantedLakeReachFor('u1', ['orgA'])).toEqual({ grantedLakeIds: [], orgGrantedLakeIds: [] });
+    expect(await grantedLakeReachFor('u1', ['orgA'])).toEqual({ grantedLakeIds: [], orgGrantedLakes: {} });
   });
 });

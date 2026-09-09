@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import type { AccessContext, IDataLake } from '@bike4mind/common';
+import type { AccessContext, DataLakeStatus, IDataLake } from '@bike4mind/common';
 import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { dataLakeRepository, dataLakeBatchRepository, DataLakeModel } from './DataLakeModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -206,7 +206,7 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     ).toEqual([]);
   });
 
-  it('ORG grant arm lifts the gate but NOT the org prerequisite (decision 12)', async () => {
+  it('ORG grant arm lifts the gate only inside the GRANTING org', async () => {
     // The containment the grant WRITE path was meant to hold and does not exist yet: an org grant
     // may not reach a lake outside its own org. Asserted in the datastore because that is where the
     // lake's org lives - the id path cannot see it (see containedGrants for the gate's copy).
@@ -218,18 +218,42 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     );
     const personal = await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'carol' }));
 
-    // Bob is a member of orgA only. The org arm reaches the orgA lake past its gate, and stops at
-    // the orgB one even though the id was granted.
+    // Bob is a member of orgA only. The orgA arm reaches the orgA lake past its gate, and stops at
+    // the orgB one and the org-less one even though both ids were granted by orgA.
     const memberOfA = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'bob', {
-      orgGrantedLakeIds: [inA.id, inB.id, personal.id],
+      orgGrantedLakes: { orgA: [inA.id, inB.id, personal.id] },
     });
-    expect(memberOfA.map(l => l.slug).sort()).toEqual(['gated-in-a', 'personal']);
+    expect(memberOfA.map(l => l.slug).sort()).toEqual(['gated-in-a']);
 
     // The USER arm has no such constraint - it is meant to cross orgs.
     const asUserGrant = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'bob', {
       grantedLakeIds: [inB.id],
     });
     expect(asUserGrant.map(l => l.slug)).toEqual(['gated-in-b']);
+  });
+
+  it('an ORG grant does not reach a lake in the caller OTHER org (multi-org caller)', async () => {
+    // The whole point of keying reach by the GRANTING org. Bob belongs to orgA and orgB, so a bare
+    // "is the lake in any of my orgs" prerequisite passes for an orgA-issued grant on an orgB lake -
+    // and on the retrieval path there is no second gate behind this filter.
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(
+      await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA', 'orgB'], 'bob', {
+        orgGrantedLakes: { orgA: [inB.id] },
+      })
+    ).toEqual([]);
+
+    // The same lake granted by its OWN org does resolve, so this is containment and not a dead arm.
+    expect(
+      (
+        await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA', 'orgB'], 'bob', {
+          orgGrantedLakes: { orgB: [inB.id] },
+        })
+      ).map(l => l.slug)
+    ).toEqual(['gated-in-b']);
   });
 
   it('grant arm stays bounded by status: a grant on a DRAFT lake does not retrieve it', async () => {
@@ -282,22 +306,61 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     ).toEqual(['transferred']);
   });
 
-  it('the ORG-grant arm lifts the gate but not the org prerequisite (decision 12)', async () => {
+  it('the ORG-grant arm lifts the gate only inside the GRANTING org, for a caller in both orgs', async () => {
     const inA = await dataLakeRepository.create(
       baseLake({ slug: 'gated-in-a', createdByUserId: 'alice', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
     );
     const inB = await dataLakeRepository.create(
       baseLake({ slug: 'gated-in-b', createdByUserId: 'alice', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
     );
+    const personal = await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'alice' }));
 
     const bobInA = ctx({ userId: 'bob', organizationIds: ['orgA'] });
     expect(
-      (await dataLakeRepository.findAccessible(bobInA, { orgGrantedLakeIds: [inA.id, inB.id] })).map(l => l.slug)
+      (await dataLakeRepository.findAccessible(bobInA, { orgGrantedLakes: { orgA: [inA.id, inB.id] } })).map(
+        l => l.slug
+      )
     ).toEqual(['gated-in-a']);
+
+    // Bob in BOTH orgs: the orgA grant still stops at the orgA lake. Membership in orgB is not what
+    // the orgA grant entitles him to.
+    const bobInBoth = ctx({ userId: 'bob', organizationIds: ['orgA', 'orgB'] });
+    expect(
+      (await dataLakeRepository.findAccessible(bobInBoth, { orgGrantedLakes: { orgA: [inA.id, inB.id] } })).map(
+        l => l.slug
+      )
+    ).toEqual(['gated-in-a']);
+
+    // An org-less (personal) lake matches no org arm - the same rule the grant writer applies.
+    expect(await dataLakeRepository.findAccessible(bobInBoth, { orgGrantedLakes: { orgA: [personal.id] } })).toEqual(
+      []
+    );
+
     // Same ids on the USER arm, which is unconstrained by design.
     expect(
       (await dataLakeRepository.findAccessible(bobInA, { grantedLakeIds: [inA.id, inB.id] })).map(l => l.slug).sort()
     ).toEqual(['gated-in-a', 'gated-in-b']);
+  });
+
+  it('the ORG-grant arm is dropped in the archived/deleted MANAGEMENT views', async () => {
+    // Those views pass includePublic:false because restore/cleanup are owner/admin-only. An org
+    // grant carries no role through the reach, so a reader-level one must not surface someone
+    // else's lake there.
+    const archived = await dataLakeRepository.create(
+      baseLake({
+        slug: 'archived-in-a',
+        createdByUserId: 'alice',
+        organizationId: 'orgA',
+        requiredUserTag: 'TagBobLacks',
+        status: 'archived',
+      })
+    );
+    const bobInA = ctx({ userId: 'bob', organizationIds: ['orgA'] });
+    const opts = { statuses: ['archived'] as DataLakeStatus[], orgGrantedLakes: { orgA: [archived.id] } };
+
+    expect(await dataLakeRepository.findAccessible(bobInA, { ...opts, includePublic: false })).toEqual([]);
+    // The arm is live in the browse/read view, so this is a view distinction and not a dead arm.
+    expect((await dataLakeRepository.findAccessible(bobInA, opts)).map(l => l.slug)).toEqual(['archived-in-a']);
   });
 
   it('a gateless ORG lake is visible to org members; a tag lake to tag holders; cross-org/non-holders excluded', async () => {
@@ -548,6 +611,22 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     // Admin: gate bypassed entirely, but the catalog is still public + active only.
     const admin = await dataLakeRepository.findPublicLakes(viewer({ isAdmin: true }));
     expect(admin.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'gated']);
+  });
+
+  it('honors an ORG grant on a public lake only inside the GRANTING org', async () => {
+    // A public lake is not exempt from its own gate, and an org grant must not be the thing that
+    // lifts it for a member of some other org - the same containment findAccessible applies.
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'pub-gated-in-b', isPublic: true, organizationId: 'orgB', requiredUserTag: 'Opti' })
+    );
+    const inBoth = viewer({ userId: 'bob', organizationIds: ['orgA', 'orgB'] });
+
+    expect((await dataLakeRepository.findPublicLakes(inBoth, { orgGrantedLakes: { orgA: [inB.id] } })).lakes).toEqual(
+      []
+    );
+    expect(
+      (await dataLakeRepository.findPublicLakes(inBoth, { orgGrantedLakes: { orgB: [inB.id] } })).lakes.map(l => l.slug)
+    ).toEqual(['pub-gated-in-b']);
   });
 
   it('agrees with findAccessible on which public lakes a caller can see', async () => {

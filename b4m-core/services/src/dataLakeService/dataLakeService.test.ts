@@ -489,7 +489,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
       statuses: ['draft', 'active'],
       grantedLakeIds: [],
-      orgGrantedLakeIds: [],
+      orgGrantedLakes: {},
     });
   });
 
@@ -3584,7 +3584,7 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
       limit: 10,
       offset: 20,
       grantedLakeIds: [],
-      orgGrantedLakeIds: [],
+      orgGrantedLakes: {},
     });
   });
 

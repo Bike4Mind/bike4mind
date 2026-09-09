@@ -52,12 +52,12 @@ export interface LakeAccessLogger {
  * of any role reaching a plain member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP
  * (`ctx.organizationIds`), distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
  *
- * Org membership never crosses orgs (epic decision 12). This function does not see the lake, so the
- * containment is applied by the caller BEFORE the rows reach here - `containedGrants` at the gate,
- * and the org-constrained repo arm on the id-resolution path (see `grantedLakeReachFor`). A caller
- * that hands over raw rows gets no containment, which is why both live in this file.
+ * An org grant never reaches a lake outside the granting org. This function does not see the lake,
+ * so the containment is applied by the caller BEFORE the rows reach here - `containedGrants` at the
+ * gate, and the per-granting-org repo arms on the id-resolution path (see `grantedLakeReachFor`). A
+ * caller that hands over raw rows gets no containment, which is why both live in this file.
  *
- * STILL MUST STAY IN SYNC WITH THE WRITE PATH: the read side now asserts decision 12 as defense in
+ * STILL MUST STAY IN SYNC WITH THE WRITE PATH: the read side now asserts that rule as defense in
  * depth, but whoever builds the member-management write path (grant a reader / grant an org - no
  * such producer exists yet; only createDataLake seeds an owner and transferLakeOwnership demotes to
  * curator) MUST still reject an org-principal grant whose org is not the lake's own org, so a bad
@@ -76,21 +76,29 @@ export function resolveReadGrant(
 }
 
 /**
- * Decision 12 at read time: an ORG-principal grant is honored only on a lake belonging to that same
- * org. An org-less (personal) lake keeps its org grants - there is no boundary to cross, and that is
- * the "share my personal lake with my team" shape. USER-principal grants are untouched: they are
- * meant to cross orgs (a transferred owner who has since moved).
+ * Org containment at read time: an ORG-principal grant is honored ONLY on a lake belonging to that
+ * same org - compared against the GRANTING org, never against "some org the caller happens to be in"
+ * (a caller in two orgs would otherwise carry an orgA grant onto an orgB lake). An org-less
+ * (personal) lake therefore matches no org grant, which is the same rule the grant writer applies
+ * when it refuses to create one; without it, moving a lake org -> personal would leave a grant this
+ * gate honored forever, since lake deletion is the only grant-removal path in the tree.
+ *
+ * USER-principal grants are untouched: they are meant to cross orgs (a transferred owner who has
+ * since moved).
  *
  * Defense in depth, not the primary guard - the write path is still expected to refuse such a row
  * (see resolveReadGrant). It exists because enforcement ships before that writer does, so without it
  * the containment property would rest on nothing.
+ *
+ * MUST STAY EQUIVALENT to the per-granting-org repo arms built from `LakeGrantReach.orgGrantedLakes`
+ * (DataLakeModel `orgGrantArms`): that is the same rule on the id-resolution path, which has no
+ * second gate behind it.
  */
 export const containedGrants = <T extends LakeGrant>(
   lake: Pick<IDataLakeDocument, 'organizationId'>,
   grants: readonly T[]
 ): T[] => {
   const lakeOrgId = lake.organizationId ? String(lake.organizationId) : '';
-  if (!lakeOrgId) return [...grants];
   return grants.filter(g => g.principalType !== 'organization' || g.principalId === lakeOrgId);
 };
 
@@ -171,7 +179,7 @@ export async function resolveEnforceReadGrants(
   if (intent && !READ_GRANT_ENFORCEMENT_READY) {
     logger?.warn?.(
       '[lakeReadGrantCutover] EnforceLakeReadGrants is ON but enforcement is code-gated off ' +
-        '(member-write + retrieval arms not wired); staying report-only'
+        '(member-write path not wired); staying report-only'
     );
     return false;
   }
@@ -195,11 +203,14 @@ export interface LakeGrantReach {
    */
   grantedLakeIds: string[];
   /**
-   * ORG-principal reach: bypasses the GATE only. The org prerequisite still applies, which is
-   * decision 12 (org membership never crosses orgs) asserted in the datastore, where the lake's own
-   * org lives - the id path's counterpart to `containedGrants` at the gate.
+   * ORG-principal reach, KEYED BY THE GRANTING ORG (orgId -> lake ids granted by that org).
+   * Bypasses the GATE only: each org's ids are ANDed in the datastore with `organizationId: orgId`,
+   * so a grant reaches only a lake inside the org that issued it - the id path's counterpart to
+   * `containedGrants` at the gate. Flattening this to a bare id list is what let an orgA grant lift
+   * the gate on an orgB lake for a caller who belongs to both, so the granting org must survive
+   * the trip to the repo.
    */
-  orgGrantedLakeIds: string[];
+  orgGrantedLakes: Record<string, string[]>;
 }
 
 /**
@@ -218,10 +229,10 @@ export const grantedLakeReachFor = async (
   grants?: PrincipalGrantLookup,
   includeReaders = false
 ): Promise<LakeGrantReach> => {
-  if (!grants) return { grantedLakeIds: [], orgGrantedLakeIds: [] };
+  if (!grants) return { grantedLakeIds: [], orgGrantedLakes: {} };
   const activeAsOf = new Date();
   const ids = new Set<string>();
-  const orgIds = new Set<string>();
+  const byOrg = new Map<string, Set<string>>();
 
   const userRows = await grants.listByPrincipal('user', userId, { activeAsOf });
   for (const row of userRows) {
@@ -235,12 +246,23 @@ export const grantedLakeReachFor = async (
   // how many orgs the caller belongs to.
   if (includeReaders && organizationIds.length > 0) {
     const orgRowSets = await Promise.all(
-      organizationIds.map(orgId => grants.listByPrincipal('organization', orgId, { activeAsOf }))
+      organizationIds.map(
+        async orgId => [orgId, await grants.listByPrincipal('organization', orgId, { activeAsOf })] as const
+      )
     );
-    for (const rows of orgRowSets) for (const row of rows) orgIds.add(row.dataLakeId);
+    for (const [orgId, rows] of orgRowSets) {
+      for (const row of rows) {
+        // A lake reached both ways needs only the stronger (unconditional) user arm.
+        if (ids.has(row.dataLakeId)) continue;
+        const bucket = byOrg.get(orgId) ?? new Set<string>();
+        bucket.add(row.dataLakeId);
+        byOrg.set(orgId, bucket);
+      }
+    }
   }
 
-  // A lake reached both ways needs only the stronger (unconditional) arm.
-  for (const id of ids) orgIds.delete(id);
-  return { grantedLakeIds: Array.from(ids), orgGrantedLakeIds: Array.from(orgIds) };
+  return {
+    grantedLakeIds: Array.from(ids),
+    orgGrantedLakes: Object.fromEntries(Array.from(byOrg, ([orgId, lakeIds]) => [orgId, Array.from(lakeIds)])),
+  };
 };
