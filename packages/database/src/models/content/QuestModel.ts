@@ -48,6 +48,20 @@ const LakeMemorySchema = subSchema({
   dataLakeTags: [{ type: String, required: false }],
 });
 
+// Injected retrieval volume (passages + characters + best similarity). Its own subSchema for a
+// DIFFERENT reason than LakeMemorySchema below: it has no array child, so nothing auto-vivifies
+// here. Declared inline, its `required` children would become unconditional validators, and a
+// quest carrying `retrieval` without a volume - the documented absent case - would throw
+// ValidationError on `promptMeta.retrieval.injected.chunks`. Absent-or-fully-present, and absence
+// is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
+// `default: undefined` on the path below is inert for a single nested subdocument (nothing
+// vivifies it) and kept only for symmetry with the siblings, where it does work.
+const InjectedVolumeSchema = subSchema({
+  chunks: { type: Number, required: true },
+  chars: { type: Number, required: true },
+  topScore: { type: Number, required: false },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -66,6 +80,10 @@ const RetrievalSummarySchema = subSchema({
   // default: undefined for the same auto-vivification reason as dataLakeTags above.
   injectedLakePromptIds: { type: [String], required: false, default: undefined },
   injectedLakePromptCount: { type: Number, required: false },
+  // default: undefined for the same auto-vivification reason as the paths above - and here it also
+  // preserves the field's presence contract, since a materialized empty object would report
+  // "unknown volume" as a recorded one.
+  injected: { type: InjectedVolumeSchema, required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as injectedLakePromptIds above.
   preauthorizedLakeIdsUsed: { type: [String], required: false, default: undefined },
 });

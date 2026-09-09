@@ -1,5 +1,6 @@
 import {
   adminSettingsRepository,
+  agentRepository,
   apiKeyRepository,
   sessionRepository,
   projectRepository,
@@ -119,6 +120,7 @@ const handler = baseApi().post(async (req, res) => {
           sessions: sessionRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          agents: agentRepository,
         },
         // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
         // and it is only needed when files are actually attached.

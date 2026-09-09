@@ -2632,6 +2632,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
           forcedSkipReason?: string;
           surfaces: string[];
           dataLakeTags: string[];
+          injected?: { chunks: number; chars: number; topScore?: number };
         };
       }
     )?.retrieval;
@@ -2678,6 +2679,10 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // on this topic" (so it must outrank 'ok' in the merge severity order), and it collapsing back
     // into 'failed' (the two have opposite remedies - re-vectorize vs retry).
     expect(retrieval?.outcome).toBe('not_indexed');
+    // A recorded zero, not an unknown: the scan ran to completion, so nothing was injected and
+    // that is a fact. `topScore` must be ABSENT - it is still the -1 sentinel here, and persisting
+    // it would read as a real (terrible) similarity rather than as no comparison at all.
+    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0 });
   });
 
   it('records ok when the library was scanned and nothing cleared the similarity floor', async () => {
@@ -2688,6 +2693,10 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     const { retrieval, messages } = await run(ctx);
     expect(retrieval?.outcome).toBe('ok');
     expect(retrieval?.attempted).toBe(true);
+    // THE case this field exists for: 'ok' alone made a fully-starved turn byte-identical to one
+    // that injected its whole budget. `topScore: 0` is the diagnostic - the best candidate was
+    // compared and scored 0, i.e. it missed the floor rather than never being looked at.
+    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0, topScore: 0 });
     // Still abstains to the user; 'ok' describes the retrieval, not the answer.
     expect(messages[0]?.content).toContain('does not cover this');
   });
@@ -2700,6 +2709,10 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // lakes the answer ended up grounded on - that narrower attribution is the LakeAccessEvent's
     // job (it derives from sourceFileIds and deliberately refuses a full-scope fallback).
     expect(retrieval?.dataLakeTags).toContain('datalake:x');
+    // The other half of the pair: a grounded turn reports the volume it grounded on. `chars` is
+    // the chunk text only ('text fileA'), never the heading, so it is comparable to the knowledge
+    // tools' number. Query and chunk vectors are identical here, hence a topScore of 1.
+    expect(retrieval?.injected).toEqual({ chunks: 1, chars: 'text fileA'.length, topScore: 1 });
     expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
   });
 
@@ -2707,6 +2720,9 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     const { retrieval } = await run(makeCtx({ searchThrows: true }));
     expect(retrieval?.outcome).toBe('failed');
     expect(retrieval?.attempted).toBe(true);
+    // Volume stays ABSENT on a failure: the scan broke mid-flight, so zero would be a lie.
+    // Absent means unknown, and that distinction is the whole presence contract.
+    expect(retrieval?.injected).toBeUndefined();
   });
 
   it('leaves no record when there is no question to retrieve for', async () => {
@@ -2739,6 +2755,8 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
         embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
         'summarize the attached figure'
       );
+      // No `injected` either: a turn that never searched has an unknown volume, not a zero one,
+      // which is what keeps "never asked" distinct from "asked and got nothing".
       expect(retrievalOf(withFiles)).toEqual({
         attempted: false,
         mode: 'forced',
