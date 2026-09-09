@@ -27,6 +27,21 @@ import { appendSetCookie, readCookie, secureAttribute } from './refreshCookie';
 // Path=/api so a single cookie covers every callback path (all live under /api).
 export const STATE_NONCE_COOKIE_NAME = 'b4m_oauth_nonce';
 export const OKTA_PKCE_COOKIE_NAME = 'b4m_okta_pkce';
+
+// Per-flow nonce slots. A signed-in user can have several *link* flows open at
+// once (Drive connect, Slack user-link, org Slack-connect); giving each its own
+// cookie slot means starting or completing one never overwrites, nor burns, a
+// sibling flow's still-pending nonce. Callers that omit a slot (login / SSO / MCP)
+// keep sharing the single base cookie, exactly as before.
+export const NONCE_SLOT = {
+  driveConnect: 'google-drive',
+  slackUserLink: 'slack-user-link',
+  orgSlackConnect: 'org-slack-connect',
+} as const;
+
+// A slot suffixes the base cookie name; no slot keeps the base cookie unchanged.
+const nonceCookieName = (slot?: string): string =>
+  slot ? `${STATE_NONCE_COOKIE_NAME}_${slot}` : STATE_NONCE_COOKIE_NAME;
 const FLOW_COOKIE_PATH = '/api';
 
 // 10 minutes: covers a slow IdP round-trip with room to spare (matches the
@@ -49,16 +64,18 @@ function expireFlowCookie(res: Response, name: string): void {
 /**
  * Sets the browser-binding nonce cookie and returns the hash to embed as the state
  * token's `nh` claim. Call once at flow-start (before minting the state token).
+ * Pass a NONCE_SLOT to use a per-flow cookie so concurrent link flows do not evict
+ * each other; the matching readStateNonceHash/clearStateNonce must pass the same slot.
  */
-export function issueStateNonce(res: Response): string {
+export function issueStateNonce(res: Response, slot?: string): string {
   const nonce = randomBytes(32).toString('hex');
-  setFlowCookie(res, STATE_NONCE_COOKIE_NAME, nonce);
+  setFlowCookie(res, nonceCookieName(slot), nonce);
   return sha256(nonce);
 }
 
 /** Hash of the nonce cookie on this request, or null if the cookie is absent. */
-export function readStateNonceHash(req: Pick<Request, 'headers'>): string | null {
-  const nonce = readCookie(req, STATE_NONCE_COOKIE_NAME);
+export function readStateNonceHash(req: Pick<Request, 'headers'>, slot?: string): string | null {
+  const nonce = readCookie(req, nonceCookieName(slot));
   return nonce ? sha256(nonce) : null;
 }
 
@@ -74,8 +91,8 @@ export function stateNonceMatches(req: Pick<Request, 'headers'>, payload: { nh?:
 }
 
 /** Expire the nonce cookie once a flow completes (success or terminal failure). */
-export function clearStateNonce(res: Response): void {
-  expireFlowCookie(res, STATE_NONCE_COOKIE_NAME);
+export function clearStateNonce(res: Response, slot?: string): void {
+  expireFlowCookie(res, nonceCookieName(slot));
 }
 
 /** Store the PKCE code_verifier (Okta) in a browser-bound HttpOnly cookie at flow-start. */

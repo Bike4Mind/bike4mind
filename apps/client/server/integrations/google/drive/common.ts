@@ -1,17 +1,36 @@
 import { Config } from '@server/utils/config';
 import { auth as googleAuth } from '@googleapis/drive';
 import dayjs from 'dayjs';
+import type { Response } from 'express';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
+import { createStateToken } from '@server/auth/jwtStateStore';
+import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
 const REDIRECT_URI = `${process.env.APP_URL}/google-drive/callback`;
 
+// Audience for the signed state token that binds a Drive connect flow to the
+// browser that started it (see getAuthUrl / the callback's verifyStateToken).
+export const GOOGLE_DRIVE_STATE_OPTIONS = { audience: 'google-drive-oauth-state', expiresIn: '10m' } as const;
+
 const oauth2Client = new googleAuth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOGLE_CLIENT_SECRET, REDIRECT_URI);
 
-export function getAuthUrl(): string {
+/**
+ * Build the Google consent URL for a connect flow. Sets the browser-binding nonce
+ * cookie on `res` and embeds its hash in a signed `state` token, so the callback
+ * can require the same browser to complete the flow. Both flow-start routes
+ * (connect.ts and token.ts's reconnect path) go through here, so neither can mint
+ * an unbound authorize URL.
+ */
+export function getAuthUrl(res: Response, userId: string): string {
+  const nonceHash = issueStateNonce(res, NONCE_SLOT.driveConnect);
+  // Embed the initiating user so the callback can assert the tokens land on the
+  // account that started the flow, not merely whoever the completion is authed as
+  // (parity with the Slack link states).
+  const state = createStateToken(GOOGLE_DRIVE_STATE_OPTIONS, { userId }, nonceHash);
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
     // Force the consent screen so Google ALWAYS returns a refresh_token. With `access_type: offline`
@@ -21,6 +40,7 @@ export function getAuthUrl(): string {
     // must keep syncing after the connecting user's access token expires or they leave the org.
     prompt: 'consent',
     scope: SCOPES,
+    state,
   });
 }
 
