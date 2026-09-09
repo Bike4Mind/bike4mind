@@ -40,6 +40,7 @@ import {
   completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
+import { notifySlackIndexingComplete } from '@server/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
@@ -514,6 +515,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFileId,
         vectorizeStatus: 'complete',
       }).catch(err => logger.error(`Error notifying vectorize-complete for ${fabFileId}: ${err}`));
+
+      // #2027: same non-fatal shape as the websocket push above - a failed or skipped Slack post
+      // must never fail or retry vectorization, which already persisted vectorized:true. Claimed
+      // BEFORE sending, unlike the websocket push above: a redelivered or concurrent completion
+      // message for this file must post the "finished indexing" reply at most once, not every time.
+      try {
+        const claimedSlackNotification = await fabFileRepository.claimSlackIndexNotification(fabFileId);
+        if (claimedSlackNotification) {
+          await notifySlackIndexingComplete(fabFile, logger).catch(err =>
+            logger.error(`Error sending the Slack indexing-complete notification for ${fabFileId}: ${err}`)
+          );
+        }
+      } catch (err) {
+        logger.error(`Error claiming the Slack indexing-complete notification for ${fabFileId}: ${err}`);
+      }
 
       // Track batch progress if file belongs to a data lake batch.
       // Atomic claim gates the increment so a redelivered "complete" message is a no-op.
