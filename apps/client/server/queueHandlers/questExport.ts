@@ -276,10 +276,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw new Error('Access denied');
     }
 
-    // Loaded once for the per-image object-level access check in the download loop below (its
-    // `groups` feed the share predicate). Plan access is already verified above; a missing user
-    // doc here fails the per-image check closed rather than leaking bytes.
-    const exportUser = await userRepository.findById(userId);
+    // The subject whose entitlements authorize the plan's embedded images: the plan OWNER, not
+    // necessarily the caller. A collaborator reaching the plan via `sharedWith` exports it as the
+    // owner assembled it, so owner-uploaded figures - which are not individually shared with the
+    // collaborator - must be authorized against the owner or every figure degrades to a breadcrumb.
+    // (Owner exporting their own plan is unchanged: owner === caller.) Loaded once for the per-image
+    // check below (its `groups` feed the share predicate); a missing owner doc fails closed.
+    const exportUser = await userRepository.findById(plan.userId || userId);
 
     // Idempotency check: skip if ZIP already exists (must be after plan load to get slug)
     const slug = slugify(plan.goal);
@@ -443,9 +446,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             throw new Error('Image is pending moderation review and is not available');
           }
 
-          // Object-level guard: a tracked fab-file key embedded in the plan markdown must belong
-          // to (or be shared with) the user running the export, or its bytes would leak into their
-          // zip (IDOR). Untracked keys (external/generated-image URLs) have no FabFile owner record
+          // Object-level guard: a tracked fab-file key embedded in the plan markdown must be
+          // accessible to the export subject (the plan owner, resolved above), or its bytes would
+          // leak (IDOR). Untracked keys (external/generated-image URLs) have no FabFile owner record
           // and fall through unaffected - the same limitation the generated-image copy/serve paths
           // carry. Lake-tag access isn't resolved here (a queue handler has no entitlement context),
           // so a curated-lake image degrades to the breadcrumb below rather than leaking. Fails
