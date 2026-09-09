@@ -137,11 +137,28 @@ describe('resolveSearchBudgets - scoped path', () => {
 
   it('falls back to the platform path if scoped resolution throws', async () => {
     const logger = loggerStub();
-    const db = makeDb({ dataLakeSearchMaxFiles: '3000' }, [], { throwOverrides: true });
+    // Every kb* field is set to a NON-default platform value: the degrade must carry the platform
+    // read, and a coded default would be indistinguishable from carrying it if these matched.
+    const db = makeDb(
+      {
+        dataLakeSearchMaxFiles: '3000',
+        kbSearchDefaultResults: '7',
+        kbSearchResultTokenBudget: '4000',
+        kbSearchMinRelevancePct: '25',
+      },
+      [],
+      { throwOverrides: true }
+    );
     const budgets = await resolveSearchBudgets(db, logger, scope);
     expect(budgets.maxFiles).toBe(3000);
     // The fallback must carry the serve budget too, or the scoped path degrades into an unclipped one.
     expect(budgets.maxChunkChars).toBe(DEFAULT_SERVE_CHARS);
+    // Same for the #1955 kb* fields - a degrade that silently reverted the floor or the token budget
+    // to its coded default would widen retrieval on an outage, which no caller could tell from a
+    // deliberate config change.
+    expect(budgets.kbDefaultResults).toBe(7);
+    expect(budgets.kbResultTokenBudget).toBe(4000);
+    expect(budgets.kbMinRelevance).toBeCloseTo(0.25);
   });
 
   it('carries the same derived serve budget as the platform path', async () => {
