@@ -749,6 +749,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Stamped into the created FabFile's sourceMetadata so the post-indexing Slack notification
       // can resolve the RIGHT workspace's bot token later - see notifySlackIndexingComplete.ts.
       teamId,
+      apiAppId,
       adminSettings: adminSettingsRepository,
       ingest: buildSlackLakeIngestDeps({
         downloadFile: (url, fileName) => slackClient.downloadFile(url, fileName),
