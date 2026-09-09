@@ -1,6 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import {
   IAdminSettings,
+  IScopedSetting,
   LogoSettings,
   ServerStatusEnum,
   SettingKey,
@@ -12,7 +13,13 @@ import { useMemo } from 'react';
 import { z } from 'zod';
 import type { ServerConfig } from '@pages/api/settings/serverConfig';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
-import { ADMIN_SETTINGS_QUERY_KEY, ADMIN_SETTINGS_ARRAY_QUERY_KEY, BRANDING_SETTINGS_QUERY_KEY } from './queryKeys';
+import type { ScopedOverrideDeleteQuery, ScopedOverridePutBody } from '@pages/api/admin/scoped-settings';
+import {
+  ADMIN_SETTINGS_QUERY_KEY,
+  ADMIN_SETTINGS_ARRAY_QUERY_KEY,
+  BRANDING_SETTINGS_QUERY_KEY,
+  SCOPED_SETTING_OVERRIDES_QUERY_KEY,
+} from './queryKeys';
 import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 
 export function useUpdateSettings() {
@@ -100,6 +107,55 @@ export function useSettingsFromServer() {
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     enabled: hasAccessToken,
+  });
+}
+
+/**
+ * Every live org/owner/lake override row, at any rung, for every setting - the whole (small by
+ * design) overlay collection in one read. The admin UI slices it two ways: per setting ("which
+ * rungs override this") and per scope address ("what is overridden here"), so both views share one
+ * query rather than one request each.
+ */
+export function useScopedSettingOverrides() {
+  // Admin-only endpoint behind auth; gate on a token the way useSettingsFromServer does so an
+  // unauthenticated mount does not fire a guaranteed 401.
+  const hasAccessToken = useAccessToken(s => !!s.accessToken);
+  return useQuery({
+    queryKey: SCOPED_SETTING_OVERRIDES_QUERY_KEY,
+    queryFn: async () => {
+      const response = await api.get<IScopedSetting[]>('/api/admin/scoped-settings');
+      return response.data;
+    },
+    enabled: hasAccessToken,
+  });
+}
+
+/** Set or change the override at one (rung, setting) address. Writing to an address that already
+ * has a row is an upsert, so this is both "add" and "change". */
+export function useSetScopedSettingOverride() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: ScopedOverridePutBody) => {
+      const { data } = await api.put('/api/admin/scoped-settings', body);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: SCOPED_SETTING_OVERRIDES_QUERY_KEY });
+    },
+  });
+}
+
+export function useClearScopedSettingOverride() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    // The address travels as query params, not a body - see the route.
+    mutationFn: async (params: ScopedOverrideDeleteQuery) => {
+      const { data } = await api.delete('/api/admin/scoped-settings', { params });
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: SCOPED_SETTING_OVERRIDES_QUERY_KEY });
+    },
   });
 }
 

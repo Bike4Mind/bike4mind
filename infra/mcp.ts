@@ -18,13 +18,9 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
   handler: 'apps/client/server/utils/mcpCall.handler',
   runtime: 'nodejs24.x',
   vpc: lambdaVpc,
-  // Enable versioning to create published versions (required for provisioned concurrency)
-  versioning: true,
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        provisioned: 1,
-      }
-    : undefined,
+  // No provisioned concurrency: see the note on AgentExecutor in infra/agentExecutor.ts. This
+  // function carried no `reserved`, so its orphans never blocked a deploy - they accumulated
+  // silently (18 of them) and billed for idle capacity nothing could route to.
   link: [secrets.RATE_LIMIT_INGEST_TOKEN],
   logging: {
     retention: '3 days',

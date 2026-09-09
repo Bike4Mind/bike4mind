@@ -45,11 +45,6 @@ const retryMutate = vi.fn();
 const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: false, isLoading: false }));
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => useLakeDriveConnection(),
-  DRIVE_STATUS_BADGE: {
-    connected: { label: 'Connected', color: 'success' },
-    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-    credential_error: { label: 'Credential error', color: 'danger' },
-  },
 }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });

@@ -1,6 +1,6 @@
 import type { IDataLakeDocument, IFabFileRepository, IFabFileChunkRepository } from '@bike4mind/common';
 import { OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
-import { lakeMembershipScope } from './lakeMembershipScope';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 
 /** Default files re-chunked per "Rebuild passages" call. Small so a single wave never bursts the
  *  embedding provider's tokens-per-minute; the caller repeats waves until the count reaches zero. */
@@ -8,7 +8,10 @@ export const DEFAULT_REBUILD_WAVE = 50;
 /** Hard cap on one wave, so a hand-crafted request can't fan out an unbounded embedding burst. */
 export const MAX_REBUILD_WAVE = 200;
 
-type ScopeSourceLake = Pick<IDataLakeDocument, 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
+/** `id` is required, not optional: this door admits registry lakes (assertLakeRebuildAccess is the
+ *  one file-level gate that does), and it is what `resolveLakeMembershipScope` tells them apart by.
+ *  An id-less lake would fail closed to meta-tag-only instead of failing to compile. */
+type ScopeSourceLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
 
 export type UnderChunkedFile = { fabFileId: string; userId: string };
 
@@ -46,7 +49,7 @@ export const detectUnderChunkedFiles = async (
   { db }: DetectDeps,
   tokenThreshold: number = OVERSIZED_PASSAGE_TOKEN_THRESHOLD
 ): Promise<UnderChunkedFile[]> => {
-  const scope = lakeMembershipScope(lake);
+  const scope = resolveLakeMembershipScope(lake);
   const [files, stranded] = await Promise.all([
     db.fabFiles.findChunkedFilesByScope(scope),
     db.fabFiles.findConvergencePausedFilesByScope(scope),
@@ -86,4 +89,4 @@ export const detectUnderChunkedFiles = async (
 export const countFailedLakeFiles = async (
   lake: ScopeSourceLake,
   { db }: { db: { fabFiles: Pick<IFabFileRepository, 'countFailedFilesByScope'> } }
-): Promise<number> => db.fabFiles.countFailedFilesByScope(lakeMembershipScope(lake));
+): Promise<number> => db.fabFiles.countFailedFilesByScope(resolveLakeMembershipScope(lake));

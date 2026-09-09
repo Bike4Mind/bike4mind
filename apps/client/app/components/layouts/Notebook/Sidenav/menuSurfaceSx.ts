@@ -1,4 +1,5 @@
 import type { Theme } from '@mui/joy/styles';
+import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 
 /**
@@ -15,7 +16,7 @@ const MENU_INSET = '8px';
  * panel and the Data Lake menus use 8px, the More flyout 12px.
  *
  * Anything on this ground that renders as a Joy List - a Menu, a Select listbox - wants
- * menuListSx too, and a Select's listbox wants selectListboxSx.
+ * menuListSx too, and its rows want selectListboxSx (a Select) or menuItemListSx (a Menu).
  */
 export const menuSurfaceSx = (theme: Theme, radius = '8px') => ({
   backgroundColor: theme.palette.background.surface,
@@ -65,7 +66,8 @@ export const menuListSx = ({ gap = '4px' }: { gap?: string } = {}) => ({
  * declaration that outweighs Joy's `:active` on specificity.
  *
  * Scoped to [role="option"], so spreading it on a Joy Menu is inert - Menu rows are
- * role="menuitem" and take menuRowSx per item, which owns the danger variant too.
+ * role="menuitem" and take menuItemListSx, or menuRowSx per item where a row wants the fixed
+ * icon + label geometry (and the danger variant) too.
  *
  * Not every Select in the app belongs here: the model-filter, file-browser and upload dropdowns
  * (Session/ModelSelection, Files/Browser/MobileSearchFilter, Files/Browser/UploadActionsSelect)
@@ -95,26 +97,83 @@ export const selectListboxSx = (theme: Theme, opts?: { gap?: string }) => ({
 });
 
 /**
- * A single icon + label row inside a menuSurfaceSx panel. `danger` tints a destructive row.
- * Joy sets its own hover background from `--variant-plainHoverBg`, so consumers built on Joy
- * MenuItem must ALSO point that variable at the hover colour or Joy's rule wins.
+ * The [role="menuitem"] mirror of selectListboxSx: a Joy Menu's rows on a menuSurfaceSx ground.
+ * selectListboxSx is inert on these - Menu rows are menuitem, not option - which is how menus
+ * sitting on the same ground ended up marking their rows differently.
+ *
+ * Sets no geometry on purpose, so it tolerates rows that are not menuRowSx's single 40px
+ * icon + label line: the lake picker's are two-line, with a decorator and a trailing count.
+ *
+ * Hover and press go through Joy's variables because Joy's own ListItemButton rules outrank a
+ * bare `&:hover` here. The selected row cannot: Joy paints `.Mui-selected` from the plainActive
+ * variant as well, so pointing that variable at the hover ground would erase the selected marker.
+ * It is a declaration instead, and it lands because the descendant selector - not the fact that it
+ * is a declaration - outranks Joy's own rule on the row's class.
+ *
+ * That same descendant selector means a per-item sx will NOT override what this sets short of
+ * escalating its own specificity (`&&`, `!important`), so a menu with per-row grounds
+ * (rowActionsMenu's destructive row) stays on menuRowSx per item instead. Joy gives a ListItem
+ * inside a Menu role="none", so a menu's non-row content (the lake picker's filter box, skeletons
+ * and count chip) is untouched.
+ *
+ * These are custom properties: they inherit into the row's whole subtree, so a plain-variant Joy
+ * child dropped into a row (an IconButton, a Chip) would pick the row's ground up as its own.
+ * rowActionsMenu.tsx zeroes both variables on its trigger for exactly that reason.
  */
-export const menuRowSx = (theme: Theme, danger = false) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: '12px',
-  px: '10px',
-  height: '40px',
-  borderRadius: '8px',
-  cursor: 'pointer',
-  color: danger ? theme.palette.danger[500] : theme.palette.sidenav?.navItemText,
-  // Joy icons - and the Credits Bike4MindIcon, which fills with var(--Icon-color) - read
-  // --Icon-color, not `color`. Tint them brand light-blue @50% (text.tertiary).
-  '--Icon-color': danger ? theme.palette.danger[500] : theme.palette.text.tertiary,
-  transition: 'background 0.15s',
-  '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-  '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
+export const menuItemListSx = (theme: Theme, opts?: { gap?: string }) => ({
+  ...menuListSx(opts),
+  '& [role="menuitem"]': {
+    transition: 'background 0.15s',
+    '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+    '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+    // The weight is load-bearing, not decoration: in dark mode notebooklist.hoverBg and
+    // focusedBackground are the SAME value, so a hovered sibling paints the selected row's exact
+    // ground and the ground alone stops marking anything. Joy's `body-sm` level declares no
+    // fontWeight, so this inherits into a row's label Typography; `body-xs` declares one, which is
+    // why a secondary line and a trailing count stay unbolded.
+    [`&.${menuItemClasses.selected}`]: {
+      backgroundColor: theme.palette.notebooklist.focusedBackground,
+      fontWeight: 600,
+    },
+    '&:focus-visible': {
+      outline: `2px solid ${theme.palette.primary[500]}`,
+      outlineOffset: '-2px',
+    },
+  },
 });
+
+/**
+ * A single icon + label row inside a menuSurfaceSx panel. `danger` tints a destructive row.
+ *
+ * One ground covers hover and press, declared three ways because the consumers are not all the
+ * same kind of element. The `&:hover` declaration is what the profile menu's plain Boxes use;
+ * the two variables are what Joy reads on a MenuItem, whose own rules outrank that declaration.
+ * --variant-plainActiveBg in particular has to be set: Joy's ListItemButton carries an
+ * unconditional `&:active` painted from it, and left unset it falls through to
+ * neutral.plainActiveBg, which this theme tints brand blue (themePrimitives.ts) - so the row
+ * would flash blue under the finger instead of staying on its hover ground.
+ */
+export const menuRowSx = (theme: Theme, danger = false) => {
+  const ground = danger ? theme.palette.danger.plainHoverBg : theme.palette.notebooklist.hoverBg;
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    px: '10px',
+    height: '40px',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    color: danger ? theme.palette.danger[500] : theme.palette.sidenav?.navItemText,
+    // Joy icons - and the Credits Bike4MindIcon, which fills with var(--Icon-color) - read
+    // --Icon-color, not `color`. Tint them brand light-blue @50% (text.tertiary).
+    '--Icon-color': danger ? theme.palette.danger[500] : theme.palette.text.tertiary,
+    transition: 'background 0.15s',
+    '&:hover': { backgroundColor: ground },
+    '--variant-plainHoverBg': ground,
+    '--variant-plainActiveBg': ground,
+    '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
+  };
+};
 
 /** Fixed box the row's icon sits in, so labels align regardless of glyph width. */
 export const MENU_ROW_ICON_SX = {

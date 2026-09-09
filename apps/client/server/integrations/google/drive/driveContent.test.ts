@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { drive_v3 } from 'googleapis';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { walkFolder, fetchDriveFileContent } from './driveContent';
-import { FOLDER_MIME_TYPE } from './driveClient';
+import { FOLDER_MIME_TYPE, isDriveRateLimitError } from './driveClient';
 
 const folder = (id: string, name: string) => ({ id, name, mimeType: FOLDER_MIME_TYPE });
 const file = (id: string, name: string, mimeType: string) => ({ id, name, mimeType });
@@ -104,5 +104,76 @@ describe('fetchDriveFileContent', () => {
 
     const res = await fetchDriveFileContent(drive, file('big', 'Huge', 'application/vnd.google-apps.document'));
     expect(res).toMatchObject({ ok: false, reason: 'export_too_large' });
+  });
+
+  // The whole point of the separate reason: `error` is permanent to the caller, so a throttle
+  // landing there drops the file from the lake and still finalizes the batch clean.
+  it('reports rate_limited (not error) when Drive throttles a native download', async () => {
+    const getFn = vi.fn(async () => {
+      throw Object.assign(new Error('Rate Limit Exceeded'), {
+        code: 429,
+        response: { status: 429, data: { error: { errors: [{ reason: 'userRateLimitExceeded' }] } } },
+      });
+    });
+    const drive = { files: { export: vi.fn(), get: getFn } } as unknown as drive_v3.Drive;
+
+    const res = await fetchDriveFileContent(drive, file('n', 'notes.txt', 'text/plain'));
+    expect(res).toMatchObject({ ok: false, reason: 'rate_limited' });
+  });
+
+  it('reports rate_limited for a 403 whose reason is a quota, not a permission denial', async () => {
+    const exportFn = vi.fn(async () => {
+      throw Object.assign(new Error('The user has exceeded their rate limit.'), {
+        code: 403,
+        response: { status: 403, data: { error: { errors: [{ reason: 'rateLimitExceeded' }] } } },
+      });
+    });
+    const drive = { files: { export: exportFn, get: vi.fn() } } as unknown as drive_v3.Drive;
+
+    const res = await fetchDriveFileContent(drive, file('d', 'Doc', 'application/vnd.google-apps.document'));
+    expect(res).toMatchObject({ ok: false, reason: 'rate_limited' });
+  });
+
+  it('still reports a permanent error for a non-throttle failure', async () => {
+    const getFn = vi.fn(async () => {
+      throw Object.assign(new Error('File not found'), { code: 404, response: { status: 404 } });
+    });
+    const drive = { files: { export: vi.fn(), get: getFn } } as unknown as drive_v3.Drive;
+
+    const res = await fetchDriveFileContent(drive, file('n', 'notes.txt', 'text/plain'));
+    expect(res).toMatchObject({ ok: false, reason: 'error' });
+  });
+});
+
+describe('isDriveRateLimitError', () => {
+  it.each([
+    ['a numeric 429 code', { code: 429 }],
+    ['a string 429 code (googleapis stringifies it in places)', { code: '429' }],
+    ['a 429 only on the response', { response: { status: 429 } }],
+    ['a 403 carrying userRateLimitExceeded', { code: 403, errors: [{ reason: 'userRateLimitExceeded' }] }],
+    [
+      'a nested quotaExceeded reason',
+      { code: 403, response: { data: { error: { errors: [{ reason: 'quotaExceeded' }] } } } },
+    ],
+  ])('detects %s', (_label, shape) => {
+    expect(isDriveRateLimitError(Object.assign(new Error('throttled'), shape))).toBe(true);
+  });
+
+  it.each([
+    [
+      'a permission denial, which shares the 403 but not the reason',
+      { code: 403, errors: [{ reason: 'insufficientFilePermissions' }] },
+    ],
+    ['an oversized export', { code: 403, errors: [{ reason: 'exportSizeLimitExceeded' }] }],
+    ['a not-found', { code: 404 }],
+    ['a DNS failure whose code is a non-numeric string', { code: 'ENOTFOUND' }],
+    ['a plain error', {}],
+  ])('does not treat %s as a rate limit', (_label, shape) => {
+    expect(isDriveRateLimitError(Object.assign(new Error('nope'), shape))).toBe(false);
+  });
+
+  it('is safe on non-object rejections', () => {
+    expect(isDriveRateLimitError(undefined)).toBe(false);
+    expect(isDriveRateLimitError('429')).toBe(false);
   });
 });

@@ -120,6 +120,11 @@ const handler = baseApi()
       // allSettled, not all: one failed send must not fail the whole wave. A file whose send didn't
       // land is left in the reset state (chunked:false, chunkCount:0), which is exactly what the
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.
+      // The cost of routing recovery that way, since the reset above covers the whole wave before
+      // any send: such a file stays unsearchable until REBUILD_PENDING_STALE_MS (2h) has elapsed
+      // AND the next daily 05:00 UTC reconcile runs. On a registry lake its owner may never have
+      // joined the lake, so nobody is watching for it. Resetting each file immediately before its
+      // own send would close the window.
       //
       // NO `chunkSize` on purpose, unlike /converge which sends `policy.requiredTarget`. This door
       // restores RETRIEVABILITY and is deliberately policy-independent: it has to work on a lake with

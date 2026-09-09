@@ -11,11 +11,6 @@ import type { ManagerLake } from './shared';
 // rather than needing a QueryClientProvider.
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => ({ data: null, isError: false, isLoading: false }),
-  DRIVE_STATUS_BADGE: {
-    connected: { label: 'Connected', color: 'success' },
-    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-    credential_error: { label: 'Credential error', color: 'danger' },
-  },
 }));
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this
