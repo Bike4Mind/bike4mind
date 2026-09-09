@@ -6,8 +6,11 @@ import {
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
+  fabFileChunkRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { UpdateDataLakeRequestInput } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -22,6 +25,19 @@ import { disableDriveConnectionForLake } from '@server/integrations/google/drive
 // call is wired with the settings repo + a logger, so a persisted reader grant that WOULD change
 // access is emitted as a [lakeReadGrantCutover] diff line (report-only until EnforceLakeReadGrants).
 const readGateLogger = new Logger({ metadata: { handler: 'dataLakeReadGate' } });
+
+/**
+ * Undefined everywhere except self-host OpenSearch (see ports.ts) - Atlas's vector index lives
+ * on the FabFileChunk collection itself, so removing chunks there already removes it; only a
+ * genuinely separate store needs this port wired.
+ */
+const retrievalIndex = () =>
+  selfHostOpenSearchEnabled()
+    ? dataLakeService.openSearchRetrievalIndex({
+        db: { fabFileChunks: fabFileChunkRepository },
+        searchIndex: FabFileChunkSearchIndex,
+      })
+    : undefined;
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -130,9 +146,10 @@ const handler = baseApi()
         fabFiles: fabFileRepository,
         ...lakeConfigAuditDb,
       },
-      // The SECOND archive door (the lifecycle route is the other) - it has to disable the lake's
-      // Drive connection too, or archiving through here leaves the hourly re-sync poll enqueueing
-      // ingest for a lake nobody can see. Must stay wired at both doors; see ports.ts.
+      // The SECOND archive door (the lifecycle route is the other) - both ports below have to be
+      // wired here too, or archiving through this door leaves the hourly re-sync poll enqueueing
+      // ingest for a lake nobody can see, and its chunks still retrievable. See ports.ts.
+      retrievalIndex: retrievalIndex(),
       disableDriveConnection: async ({ dataLakeId }) => {
         await disableDriveConnectionForLake(dataLakeId);
       },
