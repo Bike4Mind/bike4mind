@@ -1,7 +1,6 @@
 import { createWriteStream } from 'fs';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 
@@ -46,8 +45,11 @@ export async function spoolRequestToFile(
   maxBytes: number,
   options: SpoolOptions = {}
 ): Promise<SpooledUpload> {
-  const dir = await mkdtemp(join(tmpdir(), 'b4m-upload-'));
-  const path = join(dir, options.filename ?? 'upload.bin');
+  // Template literals, not path.join: @vercel/nft partially evaluates a join() whose arguments it
+  // cannot resolve, gives up on a concrete path, and falls back to globbing the app directory -
+  // which drags all of apps/client into the traced Lambda bundle. Keep these opaque to the tracer.
+  const dir = await mkdtemp(`${tmpdir()}/b4m-upload-`);
+  const path = `${dir}/${options.filename ?? 'upload.bin'}`;
   options.onPath?.(path);
 
   let removed = false;
