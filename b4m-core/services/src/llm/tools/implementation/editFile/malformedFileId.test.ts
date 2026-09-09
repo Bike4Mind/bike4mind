@@ -27,7 +27,7 @@ describe('editFileTool malformed fileId handling', () => {
       userId: 'u1',
       user: {},
       logger,
-      db: { fabFiles: { findById } },
+      db: { fabfiles: { findById } },
       llm: { complete: vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined)) },
       statusUpdate: vi.fn(),
       model: 'test-model',
@@ -65,7 +65,11 @@ describe('editFileTool malformed fileId handling', () => {
     expect(malformedError).not.toMatch(/Cast to ObjectId/);
   });
 
-  it('leaves a well-formed id on the normal path', async () => {
+  // Doubles as the regression pin for a lookup that read `db.fabFiles` through an `as any`
+  // cast - a key no host wiring this tool populates, so `?.` returned undefined and EVERY id,
+  // real ones included, fell through to the not-found above. Mock the key the hosts actually
+  // wire (`fabfiles`) or this test pins the bug instead of the behaviour.
+  it('reaches the repository for a well-formed id and goes on to edit', async () => {
     const findById = vi.fn(async () => ({
       fileName: 'a.txt',
       mimeType: 'text/plain',
@@ -74,8 +78,9 @@ describe('editFileTool malformed fileId handling', () => {
     }));
     const context = makeContext(findById);
 
-    await run(context, WELL_FORMED_FILE_ID);
+    const result = await run(context, WELL_FORMED_FILE_ID);
 
     expect(findById).toHaveBeenCalledWith(WELL_FORMED_FILE_ID);
+    expect(JSON.stringify(result)).not.toMatch(/not found/);
   });
 });

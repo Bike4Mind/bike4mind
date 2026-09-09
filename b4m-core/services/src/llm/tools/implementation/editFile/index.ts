@@ -110,8 +110,11 @@ export const editFileTool: ToolDefinition = {
           throw new NotFoundError(`File with ID ${fileId} not found`);
         }
 
-        // context.db's type doesn't expose fabFiles; reached via the cast below.
-        const fabFile = await (context.db as any).fabFiles?.findById(fileId);
+        // `fabfiles`, lowercase, and no cast: this read used to be `(context.db as any).fabFiles`,
+        // a key no host that can reach this tool actually populates. The cast silenced the
+        // compiler and `?.` silenced the miss, so every edit - including one naming a real row -
+        // fell through to the not-found below. The tool had never edited a file.
+        const fabFile = await context.db.fabfiles?.findById(fileId);
         if (!fabFile) {
           throw new NotFoundError(`File with ID ${fileId} not found`);
         }
