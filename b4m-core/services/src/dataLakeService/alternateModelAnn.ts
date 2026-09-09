@@ -212,9 +212,12 @@ export async function runAlternateModelAnn(args: {
   try {
     const fileIds = candidate.annReady.map(f => f.id);
     const result = await runAnn({ fileIds, queryVector, model: candidate.model });
-    // Same "zero raw hits" signal the primary model uses (semanticDataLakeSearch.ts's
-    // missedFiles rebucket): a queryable index does not guarantee this model's chunks are
-    // actually in it yet (indexing lag, or a mid-file re-embed under the wrong model).
+    // Bare absence from `filesWithHits`, which is NOT what the primary model keys off any more:
+    // its rebucket now requires the query to have come back UNDER-saturated before it reads
+    // absence as missing content (see semanticDataLakeSearch.ts's `annSaturated`). The looser
+    // signal is kept here because it is diagnostic only - nothing rebuckets on it, so an absence
+    // that merely means "did not rank" costs an over-reported `filesMissed`, not a wasted scan.
+    // Anything that starts ACTING on this list has to adopt the saturation rule first.
     const filesMissed = candidate.annReady.map(f => f.id).filter(id => !result.filesWithHits.has(id));
     return {
       model: candidate.model,

@@ -1234,7 +1234,88 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       expect(vectorSearch).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining(ALARM),
-        expect.objectContaining({ reason: 'no-ready-files', backend: 'atlas', rankableFiles: 1 })
+        // Zero within the lag is what separates this from the transient case below: nothing here
+        // is waiting on anything, the chunk `embeddingModel` backfill simply never ran.
+        expect.objectContaining({
+          reason: 'no-ready-files',
+          backend: 'atlas',
+          rankableFiles: 1,
+          stampedWithinLagFiles: 0,
+        })
+      );
+    });
+
+    it('reports ready-files-within-lag when the whole lake only just finished vectorizing', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('f1', { chunkEmbeddingModelStampedAt: freshStamp })],
+        scanChunks: chunkRows('f1', 2),
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: logger as never }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      // Same observable state as no-ready-files (zero eligible files, scan-only retrieval) but the
+      // opposite fix: this one resolves itself within one lag window, so pointing an operator at
+      // the backfill would send them after work that has already run.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(ALARM),
+        expect.objectContaining({ reason: 'ready-files-within-lag', stampedWithinLagFiles: 1 })
+      );
+    });
+
+    it('keeps no-ready-files when only SOME files are inside the lag, and counts them', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [
+          annFile('never-stamped', { chunkEmbeddingModelStampedAt: undefined }),
+          annFile('just-stamped', { chunkEmbeddingModelStampedAt: freshStamp }),
+        ],
+        scanChunks: chunkRows('never-stamped', 2),
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: logger as never }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      // Waiting would never fix `never-stamped`, so the backfill reason wins - and the count is
+      // what tells the operator part of the lake needs nothing but time.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(ALARM),
+        expect.objectContaining({ reason: 'no-ready-files', rankableFiles: 2, stampedWithinLagFiles: 1 })
+      );
+    });
+
+    it('still fires when an alternate model was embedded but its ANN query threw', async () => {
+      const ALT_MODEL = 'text-embedding-3-small';
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [
+          annFile('primary-unstamped', { chunkEmbeddingModelStampedAt: undefined }),
+          annFile('alt', { embeddingModel: ALT_MODEL }),
+        ],
+        scanChunks: chunkRows('primary-unstamped', 2),
+        queryableModels: ['text-embedding-ada-002', ALT_MODEL],
+      });
+      vectorSearch.mockImplementation((_ids: string[], _vec: number[], _model: string) =>
+        Promise.reject(new Error('alt index down'))
+      );
+
+      const result = await semanticDataLakeSearch(
+        { ...baseParams(), vectorSearchEnabled: true, logger: logger as never },
+        {
+          db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+        } as never
+      );
+
+      // The alternate model's query WAS issued, so it counts in annModelsQueried - but it threw and
+      // served nothing, which is exactly the deployment state this alarm exists to report. Keying
+      // the alarm off that metric would let a broken alternate index mask a scan-only primary.
+      expect(result.scan.annModelsQueried).toBe(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(ALARM),
+        expect.objectContaining({ reason: 'no-ready-files' })
       );
     });
 
@@ -1350,6 +1431,12 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       expect.stringContaining('returned no hits for ready files'),
       expect.anything()
     );
+    // The failure this replaced was silent, so the scanning it avoided is recorded rather than
+    // merely not happening - a regression back to rescanning would otherwise look identical.
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('saturated its limit'),
+      expect.objectContaining({ fileCount: 1, hitsReturned: 2 })
+    );
   });
 
   it('still rescans an unranked ready file when ANN came back short of its limit', async () => {
@@ -1374,8 +1461,30 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.results.map(r => r.fileId)).toContain('unranked');
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('returned no hits for ready files'),
-      expect.objectContaining({ fileCount: 1, hitsReturned: 1, limit: 2 })
+      expect.objectContaining({ fileCount: 1, hitsReturned: 1, hitsUsable: 1, limit: 2 })
     );
+  });
+
+  it('does not read a full response as saturated when every hit was out of scope', async () => {
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('ready')],
+      scanChunks: chunkRows('ready', 3),
+      // A full topK of hits whose parent file is not in this query's scope at all - a deleted
+      // parent, or index content belonging to another lake. Counting them as saturation would
+      // suppress the rescue and return NOTHING, where the scan would have answered: worse than the
+      // behavior this PR replaced, which rescanned unconditionally.
+      annHits: [
+        { id: 'ghost-c0', fabFileId: 'not-in-scope', text: 'orphan hit', score: 0.99 },
+        { id: 'ghost-c1', fabFileId: 'not-in-scope', text: 'orphan hit', score: 0.98 },
+      ],
+    });
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, topK: 2 }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+    } as never);
+
+    expect(result.scan.chunksScanned).toBe(3);
+    expect(result.results.map(r => r.fileId)).toEqual(['ready', 'ready']);
   });
 
   describe('mixed-embeddingModel lake (alternate-model ANN cutover)', () => {
@@ -1819,6 +1928,38 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
     expect(result.scan.annFilesQueried).toBe(0);
     expect(result.scan.chunksScanned).toBe(2);
     expect(result.results.map(r => r.fileId)).toEqual(['ready', 'ready']);
+  });
+
+  /**
+   * The Atlas saturation rule deliberately does NOT apply here.
+   *
+   * Atlas's argument for it is that mongot indexes the chunk collection itself, so a stamped file's
+   * content is in the index by construction. Self-host has no such guarantee: the documents live in
+   * a separate cluster fed by a fail-open dual-write, files predating the feature were never indexed
+   * and have no backfill, and the readiness stamp knows nothing about any of it. Absence-keyed
+   * rescue is the only thing covering that here, so it stays - at the cost of the topK/fileCount
+   * ceiling on this path. Without a saturating fixture the existing zero-hit test above cannot see
+   * the difference, which is why this one supplies a full topK of hits from the indexed file.
+   */
+  it('rescans a stamped-but-unindexed file even when knnSearch saturated its limit', async () => {
+    enableSelfHostOpenSearch();
+    const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+      files: [annFile('indexed'), annFile('never-dual-written')],
+      scanChunks: chunkRows('never-dual-written', 3),
+      annHits: [
+        { id: 'indexed-c0', fabFileId: 'indexed', text: 'ann hit', score: 0.95 },
+        { id: 'indexed-c1', fabFileId: 'indexed', text: 'ann hit', score: 0.94 },
+      ],
+    });
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, topK: 2 }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+      vectorIndex: { knnSearch },
+    } as never);
+
+    expect(result.scan.chunksScanned).toBe(3);
+    expect(result.scan.annFilesQueried).toBe(1);
+    expect(result.results.map(r => r.fileId)).toContain('never-dual-written');
   });
 
   it('never calls knnSearch on an Atlas-backed deployment even if a vectorIndex adapter is (mistakenly) provided', async () => {
