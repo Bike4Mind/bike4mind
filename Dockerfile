@@ -48,6 +48,15 @@ RUN NODE_OPTIONS='--max-old-space-size=12288' pnpm --filter @bike4mind/client bu
 # and the standalone server preloads them at boot, running test-only module
 # side effects in production (see the script header for the S3 stub failure).
 RUN node apps/client/scripts/pruneTestRoutes.mjs apps/client/.next/standalone/apps/client/.next
+# Strip Next's file-tracing metadata: .nft.json is ~66% of the tree the runner
+# copies below, and only the bundler reads it (in next 16.2.11 the name resolves
+# solely under next/dist/build/**, never under dist/server/**). Must stay in this
+# builder stage: the hosted OpenNext path reads these same files back out of
+# .next/standalone in copyTracedFiles, and never runs through this image.
+RUN set -eu; \
+    before=$(du -sb apps/client/.next/standalone | cut -f1); \
+    find apps/client/.next/standalone -name '*.nft.json' -type f -delete; \
+    echo "stripped traces: ${before} -> $(du -sb apps/client/.next/standalone | cut -f1) bytes"
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner
