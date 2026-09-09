@@ -40,6 +40,12 @@ export interface HandleDataLakeCommandParams {
   files: SlackAttachment[];
   channel: string;
   messageTs: string;
+  /**
+   * The Slack workspace this message arrived on, stamped into the created FabFile's
+   * `sourceMetadata` so `notifySlackIndexingComplete.ts` can later resolve the SAME workspace's
+   * bot token to post the indexing-done reply, rather than guessing via the lake's org.
+   */
+  teamId: string;
   deps: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   /**
    * Whether the `enableAutoChunk` admin setting is on. Only affects the wording of the success
@@ -58,6 +64,17 @@ const HELP_TEXT = [
 ].join('\n');
 
 const USAGE_HINT = 'Try `@datalake help`.';
+
+/**
+ * Reply for a message that names "datalake" without the leading `@` (e.g. bare `datalake list`).
+ * Kept separate from the `default:` case's "Unrecognized `@datalake` command" wording below - that
+ * one is for a real `@datalake` mention with an unknown subcommand, this one is for a message that
+ * never reached the deterministic handler at all, so the phrasing (and the caller's routing
+ * decision) must not conflate the two.
+ */
+export function formatBareDataLakeMentionHint(): string {
+  return `Did you mean \`@datalake\`? ${USAGE_HINT}`;
+}
 
 /** Rows shown by `list` before a "+N more" tail. Keeps the reply well inside Slack's 40k limit. */
 const LIST_LIMIT = 50;
@@ -267,6 +284,7 @@ async function handleAdd(
         files: params.files,
         channel: params.channel,
         messageTs: params.messageTs,
+        teamId: params.teamId,
       },
       params.deps
     );
@@ -284,6 +302,7 @@ async function handleAdd(
         link: parsed.link,
         channel: params.channel,
         messageTs: params.messageTs,
+        teamId: params.teamId,
       },
       params.deps
     );
@@ -324,15 +343,21 @@ export function formatLinkOutcome(outcome: SlackLinkIngestOutcome, opts: { autoC
   if (!outcome.ok) return outcome.message;
 
   return formatIngestOutcome(
-    { ok: true, lakeName: outcome.lakeName, added: [outcome.fileName], duplicates: [], rejected: [] },
+    {
+      ok: true,
+      lakeName: outcome.lakeName,
+      added: outcome.duplicate ? [] : [outcome.fileName],
+      duplicates: outcome.duplicate ? [outcome.fileName] : [],
+      rejected: [],
+    },
     opts
   );
 }
 
 /**
- * Compose the in-thread reply. Confirms "added, processing" and STOPS - there is no
- * post-vectorization "now live" update in this rollout, because nothing in the pipeline emits a
- * signal this handler could await (fabFileVectorize only reaches the browser).
+ * Compose the immediate in-thread reply: "added, processing". A separate, later "now searchable"
+ * reply is posted asynchronously once indexing finishes - see `notifySlackIndexingComplete.ts`,
+ * invoked from `fabFileVectorize.ts` on completion, not from this synchronous request/response path.
  */
 export function formatIngestOutcome(
   outcome: SlackLakeIngestOutcome,
@@ -382,6 +407,8 @@ export interface RunDataLakeSlackCommandDeps {
   channel: string;
   messageTs: string;
   threadTs?: string;
+  /** Forwarded to `handleDataLakeCommand` - see its own field doc. */
+  teamId: string;
   adminSettings: {
     getSettingsValue(
       key: 'EnableDataLakes' | 'EnableDataLakeSlackAdd' | 'enableAutoChunk'
@@ -429,6 +456,7 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
       files: deps.files,
       channel: deps.channel,
       messageTs: deps.messageTs,
+      teamId: deps.teamId,
       deps: deps.ingest,
       autoChunkEnabled,
     });
