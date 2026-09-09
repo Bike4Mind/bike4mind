@@ -52,10 +52,12 @@ export interface LakeAccessLogger {
  * of any role reaching a plain member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP
  * (`ctx.organizationIds`), distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
  *
- * An org grant never reaches a lake outside the granting org. This function does not see the lake,
- * so the containment is applied by the caller BEFORE the rows reach here - `containedGrants` at the
- * gate, and the per-granting-org repo arms on the id-resolution path (see `grantedLakeReachFor`). A
- * caller that hands over raw rows gets no containment, which is why both live in this file.
+ * THIS ARM never lets an org grant reach a lake outside the granting org. Scoped deliberately: the
+ * claim is about the read-grant arm, not about the whole decision - the legacy `canManageLake` org
+ * rung it is ORed with has its own (weaker) rules. This function does not see the lake, so the
+ * containment is applied by the caller BEFORE the rows reach here - `containedGrants` at the gate,
+ * and the per-granting-org repo arms on the id-resolution path (see `grantedLakeReachFor`). A caller
+ * that hands over raw rows gets no containment, which is why both live in this file.
  *
  * STILL MUST STAY IN SYNC WITH THE WRITE PATH: the read side now asserts that rule as defense in
  * depth, but whoever builds the member-management write path (grant a reader / grant an org - no
@@ -175,7 +177,7 @@ export async function resolveEnforceReadGrants(
     return false;
   }
   // Interlock: the operator asked to enforce, but the feature is not code-ready. Stay report-only and
-  // make the premature toggle loud rather than silently half-enabling a gate with no retrieval arm.
+  // make the premature toggle loud rather than half-enabling it before the member-write path exists.
   if (intent && !READ_GRANT_ENFORCEMENT_READY) {
     logger?.warn?.(
       '[lakeReadGrantCutover] EnforceLakeReadGrants is ON but enforcement is code-gated off ' +

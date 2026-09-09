@@ -627,6 +627,15 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     expect(
       (await dataLakeRepository.findPublicLakes(inBoth, { orgGrantedLakes: { orgB: [inB.id] } })).lakes.map(l => l.slug)
     ).toEqual(['pub-gated-in-b']);
+
+    // And the org-less arm of the same rule: no org can be the granting org of a lake that has
+    // none, matching the writer's refusal to issue such a row.
+    const orgLess = await dataLakeRepository.create(
+      baseLake({ slug: 'pub-gated-org-less', isPublic: true, requiredUserTag: 'Opti' })
+    );
+    expect(
+      (await dataLakeRepository.findPublicLakes(inBoth, { orgGrantedLakes: { orgA: [orgLess.id] } })).lakes
+    ).toEqual([]);
   });
 
   it('agrees with findAccessible on which public lakes a caller can see', async () => {

@@ -65,8 +65,9 @@ export const browsePublicDataLakes = async (
   { db }: BrowsePublicDataLakesAdapters
 ): Promise<BrowsePublicDataLakesResult> => {
   // Resolved before the catalog query so an explicitly granted public lake discovers on the same
-  // terms it lists on - the arms `listDataLakes` already passes to findAccessible. Both the flag
-  // read and the grant lookup cost one query per page on this load-more path.
+  // terms it lists on - the arms `listDataLakes` already passes to findAccessible. Cost per page on
+  // this load-more path: the flag read, the user-grant lookup, and under enforce one org-grant
+  // lookup per org the caller belongs to.
   const includeReaders = await resolveEnforceReadGrants(db.settings);
   const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     actor.userId,

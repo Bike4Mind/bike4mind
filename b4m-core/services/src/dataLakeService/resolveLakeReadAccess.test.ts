@@ -166,12 +166,19 @@ describe('resolveLakeReadAccess - report-only vs enforce', () => {
   });
 
   it('org grant to a NON-member: no divergence, stays denied', () => {
-    const orgLake = lake({ organizationId: 'orgA', requiredUserTag: 'TagOutsiderLacks' });
+    const orgLake = lake({ organizationId: 'orgA' });
     const outsider = ctx({ userId: 'x1', organizationIds: ['orgB'] });
     const d = resolveLakeReadAccess(orgLake, outsider, [grant('reader', 'orgA', 'organization')], {
       enforceReadGrants: true,
     });
-    expect(d).toMatchObject({ allowed: false, readGrantAllows: false, diverges: false });
+    // `legacyArm` pinned so the test records WHY legacy denied - non-membership, not a gate the
+    // outsider happens to lack.
+    expect(d).toMatchObject({
+      allowed: false,
+      readGrantAllows: false,
+      diverges: false,
+      legacyArm: 'org-prereq',
+    });
   });
 
   it('owner grant does not diverge (already allowed by the legacy owner-admin arm)', () => {
