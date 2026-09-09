@@ -20,9 +20,9 @@ import { canonicalSourceKey, sanitizeSourceUrlForRecord } from './canonicalSourc
  *
  * Dedup is keyed on CANONICAL SOURCE IDENTITY, with the normalized-text hash as the secondary
  * "changed materially" signal. Neither of the two tempting alternatives is used, deliberately:
- * `FabFile.contentHash` is a client-side hash of raw bytes written by only the presigned-URL upload
- * doors and never verified server-side (so proposal-created files carry none, and a hash of
- * extracted text could never equal the byte hash of the PDF it came from), and the vector index is
+ * `FabFile.contentHash` (stamped by every `createFabFileByUrl` caller as of #2027, this door's own
+ * admission included) is never verified server-side and does not exist YET at this stage anyway -
+ * this runs BEFORE any FabFile is created, so there is nothing to hash - and the vector index is
  * torn down per member by convergence, so an overlapping run would propose content the lake already
  * holds - the exact failure dedup exists to prevent.
  */
