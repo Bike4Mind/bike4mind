@@ -83,6 +83,7 @@ const run = (overrides: Record<string, unknown> = {}) =>
       link: LINK,
       channel: 'C123',
       messageTs: '1700000000.0001',
+      teamId: 'T123',
       ...overrides,
     } as never,
     deps
@@ -215,7 +216,7 @@ describe('successful ingest', () => {
       ],
       provenance: {
         sourceType: FabFileSourceType.SLACK,
-        sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', sourceUrl: LINK },
+        sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', sourceUrl: LINK, teamId: 'T123' },
       },
       // Carried from the AUTHORIZED context, and asserted here because `createFabFile` runs a third
       // manage gate that cannot derive this from the user document: dropping it refuses an org admin
