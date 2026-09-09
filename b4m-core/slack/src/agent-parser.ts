@@ -165,19 +165,21 @@ export function isDataLakeCommand(parsed: ParsedAgentCommand): boolean {
 }
 
 /**
- * Matches the literal word "datalake" at the start of the message (after optional Slack user
- * mentions), with no `@` - e.g. "datalake list". Anchored the same way as
+ * Matches "datalake" or one of the small, enumerable set of misspellings #2028 named
+ * ("datakale", "data lake", "data-lake") at the start of the message (after optional Slack user
+ * mentions), with no `@` - e.g. "datalake list" or "datakale list". Anchored the same way as
  * `DATA_LAKE_MENTION_PATTERN` so a leading `@datalake` can never match this pattern too (a literal
- * `@` immediately before "datalake" fails the no-`@` requirement here), and an unrelated sentence
- * that merely mentions the product by name elsewhere in the message is never treated as an attempt
- * to invoke it. Deliberately just the word - no fuzzy misspelling matching.
+ * `@` immediately before it fails the no-`@` requirement here), and an unrelated sentence that
+ * merely mentions the product by name elsewhere in the message is never treated as an attempt to
+ * invoke it. Deliberately just this enumerable list - not general fuzzy/edit-distance matching,
+ * which would risk false positives on unrelated words.
  *
  * Exported so `events.ts` can widen its pre-filter (`SlackEvent.shouldProcess`'s
  * `agentCommandPattern`) to let a bare-mention channel message reach `looksLikeBareDataLakeMention`
  * at all - that filter only admits `@`-prefixed agent commands, DMs, and app-mentions by default, so
  * without this a bare "datalake list" typed in a channel is dropped before this file ever sees it.
  */
-export const BARE_DATA_LAKE_MENTION_PATTERN = /^(?:<@[^>]+>\s*)*datalake\b/i;
+export const BARE_DATA_LAKE_MENTION_PATTERN = /^(?:<@[^>]+>\s*)*(?:datalake|datakale|data[\s-]lake)\b/i;
 
 /**
  * True when a message names "datalake" without the `@` that would route it to the deterministic
