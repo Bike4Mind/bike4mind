@@ -384,7 +384,8 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     userTags: string[],
     entitlementKeys: string[],
     organizationIds?: string[] | null,
-    userId?: string | null
+    userId?: string | null,
+    opts?: { grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
@@ -425,6 +426,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // (both-blank OR held tag OR held key), so a gate added after publishing keeps holding; a
     // normal public lake is gate-less and matches the both-blank sub-arm.
     accessArms.push({ $and: [{ isPublic: true }, requirementConstraint(userTags, entitlementKeys)] });
+
+    // Explicit-grant arm (mirrors findAccessible's, #1668): a lake the caller holds an active
+    // access grant on is reachable by that grant alone - the grant IS the authorization, so it
+    // needs none of the org/gate constraints (the analog of the createdByUserId owner bypass,
+    // extended to a transferred/delegated owner-curator-reader). Ids are pre-resolved by the
+    // caller from listByPrincipal (grantedLakeIdsFor); an empty list adds no arm. This is what
+    // keeps RETRIEVAL in step with browse - without it a transferred owner can open a lake but
+    // not ground on it.
+    const grantedLakeIds = opts?.grantedLakeIds ?? [];
+    if (grantedLakeIds.length > 0) accessArms.push({ _id: { $in: grantedLakeIds } });
 
     // Owner bypass (mirrors findAccessible): the creator always retrieves their own lakes,
     // including private gateless ones. Only when a userId is supplied.

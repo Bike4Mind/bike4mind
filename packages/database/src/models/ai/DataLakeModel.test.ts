@@ -182,6 +182,43 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
 
     expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice')).toEqual([]);
   });
+
+  it('grant arm reaches a private, cross-org, gated lake - and an empty list adds no arm', async () => {
+    // The transferred-owner case: transferLakeOwnership moves ownership through grant rows and
+    // leaves createdByUserId alone, so without this arm the new owner browses a lake they cannot
+    // ground on. Ids are pre-resolved by the caller (grantedLakeIdsFor); passed directly here to
+    // keep the test at the repo boundary.
+    const gated = await dataLakeRepository.create(
+      baseLake({ slug: 'granted', createdByUserId: 'alice', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const priv = await dataLakeRepository.create(baseLake({ slug: 'private', createdByUserId: 'alice' }));
+
+    // Bob: no tags, no keys, a different org - reaches both only by grant.
+    const byGrant = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob', {
+      grantedLakeIds: [gated.id, priv.id],
+    });
+    expect(byGrant.map(l => l.slug).sort()).toEqual(['granted', 'private']);
+
+    // Without the arm, neither resolves.
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob')).toEqual([]);
+    expect(
+      await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob', { grantedLakeIds: [] })
+    ).toEqual([]);
+  });
+
+  it('grant arm stays bounded by status: a grant on a DRAFT lake does not retrieve it', async () => {
+    // The arm is nested under the same `status: 'active'` conjunct as every other arm, so a grant
+    // widens the gate and never the status - matching the owner bypass above.
+    const draft = await dataLakeRepository.create(
+      baseLake({ slug: 'draft-granted', createdByUserId: 'alice', status: 'draft' })
+    );
+
+    expect(
+      await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob', {
+        grantedLakeIds: [draft.id],
+      })
+    ).toEqual([]);
+  });
 });
 
 describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/management path)', () => {
