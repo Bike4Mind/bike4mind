@@ -25,7 +25,12 @@ import {
   LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
 } from '../constants/lakeAccessAudit';
-import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import {
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+} from '../constants/forcedRetrieval';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
@@ -528,6 +533,110 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
     expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
     expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
     expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
+  });
+});
+
+describe('forced-retrieval relevance floors are levers (#2497)', () => {
+  const FLOOR_KEYS = ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'] as const;
+
+  it('defaults to the shared constants rather than hand-copied literals', () => {
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.defaultValue).toBe(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT);
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.defaultValue).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
+  });
+
+  it('keeps the absolute floor percent in step with the cosine fraction it replaced', () => {
+    // The percent is what an admin edits; the fraction is what the retrieval path compares against.
+    // Pinned together because the setting exists to REPLACE a hardcoded use of the fraction, and a
+    // change to one that missed the other would silently move the floor.
+    expect(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    // 0 is a MEANINGFUL value for both (disabled relative floor / absent absolute floor), so a
+    // prefault that silently landed on it would disable the lever instead of defaulting it.
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(undefined)).toBe(
+      FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT
+    );
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(undefined)).toBe(
+      FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT
+    );
+  });
+
+  it('bounds both floors at write time, integrally, and floors them differently at the bottom', () => {
+    // The 100 ceiling is load-bearing, not cosmetic: the relative floor is multiplied by the turn's
+    // top score, so a value above 100 would put the cutoff ABOVE the best candidate and starve
+    // every turn.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].max).toBe(100);
+      expect(() => settingsMap[key].schema.parse(-1)).toThrow();
+      expect(() => settingsMap[key].schema.parse(101)).toThrow();
+      expect(settingsMap[key].schema.parse(100)).toBe(100);
+      // Integral at the write boundary rather than floored later by a reader, so the percent an
+      // admin sees is the percent the retrieval path actually compares against.
+      expect(settingsMap[key].int).toBe(true);
+      expect(() => settingsMap[key].schema.parse(85.5)).toThrow();
+    }
+
+    // The two differ at the bottom of the range, and deliberately. 0 is what makes the RELATIVE
+    // floor's "disabled" expressible.
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.min).toBe(0);
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(0)).toBe(0);
+
+    // The ABSOLUTE floor stops at 1, because clearing a number field in the admin UI coerces to 0,
+    // so 0 reads as an emptied field rather than as intent. 1% still effectively disables the gate.
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.min).toBe(1);
+    expect(() => settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(0)).toThrow();
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(1)).toBe(1);
+  });
+
+  it('is settable at org and owner but NOT per lake, unlike dataLakeSearchMaxChunks', () => {
+    // Deliberate, and the reason is structural rather than an oversight: one forced-retrieval turn
+    // scans an uncapped SET of lakes into a single pool with a single top score, so there is no one
+    // lake for a narrower rung to key on. Same call as kbSearchMinRelevancePct, whose corpus has the
+    // same shape. If a per-lake floor is ever wanted it needs per-lake top scores first, not just
+    // this rung.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+      expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
+    }
+    expect(settingsMap.dataLakeSearchMaxChunks.scope?.settableAt).toContain(SettingScopeLevel.Lake);
+  });
+
+  it('declares a scope, so the read path must go through the scoped resolver', () => {
+    // The inverse of forcedRetrievalCharBudget's assertion above. That one is platform-only because
+    // it is read via getSettingsValue, which ignores settableAt; these two are read via
+    // resolveScopedSettingValues, which honors it. A future change that pointed them back at
+    // getSettingsValue would silently drop every override, so the scope block is the signal that
+    // the resolver is required.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].scope).toBeDefined();
+    }
+  });
+
+  it('defaults the relative floor low enough to preserve behavior on the measured band', () => {
+    // The shipped default is a mechanism plus a safe starting point, NOT a tuned value. On the
+    // production lake this issue was measured against (166 injected chunks) the weakest accepted
+    // score was 0.8025 against a per-turn best of 0.9140, so anything at or below that ratio admits
+    // everything the absolute floor admitted and changes no production behavior on its own.
+    // Raising this default is a deliberate tuning decision that should follow the embedding
+    // migration, not precede it - this test is what makes such a change visible in review.
+    const weakestAcceptedRatio = 0.8025 / 0.914;
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100).toBeLessThan(weakestAcceptedRatio);
+  });
+
+  it('renders in the embedding group so an admin can actually reach both', () => {
+    // A lever nobody can find is the failure mode this issue cites in its own Related section.
+    // The two assertions below are not the same check, and only the second one is the runtime gate:
+    // AdminSettingsTab enumerates `Object.values(settingsMap)` and buckets each entry by its OWN
+    // `group` field (AdminSettingsTab.tsx:134 and :407), then orders within a group by its `order`
+    // (:571) - which is also what makes the two descriptions' "above"/"below" wording true. The
+    // group's `settings` array is never dereferenced by the render path; it is a hand-maintained
+    // index that only this suite enforces, so it is checked here to keep the two from drifting.
+    const keys = API_SERVICE_GROUPS.EMBEDDING.settings.map(entry => entry.key);
+    for (const key of FLOOR_KEYS) {
+      expect(keys).toContain(key);
+      expect(settingsMap[key].group).toBe(API_SERVICE_GROUPS.EMBEDDING.id);
+    }
   });
 });
 
