@@ -488,14 +488,6 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // including private gateless ones. Only when a userId is supplied.
     if (userId) accessArms.unshift({ createdByUserId: userId });
 
-    // Explicit-grant arm, the exact counterpart of findAccessible's: a lake the caller holds an
-    // active grant on is reachable by that grant alone - the grant IS the authorization, so it
-    // needs none of the org/gate constraints. Ids are pre-resolved by the caller from
-    // listByPrincipal (an empty list adds no arm), which is what keeps this retrieval read in step
-    // with the browse/list read instead of the two disagreeing about a transferred lake.
-    const grantArmIds = grantedLakeIds ?? [];
-    if (grantArmIds.length > 0) accessArms.push({ _id: { $in: grantArmIds } });
-
     const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
@@ -653,9 +645,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
         requirementConstraint(viewer.userTags, viewer.entitlementKeys),
       ];
       if (grantedLakeIds.length > 0) reachArms.push({ _id: { $in: grantedLakeIds } });
-      // The org-principal half carries the granting-org conjunct the user half does not, same rule as
-      // findAccessible's. A public lake is not exempt: its gate still binds here, and an org grant
-      // must not be the thing that lifts it for a member of some other org.
+      // The org-principal half carries the granting-org conjunct the user half does not, same rule
+      // as findAccessible's. Like the user arm, it is an $or sibling of the requirement constraint,
+      // so the grant DOES lift a public lake's post-publish gate - the grant is the authorization.
+      // What the conjunct denies is reach: only the org that issued the grant, so a member of some
+      // other org never gets the gate lifted for them.
       reachArms.push(...orgGrantArms(opts?.orgGrantedLakes));
       (filter.$and as Record<string, unknown>[]).push({ $or: reachArms });
     }
