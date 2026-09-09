@@ -611,8 +611,9 @@ export interface ResolveEnabledToolsInput {
  *      knowledge: documents attached to THIS session (hasAttachedKnowledge) OR a data lake they
  *      can reach (hasAccessibleDataLake). Attaching files / having a lake is a far stronger
  *      retrieval signal than any phrase match, and offering a tool is cheap (the model may
- *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set
- *      (prompt-mode requests), since the offer is our addition, not the caller's.
+ *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set -
+ *      by a promptMode or by the caller's own request field, see resolveSkipAutoOffers - since the
+ *      offer is our addition, not the caller's.
  *   3. companion pairing        - a tool useless without its partner rides along
  *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
  *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
@@ -2756,9 +2757,10 @@ export class ChatCompletionProcess {
       // offered set. Checked here against offeredToolNames (not at resolveEnabledTools) because
       // this is the authoritative post-build list - it sees the post-build denylist pass, the
       // Ollama auto-added trim, and tools injected inside buildTools, none of which the pre-build
-      // enabledTools filter can. Skipped under promptMode, where withholding the offer is
-      // deliberate (auto-offers suppressed, see resolveSkipAutoOffers), not a failure. Silent otherwise means the model answers
-      // from its weights while the user believes their knowledge was consulted.
+      // enabledTools filter can. Skipped whenever auto-offers are suppressed (a promptMode or the
+      // request field - see resolveSkipAutoOffers), where withholding the offer is deliberate, not
+      // a failure. Silent otherwise means the model answers from its weights while the user
+      // believes their knowledge was consulted.
       // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
       // user belief that their knowledge was consulted, and attaching documents creates that belief
       // where merely owning a lake does not. So for the lake-only case we warn on an UNEXPECTED

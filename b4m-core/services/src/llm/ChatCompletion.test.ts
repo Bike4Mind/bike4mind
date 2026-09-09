@@ -3061,12 +3061,13 @@ describe('ChatCompletionProcess', () => {
         expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringMatching(/search_knowledge_base is not offered/));
       });
 
-      // The gap this field routes around. Both modes are pinned, for opposite reasons: `raw` must
-      // never admit the licence (an admin prompt would invalidate the bare-model arm it exists to
+      // The gap this field routes around. The list is every PromptMode, so a fourth one cannot be
+      // added without deciding this, but raw and surface are the interesting ends: `raw` must never
+      // admit the licence (an admin prompt would invalidate the bare-model arm it exists to
       // provide), whereas `surface` claims no such bareness and dropping a safety counterweight
       // there is arguable - so if PROMPT_MODE_SOURCES.surface ever admits `abstention`, that is a
       // deliberate decision and this test is where it surfaces.
-      it.each(['raw', 'surface'] as const)(
+      it.each(['raw', 'grounded', 'surface'] as const)(
         'promptMode %s strips the licence along with every other authored prompt',
         async mode => {
           const { contextAndSystemMessages } = await runKnowledgeGatingCase({
