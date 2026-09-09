@@ -1,4 +1,5 @@
 import { ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { z } from 'zod';
 import { NotFoundError } from '@bike4mind/utils';
@@ -99,6 +100,16 @@ export const editFileTool: ToolDefinition = {
       context.logger.info(`📝 Edit File Tool: Instruction: ${instruction}`);
 
       try {
+        // Same not-found answer a missing row gets, for the same reason: `fileId` is composed by
+        // the model, so a value Mongoose cannot cast to an `_id` is a bad argument rather than a
+        // fault. Without this the CastError reaches the catch below and the model is told
+        // "Failed to edit file: Cast to ObjectId failed for value ..." - our internals, and no
+        // hint that it should go and find the real id (#2530 fixed the same shape in
+        // knowledgeBaseRetrieve).
+        if (!isObjectIdShaped(fileId)) {
+          throw new NotFoundError(`File with ID ${fileId} not found`);
+        }
+
         // context.db's type doesn't expose fabFiles; reached via the cast below.
         const fabFile = await (context.db as any).fabFiles?.findById(fileId);
         if (!fabFile) {

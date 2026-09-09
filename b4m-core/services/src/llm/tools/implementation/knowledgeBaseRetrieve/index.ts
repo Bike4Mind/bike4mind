@@ -1,6 +1,5 @@
-import { isObjectIdOrHexString } from 'mongoose';
-
 import { ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
@@ -158,11 +157,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             // message and same 'ok' outcome as an out-of-scope or genuinely-missing id, which also
             // tightens the existence-oracle invariant the branches below are careful about -
             // "not even well-formed" is no longer distinguishable from "not found".
-            // `isObjectIdOrHexString`, not `isValidObjectId`: tool args are cast from JSON without
-            // validation, so a model that emits a bare number gives us a runtime number despite the
-            // `string` type - and `isValidObjectId` accepts one, casting it to a fabricated id.
-            // Same choice, same reason, as usableObjectIds in @bike4mind/db-core.
-            if (!isObjectIdOrHexString(file_id)) {
+            if (!isObjectIdShaped(file_id)) {
               context.logger.log('📖 Knowledge Retrieve: file_id is not an ObjectId, answering as not-found', {
                 file_id,
               });
