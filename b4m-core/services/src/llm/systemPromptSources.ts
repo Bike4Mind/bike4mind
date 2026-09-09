@@ -255,7 +255,7 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  * Whether this turn withholds OUR server-side tool auto-offers. Two independent triggers: any
  * `promptMode` (an eval/passthrough surface), or the caller's explicit `skipAutoOffers`. Unioned
  * here rather than at each gate because the rule was previously spelled out per-site and a site was
- * missed - the three auto-add sites named in AUTO_ADDED_TOOL_NAMES must agree, and a fourth trigger
+ * missed - all three auto-add sites in ChatCompletionProcess must agree, and a fourth trigger
  * should mean editing this function and nothing else.
  *
  * A force-on, not an override: `skipAutoOffers: false` under a promptMode still suppresses, because

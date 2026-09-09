@@ -227,8 +227,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * was the only switch for the offer and it also strips every authored prompt, so no caller could
    * have an arm that went unoffered AND kept the abstention licence.
    *
-   * Gates the three auto-add sites listed in AUTO_ADDED_TOOL_NAMES (the knowledge offer, the
-   * navigate_view auto-add, the blog/skill gate), unioned with `Boolean(promptMode)` by
+   * Gates the three auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
+   * auto-add, the blog/skill gate), unioned with `Boolean(promptMode)` by
    * resolveSkipAutoOffers. A force-on, not an override: `false` under a promptMode still suppresses.
    * Withholding navigate_view also drops the viewRegistry system block, which only describes it.
    *

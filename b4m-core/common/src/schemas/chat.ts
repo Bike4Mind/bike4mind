@@ -86,11 +86,13 @@ export const SimplifiedChatRequestSchema = z.object({
     .optional()
     .describe(
       'Suppress tools the server would otherwise attach on its own for this session (the ' +
-        'knowledge-base search offer, and in-app view navigation). Tools you request explicitly ' +
-        'are unaffected, as is the system-prompt content. This does not switch off retrieval: a ' +
-        'session with forced knowledge retrieval still retrieves, and documents already attached ' +
-        'to the session are still placed in the prompt directly. Any promptMode suppresses these ' +
-        'too, so false has no effect alongside one.'
+        'knowledge-base search offer, in-app view navigation, blog drafting/editing/publishing, ' +
+        'and skill invocation). Tools you request explicitly are unaffected. One system-prompt ' +
+        'block goes with them: withholding in-app view navigation also drops the view-registry ' +
+        'block that exists only to describe it. No other prompt content changes. This does not ' +
+        'switch off retrieval: a session with forced knowledge retrieval still retrieves, and ' +
+        'documents already attached to the session are still placed in the prompt directly. Any ' +
+        'promptMode suppresses these too, so false has no effect alongside one.'
     ),
   // With wait, also return the per-source system prompt breakdown the completion was
   // assembled from (promptDetails), so callers can verify what fed the model instead of
