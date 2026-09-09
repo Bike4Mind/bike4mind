@@ -426,7 +426,7 @@ describe('ImageGenerationService.process (Gemini edit-path model passthrough)', 
     const findById = vi.fn(async () => quest as any);
     const update = vi.fn(async () => undefined);
     const updateMany = vi.fn(async () => undefined);
-    const findAllInIds = vi.fn(async () => [
+    const findAccessibleInIds = vi.fn(async () => [
       { id: 'f1', filePath: 'data:image/png;base64,AAAA', mimeType: 'image/png', moderationStatus: 'clean' },
     ]);
     const service = new ImageGenerationService({
@@ -434,7 +434,7 @@ describe('ImageGenerationService.process (Gemini edit-path model passthrough)', 
         quests: { findById, update, updateMany },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
-        fabFiles: { findAllInIds },
+        fabFiles: { findAccessibleInIds },
       },
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
