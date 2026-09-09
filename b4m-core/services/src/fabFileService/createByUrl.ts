@@ -14,13 +14,6 @@ import { fetchAndParseURL } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createFabFile, CreateFabFileAdapters } from './create';
 
-// Re-exported for backward compatibility - callers importing `DuplicateFabFileError` from here
-// (directly, or via `fabFilesService`) keep working. Canonical definition now lives in
-// `@bike4mind/common` (see there for why): thrown here, but caught across a package boundary in
-// `apps/client`, so it needs one module identity rather than a per-caller `instanceof` that can
-// miss across module realms.
-export { DuplicateFabFileError };
-
 const createFabFileByUrlSchema = z.object({
   url: z
     .string()
@@ -108,8 +101,8 @@ export const createFabFileByUrl = async (
   // produces identical `textContent`, so this still satisfies "byte-identical fetched bodies are
   // duplicates" without widening `fetchAndParseURL`'s own contract.
   //
-  // Only computed/checked/stamped when there is content: an empty fetch (a JS-only or paywalled
-  // page) would otherwise share one `computeContentHash('')` key across every such page, making
+  // Only computed/checked when there is content: an empty fetch (a JS-only or paywalled page)
+  // would otherwise share one `computeContentHash('')` key across every such page, making
   // unrelated empty fetches collide with each other as false "duplicates".
   const contentHash = fileSize > 0 ? computeContentHash(textContent) : undefined;
 
@@ -117,6 +110,17 @@ export const createFabFileByUrl = async (
     const existing = await checkDuplicate(contentHash);
     if (existing) throw new DuplicateFabFileError(existing, title);
   }
+
+  // Stamped on the row ONLY when a caller opted into ingest-time dedup (`checkDuplicate` supplied),
+  // deliberately keeping the stamp coupled to the dedup behavior rather than stamping it on every
+  // door. `unarchiveDataLake.ts`'s hard-delete dedup pass (the family's only HARD delete) reads this
+  // same field across every FabFile, regardless of which door created it - stamping it unconditionally
+  // would enroll doors that never asked for content-hash dedup (the web-upload and proposal-admission
+  // doors) in that pass too. Since this door hashes extracted TEXT rather than the URL, two
+  // provenance-distinct rows (a canonical page vs. its tracking-parameter/print/AMP variant) can share
+  // a hash - fine as an ingest-time dedup signal for the door that asked for it, but not safe to feed
+  // into an irreversible delete on doors that never opted in.
+  const stampedContentHash = checkDuplicate ? contentHash : undefined;
 
   const fabFile = await createFabFile(
     userId,
@@ -127,7 +131,7 @@ export const createFabFileByUrl = async (
       type: KnowledgeType.URL,
       public: false,
       prefix: 'url',
-      contentHash,
+      contentHash: stampedContentHash,
       // Forwarded from the adapters, not from `params` - see the `tags` note above.
       ...(tags && { tags }),
     },
