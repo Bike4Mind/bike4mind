@@ -25,6 +25,7 @@ import {
   handleDataLakeCommand,
   runDataLakeSlackCommand,
   formatIngestOutcome,
+  formatBareDataLakeMentionHint,
   slugTier,
   type ListScope,
 } from './handleDataLakeCommand';
@@ -463,6 +464,24 @@ describe('handleDataLakeCommand', () => {
       expect(reply).toContain('Added 1 file to *Sales*: "An Article"');
     });
 
+    it('reports a re-added link as skipped, matching the FILE path wording', async () => {
+      // Acceptance criterion: re-adding the same URL answers "Already in <lake>, skipped", not a
+      // second "Added 1 file" - the bug #2027 was filed for.
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'An Article',
+        sourceUrl: 'https://x',
+        duplicate: true,
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toContain('Already in *Sales*, skipped: "An Article"');
+      expect(reply).not.toContain('Added 1 file');
+    });
+
     it('surfaces a link refusal verbatim', async () => {
       parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
       ingestSlackLinkIntoLake.mockResolvedValue({
@@ -710,6 +729,16 @@ describe('formatIngestOutcome', () => {
     );
 
     expect(text).toMatch(/searchable once indexing finishes/i);
+  });
+});
+
+describe('formatBareDataLakeMentionHint (#2027)', () => {
+  it('points at @datalake and the help subcommand, distinct from the unrecognized-subcommand reply', () => {
+    const text = formatBareDataLakeMentionHint();
+
+    expect(text).toContain('@datalake');
+    expect(text).toContain('@datalake help');
+    expect(text).not.toMatch(/unrecognized/i);
   });
 });
 
