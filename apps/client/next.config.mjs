@@ -54,21 +54,6 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
-  // esbuild's native platform binary is 10.9 MB of the deployed server function and can never be
-  // used there. Its only consumer is app/serwist/[path]/route.ts, whose handler comes from
-  // @serwist/turbopack with `dynamic: 'force-static'`, `dynamicParams: false` and
-  // `revalidate: false` - Next prerenders it during the build and serves static output afterwards,
-  // so the handler cannot be re-invoked in the Lambda. And even if it could, serwist's
-  // `useNativeEsbuild` defaults to `process.platform === 'win32'`, so on the Linux runtime it takes
-  // the esbuild-wasm branch and never loads the native package at all.
-  //
-  // Both packages stay in `serverExternalPackages` below on purpose: the prerender DOES run esbuild
-  // during `next build`, so removing them there would risk the build to save nothing. This excludes
-  // the native binary from the deployment trace only, which is the one place it is provably dead.
-  outputFileTracingExcludes: {
-    '*': ['**/@esbuild/**'],
-  },
-
   transpilePackages: [
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',
@@ -128,9 +113,14 @@ const nextConfig = {
     '@aws-sdk/client-transcribe',
     '@aws-sdk/credential-provider-node',
     '@opensearch-project/opensearch',
-    // Serwist uses esbuild to build the service worker during `next build` (the route that
-    // invokes it is force-static, so this is not a runtime dependency of the deployed server).
-    'esbuild',
+    // Serwist builds the service worker during `next build`, not at request time: the route
+    // that invokes it (app/serwist/[path]/route.ts) is `force-static` with `dynamicParams: false`
+    // and `revalidate: false`, so Next prerenders it and the handler is never re-invoked in the
+    // Lambda. Only `esbuild-wasm` is listed, because that is the branch serwist actually takes -
+    // `useNativeEsbuild` defaults to `process.platform === 'win32'`, false on the Linux runtime.
+    // Declaring the native `esbuild` here made the packager ship @esbuild/linux-x64 (10.9 MB) into
+    // the server function. An `outputFileTracingExcludes` glob does NOT undo that; measured, the
+    // bytes stay. The external declaration is what pulls it in, so that is what has to go.
     'esbuild-wasm',
   ],
 
