@@ -53,6 +53,7 @@ import {
   resolveHistoryFetchLimit,
   buildMemoryContext,
   buildLakeMemoryContext,
+  lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   DATALAKE_TAG_PREFIX,
@@ -735,11 +736,20 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     // NonNullable, not RetrievalSummary['outcome']: the latter now includes undefined, so an
     // explicit `outcome: undefined` would type-check here and merge through verbatim, breaking
     // the present-iff-`attempted` contract. Same guard recordForcedSkip uses for forcedSkipReason.
-    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
+    // `injected` is passed only by the exits that COMPLETED a search, so an exit that broke or
+    // never searched leaves the volume absent (unknown) rather than recording a zero - see the
+    // presence contract on RetrievalSummarySchema.injected. No topScore from this surface: belief
+    // `relevance` is a different scale from the cosine similarities the other surfaces report.
+    const recordRetrieval = (
+      outcome: NonNullable<RetrievalSummary['outcome']>,
+      dataLakeTags: string[],
+      injected?: NonNullable<RetrievalSummary['injected']>
+    ) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        ...(injected ? { injected } : {}),
         // Both recorders run only under forced retrieval, so they can label the turn themselves.
         // Redundant with the seed in ChatCompletionProcess, which every path that constructs this
         // feature also reaches - the redundancy is for ORDERING, not for a second entry point: a
@@ -788,7 +798,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       if (beliefs.length === 0) {
         // A legitimate zero: recall ran to completion and found nothing. This is the case the
         // whole feature exists to make distinguishable from "never asked".
-        recordRetrieval('ok', dataLakeTags);
+        recordRetrieval('ok', dataLakeTags, { chunks: 0, chars: 0 });
         return [];
       }
 
@@ -797,13 +807,22 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.context = quest.promptMeta.context ?? {};
       quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
-      recordRetrieval('ok', dataLakeTags);
 
       this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
       // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
       // sanitizes + length-bounds each fact (uploaded-doc content is untrusted). Distinct from the
       // memento framing used above.
-      const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
+      // Sanitized once, up front, so the volume below counts the facts the render actually emits.
+      // `beliefs.length` would overcount (a fact that sanitizes to empty is dropped) and
+      // `context.length` would overcount `chars` by the framing preamble and the `- ` bullets -
+      // and `chars` is specified as retrieved CONTENT only, so it means the same thing here as on
+      // the cosine surfaces, which is what makes the merge's SUM meaningful.
+      const injectedFacts = lakeMemoryFacts(beliefs.map(b => b.fact));
+      const context = buildLakeMemoryContext(injectedFacts);
+      recordRetrieval('ok', dataLakeTags, {
+        chunks: injectedFacts.length,
+        chars: injectedFacts.reduce((total, fact) => total + fact.length, 0),
+      });
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
       // A retrieval that threw must not be byte-identical to one never attempted - record it
@@ -2004,12 +2023,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // the audit spine and the per-turn summary name this surface identically.
     // Outer-scoped so the catch can report whichever lakes were resolved even when the scan threw.
     let attemptedDataLakeTags: string[] = [];
-    // NonNullable for the same reason as LakeMemoryFeature's recorder above.
-    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
+    // NonNullable for the same reason as LakeMemoryFeature's recorder above. `injected` follows the
+    // same presence contract as LakeMemoryFeature's recorder: supplied only by an exit that ran a
+    // search to completion, so a broken or never-searched exit leaves the volume unknown.
+    const recordRetrieval = (
+      outcome: NonNullable<RetrievalSummary['outcome']>,
+      dataLakeTags: string[],
+      injected?: NonNullable<RetrievalSummary['injected']>
+    ) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        ...(injected ? { injected } : {}),
         mode: 'forced',
         surfaces: ['forced-retrieval'],
         dataLakeTags,
@@ -2308,7 +2334,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // 'not_indexed' rather than 'ok' because reporting that as a topical zero would claim the
         // library was searched and came up empty, and rather than 'failed' because nothing threw:
         // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
-        recordRetrieval('not_indexed', dataLakeTags);
+        // No topScore: nothing was scored, so `topScore` is still its -1 sentinel and persisting
+        // that would read as a real (very poor) similarity rather than as an absent one.
+        recordRetrieval('not_indexed', dataLakeTags, { chunks: 0, chars: 0 });
         return this.noContextMessages('unavailable');
       }
       const scored = pool.sort(compareForcedRetrievalCandidates);
@@ -2371,14 +2399,34 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // The legitimate zero: the corpus WAS scanned and compared, nothing was similar enough.
         // 'ok' per RetrievalSummarySchema - this is the case the field exists to distinguish from
         // "never asked". Partial-scan hedging rides on promptMeta.warnings via reportCoverage above.
-        recordRetrieval('ok', dataLakeTags);
+        // The starve this field exists to record. `topScore` is the diagnostic that says how close
+        // the best candidate came to the floor; guarded on scoredCount because an unscored scan
+        // leaves the -1 sentinel. Not guarded on `topScore >= 0`, which would discard a genuinely
+        // negative cosine - a real near-miss, and the very diagnostic this exit is here to carry.
+        //
+        // This zero is true OF THIS SURFACE and can still be a grounded turn: the model may be offered
+        // the knowledge tools alongside forced retrieval and ground through retrieve_knowledge_content,
+        // which reports no volume to oppose it. Documented as a known hole on
+        // RetrievalSummarySchema.injected - do not resolve it by suppressing the zero here, which
+        // would erase the starve this exit exists to record; the fix is to instrument that tool.
+        recordRetrieval('ok', dataLakeTags, {
+          chunks: 0,
+          chars: 0,
+          ...(scoredCount > 0 ? { topScore } : {}),
+        });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
       }
       const partialCoverage = this.reportCoverage(quest, coverage, embeddingModel);
       // Recorded here, before the remaining awaits, so the success outcome is stamped the moment
       // grounding is decided rather than depending on the lake-prompt and audit steps below.
-      recordRetrieval('ok', dataLakeTags);
+      // `used` counts the injected chunk text only, never the headings, so `chars` means the same
+      // thing here as on the knowledge tools (see RetrievalSummarySchema.injected).
+      recordRetrieval('ok', dataLakeTags, {
+        chunks: sections.length,
+        chars: used,
+        ...(scoredCount > 0 ? { topScore } : {}),
+      });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {

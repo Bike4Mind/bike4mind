@@ -5901,7 +5901,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
 
     // Project feature - only if needed and available
     if (projectId) {
-      const project = await this.db.projects.findById(projectId);
+      const project = await this.db.projects.shareable.findAccessibleById(this.user, projectId);
       if (project) {
         this.logger.log('  - Enabling Project feature');
         this.features.set('project', new ProjectFeature(this, project));

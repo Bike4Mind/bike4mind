@@ -119,6 +119,10 @@ const FULL_PROMPT_META = {
     outcome: 'ok',
     surfaces: ['knowledgeBaseSearch', 'lake-memory'],
     dataLakeTags: ['datalake:x'],
+    // The parity test only checks that a Zod path has a Mongoose declaration; this round trip is
+    // what covers the BSON-type half, so a Number-vs-String slip on any of these three fails here
+    // rather than shipping as a field that saves and then fails its Zod re-parse on read.
+    injected: { chunks: 5, chars: 1300, topScore: 0.88 },
   },
   // Top-level for the same reason as `retrieval` above. The chat coverage banner keys on this
   // field surviving the round-trip, so a shape that persists but fails the Zod re-parse would

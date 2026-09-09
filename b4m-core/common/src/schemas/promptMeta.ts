@@ -323,11 +323,16 @@ export const CitableSourceSchema = z.object({
  * zero-result retrieval, so a turn that legitimately found nothing is indistinguishable from one
  * where retrieval never ran at all.
  *
- * Deliberately holds NO counts and NO chunk/document identifiers. Counts already exist and are
- * more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
+ * Holds NO chunk/document identifiers, and no DOCUMENT count. A document count already exists and
+ * is more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
  * `applyQuestStatusChanges`, while this shape cannot dedupe (no identifiers to dedupe by) and
- * would have to sum - producing a second, disagreeing number for the same question. Similarity
- * scores live on `LakeAccessEvent`, not here.
+ * would have to sum - producing a second, disagreeing number for the same question.
+ *
+ * `injected` below is NOT that number and does not reopen it: it counts PASSAGES and characters,
+ * neither of which `citables` can express - one document contributes many passages, and a turn
+ * that injected nothing emits no citable to count at all. Similarity scores otherwise live on
+ * `LakeAccessEvent`; the single `injected.topScore` is here because that row is written only on a
+ * turn that grounded, so it cannot carry the near-miss score of a turn that grounded on nothing.
  *
  * CAUTION, not a guarantee: the absence of chunk/document identifiers is what keeps this shape
  * OUT of `promptMetaRedaction.ts`'s scope (that helper is a functionCalls-only denylist and would
@@ -433,6 +438,61 @@ export const RetrievalSummarySchema = z.object({
   injectedLakePromptIds: z.array(z.string()).optional(),
   /** mementoCount/mementoIds precedent: mirrors injectedLakePromptIds.length. */
   injectedLakePromptCount: z.number().optional(),
+  /**
+   * How much retrieved content actually reached the model this turn: `chunks` passages totalling
+   * `chars` characters of retrieved CONTENT (headings and framing excluded, so the number means
+   * the same thing on every surface), plus `topScore`, the best similarity among the compared
+   * passages the reporting surface can SEE - which is not the same population on every surface.
+   * Forced retrieval scores every chunk itself and so reports true near-misses; knowledgeBaseSearch's
+   * semantic arm only ever sees `minScore` survivors, and reports no `topScore` at all on a starve,
+   * so a sub-floor near-miss there is invisible rather than recorded.
+   *
+   * PRESENCE CONTRACT: present if and only if at least one surface COMPLETED a search this turn.
+   * `chunks: 0` is a RECORDED STARVE - the library was searched and nothing was injected, which is
+   * the case this field exists to make visible: without it, a forced-retrieval turn that injected
+   * nothing is byte-identical to one that injected its whole character budget (both `outcome:
+   * 'ok'`). Absence means the volume is UNKNOWN, which is what a turn carries when no surface
+   * completed a search: retrieval was never attempted, nothing was in scope to search
+   * ('no_lakes'), or the one surface that ran broke mid-flight, where a zero would be a lie.
+   * A surface that completed but CANNOT know the turn's passage volume also stays silent rather
+   * than claiming a zero - knowledgeBaseSearch's keyword arm on a hit is the case: it injects
+   * file metadata and hands the model retrieve_knowledge_content, which injects the text and
+   * reports no volume, so its zero would survive the merge as a starve that did not happen.
+   *
+   * KNOWN HOLE in that rule, while retrieve_knowledge_content stays uninstrumented: a recorded zero
+   * is not PROOF of a starve. Forced retrieval and the knowledge tools are not mutually exclusive
+   * (ChatCompletionProcess seeds on `forcedRetrievalEnabled || knowledgeToolOffered`), so the forced
+   * arm can complete empty, write its honest zero, and the model can then ground the same turn
+   * through retrieve_knowledge_content, which contributes no volume to oppose it. The zero is
+   * per-surface-truthful and turn-level-misleading. Any rollup counting starves should treat a zero
+   * as "nothing was injected by a surface that reports volume" and, until that tool reports its own,
+   * cross-check `functionCalls` before calling the turn ungrounded.
+   *
+   * Per SURFACE, not per turn: a surface that breaks contributes nothing while a surface that
+   * completed alongside it still reports its own volume, so a turn CAN read 'failed' next to a
+   * recorded zero. That pairing means "one surface broke, and everything that did finish injected
+   * nothing" - which is exactly what a reader needs, and strictly more than the outcome alone.
+   *
+   * SUMMED across surfaces, so this field and `outcome` can legitimately disagree in tone on a
+   * multi-surface turn: forced retrieval grounding on 12 passages while knowledgeBaseSearch throws
+   * gives `outcome: 'failed'` alongside `chunks: 12`. That is correct - `outcome` is worst-of,
+   * `injected` is sum-of-completions.
+   *
+   * `topScore` is optional because only cosine-similarity surfaces have one to report. Lake
+   * memory's belief `relevance` is a different scale and forced retrieval's pre-scan value is a
+   * -1 sentinel; neither is ever written here, because a `max` across mixed scales, or against a
+   * sentinel, is a number that reads as a similarity and is not one.
+   *
+   * Date-bound any rollup, the same caveat `mode` documents on itself: turns recorded before this
+   * landed carry no volume, and no backfill is possible - the volume of a past turn is gone.
+   */
+  injected: z
+    .object({
+      chunks: z.number(),
+      chars: z.number(),
+      topScore: z.number().optional(),
+    })
+    .optional(),
   /**
    * Which of this turn's injected lake prompt ids were BOTH in the session's pre-authorized (manage-
    * but-not-member admission) set AND injected on this turn - see unionPreauthorizedLakeAccess and

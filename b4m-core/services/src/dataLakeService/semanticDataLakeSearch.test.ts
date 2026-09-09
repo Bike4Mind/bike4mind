@@ -1910,3 +1910,143 @@ describe('comparedNoPassages', () => {
     expect(comparedNoPassages({ chunksScored: 0, scan: scanOf({ annHits: 1 }) })).toBe(false);
   });
 });
+
+/**
+ * ANN/scan ranking parity.
+ *
+ * The cutover suite above proves the two partitions MERGE (a ready file goes to Atlas, a fresh one
+ * stays on scan, both land in one ranking), but its ann branch returns a hardcoded score, so
+ * nothing there can see the two paths disagree about ORDER or SCALE. That gap matters because the
+ * paths compute their scores differently: the scan path runs `computeCosineSimilarity` directly,
+ * while the ann path denormalizes the backend's [0,1] score back to raw cosine (`2 * score - 1`,
+ * see annVectorSearch.ts) precisely so the two are comparable inside one `BoundedTopK`. If that
+ * conversion, the comparator, or the merge regressed, every existing test would still pass and
+ * retrieval would silently reorder.
+ *
+ * Method: one fixed corpus, scored two ways. The ann adapter here is EXHAUSTIVE - it ranks the
+ * same vectors by true cosine and returns the top `limit` - so any difference in output is the
+ * plumbing, not the backend. That is deliberate and also the limit of what a unit test can pin:
+ * it does NOT model Atlas's approximate recall (`numCandidates`, FabFileModel.ts), which is the
+ * one case where ann can legitimately return less than the scan would.
+ */
+describe('semanticDataLakeSearch ANN/scan ranking parity', () => {
+  const PARITY_MODEL = 'text-embedding-ada-002';
+  const readyStamp = new Date(Date.now() - 120_000); // past the 60s mongot indexing lag
+
+  const realCosine = (a: number[], b: number[]): number => {
+    const dot = a.reduce((s, v, i) => s + v * (b[i] ?? 0), 0);
+    const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
+    const magB = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
+    return magA === 0 || magB === 0 ? 0 : dot / (magA * magB);
+  };
+
+  /**
+   * Chunks alternate between two files so the top-K spans both: a corpus where the best K all sit
+   * in one file would pass even if the merge dropped a whole partition. Angles increase with the
+   * index, so cosine against the query direction is strictly decreasing and the expected order is
+   * unambiguous (no ties for the comparator's tie-break to decide).
+   */
+  const CORPUS = Array.from({ length: 8 }, (_, i) => {
+    const theta = ((i + 1) * 5 * Math.PI) / 180;
+    return {
+      id: `c${String(i).padStart(2, '0')}`,
+      fabFileId: i % 2 === 0 ? 'fileA' : 'fileB',
+      text: `passage ${i}`,
+      vector: [Math.cos(theta), Math.sin(theta)],
+    };
+  });
+
+  const parityFile = (id: string) => ({
+    id,
+    fileName: `${id}.pdf`,
+    tags: [],
+    embeddingModel: PARITY_MODEL,
+    vectorizedChunkCount: 4,
+    chunkEmbeddingModelStampedAt: readyStamp,
+  });
+
+  const TOP_K = 4;
+
+  const runSearch = async (vectorSearchEnabled: boolean) => {
+    const files = [parityFile('fileA'), parityFile('fileB')];
+
+    // Scan sees the whole corpus; with ann enabled both files are ann-eligible, so the scan
+    // partition is empty and this mock is simply never asked for them.
+    const findVectorsByFabFileIds = pagingChunkMock(CORPUS);
+
+    // Exhaustive stand-in for $vectorSearch: true cosine over the same vectors, ranked, truncated
+    // to `limit`, and re-normalized to the [0,1] scale Atlas reports so the production
+    // `2 * score - 1` recovers the raw cosine.
+    const vectorSearch = vi.fn((fileIds: string[], vector: number[], model: string, opts?: { limit?: number }) => {
+      if (model !== PARITY_MODEL) return Promise.resolve([]);
+      return Promise.resolve(
+        CORPUS.filter(c => fileIds.includes(c.fabFileId))
+          .map(c => ({ id: c.id, fabFileId: c.fabFileId, text: c.text, score: (realCosine(vector, c.vector) + 1) / 2 }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, opts?.limit ?? CORPUS.length)
+      );
+    });
+
+    const getAtlasIndexStatus = vi.fn((model: string) =>
+      Promise.resolve({ queryable: model === PARITY_MODEL, status: 'READY' })
+    );
+
+    return semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        embeddingModel: PARITY_MODEL as SemanticDataLakeSearchParams['embeddingModel'],
+        topK: TOP_K,
+        vectorSearchEnabled,
+      },
+      {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: files, hasMore: false, total: files.length }]) },
+          fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus },
+        },
+      } as never
+    );
+  };
+
+  beforeEach(() => {
+    // The suite-wide cosine mock returns a flat 0.9, which would make every chunk tie and destroy
+    // the ordering this block exists to compare. Restored to the real computation here only.
+    mockCosine.mockImplementation((a: number[], b: number[]) => realCosine(a, b));
+  });
+
+  it('ranks identically whether the scan or an exhaustive ANN produced the results', async () => {
+    const viaScan = await runSearch(false);
+    const viaAnn = await runSearch(true);
+
+    // Guard against a vacuous pass: if ann never engaged, both runs are the scan path and the
+    // comparison below is trivially true.
+    expect(viaScan.scan.annModelsQueried).toBe(0);
+    expect(viaAnn.scan.annModelsQueried).toBeGreaterThan(0);
+
+    expect(viaAnn.results).toHaveLength(TOP_K);
+    expect(viaAnn.results.map(r => r.chunkId)).toEqual(viaScan.results.map(r => r.chunkId));
+    expect(viaAnn.results.map(r => r.fileId)).toEqual(viaScan.results.map(r => r.fileId));
+
+    viaAnn.results.forEach((hit, i) => {
+      expect(hit.score).toBeCloseTo(viaScan.results[i].score, 9);
+    });
+  });
+
+  it('selects the same top-K across both files rather than draining one partition', async () => {
+    const viaAnn = await runSearch(true);
+
+    // The corpus alternates files by index and cosine decreases with index, so the first four are
+    // c00..c03 spanning both files. A merge that concatenated partitions instead of ranking across
+    // them would return four chunks from one file.
+    expect(viaAnn.results.map(r => r.chunkId)).toEqual(['c00', 'c01', 'c02', 'c03']);
+    expect(new Set(viaAnn.results.map(r => r.fileId))).toEqual(new Set(['fileA', 'fileB']));
+  });
+
+  it('recovers raw cosine from the backend score rather than passing the normalized value through', async () => {
+    const viaAnn = await runSearch(true);
+
+    // cos(5 degrees) for the top hit. A missing denormalization would report (cos + 1) / 2, about
+    // 0.998, which is close enough to the true 0.996 to survive a loose assertion - hence the
+    // tight tolerance.
+    expect(viaAnn.results[0].score).toBeCloseTo(Math.cos((5 * Math.PI) / 180), 6);
+  });
+});

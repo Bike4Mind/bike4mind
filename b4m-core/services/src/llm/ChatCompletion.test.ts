@@ -3955,7 +3955,29 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // One belief recalled and rendered. No `topScore`: belief relevance is a different scale
+        // from the cosine similarities the other surfaces report, so a max across the two would
+        // be a number that looks like a similarity and is not one.
+        // `chars` counts the sanitized fact text ONLY - not the rendered block, whose framing
+        // preamble and `- ` bullets would inflate it by a fixed overhead and make it mean
+        // something different here than on the surfaces this field is summed with.
+        injected: { chunks: 1, chars: 'The X-200 pump has a 5-year warranty.'.length },
       });
+    });
+
+    it('counts only the beliefs that survive sanitizing, since a blank fact reaches the model as nothing', async () => {
+      const fact = 'The X-200 pump has a 5-year warranty.';
+      const { retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [
+          { fact, relevance: 0.9, sources: ['doc1'] },
+          { fact: '   ', relevance: 0.8, sources: ['doc2'] },
+        ],
+      });
+
+      // buildLakeMemoryContext drops the whitespace-only fact, so two recalled beliefs render one
+      // bullet. `injected` is what reached the model, not what recall returned.
+      expect(retrieval).toMatchObject({ injected: { chunks: 1, chars: fact.length } });
     });
 
     it('emits no lake-memory block when recall returns nothing, but still records attempted:true, outcome:ok (#1867 zero case)', async () => {
@@ -3970,6 +3992,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // Recall completed, so the zero is RECORDED rather than unknown - the same distinction
+        // 'ok' draws for the outcome, now drawn for the volume.
+        injected: { chunks: 0, chars: 0 },
       });
     });
 
@@ -3980,7 +4005,8 @@ describe('ChatCompletionProcess', () => {
       });
 
       expect(systemText).not.toContain('Background reference facts');
-      // A retrieval that threw must not be byte-identical to one never attempted.
+      // A retrieval that threw must not be byte-identical to one never attempted. No `injected`:
+      // recall broke mid-flight, so the volume is unknown and a zero would be a lie.
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
