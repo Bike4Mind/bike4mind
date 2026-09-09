@@ -418,15 +418,19 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
  * so a document supplying `topK * DIVERSITY_CANDIDATE_POOL_FACTOR` or more of the top-scoring
  * chunks fills the pool alone and the cap becomes a complete no-op on it - capChunksPerFile holds
  * its surplus back, then backfills those same chunks, returning the uncapped result while still
- * paying the widened ANN limit. That is a reachable shape, not a corner: the KB path's topK is 10,
- * so the pool is 30 chunks and a book-length PDF clears 30 top-scoring chunks routinely. So this
- * is a guard for CONTESTED slots, not a fix for severe single-document crowding. This only widens
- * the ANN backends' own
- * request size and the ranked pool's memory footprint - the SCAN path reads no more rows than it
- * already would (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here
- * only changes how many of the chunks it was scanning anyway survive into `ranked`). So this is a
- * knob that trades ANN query size and a little CPU for diversity, not scan cost, and it is a
- * constant rather than a setting until an operator has a reason to want a different one.
+ * paying the widened ANN limit. That is a reachable shape, not a corner: the KB path's topK is 6
+ * by default (KB_SEARCH_CANDIDATE_FLOOR), so the pool is 18 chunks, and 30 once either adaptive
+ * knob widens topK to KB_SEARCH_MAX_RESULTS. A book-length PDF clears either routinely. So this
+ * is a guard for CONTESTED slots, not a fix for severe single-document crowding.
+ *
+ * Cost: this widens the ANN backends' own request size and the ranked pool's memory footprint. On
+ * Atlas the request size is not the whole bill - FabFileModel's vector stage derives
+ * `numCandidates` from `limit * 10`, so a 3x limit is also a 3x widening of the index's internal
+ * exploration, which is the larger term. The SCAN path reads no more rows than it already would
+ * (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here only changes
+ * how many of the chunks it was scanning anyway survive into `ranked`). So this is a knob that
+ * trades ANN query work and a little CPU for diversity, not scan cost, and it is a constant rather
+ * than a setting until an operator has a reason to want a different one.
  */
 const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
 
@@ -445,6 +449,19 @@ const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
  * callers consume a PREFIX of this list (tokenBudget.ts trims from the end, and
  * search_knowledge_base promises the first passage back before any budget applies). Membership is
  * the cap's business; presentation order stays strictly best-first.
+ *
+ * That prefix is the second thing bounding what the cap can do, and it is worth stating exactly.
+ * This trims to `topK`, but the chat KB path asks for a topK WIDER than the count it serves:
+ * `resolvePassageCeiling` decides what is served, while topK is floored at
+ * KB_SEARCH_CANDIDATE_FLOOR and widened to KB_SEARCH_MAX_RESULTS by either adaptive knob - so the
+ * default config asks for 6 and serves 5, and a configured minimum-relevance alone asks for 10 and
+ * still serves 5. A promoted chunk (one the uncapped top-K would not have held) scores at or below
+ * every chunk it displaced, so the re-sort above lands promotions in the TAIL. With P promotions
+ * and `served` slots actually read, min(P, topK - served) of them fall past the last slot anyone
+ * reads and only max(0, P - (topK - served)) reach the caller. At the default 6/5 that means a cap
+ * which promotes exactly one chunk is invisible; it takes two before the first one is served.
+ * Closing that gap means enforcing at the served count rather than at topK, which is the caller's
+ * number to supply - not something this function can widen its way out of.
  *
  * This is the ONLY place the cap is enforced, but not the only place it changes: the candidate
  * streams feeding the merge are widened to `topK * DIVERSITY_CANDIDATE_POOL_FACTOR` when the cap
@@ -1187,7 +1204,14 @@ async function rankChunksForFiles(args: {
   for (const result of scanned.results) merged.offer(result);
   for (const result of annResult.results) merged.offer(result);
   for (const result of alternateResults) merged.offer(result);
-  const mergedResults = capChunksPerFile(merged.drain(), topK, perFileCap);
+  const candidates = merged.drain();
+  const mergedResults = capChunksPerFile(candidates, topK, perFileCap);
+  // How many slots the cap actually redistributed: entries it admitted that the uncapped top-K
+  // would not have held. Without this nothing distinguishes a cap that bound from one that was on
+  // and inert, and the widened pool makes `ann hits` jump by DIVERSITY_CANDIDATE_POOL_FACTOR with
+  // nothing in the log to attribute the jump to. O(topK), and skipped entirely when off.
+  const uncappedIds = perFileCap > 0 ? new Set(candidates.slice(0, topK).map(c => c.chunkId)) : undefined;
+  const capPromotions = uncappedIds ? mergedResults.filter(c => !uncappedIds.has(c.chunkId)).length : 0;
 
   const scan: SemanticSearchScanAccounting = {
     truncated: args.fileBudgetHit || scanned.chunkBudgetHit,
@@ -1287,7 +1311,7 @@ async function rankChunksForFiles(args: {
   }
 
   logger?.debug?.(
-    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via ${canUseAtlas ? 'atlas' : 'opensearch'} ${embeddingModel}), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits across ${scan.annModelsQueried} model(s) -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
+    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via ${canUseAtlas ? 'atlas' : 'opensearch'} ${embeddingModel}), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits across ${scan.annModelsQueried} model(s) -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}${perFileCap > 0 ? `, cap ${perFileCap}/file over a pool of ${candidatePoolK} promoted ${capPromotions}` : ''}`
   );
   if (outcomes.length > 0) {
     logger?.debug?.(

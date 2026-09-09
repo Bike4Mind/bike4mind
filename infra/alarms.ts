@@ -1252,6 +1252,47 @@ if (isMonitoredStage) {
     },
   });
 
+  /**
+   * Alarm: Data Lake Chunk Rescue Sweep Threw
+   *
+   * The sibling alarm above counts files the sweep could not enqueue. This one covers the case
+   * where there were no per-file failures to count because the sweep never got that far: it threw,
+   * the cron caught it, and reported `outcome: 'failed'` with both counters at zero. Read only by
+   * ChunkRescueFailures, that day is indistinguishable from a clean run - which is the exact hole
+   * the outcome dimension was added to close, so it needs its own alarm to be worth emitting.
+   *
+   * A throw is more severe than a per-file enqueue failure (no file is rescued at all, not one),
+   * but a single one is still within blip range for a cron that talks to Mongo and SQS, so the
+   * tolerance is two consecutive daily runs rather than the sibling's three.
+   *
+   * Not covered by anything else: this cron's log group is not in infra/logMonitor.ts's
+   * individualLogGroups, so its logger.error is neither Slacked nor alarmed, and the function has
+   * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
+   * outcome supplied by server/cron/dataLakeBatchReconcile.ts's catch.
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimension outcome=failed
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueSweepFailing', {
+    name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-sweep-failing`,
+    alarmDescription:
+      'Data lake un-chunked rescue sweep is throwing - no files are being rescued and the failure counter reads zero',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 2, // two consecutive daily runs; one throw is a blip, two is a broken sweep
+    metricName: 'ChunkRescueRuns',
+    namespace: 'Lumina5/DataLakeBatch',
+    dimensions: { outcome: 'failed' }, // 'disabled' and 'swept' share the metric and must not fire
+    period: 86400, // 1 day - matches the daily cron that emits it
+    statistic: 'Sum',
+    threshold: 0, // any throw at all
+    treatMissingData: 'notBreaching', // a day with no failed run emits no datapoint for this dimension
+    alarmActions: [dataLakeChunkRescueFailuresAlarm!.arn],
+    tags: {
+      Application: 'DataLakeBatch',
+      Severity: 'Medium',
+    },
+  });
+
   // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
   // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
   // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future

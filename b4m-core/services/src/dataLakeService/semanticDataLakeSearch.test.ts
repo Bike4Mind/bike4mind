@@ -830,6 +830,31 @@ describe('semanticDataLakeSearch per-document cap', () => {
     expect(result.results.map(r => r.fileId)).toEqual(['dA', 'dA']);
     expect(result.results.some(r => r.fileId === 'dB')).toBe(false);
   });
+
+  // The cap widens every candidate stream, so `ann hits` in this line jumps by
+  // DIVERSITY_CANDIDATE_POOL_FACTOR whenever it is on. Without the promotion count beside it,
+  // nothing in the log separates a cap that redistributed slots from one that was enabled and
+  // inert, and the jump has no visible cause.
+  const cappedSearchLog = async (maxChunksPerFile: number | undefined) => {
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const logger = makeLogger();
+    await semanticDataLakeSearch({ ...baseParams(), topK: 4, budgets: { maxChunksPerFile }, logger: logger as never }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: THREE_DOCS, hasMore: false, total: 3 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rankedCorpus as never) },
+      },
+    } as never);
+    return logger.debug.mock.calls.map(call => String(call[0])).find(line => line.includes('[semanticSearch]')) ?? '';
+  };
+
+  it('reports the cap, its pool and how many slots it actually redistributed', async () => {
+    // Two of the four slots go to dB chunks the uncapped top-4 would not have held.
+    expect(await cappedSearchLog(2)).toContain('cap 2/file over a pool of 12 promoted 2');
+  });
+
+  it('says nothing about the cap when it is off, so quiet installs read as before', async () => {
+    expect(await cappedSearchLog(undefined)).not.toContain('cap ');
+  });
 });
 
 /**
