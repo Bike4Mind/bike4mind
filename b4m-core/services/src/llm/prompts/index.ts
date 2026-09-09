@@ -7,9 +7,15 @@
  *
  * NOT every grounding surface. An inlined file attachment (fabFileIds skips forced retrieval) carries no
  * retrieved-content wrapper for this to sit in; on a normal turn it leans on the always-on
- * ABSTENTION_PROMPT instead. A promptMode session is a real gap, not a covered case: filterByPromptMode
- * strips ABSTENTION_PROMPT along with every authored prompt (ChatCompletionProcess.ts:2495), so neither
- * this rule nor the abstention licence reaches it - an eval/passthrough surface uncovered by design.
+ * ABSTENTION_PROMPT instead. Under a promptMode the two part company, and the distinction matters:
+ * filterByPromptMode strips ABSTENTION_PROMPT in ALL THREE modes (no mode admits the `abstention`
+ * source), but this rule is not an authored prompt - KnowledgeRetrievalFeature splices it into the
+ * retrieved-content block itself, and `grounded`/`surface` both admit `knowledgeRetrieval` and keep
+ * forced retrieval on, so a retrieval that finds content still carries it. The uncovered surface is
+ * any turn answering with NO retrieved content: `raw` always, and a grounded/surface turn that found
+ * nothing. A caller who needs the knowledge auto-offer withheld without opening even that gap sets
+ * the `skipAutoOffers` request field instead of a mode; the two were one switch until it cost a
+ * measurement.
  *
  * Under a leading question ("what did we win against <competitor>", "what was the <customer>
  * contract worth"), a grounded model tends to answer from the retrieved passages AND top them off

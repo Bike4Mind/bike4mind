@@ -223,6 +223,21 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
   /**
+   * Suppress OUR server-side auto-offers without entering a promptMode. Exists because promptMode
+   * was the only switch for the offer and it also strips every authored prompt, so no caller could
+   * have an arm that went unoffered AND kept the abstention licence.
+   *
+   * Gates the three auto-add sites listed in AUTO_ADDED_TOOL_NAMES (the knowledge offer, the
+   * navigate_view auto-add, the blog/skill gate), unioned with `Boolean(promptMode)` by
+   * resolveSkipAutoOffers. A force-on, not an override: `false` under a promptMode still suppresses.
+   * Withholding navigate_view also drops the viewRegistry system block, which only describes it.
+   *
+   * Withholds the OFFER, not knowledge: `session.forceKnowledgeRetrieval` is untouched, and an
+   * already-attached corpus is inlined rather than deferred to the tool. An arm that must see no
+   * knowledge at all also needs a session with no attachments and forced retrieval off.
+   */
+  skipAutoOffers: z.boolean().optional(),
+  /**
    * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
    * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm.
    *

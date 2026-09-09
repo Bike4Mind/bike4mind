@@ -244,6 +244,10 @@
               "surface"
             ]
           },
+          "skip_auto_offers": {
+            "type": "boolean",
+            "description": "Suppress tools the server would otherwise attach on its own for this session (the knowledge-base search offer, and in-app view navigation). Tools you request explicitly are unaffected, as is the system-prompt content. This does not switch off retrieval: a session with forced knowledge retrieval still retrieves, and documents already attached to the session are still placed in the prompt directly. Any promptMode suppresses these too, so false has no effect alongside one."
+          },
           "includePromptDetails": {
             "type": "boolean"
           },

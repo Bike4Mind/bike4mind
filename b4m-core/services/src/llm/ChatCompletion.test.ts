@@ -1263,6 +1263,33 @@ describe('ChatCompletionProcess', () => {
         }
       });
 
+      // Third auto-add site (see AUTO_ADDED_TOOL_NAMES). It keyed on promptMode alone until the
+      // skipAutoOffers field existed, so a caller suppressing our offers WITHOUT a mode still got
+      // blog_draft, and with it the tool-use preamble the suppression exists to keep out. Same
+      // admin user and same message as the test above, so the flag is the only difference.
+      it('withholds blog_draft under skipAutoOffers, on the very message that offers it', async () => {
+        (service as any).user.isAdmin = true;
+        try {
+          mockTextModel();
+          const body = {
+            ...startQuestParams,
+            message: 'Turn this conversation into a blog post',
+            skipAutoOffers: true,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? []).not.toContain(
+            'blog_draft'
+          );
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
+
       // The no-signal path: an ordinary "Hello" carries no blog intent and continues no prior
       // blog workflow, so blog_draft is not worth its tokens on this turn.
       it('does not offer blog_draft on an ordinary message with no blog intent', async () => {
@@ -2793,8 +2820,9 @@ describe('ChatCompletionProcess', () => {
       files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
-      promptMode?: 'raw';
+      promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
+      skipAutoOffers?: boolean;
       fabPromptMessages?: IMessage[];
       fabFileNotices?: FabFileNotice[];
     }) => {
@@ -2860,6 +2888,7 @@ describe('ChatCompletionProcess', () => {
       const body = {
         ...startQuestParams,
         ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
         tools: opts.requestTools ?? [],
         projectId: undefined,
         organizationId: undefined,
@@ -3001,6 +3030,53 @@ describe('ChatCompletionProcess', () => {
       expect(enabledToolsArg).not.toContain('search_knowledge_base');
       expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
       expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    // The offer and the authored prompts used to be one switch, so both halves are asserted
+    // together: either alone still describes a control arm nobody can build. Note the attachment
+    // fixture is deliberately never read - under this flag the file lookup is skipped entirely and
+    // hasAttachedKnowledge comes from the null fail-open, which the first test pins.
+    describe('skipAutoOffers separates the offer from the prompt stack', () => {
+      const ABSTENTION_SENTINEL = 'ABSTENTION-LICENCE-SENTINEL';
+      beforeEach(() => {
+        mockedGetSettingsValue.mockImplementation(((key: string) =>
+          key === 'AbstentionPrompt' ? ABSTENTION_SENTINEL : undefined) as typeof getSettingsValue);
+      });
+      afterEach(() => {
+        mockedGetSettingsValue.mockReset();
+      });
+
+      it('withholds both knowledge tools while the abstention licence still reaches the model', async () => {
+        const { enabledToolsArg, contextAndSystemMessages, getAccessibleFiles } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          skipAutoOffers: true,
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+        expect(enabledToolsArg).not.toContain('search_knowledge_base');
+        expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+        expect(contextAndSystemMessages.map(m => String(m.content)).join('\n')).toContain(ABSTENTION_SENTINEL);
+        // The attachment DB read is elided too, same as the promptMode case above.
+        expect(getAccessibleFiles).not.toHaveBeenCalled();
+        // Withholding is deliberate here, so the invisible-failure warning must stay silent.
+        expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringMatching(/search_knowledge_base is not offered/));
+      });
+
+      // The gap this field routes around. Both modes are pinned, for opposite reasons: `raw` must
+      // never admit the licence (an admin prompt would invalidate the bare-model arm it exists to
+      // provide), whereas `surface` claims no such bareness and dropping a safety counterweight
+      // there is arguable - so if PROMPT_MODE_SOURCES.surface ever admits `abstention`, that is a
+      // deliberate decision and this test is where it surfaces.
+      it.each(['raw', 'surface'] as const)(
+        'promptMode %s strips the licence along with every other authored prompt',
+        async mode => {
+          const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            promptMode: mode,
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+          });
+          expect(contextAndSystemMessages.map(m => String(m.content)).join('\n')).not.toContain(ABSTENTION_SENTINEL);
+        }
+      );
     });
 
     it('fails OPEN (still offers the tools) and completes the turn when the file lookup throws', async () => {

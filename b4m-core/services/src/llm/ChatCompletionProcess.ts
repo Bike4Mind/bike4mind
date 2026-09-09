@@ -154,6 +154,7 @@ import {
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  resolveSkipAutoOffers,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
@@ -589,12 +590,15 @@ export interface ResolveEnabledToolsInput {
    */
   hasAccessibleDataLake?: boolean;
   /**
-   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Set for any `promptMode`,
-   * matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`): auto-adds
-   * are our additions, not the caller's, and attaching a tool also pulls the provider's tool-use
-   * preamble into the request - so a mode-driven eval, above all `raw` (the bare-model control
-   * arm), must not get surprise tools. Caller-selected and session-forced tools are unaffected;
-   * only step 2 is gated.
+   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Resolved by
+   * resolveSkipAutoOffers from either trigger - any `promptMode`, or the `skipAutoOffers` request
+   * field - and every auto-add site reads that same helper: auto-adds are our additions, not the
+   * caller's, and attaching a tool also pulls the provider's tool-use preamble into the request, so
+   * a mode-driven eval, above all `raw` (the bare-model control arm), must not get surprise tools.
+   * The request field is that same suppression without a mode, for an arm that must not be OFFERED
+   * knowledge while keeping the authored prompts a mode would strip - it withholds the tool, not
+   * knowledge (same caveat as ChatCompletionInvokeParamsSchema.skipAutoOffers). Caller-selected and
+   * session-forced tools are unaffected; only step 2 is gated.
    */
   skipAutoOffers?: boolean;
 }
@@ -1180,12 +1184,12 @@ export class ChatCompletionProcess {
     if ((skipAutoOffers || knowledgeSearchDisabled) && mode === 'retrieve') {
       this.logger.warn(
         `[dataLakes] grounding mode 'retrieve' requested but the knowledge tool is ${
-          skipAutoOffers ? 'not offered (promptMode)' : 'disabled for this session'
+          skipAutoOffers ? 'not offered (auto-offers suppressed)' : 'disabled for this session'
         }; inlining the corpus (${attachedCount} doc(s)) to avoid stranding it.`
       );
     }
-    // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
-    // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
+    // Whatever suppressed the offer (a promptMode, or the request field), the tool is NOT there -
+    // deferring to it would strand the corpus with no reader. Symmetric with the tool-offer gate.
     if (skipAutoOffers) return noDefer;
     // Same reasoning one step further: `session.disabledTools` wins over every other tool gate
     // (including the post-build denylist pass, which runs AFTER this plan), so deferring to a
@@ -1353,7 +1357,7 @@ export class ChatCompletionProcess {
     // intent-or-continuation check needs the fetched history; `skill` needs the invocable-skill
     // catalog SkillsFeature populates later) - see the conditional auto-add in process(), after
     // previous messages are fetched and the feature loop has run.
-    if (!parsedBody.promptMode) {
+    if (!resolveSkipAutoOffers(parsedBody)) {
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
       }
@@ -1700,8 +1704,11 @@ export class ChatCompletionProcess {
       this.turnPreauthorizedLakeIds = vetPreauthorizedLakeIds(session, this.user.id);
 
       const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
-      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
-      const skipAutoOffers = Boolean(promptMode);
+      // Withholds OUR auto-offers, via a promptMode or the caller's request field - see
+      // resolveSkipAutoOffers. Every gate after this point reads this local rather than re-deriving
+      // the rule; the one site that cannot is the navigate_view auto-add, which runs in
+      // initializeProcessContext before this exists and so calls the same helper directly.
+      const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -2308,7 +2315,7 @@ export class ChatCompletionProcess {
       // tool list (below, near buildTools) already strips any session-forbidden tool regardless
       // of when it was added to enabledTools.
       let hasContentTransform = false;
-      if (!promptMode) {
+      if (!skipAutoOffers) {
         const blogGates = shouldOfferBlogTools({
           isAdmin: this.user.isAdmin,
           hasBlogIntegration: Boolean(this.user.blogIntegration),
@@ -2444,7 +2451,8 @@ export class ChatCompletionProcess {
       // Once the knowledge tools are offered (above), stop ALSO force-inlining a large retrievable
       // corpus - the even-split inline goes breadth-shallow and the tool can fetch the relevant
       // docs on demand. Off by default; defers only the tool-retrievable subset. `skipAutoOffers`
-      // mirrors the tool-offer gate (the tool isn't offered under promptMode, so we don't defer).
+      // mirrors the tool-offer gate (the tool isn't offered when it is set, so we don't defer -
+      // the corpus is inlined instead, which is why suppressing the offer is not "no knowledge").
       const corpusInlinePlan = await this.resolveCorpusInlinePlan({
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
@@ -2749,7 +2757,7 @@ export class ChatCompletionProcess {
       // this is the authoritative post-build list - it sees the post-build denylist pass, the
       // Ollama auto-added trim, and tools injected inside buildTools, none of which the pre-build
       // enabledTools filter can. Skipped under promptMode, where withholding the offer is
-      // deliberate (see skipAutoOffers), not a failure. Silent otherwise means the model answers
+      // deliberate (auto-offers suppressed, see resolveSkipAutoOffers), not a failure. Silent otherwise means the model answers
       // from its weights while the user believes their knowledge was consulted.
       // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
       // user belief that their knowledge was consulted, and attaching documents creates that belief
@@ -2760,7 +2768,7 @@ export class ChatCompletionProcess {
       const knowledgeToolWithheldByConfig =
         (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
         offeredToolNames.length === 0;
-      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !promptMode) {
+      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !skipAutoOffers) {
         const source = hasAttachedKnowledge
           ? `${session.knowledgeIds!.length} attached document(s)`
           : 'an accessible data lake';

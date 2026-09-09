@@ -252,6 +252,25 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
 }
 
 /**
+ * Whether this turn withholds OUR server-side tool auto-offers. Two independent triggers: any
+ * `promptMode` (an eval/passthrough surface), or the caller's explicit `skipAutoOffers`. Unioned
+ * here rather than at each gate because the rule was previously spelled out per-site and a site was
+ * missed - the three auto-add sites named in AUTO_ADDED_TOOL_NAMES must agree, and a fourth trigger
+ * should mean editing this function and nothing else.
+ *
+ * A force-on, not an override: `skipAutoOffers: false` under a promptMode still suppresses, because
+ * a mode that promises a bare model cannot also carry the provider's tool-use preamble.
+ *
+ * Siblings below/above resolve the other promptMode-derived axes. Several more are still spelled out
+ * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`,
+ * `omitIdentityReminder`) - each has the same miss-a-site failure mode, and each should get a named
+ * resolver here rather than a second inline derivation when a caller needs it on its own.
+ */
+export function resolveSkipAutoOffers(body: { promptMode?: PromptMode; skipAutoOffers?: boolean }): boolean {
+  return Boolean(body.promptMode) || body.skipAutoOffers === true;
+}
+
+/**
  * How each source is reported in telemetry. `origin` answers "who authored this text" (we, an
  * admin, the org, the user's own data); `name` is the stable identifier dashboards group on, so
  * the pre-existing names are kept verbatim even where they read a little oddly.

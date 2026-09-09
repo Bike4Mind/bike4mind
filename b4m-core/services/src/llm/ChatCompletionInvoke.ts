@@ -88,6 +88,7 @@ export class ChatCompletionInvoke {
       enableAgents,
       enableLattice,
       promptMode,
+      skipAutoOffers,
       systemPrompt,
       tools,
       projectId,
@@ -363,6 +364,10 @@ export class ChatCompletionInvoke {
         enableAgents,
         enableLattice,
         promptMode,
+        // Must be carried explicitly: this literal - not the parsed request - is what
+        // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
+        // every path except `wait: true`.
+        skipAutoOffers,
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
