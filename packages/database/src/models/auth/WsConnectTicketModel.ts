@@ -9,15 +9,17 @@ const ModelName = 'WsConnectTicket';
  * URL query string - which would otherwise be written to every proxy/CDN/
  * access log on the path and be replayable until the JWT expired.
  *
- * `tokenVersion` is captured from the minting session's JWT so the connect
- * handler can re-run the same tokenVersion kill-switch the JWT path enforces.
+ * `tokenVersion` snapshots the user's current version at mint time (which
+ * equals the minting JWT's version, since the mint request itself passed the
+ * JWT kill-switch) so the connect handler can re-run the same tokenVersion
+ * kill-switch the JWT path enforces.
  */
 export interface IWsConnectTicketDoc {
   _id: string;
   /** CSPRNG-random opaque ticket presented as `?ticket=<t>` at `$connect`. */
   ticket: string;
   userId: string;
-  /** tokenVersion of the minting JWT; null-safe normalizes to 0 like the JWT path. */
+  /** User's tokenVersion snapshotted at mint; null-safe normalizes to 0 like the JWT path. */
   tokenVersion: number;
   /** Set once on consume; prevents replay. */
   used: boolean;

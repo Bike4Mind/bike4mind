@@ -17,12 +17,18 @@ const TICKET_TTL_MS = 30 * 1000;
  * it in the WS URL instead of the session JWT, keeping the long-lived
  * credential out of proxy/CDN/access logs.
  *
- * `tokenVersion` is captured from the (already JWT-authed) request so
- * `$connect` can re-run the tokenVersion kill-switch: if the user's version
- * is bumped between mint and connect, the captured version goes stale and the
- * connection is rejected.
+ * `jwtOnly`: this ticket exists only for the browser JWT session, so the
+ * api-key credential chain is not installed - a valid `b4m_live_` API key
+ * cannot mint a web connect ticket and route around the connect-time scope
+ * gate `resolveIdentity` enforces on the API-key path.
+ *
+ * `tokenVersion` snapshots the user's current version at mint time (equal to
+ * the minting JWT's version, since the mint request itself just passed the JWT
+ * kill-switch). `$connect` re-runs that kill-switch against the snapshot: if a
+ * revoke bumps the version between mint and connect, the snapshot goes stale
+ * and the connection is rejected.
  */
-const handler = baseApi({ auth: true }).post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler(async (req, res) => {
     req.logger.updateMetadata({ endpoint: 'websocket/ticket' });
 
