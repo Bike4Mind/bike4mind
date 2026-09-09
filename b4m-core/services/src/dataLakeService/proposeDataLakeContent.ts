@@ -20,11 +20,13 @@ import { canonicalSourceKey, sanitizeSourceUrlForRecord } from './canonicalSourc
  *
  * Dedup is keyed on CANONICAL SOURCE IDENTITY, with the normalized-text hash as the secondary
  * "changed materially" signal. Neither of the two tempting alternatives is used, deliberately:
- * `FabFile.contentHash` (stamped by every `createFabFileByUrl` caller as of #2027, this door's own
- * admission included) is never verified server-side and does not exist YET at this stage anyway -
- * this runs BEFORE any FabFile is created, so there is nothing to hash - and the vector index is
- * torn down per member by convergence, so an overlapping run would propose content the lake already
- * holds - the exact failure dedup exists to prevent.
+ * `FabFile.contentHash` (as of #2027, stamped only by a `createFabFileByUrl` caller that opts into
+ * ingest-time dedup via `checkDuplicate` - this door's own admission does not, since a second
+ * content-hash check here would be redundant with the canonical-source-key dedup below) is never
+ * verified server-side and does not exist YET at this stage anyway - this runs BEFORE any FabFile is
+ * created, so there is nothing to hash - and the vector index is torn down per member by
+ * convergence, so an overlapping run would propose content the lake already holds - the exact
+ * failure dedup exists to prevent.
  */
 
 /** The lake fields a proposal decision needs. Taking the resolved document avoids a refetch. */
