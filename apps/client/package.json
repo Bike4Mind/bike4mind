@@ -20,6 +20,7 @@
     "clean": "rm -rf node_modules/ .next/ .sst/ public/pdfjs public/pdf.worker.min.mjs public/highs.wasm",
     "start": "next start",
     "lint": "eslint .",
+    "check:bundle-size": "node scripts/check-server-bundle-size.mjs",
     "format": "prettier --write './**/*.{ts,tsx}'",
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
