@@ -98,6 +98,9 @@ describe('notifySlackIndexingComplete (#2027)', () => {
 
     expect(findByDatalakeTags).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
+    // A stamped-but-unresolvable teamId is a real data-health signal (uninstalled workspace,
+    // rotated token), unlike the deliberate no-teamId skip below - so it gets its own warn too.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('T123'));
   });
 
   it('falls back to the tags->lake->org chain, with a warning, when sourceMetadata has no teamId (pre-stamp files)', async () => {
