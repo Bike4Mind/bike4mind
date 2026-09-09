@@ -83,6 +83,8 @@ export interface SlackLakeIngestParams {
   messageTs: string;
   /** The Slack workspace this message arrived on - see `notifySlackIndexingComplete.ts`. */
   teamId: string;
+  /** The Slack app this message arrived on, stamped alongside `teamId` - see the same doc. */
+  apiAppId: string;
 }
 
 export type SlackLakeIngestRefusal = LakeWriteRefusalReason | 'no_files';
@@ -104,7 +106,7 @@ export async function ingestSlackFilesIntoLake(
   params: SlackLakeIngestParams,
   deps: SlackLakeIngestDeps
 ): Promise<SlackLakeIngestOutcome> {
-  const { actor, lakeSlug, files, channel, messageTs, teamId } = params;
+  const { actor, lakeSlug, files, channel, messageTs, teamId, apiAppId } = params;
 
   const mockRefusal = refuseMockActor(actor, lakeSlug, deps);
   if (mockRefusal) return mockRefusal;
@@ -227,7 +229,7 @@ export async function ingestSlackFilesIntoLake(
         tags,
         provenance: {
           sourceType: FabFileSourceType.SLACK,
-          sourceMetadata: { channel, messageTs, teamId },
+          sourceMetadata: { channel, messageTs, teamId, apiAppId },
         },
         administeredOrgIds: ctx.administeredOrgIds ?? [],
       });
