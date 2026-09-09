@@ -110,10 +110,11 @@ describe('foldersTagsForBatch', () => {
   });
 
   it('normalizes a stored prefix that carries edge whitespace (#2467)', () => {
-    // The pipeline passes the lake's RAW fileTagPrefix, and a row predating the create schema's
-    // trim can hold " legal: ". folderTagForFile normalizes, so upload's tag matches the one
-    // applyTaxonomySuggestions later subtracts from its taxonomy result - and both are visible
-    // to the read arms, which trim before matching.
+    // runUploadPipeline already trims via submittedTagPrefix before it reaches this helper, so
+    // this pins the belt rather than the braces: foldersTagsForBatch is exported and callable
+    // with a lake's raw fileTagPrefix, and a row predating the create schema's trim can hold
+    // " legal: ". The name it builds has to be the trimmed one either way, since that is the
+    // form the read arms and the apply door both match on (#2467).
     expect(foldersTagsForBatch([{ relativePath: 'legal/contracts/a.pdf' }], ' legal: ')).toEqual(
       foldersTagsForBatch([{ relativePath: 'legal/contracts/a.pdf' }], 'legal:')
     );

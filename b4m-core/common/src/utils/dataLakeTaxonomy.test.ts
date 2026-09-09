@@ -179,10 +179,11 @@ describe('tagsForFile', () => {
 
 describe('folderTagForFile', () => {
   it('trims a stored prefix, so the upload pipeline and the apply door share one namespace', () => {
-    // The upload pipeline passes the lake's RAW fileTagPrefix (dataLakeUploadPipeline.ts) while
-    // applyTaxonomySuggestions passes the gate's normalized one. Both must produce the same name
-    // for the same file, or a re-apply's folder-tag subtraction stops matching what upload wrote
-    // and the file picks up the folder tag twice under two spellings.
+    // Callers reach this with the prefix in whatever form their own path left it: the upload
+    // pipeline normalizes first (submittedTagPrefix), applyTaxonomySuggestions passes the gate's
+    // normalized value, and the analyze job passes lake.fileTagPrefix raw. All three must produce
+    // the same name for the same file, or one lake's files split across two namespaces of which
+    // only the trimmed one is visible to the read arms.
     expect(folderTagForFile('root/legal/vendor.pdf', ' acme: ')).toEqual(
       folderTagForFile('root/legal/vendor.pdf', 'acme:')
     );
