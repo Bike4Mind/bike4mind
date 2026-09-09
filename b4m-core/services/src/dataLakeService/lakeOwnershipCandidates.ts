@@ -107,9 +107,12 @@ export function resolveLakeTransferAuthority(
   const isOwner = isEffectiveOwner(lake, actor, grants);
   const lakeOrg = normalizeId(lake.organizationId);
   const isOrgAdminOfLake = !!lakeOrg && (actor.administeredOrgIds ?? []).includes(lakeOrg);
-  const inLakeOrg = !lakeOrg || isOrgAdminOfLake || (actor.organizationIds ?? []).includes(lakeOrg);
+  // Org-scoped by construction: an org-less lake is refused outright for a non-admin (see the doc
+  // comment), so the membership rule never gets to decide one. Carrying the `!!lakeOrg` here rather
+  // than in `allowed` keeps that refusal in ONE term instead of reading as two competing rules.
+  const inLakeOrg = !!lakeOrg && (isOrgAdminOfLake || (actor.organizationIds ?? []).includes(lakeOrg));
   return {
-    allowed: !!actor.isAdmin || (!!lakeOrg && inLakeOrg && (isOwner || isOrgAdminOfLake)),
+    allowed: !!actor.isAdmin || (inLakeOrg && (isOwner || isOrgAdminOfLake)),
     isOwner,
     viaOrgAdminOnly: !actor.isAdmin && !isOwner && isOrgAdminOfLake,
   };
@@ -168,6 +171,13 @@ export async function listLakeOwnershipCandidates(
 
   const grants = await loadActiveLakeGrants(lake, { db });
   const authority = resolveLakeTransferAuthority(lake, actor, grants);
+  // `!lakeOrg` is checked SEPARATELY from authority, and only a platform admin can reach it: for
+  // anyone else `allowed` is already false on an org-less lake. So a superuser sees the Transfer
+  // button (`meta.canTransferOwnership` follows `allowed`) and then the personal-lake alert telling
+  // them to move the lake into an organization, while the write path would in fact accept the
+  // transfer. That admin path is knowingly API-only - offering a picker here would mean a global
+  // user search, the enumeration surface this view refuses to open (see the doc comment). Read the
+  // alert as the rule for a non-admin, not for an admin.
   if (!authority.allowed || !lakeOrg) {
     return { scope, candidates: [] };
   }

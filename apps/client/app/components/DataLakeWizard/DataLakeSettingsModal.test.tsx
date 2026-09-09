@@ -436,6 +436,10 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     // Mirrors getDataLakePrompts' trust rule. The two halves have to move together: the copy is
     // the only place a lake editor is told who their prompt reaches, so a widened gate with stale
     // copy understates it and a narrowed one promises reach that never happens.
+    //
+    // Phrased as HOLDING a grant, not as the reader having issued one: today's only producers are
+    // createDataLake's self-grant and transferLakeOwnership, so no path lets this reader appoint
+    // anyone. The wording stays true when the member-management write path lands.
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
@@ -443,7 +447,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     );
 
     const help = screen.getByTestId('datalake-systemprompt-help');
-    expect(help).toHaveTextContent(/owner or curator of this lake/i);
+    expect(help).toHaveTextContent(/anyone holding an owner or curator grant on this lake/i);
     expect(help).toHaveTextContent(/not to users given read-only access by tag, entitlement, or a reader grant/i);
   });
 
