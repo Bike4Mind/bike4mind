@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { DuplicateFabFileError, FabFileSourceType, KnowledgeType } from '@bike4mind/common';
 
 /**
  * `createFabFileByUrl` had no tests. These cover the tag/provenance pass-through added for LINK
@@ -13,7 +13,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   fetchAndParseURL,
 }));
 
-import { createFabFileByUrl, DuplicateFabFileError } from './createByUrl';
+import { createFabFileByUrl } from './createByUrl';
 
 const URL_UNDER_TEST = 'https://example.com/article';
 
@@ -131,15 +131,29 @@ describe('createFabFileByUrl', () => {
     expect(fetchAndParseURL).not.toHaveBeenCalled();
   });
 
-  it('stamps a contentHash of the fetched textContent, even with no checkDuplicate adapter', async () => {
+  it('stamps a contentHash of the fetched textContent when a caller opts into checkDuplicate', async () => {
     // #2027: URL-created files previously stored NO contentHash at all, which is why the link path
-    // had nothing to dedupe against. Stamped unconditionally so every caller benefits, not only the
-    // Slack path that opts into `checkDuplicate`.
-    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+    // had nothing to dedupe against. Stamped only for a caller that opts into ingest-time dedup -
+    // see the next test for why NOT stamping it for every caller matters.
+    const checkDuplicate = vi.fn().mockResolvedValue(null);
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
 
     const created = fabFilesCreate.mock.calls[0][0];
     // sha256('body text'), computed independently rather than trusted from the implementation.
     expect(created.contentHash).toBe('d9fbbc91492fbb3ba8e57ca15b039134e7098030a89578315a4c354f9117ccf2');
+  });
+
+  it('does NOT stamp a contentHash when no caller opts into checkDuplicate (web upload, proposal admission)', async () => {
+    // The stamp is deliberately coupled to opting into dedup, not stamped unconditionally:
+    // `unarchiveDataLake`'s hard-delete dedup pass reads `contentHash` across every FabFile
+    // regardless of door, and this door hashes extracted TEXT (not the URL) - two provenance-distinct
+    // rows with identical body text would otherwise collide there too, for doors that never asked
+    // for content-hash dedup at all.
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    const created = fabFilesCreate.mock.calls[0][0];
+    expect(created.contentHash).toBeUndefined();
   });
 
   it('does not compute, check, or stamp a contentHash when the fetch returned no content', async () => {
