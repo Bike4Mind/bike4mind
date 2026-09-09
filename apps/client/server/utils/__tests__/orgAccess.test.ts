@@ -70,7 +70,8 @@ describe('verifyOrgAccess', () => {
 });
 
 describe('resolveBillingOrgId', () => {
-  const asReq = (user: Record<string, unknown>) => ({ user }) as never;
+  const warn = vi.fn();
+  const asReq = (user: Record<string, unknown>) => ({ user, logger: { warn } }) as never;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -100,12 +101,27 @@ describe('resolveBillingOrgId', () => {
     expect(mockResolveActiveOrg).toHaveBeenCalledWith(req, OTHER_ORG);
   });
 
-  it('propagates the gate rejection - even a stale home-org field cannot silently keep billing', async () => {
-    // A since-revoked member whose organizationId still points at the org: the gate rejects, and the
-    // billing path must surface that rather than trusting the stale field.
+  it('degrades an implicit own-org fallback to personal (null) when the gate rejects a stale pointer', async () => {
+    // A since-revoked member whose organizationId still points at the org did not CHOOSE to bill it,
+    // so a stale pointer must fall back to personal billing rather than 403-lock the whole request.
+    // Security holds: the org is never billed either way.
     mockResolveActiveOrg.mockRejectedValue(new ForbiddenError('not a member'));
-    await expect(resolveBillingOrgId(asReq({ id: STRANGER, organizationId: ORG }), undefined)).rejects.toBeInstanceOf(
+    await expect(resolveBillingOrgId(asReq({ id: STRANGER, organizationId: ORG }), undefined)).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates the gate rejection for a CLIENT-SUPPLIED org (the strict trust boundary)', async () => {
+    // Unlike the implicit fallback, an org id the caller put in the request body must fail hard when
+    // the caller is not a member - it cannot silently degrade to personal and pretend success.
+    mockResolveActiveOrg.mockRejectedValue(new ForbiddenError('not a member'));
+    await expect(resolveBillingOrgId(asReq({ id: STRANGER, organizationId: ORG }), OTHER_ORG)).rejects.toBeInstanceOf(
       ForbiddenError
     );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a non-authorization error from the fallback path (transient DB failure -> 5xx)', async () => {
+    mockResolveActiveOrg.mockRejectedValue(new Error('db down'));
+    await expect(resolveBillingOrgId(asReq({ id: OWNER, organizationId: ORG }), undefined)).rejects.toThrow('db down');
   });
 });

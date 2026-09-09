@@ -110,8 +110,9 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
     // otherwise any authenticated user could read/continue another user's session by id.
     // The verb is `update`, not `read`: quests are appended to this session, and the retry path
     // in ChatCompletionInvoke clears an existing quest's reply, so a read-only share must not
-    // reach it. With an ability, honor the full access shape (owner + shares + org) exactly as
-    // the update path does; without one (e.g. the Slack path), fall back to owner-only.
+    // reach it. With an ability, honor the Session write shape (owner + global-write + user/group
+    // shares - see ability.ts; Session has no org arm) exactly as the update path does; without
+    // one (e.g. the Slack path), fall back to owner-only.
     // A miss (not found OR no access) falls through to the NotFoundError below - a 404 that
     // does not distinguish the two, matching orgAccess's anti-enumeration behavior.
     session = ability

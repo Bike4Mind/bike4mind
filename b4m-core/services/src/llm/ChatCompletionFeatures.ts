@@ -127,6 +127,7 @@ import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } 
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
+import { isObjectIdShaped } from './tools/base/objectId';
 
 interface DatabaseAdapters {
   sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'>;
@@ -1145,13 +1146,20 @@ export class QuestMasterFeature implements ChatCompletionFeature {
    * client-supplied `questMaster` params, so a bare findById would let one user drive
    * status changes on another user's plan. Access = plan owner or explicit sharee;
    * legacy plans without a userId bind to their owning notebook's owner.
+   *
+   * Must stay in sync with apps/client/server/utils/questMasterPlanAccess.ts, which is the same
+   * predicate on the HTTP side (it also guards the notebook lookup on ObjectId shape below).
    */
   private async callerCanWritePlan(plan: IQuestMasterPlanDocument): Promise<boolean> {
     const userId = this.user.id;
     if (plan.userId) {
       return plan.userId === userId || (plan.sharedWith?.includes(userId) ?? false);
     }
-    const session = plan.notebookId ? await this.chatCompletion.db.sessions.findById(plan.notebookId) : null;
+    // notebookId is a schema String: placeholder plans carry `direct-<uuid>` / `clone-<uuid>`, so
+    // guard on ObjectId shape before findById to keep a non-id from casting into a CastError.
+    const session = isObjectIdShaped(plan.notebookId)
+      ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
+      : null;
     return session?.userId === userId;
   }
 

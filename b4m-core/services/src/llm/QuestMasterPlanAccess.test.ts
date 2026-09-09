@@ -8,6 +8,9 @@ import type { IChatHistoryItemDocument } from '@bike4mind/common';
 
 const CALLER = 'user-A';
 const OTHER = 'user-B';
+// A legacy plan's notebookId is a real session _id, so it must be ObjectId-shaped: the plan-write
+// guard skips the notebook lookup for a non-ObjectId value (placeholder plans carry a userId).
+const NB = '650000000000000000000abc';
 
 const questMaster = { questMasterPlanId: 'plan1', questId: 'q1', subQuestId: 'sq1' };
 
@@ -70,21 +73,32 @@ describe('QuestMasterFeature.onComplete plan access guard', () => {
 
   it('binds a legacy plan (no userId) to its notebook owner - allows when the caller owns it', async () => {
     const { feature, findById, updateTaskStatus, sessionsFindById } = makeHarness();
-    findById.mockResolvedValueOnce({ id: 'plan1', notebookId: 'nb1', quests: [{ id: 'q1' }] });
-    sessionsFindById.mockResolvedValueOnce({ id: 'nb1', userId: CALLER });
+    findById.mockResolvedValueOnce({ id: 'plan1', notebookId: NB, quests: [{ id: 'q1' }] });
+    sessionsFindById.mockResolvedValueOnce({ id: NB, userId: CALLER });
 
     await call(feature);
 
+    expect(sessionsFindById).toHaveBeenCalledWith(NB);
     expect(updateTaskStatus).toHaveBeenCalledWith('plan1', 'q1', 'sq1', 'completed');
   });
 
   it('binds a legacy plan (no userId) to its notebook owner - refuses a foreign notebook', async () => {
     const { feature, findById, updateTaskStatus, sessionsFindById } = makeHarness();
-    findById.mockResolvedValueOnce({ id: 'plan1', notebookId: 'nb1', quests: [{ id: 'q1' }] });
-    sessionsFindById.mockResolvedValueOnce({ id: 'nb1', userId: OTHER });
+    findById.mockResolvedValueOnce({ id: 'plan1', notebookId: NB, quests: [{ id: 'q1' }] });
+    sessionsFindById.mockResolvedValueOnce({ id: NB, userId: OTHER });
 
     await call(feature);
 
+    expect(updateTaskStatus).not.toHaveBeenCalled();
+  });
+
+  it('refuses a legacy plan whose notebookId is not ObjectId-shaped, without a session lookup', async () => {
+    const { feature, findById, updateTaskStatus, sessionsFindById } = makeHarness();
+    findById.mockResolvedValueOnce({ id: 'plan1', notebookId: 'direct-abc', quests: [{ id: 'q1' }] });
+
+    await call(feature);
+
+    expect(sessionsFindById).not.toHaveBeenCalled();
     expect(updateTaskStatus).not.toHaveBeenCalled();
   });
 });

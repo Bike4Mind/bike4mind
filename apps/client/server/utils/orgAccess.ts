@@ -67,17 +67,23 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
  * - `undefined`  -> the caller's own organization (their `organizationId`), or null if they have none
  * - an org id    -> the client-supplied billing target
  *
- * The resolved org (own-org fallback included) is validated through `resolveActiveOrg` - the ONE
- * place a route turns a client-supplied active org into a trusted scope - so billing authorization
- * can't drift from data-lake scoping (both must use the same shareable ACL gate), and a stale
- * `organizationId` (e.g. a since-revoked member's, before revokeAccess clears it) can't silently
- * keep billing an org the caller no longer belongs to. `resolveActiveOrg` throws ForbiddenError /
- * NotFoundError for a non-member or missing org.
+ * A client-supplied org id is validated strictly through `resolveActiveOrg` - the ONE place a
+ * route turns a client-supplied active org into a trusted scope - so billing authorization can't
+ * drift from data-lake scoping (both must use the same shareable ACL gate); its ForbiddenError /
+ * NotFoundError propagates, because the caller explicitly asked to bill that org and may not.
+ *
+ * The IMPLICIT own-org fallback (`undefined` request) is different: the caller did not choose it,
+ * so a stale `organizationId` pointer must degrade to personal scope rather than 403-lock the
+ * caller out of a route they could always reach. Stale pointers already exist in the data (revoke,
+ * `deleteOrganization`, and `assignManager` paths leave them), so validating the fallback through
+ * the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is never an
+ * automatic consequence of the home-org field. Security holds either way - a non-member org is
+ * never billed; the fallback just bills personally instead of failing the request.
  */
 export async function resolveBillingOrgId(
   // Accept any authenticated request shape: the LLM/media routes type `req` with a narrowed `Params`
-  // generic that a bare `Request` would reject, and only `req.user` is needed here (and by the gate).
-  req: Pick<Request, 'user'>,
+  // generic that a bare `Request` would reject, and only `req.user`/`req.logger` are needed here.
+  req: Pick<Request, 'user' | 'logger'>,
   requestedOrgId: string | null | undefined
 ): Promise<string | null> {
   // Explicit personal (null) carries no cross-tenant risk and skips org billing entirely.
@@ -85,13 +91,32 @@ export async function resolveBillingOrgId(
     return null;
   }
 
-  // undefined -> fall back to the caller's own org; anything else is the client-supplied target.
-  const orgId = requestedOrgId ?? req.user?.organizationId?.toString() ?? null;
-  if (orgId === null) {
-    return null;
+  // The caller always hands us a full express request (these are authenticated routes); the cast
+  // just bridges `Pick<Request, ...>` back to the `Request` the shared gate is typed against.
+  const reqAsExpress = req as Request;
+
+  // A client-supplied target is a hard trust boundary: validate strictly and let a rejection surface.
+  if (requestedOrgId !== undefined) {
+    return (await resolveActiveOrg(reqAsExpress, requestedOrgId)) ?? null;
   }
 
-  // The caller always hands us a full express request (these are authenticated routes); the cast
-  // just bridges `Pick<Request, 'user'>` back to the `Request` the shared gate is typed against.
-  return (await resolveActiveOrg(req as Request, orgId)) ?? null;
+  // Implicit own-org fallback: validate, but degrade to personal scope on a stale pointer.
+  const ownOrgId = req.user?.organizationId?.toString();
+  if (!ownOrgId) {
+    return null;
+  }
+  try {
+    return (await resolveActiveOrg(reqAsExpress, ownOrgId)) ?? null;
+  } catch (err) {
+    // Match by name, not instanceof: resolveActiveOrg throws @bike4mind/common's error classes,
+    // which are not identity-equal to this file's @bike4mind/utils imports.
+    const name = (err as { name?: string })?.name;
+    if (name === 'ForbiddenError' || name === 'NotFoundError') {
+      req.logger?.warn(
+        `resolveBillingOrgId: stale home-org pointer for user ${req.user?.id ?? 'unknown'} -> personal billing scope (${name})`
+      );
+      return null;
+    }
+    throw err; // a transient DB failure must surface as a 5xx, not silently bill personally
+  }
 }
