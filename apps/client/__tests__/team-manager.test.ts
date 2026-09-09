@@ -349,9 +349,15 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
       findById: vi.fn().mockResolvedValue({ ...mockOrganization }),
       update: vi.fn().mockImplementation(org => Promise.resolve(org)),
     };
-    // revokeAccess now purges the removed member's org group ids + adminUserIds (org-groups #1172).
+    // revokeAccess now purges the removed member's org group ids + adminUserIds (org-groups #1172),
+    // and clears their organizationId when it pointed at this org (findById returns null here, so
+    // that clear is a no-op for these cases).
     mockGroupRepository = { findByOrganization: vi.fn().mockResolvedValue([]) };
-    mockUserRepository = { removeGroupsFromUser: vi.fn().mockResolvedValue(undefined) };
+    mockUserRepository = {
+      removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
+      findById: vi.fn().mockResolvedValue(null),
+      update: vi.fn().mockResolvedValue(undefined),
+    };
   });
 
   it('should allow manager to revoke access from members', async () => {
