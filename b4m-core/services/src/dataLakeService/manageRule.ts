@@ -107,6 +107,23 @@ export function isEffectiveOwner(
 }
 
 /**
+ * Is an ORGANIZATION-principal grant contained to the lake it is granted on? True for an org-less
+ * lake (nothing to cross) or when the granted org IS the lake's own org; false for a lake belonging
+ * to a DIFFERENT org. Both sides are normalized because `lake.organizationId` may arrive as an
+ * ObjectId while `principalId` is always a string.
+ *
+ * Factored out rather than inlined twice: `canManageLake` and `resolveLakeManageRung` must agree on
+ * the org-grant rung, and a shared conjunct cannot drift between them.
+ *
+ * Org membership never crosses orgs (epic decision 12). The read arm enforces that at grant-WRITE
+ * time (see resolveReadGrant's sync note); the MANAGE rung enforces it here, at decision time, so an
+ * admin of orgA holding an org grant cannot manage - and therefore cannot read - an orgB lake.
+ */
+function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boolean {
+  return !lakeOrg || normalizeId(grant.principalId) === lakeOrg;
+}
+
+/**
  * The single WRITE/MANAGE decision for a lake, in ascending rungs (none weakens the gate; each only
  * ADDS a manager):
  *   1. platform admin;
@@ -115,7 +132,8 @@ export function isEffectiveOwner(
  *      ownership transfer and the visibility expose gate, which stay effective-owner-only;
  *   4. an admin of the lake's org (`lake.organizationId in actor.administeredOrgIds`) - the
  *      org-manageable rung: org lakes survive their creator because org admins manage them by role;
- *   5. an `owner`/`curator` ORG grant for an org the actor administers.
+ *   5. an `owner`/`curator` ORG grant for an org the actor administers, where that org is the
+ *      lake's OWN org (or the lake has none) - an org grant never reaches across orgs.
  *
  * Deliberately narrower than `canAccessLake` (read): a tag/entitlement/org-READ grant lets a member
  * read a lake but not write into it. `canAccessLake` calls THIS first, so every rung here also
@@ -146,7 +164,8 @@ export function canManageLake(
     g =>
       g.principalType === 'organization' &&
       (g.role === 'owner' || g.role === 'curator') &&
-      administeredOrgIds.includes(g.principalId)
+      administeredOrgIds.includes(g.principalId) &&
+      isGrantOrgContained(g, lakeOrg)
   );
 }
 
@@ -197,7 +216,8 @@ export function resolveLakeManageRung(
     g =>
       g.principalType === 'organization' &&
       (g.role === 'owner' || g.role === 'curator') &&
-      administeredOrgIds.includes(g.principalId)
+      administeredOrgIds.includes(g.principalId) &&
+      isGrantOrgContained(g, lakeOrg)
   );
   if (hasOrgGrant) return 'org-grant';
 
