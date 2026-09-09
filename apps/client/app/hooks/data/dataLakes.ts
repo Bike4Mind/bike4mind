@@ -258,8 +258,11 @@ export interface RevokeLakeAccessBody {
  * door: `owner` is refused by the server (ownership moves only through transfer), so the form does
  * not offer it.
  *
- * Invalidates only the access view - a grant to someone else changes nothing about what THIS actor
- * can do, unlike a transfer.
+ * Invalidates the lake list as well as the access view and the config history: the actor can target
+ * THEMSELVES (the form takes any email, their own included), so re-roling themselves down drops
+ * their own manage rung while `canManage` on the cached list still says otherwise - Settings and
+ * Access would stay lit until something else refetched and then 403. Same reasoning as
+ * `useTransferLakeOwnership`. The history goes too because this door records a config-change event.
  */
 export function useGrantLakeAccess() {
   const queryClient = useQueryClient();
@@ -274,6 +277,8 @@ export function useGrantLakeAccess() {
     },
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       toast.success('Access granted');
     },
     onError: (error: Error) => {
@@ -288,7 +293,10 @@ export function useGrantLakeAccess() {
 }
 
 /** Revoke a principal's grant on a lake. The server refuses an ownership grant, so rows holding one
- * do not offer this. */
+ * do not offer this.
+ *
+ * Invalidates the list and the config history alongside the access view, for the same reasons as
+ * `useGrantLakeAccess`: the revoked principal may be the actor, and the door records an audit event. */
 export function useRevokeLakeAccess() {
   const queryClient = useQueryClient();
 
@@ -301,6 +309,8 @@ export function useRevokeLakeAccess() {
     },
     onSuccess: (data, { id }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       // `revoked: false` means the grant was already gone - the outcome asked for, so not an error,
       // but saying "revoked" would claim this call did something it did not.
       toast.success(data.revoked ? 'Access revoked' : 'That principal no longer had access');

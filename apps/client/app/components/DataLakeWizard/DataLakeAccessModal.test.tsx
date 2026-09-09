@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -18,13 +18,14 @@ let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean; is
 const transferMutate = vi.fn();
 const grantMutate = vi.fn();
 const revokeMutate = vi.fn();
+let revokePending = false;
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeAccessView: () => viewState,
   useLakeOwnershipCandidates: () => candidatesState,
   useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
   useGrantLakeAccess: () => ({ mutateAsync: grantMutate, isPending: false }),
-  useRevokeLakeAccess: () => ({ mutate: revokeMutate, isPending: false }),
+  useRevokeLakeAccess: () => ({ mutate: revokeMutate, isPending: revokePending }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
 }));
 
@@ -90,6 +91,7 @@ const loaded = (view: LakeAccessView, canTransferOwnership = false, readerGrants
 
 beforeEach(() => {
   vi.clearAllMocks();
+  revokePending = false;
   viewState = loaded(fullView);
   candidatesState = { data: { scope: 'organization', candidates: [], organizationName: 'Acme' }, isLoading: false };
 });
@@ -382,6 +384,57 @@ describe('DataLakeAccessModal grant writes', () => {
     await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
     await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
     expect(screen.queryByTestId('datalake-grant-principal-org')).not.toBeInTheDocument();
+  });
+
+  it('submits an org grant against the lake OWN org id, not the label', async () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-org'));
+    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+
+    // The channel's `value`, which is what refuseGrantWrite compares against the lake's own org.
+    expect(grantMutate).toHaveBeenCalledWith({
+      id: 'lake1',
+      principalType: 'organization',
+      principalId: 'orgA',
+      role: 'reader',
+    });
+  });
+
+  it('offers curator for a person and never for an organization', async () => {
+    // An org curator grant confers management on nobody (its admins already manage the lake), and
+    // the server refuses it - so the form must not offer a role the door rejects.
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.click(screen.getByTestId('datalake-grant-role-select'));
+    expect(screen.getByRole('option', { name: /curator/i })).toBeInTheDocument();
+    // Chosen rather than dismissed with Escape, which Joy's Modal takes as a close of the whole form.
+    await userEvent.click(screen.getByRole('option', { name: /reader/i }));
+
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
+    await userEvent.click(screen.getByTestId('datalake-grant-principal-org'));
+    await userEvent.click(screen.getByTestId('datalake-grant-role-select'));
+    expect(screen.queryByRole('option', { name: /curator/i })).not.toBeInTheDocument();
+  });
+
+  it('composes the chosen expiry date as the END of that day', async () => {
+    // A date alone parses as midnight UTC, which the server refuses as already lapsed for a grant
+    // dated today.
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
+    fireEvent.change(screen.getByTestId('datalake-grant-expiry-input'), { target: { value: '2027-03-04' } });
+    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+
+    expect(grantMutate).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: '2027-03-04T23:59:59.999Z' }));
+  });
+
+  it('disables Revoke while one is in flight, so a double click cannot send a second DELETE', () => {
+    revokePending = true;
+    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-revoke-user-cur1')).toBeDisabled();
   });
 
   it('discloses that reader grants are recorded but not yet in force, and drops the note once they are', () => {

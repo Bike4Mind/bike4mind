@@ -10,7 +10,6 @@ import {
   DialogTitle,
   FormControl,
   FormLabel,
-  IconButton,
   Input,
   Modal,
   ModalClose,
@@ -81,7 +80,15 @@ const ROLE_COLOR: Record<DataLakeAccessRole, ColorPaletteProp> = {
   reader: 'neutral',
 };
 
-function GrantRow({ grant, onRevoke }: { grant: LakeAccessGrantView; onRevoke?: () => void }) {
+function GrantRow({
+  grant,
+  onRevoke,
+  revoking,
+}: {
+  grant: LakeAccessGrantView;
+  onRevoke?: () => void;
+  revoking?: boolean;
+}) {
   return (
     <tr data-testid="datalake-access-grant-row">
       <td>
@@ -118,16 +125,19 @@ function GrantRow({ grant, onRevoke }: { grant: LakeAccessGrantView; onRevoke?: 
         {/* Absent on an ownership row: the server refuses to revoke one (it would silently
             un-transfer the lake), and the UI must not offer what the door rejects. */}
         {onRevoke && (
-          <IconButton
+          <Button
             size="sm"
             variant="plain"
             color="danger"
             onClick={onRevoke}
-            aria-label={`Revoke access for ${grant.principalName ?? grant.principalId}`}
+            // Disabled for the whole table while a revoke is in flight: a second click sends a
+            // second DELETE, and the row it names is already gone by then, so the reply reports
+            // "no longer had access" for an action that in fact worked.
+            disabled={revoking}
             data-testid={`datalake-access-revoke-${grant.principalType}-${grant.principalId}`}
           >
             Revoke
-          </IconButton>
+          </Button>
         )}
       </td>
     </tr>
@@ -309,12 +319,17 @@ const tomorrowInputDate = (): string => new Date(Date.now() + 86_400_000).toISOS
  * Grant one principal access to this lake.
  *
  * `owner` is deliberately absent from the role choices: ownership moves only through
- * transfer-ownership, and the server refuses it here. The organization option appears only when the
- * lake HAS an owning org - read off the view's own organization channel rather than fetched, since
- * a grant may name no other org (membership never crosses organizations).
+ * transfer-ownership, and the server refuses it here. `curator` is absent for an ORGANIZATION
+ * principal for a different reason - there is no principal it could confer management on, since the
+ * only grantable org is the lake's own and its admins already manage the lake - so `refuseGrantWrite`
+ * refuses it and this form does not offer it.
+ *
+ * The organization option appears only when the lake HAS an owning org - read off the view's own
+ * organization channel rather than fetched, since a grant may name no other org (membership never
+ * crosses organizations).
  *
  * A user is named by EMAIL, which is the only identifier a manager sharing outside their own org
- * has; the server resolves it by exact lookup.
+ * has, and the only one the server can resolve to a real account before writing a row.
  */
 function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () => void }) {
   const grant = useGrantLakeAccess();
@@ -356,7 +371,13 @@ function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () 
               <FormLabel>Grant to</FormLabel>
               <Select
                 value={principalType}
-                onChange={(_e, value) => value && setPrincipalType(value)}
+                onChange={(_e, value) => {
+                  if (!value) return;
+                  setPrincipalType(value);
+                  // An org grant can only be a reader, so a curator selection cannot survive the
+                  // switch - leaving it would submit a role the server refuses.
+                  if (value === 'organization') setRole('reader');
+                }}
                 slotProps={{ button: { 'data-testid': 'datalake-grant-principal-select' } }}
               >
                 <Option value="user" data-testid="datalake-grant-principal-user">
@@ -393,7 +414,9 @@ function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () 
                 slotProps={{ button: { 'data-testid': 'datalake-grant-role-select' } }}
               >
                 <Option value="reader">Reader - can read this lake</Option>
-                <Option value="curator">Curator - can also manage its files and settings</Option>
+                {principalType === 'user' && (
+                  <Option value="curator">Curator - can also manage its files and settings</Option>
+                )}
               </Select>
             </FormControl>
 
@@ -505,6 +528,7 @@ function AccessViewBody({
                               principalId: g.principalId,
                             })
                     }
+                    revoking={revoke.isPending}
                   />
                 ))}
               </tbody>
