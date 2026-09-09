@@ -17,7 +17,7 @@ import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getSystemSlackAppCredentials, verifyOrgSlackConnectStateToken } from '@bike4mind/slack';
-import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { encryptToken } from '@server/security/tokenEncryption';
 import { randomUUID } from 'crypto';
@@ -81,8 +81,11 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   }
 
   // Enforce browser-binding: the state's nonce hash must match this browser's cookie.
-  const stateResult = verifyOrgSlackConnectStateToken(state as string, readStateNonceHash(req));
-  clearStateNonce(res); // burn on exit - the nonce is single-use per flow
+  const stateResult = verifyOrgSlackConnectStateToken(
+    state as string,
+    readStateNonceHash(req, NONCE_SLOT.orgSlackConnect)
+  );
+  clearStateNonce(res, NONCE_SLOT.orgSlackConnect); // burn on exit - the nonce is single-use per flow
   if (!stateResult.valid) {
     auditLogger.failure('invalid_state');
     return sendClientRedirect(res, '/organizations?slack_error=invalid_state');

@@ -6,7 +6,7 @@ import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
@@ -25,9 +25,12 @@ const oauth2Client = new google.auth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOG
  * (connect.ts and token.ts's reconnect path) go through here, so neither can mint
  * an unbound authorize URL.
  */
-export function getAuthUrl(res: Response): string {
-  const nonceHash = issueStateNonce(res);
-  const state = createStateToken(GOOGLE_DRIVE_STATE_OPTIONS, undefined, nonceHash);
+export function getAuthUrl(res: Response, userId: string): string {
+  const nonceHash = issueStateNonce(res, NONCE_SLOT.driveConnect);
+  // Embed the initiating user so the callback can assert the tokens land on the
+  // account that started the flow, not merely whoever the completion is authed as
+  // (parity with the Slack link states).
+  const state = createStateToken(GOOGLE_DRIVE_STATE_OPTIONS, { userId }, nonceHash);
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
     // Force the consent screen so Google ALWAYS returns a refresh_token. With `access_type: offline`

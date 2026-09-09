@@ -47,18 +47,18 @@ vi.mock('@server/integrations/google/drive/common', async importOriginal => {
 
 // Import after mocks are registered.
 import handler from '@pages/api/google-drive/callback';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
 
 /** Mint a genuine state token bound to a fresh nonce, returning both the state and the browser's cookie. */
-function mintStateWithCookie(): { state: string; nonceCookie: string } {
+function mintStateWithCookie(userId = 'user-1'): { state: string; nonceCookie: string } {
   const { res } = createMocks();
-  const nonceHash = issueStateNonce(res as any);
+  const nonceHash = issueStateNonce(res as any, NONCE_SLOT.driveConnect);
   const setCookie = res.getHeader('Set-Cookie');
   const cookieStr = Array.isArray(setCookie) ? String(setCookie[0]) : String(setCookie);
-  const nonceCookie = cookieStr.split(';')[0]; // b4m_oauth_nonce=<value>
-  const state = createStateToken(GOOGLE_DRIVE_STATE_OPTIONS, undefined, nonceHash);
+  const nonceCookie = cookieStr.split(';')[0]; // b4m_oauth_nonce_google-drive=<value>
+  const state = createStateToken(GOOGLE_DRIVE_STATE_OPTIONS, { userId }, nonceHash);
   return { state, nonceCookie };
 }
 
@@ -72,9 +72,22 @@ describe('google-drive callback browser-binding', () => {
     const { req, res } = createMocks({
       method: 'GET',
       query: { code: 'auth-code', state },
-      headers: { cookie: 'b4m_oauth_nonce=someone-elses-nonce' },
+      headers: { cookie: 'b4m_oauth_nonce_google-drive=someone-elses-nonce' },
     });
     (req as any).user = { id: 'victim' };
+
+    await expect(handler(req as any, res as any)).rejects.toThrow();
+    expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the completing session is not the user that started the flow', async () => {
+    const { state, nonceCookie } = mintStateWithCookie('starter');
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state },
+      headers: { cookie: nonceCookie },
+    });
+    (req as any).user = { id: 'someone-else' };
 
     await expect(handler(req as any, res as any)).rejects.toThrow();
     expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();

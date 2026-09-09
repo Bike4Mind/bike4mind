@@ -44,7 +44,7 @@ const handler = baseApi().get(
       );
       return res.json({ accessToken: credentials.access_token });
     } catch (error) {
-      const authUrl = getAuthUrl(res);
+      const authUrl = getAuthUrl(res, userId);
       return res.json({ authUrl });
     }
   })

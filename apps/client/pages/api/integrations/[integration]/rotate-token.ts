@@ -20,7 +20,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Config } from '@server/utils/config';
 import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@server/utils/cloudwatch';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import type { Response } from 'express';
 
 function isRotatableIntegration(value: string): value is RotatableIntegration {
@@ -204,7 +204,7 @@ async function generateAuthUrl(
       const workspace = workspaceResult.workspace;
       if (!workspace.slackClientId) throw new Error('Slack OAuth not configured: missing client ID');
       // Bind this reauth flow to the browser: the user-link callback enforces the nonce.
-      const state = generateUserLinkStateToken(userId, issueStateNonce(res));
+      const state = generateUserLinkStateToken(userId, issueStateNonce(res, NONCE_SLOT.slackUserLink));
       const redirectUri = buildUserLinkRedirectUri(workspace, req as Parameters<typeof buildUserLinkRedirectUri>[1]);
       return buildSlackOAuthUrl(workspace.slackClientId, redirectUri, state, workspace.slackTeamId);
     }
