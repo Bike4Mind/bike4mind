@@ -62,6 +62,7 @@ vi.mock('@bike4mind/database', () => ({
   favoriteRepository: { find: vi.fn() },
   fabFileRepository: {},
   projectRepository: {},
+  agentRepository: {},
   userRepository: { update: userRepoUpdate },
 }));
 
