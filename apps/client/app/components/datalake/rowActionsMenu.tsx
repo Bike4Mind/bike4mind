@@ -35,9 +35,9 @@ const TRIGGER_SX = {
 const MENU_ICON_FRAME_SX = { ...MENU_ROW_ICON_SX, width: 20, height: 20 } as const;
 
 /**
- * One item in a row's action menu, styled like the profile menu's rows. Joy MenuItem needs
- * --variant-plainHoverBg pointed at the hover colour too, or its own variant rule wins over the
- * shared recipe's `&:hover`.
+ * One item in a row's action menu, styled like the profile menu's rows. Stays on menuRowSx per
+ * item rather than the menu-wide menuItemListSx: the destructive row wants its own ground, and a
+ * list-scoped `[role="menuitem"]` rule would outrank anything set here.
  */
 export function RowMenuItem({
   testId,
@@ -64,9 +64,6 @@ export function RowMenuItem({
         // Take the destructive colour from Joy's danger plain variant, exactly as the sidebar's
         // session Delete item does - the shared recipe's hardcoded danger[500] is a different red.
         ...(danger && { color: itemTheme.palette.danger.plainColor, '--Icon-color': 'currentColor' }),
-        '--variant-plainHoverBg': danger
-          ? itemTheme.palette.danger.plainHoverBg
-          : itemTheme.palette.notebooklist.hoverBg,
         // Tighter than the profile menu's 40px/10px: this menu hangs off a row in a narrow rail.
         // Both of these override a direct declaration in the shared recipe, so they must be set
         // here as declarations too - the Joy vars below alone would lose to it.

@@ -44,7 +44,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
   return {
     db: {
       fabFiles: {
-        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(filesWithToJSON) },
+        shareable: { findAllUpdateAccessByIds: vi.fn().mockResolvedValue(filesWithToJSON) },
         findById: vi.fn(async (id: string) => store.get(id) ?? null),
         pullTagsByFabFileId: vi.fn(async (id: string, names: string[]) => {
           const doc = store.get(id);
@@ -132,14 +132,14 @@ describe('toggleTags - ordinary tags', () => {
   it('returns freshly re-read documents rather than the pre-write snapshot', async () => {
     const adapters = makeAdapters([file('f1')]);
     const afterWrite = [file('f1', [{ name: 'new-tag', strength: 0 }])];
-    adapters.db.fabFiles.shareable.findAllAccessibleByIds
+    adapters.db.fabFiles.shareable.findAllUpdateAccessByIds
       .mockResolvedValueOnce([file('f1')])
       .mockResolvedValueOnce(afterWrite);
 
     const result = await run(adapters, { ids: ['f1'], tags: ['new-tag'] });
 
     expect(result).toEqual(afterWrite);
-    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledTimes(2);
+    expect(adapters.db.fabFiles.shareable.findAllUpdateAccessByIds).toHaveBeenCalledTimes(2);
   });
 
   it('acts once on a tag repeated in the same request', async () => {

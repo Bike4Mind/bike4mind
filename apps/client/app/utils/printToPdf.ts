@@ -14,7 +14,11 @@
  * cross-origin frame's `print()`, the trigger lives inside the frame and reports
  * back over `postMessage` so we can reclaim the node.
  *
- * Owner-path only. The public viewer footers stay CSP-locked (see publishExport.ts).
+ * This is the OWNER path, and it prints a FRESH render of the HTML export. The public
+ * viewer offers its own "Save as PDF" by a different route - it prints the artifact frame
+ * that is already on screen, so live interactive state survives (server/services/publish/
+ * printBridge.ts plus the button binder in pages/api/publish/widget.ts). The CSP-locked
+ * reply/fabfile footers still cannot offer either (see publishExport.ts).
  */
 
 const COMPLETE = 'b4m-print-complete';

@@ -122,7 +122,12 @@ type ChatMessageRow = Pick<
 
 /** Only the three storage calls this service makes, not a whole storage client. */
 interface ExportFileStorage {
-  getFileContent(filePath: string): Promise<string | null>;
+  /**
+   * Bytes, never a string: an implementation that decodes to UTF-8 on the way out replaces every
+   * byte it cannot represent with U+FFFD, and the base64 below then preserves the damage rather
+   * than the file. Buffer here makes such an adapter a compile error.
+   */
+  getFileContent(filePath: string): Promise<Buffer | null>;
   uploadFile(path: string, content: Buffer): Promise<void>;
   getSignedUrl(filePath: string, expiresIn?: number): Promise<string | null>;
 }
@@ -403,8 +408,10 @@ export class NotebookExportService {
             const storagePath = file.filePath;
             if (storagePath) {
               const content = await this.adapters.fileStorageService.getFileContent(storagePath);
-              if (content) {
-                exportedFile.content = Buffer.from(content).toString('base64');
+              // `=== null`, matching processImages below: an empty Buffer is truthy where the old
+              // `string` was falsy, so truthiness would make the zero-byte branch an accident.
+              if (content !== null) {
+                exportedFile.content = content.toString('base64');
               } else {
                 exportedFile.contentUrl = file.fileUrl ?? storagePath; // Fallback to URL or path reference
               }
@@ -603,13 +610,14 @@ export class NotebookExportService {
 
         try {
           const imageContent = await this.adapters.fileStorageService.getFileContent(imagePath);
-          // getFileContent reports a failed read as null. Buffer.from(null) throws, so without
-          // this the miss would surface as an exception and take the same path as a real error.
+          // getFileContent reports a failed read as null, which has no toString('base64'), so
+          // without this the miss would surface as an exception and take the same path as a real
+          // error.
           if (imageContent === null) {
             this.adapters.logger.warn('Image content unavailable, exporting the path instead', { imagePath });
             return imagePath;
           }
-          return Buffer.from(imageContent).toString('base64');
+          return imageContent.toString('base64');
         } catch (error) {
           this.adapters.logger.warn('Failed to export image', { imagePath, error });
           return imagePath; // Fallback to path reference

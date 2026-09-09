@@ -144,6 +144,31 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
 export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
 
 /**
+ * Default text for the web-search freshness nudge, and the `WebSearchFreshnessPrompt` admin
+ * setting's default.
+ *
+ * Unlike ABSTENTION_PROMPT / ARTIFACT_EMISSION_PROMPT / HELP_CENTER_PROMPT, this setting
+ * distinguishes an absent row from a cleared one. ChatCompletionProcess reads it 2-arg, so an
+ * absent row still falls back to this constant as the setting's registered default, but a cleared
+ * '' is returned verbatim and drops the section rather than reverting. The siblings are read 3-arg
+ * and collapse both cases to the constant. That divergence is deliberate - this section has no
+ * companion boolean, so clearing the field is the only off switch it has. Keep the setting's
+ * description in sync with that if either changes.
+ *
+ * Names no tool but `web_search`: the section is gated on web_search being offered, and web_fetch
+ * is an independent toggle that may well be off.
+ */
+export const WEB_SEARCH_FRESHNESS_PROMPT = `# WEB SEARCH AND FRESHNESS
+
+Your training data has a cutoff. The current date is supplied to you in this conversation's system context - treat it as authoritative, and assume anything time-sensitive may have changed since your training.
+
+Call \`web_search\` BEFORE answering when the answer depends on a fact that changes over time: current prices or rates, product availability or roadmap status, funding, organizational or personnel changes, published benchmarks or performance figures, competitive positioning, or anything the user frames as "current", "latest", "now", or "as of today". When a stale answer would mislead, search instead of answering from memory. When a search surfaces a specific page that matters, or the user names one, read that page directly rather than answering from the snippet.
+
+You do not need to search for stable knowledge (definitions, mathematics, established theory), or for questions answerable purely from this conversation or from documents already retrieved for you.
+
+When you report a time-sensitive fact, state what it is as of - the date of the source you used - and say plainly when you could not verify something and are answering from training data instead. Never present an unverified recollection as a current fact.`;
+
+/**
  * Default text for the formatting system message. Runtime fallback used by
  * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) when the `FormatPromptTemplate`
  * admin setting is blank; that setting's own default is intentionally '' - keep this the sole home.
@@ -177,6 +202,7 @@ export const SettingKeySchema = z.enum([
   'ArtifactEmissionPrompt',
   'HelpCenterPrompt',
   'AbstentionPrompt',
+  'WebSearchFreshnessPrompt',
   'UseFormatPrompt',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
@@ -511,10 +537,12 @@ export const OrchestrationDefaultsSchema = z.object({
     'mermaid_chart',
   ]),
   /**
-   * Tool names explicitly forbidden. Enforced as a final subtraction in
-   * `pickEffectiveEnabledTools` - wins even over payload-pinned tools - so this
-   * is the defense-in-depth backstop for the case where an admin broadens
-   * `allowedTools` without realizing a parallel denylist is also needed.
+   * Tool names explicitly forbidden. Enforced in two places: as a final subtraction in
+   * `pickEffectiveEnabledTools` (wins even over payload-pinned tools), and - for the two
+   * delegation tools, which are injected as objects and never registered by name - at the
+   * dependency gate in agentExecutor (`delegationOffer` withholds `agentStore` /
+   * `dagDispatcher`). The name subtraction alone cannot reach those two; see
+   * agentExecutor.sessionToolPolicy.
    *
    * Seeded with every tool that mutates user data (the spec's
    * "anything tagged `mutates_user_data`"): destructive/overwriting filesystem
@@ -1427,6 +1455,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'ArtifactEmissionPrompt', order: 9 },
       { key: 'HelpCenterPrompt', order: 10 },
       { key: 'AbstentionPrompt', order: 11 },
+      { key: 'WebSearchFreshnessPrompt', order: 12 },
     ],
   },
   EMBEDDING: {
@@ -2410,6 +2439,15 @@ export const settingsMap = {
       'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 11,
+  }),
+  WebSearchFreshnessPrompt: makeStringSetting({
+    key: 'WebSearchFreshnessPrompt',
+    name: 'Web Search Freshness Prompt',
+    defaultValue: WEB_SEARCH_FRESHNESS_PROMPT,
+    description:
+      'System prompt telling the model when to reach for web_search rather than answer from training data, and to state the as-of date of any time-sensitive fact. Injected only when the web_search tool is offered for the request - a model instructed to search without a search tool tends to claim it searched. Clearing this field turns the section OFF rather than restoring the built-in default, and it is the only off switch this section has; to get the stock wording back, paste it in. A change is not instantaneous: the settings cache is per-instance, so it applies immediately on the instance that served the change and within ~5 min (one cache TTL) everywhere else. After an upgrade, diff a saved copy against the built-in default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
+    category: 'AI',
+    order: 12,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',

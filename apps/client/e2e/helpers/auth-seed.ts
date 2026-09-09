@@ -82,11 +82,15 @@ export interface SpecAuth {
  * test-side seed cannot mint a fresh token for the seeded user without OTC or a dedicated endpoint.
  */
 export function buildAuthSuccessUrl(target: string, auth: SpecAuth): string {
-  const params = new URLSearchParams({ token: auth.accessToken, userId: auth.userId });
+  // Token and userId ride the FRAGMENT, matching what every production callback emits: parseAuthParams
+  // accepts a URL-borne token only from the hash, so the query-string form silently parses to {} and
+  // lands the whole authenticated suite on /login?error=missing_tokens.
+  // redirectTo stays in the query, which is where /auth/success reads it from.
   // sanitizeRedirectTo (app/utils/authRedirect.ts) requires a leading '/' and rejects bare '/', so
   // omit redirectTo for '/' - /auth/success then falls back to the dashboard, which is '/' anyway.
-  if (target !== '/') params.set('redirectTo', target);
-  return `/auth/success?${params.toString()}`;
+  const query = target === '/' ? '' : `?${new URLSearchParams({ redirectTo: target }).toString()}`;
+  const fragment = new URLSearchParams({ token: auth.accessToken, userId: auth.userId }).toString();
+  return `/auth/success${query}#${fragment}`;
 }
 
 /**

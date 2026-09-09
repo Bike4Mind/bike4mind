@@ -15,7 +15,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { getFilesStorage } from '@server/utils/storage';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
-import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { completedBatchStatus, finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
@@ -250,11 +250,7 @@ export const func = withContext(async (event, context, logger) => {
             action: 'data_lake_batch_progress',
             batchId: metadata.batchId,
             skippedFiles: batch?.skippedFiles ?? 1,
-            status: isBatchComplete(batch)
-              ? batch!.failedFiles > 0
-                ? 'completed_with_errors'
-                : 'completed'
-              : undefined,
+            status: completedBatchStatus(batch),
           });
         }
       } catch (error) {
