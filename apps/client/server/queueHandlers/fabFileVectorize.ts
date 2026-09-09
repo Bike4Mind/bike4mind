@@ -523,6 +523,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Gated on sourceType up front: notifySlackIndexingComplete no-ops for non-Slack files anyway,
       // and sourceType/sourceMetadata/tags never change during vectorization, so existingFabFile
       // (fetched once, above) is used instead of the fabFile re-fetched for the chunkCount rollup.
+      //
+      // TRADEOFF, deliberate: claiming before sending makes this AT-MOST-ONCE, not
+      // at-least-once - a successful claim followed by a failed send (network error, Slack
+      // outage, the WebClient timeout above) is indistinguishable from a delivered notification
+      // in `dispatchedNotifications`: no retry, no queryable owed-state, no repair short of
+      // hand-editing that field. Chosen deliberately: a duplicate "now searchable" reply is a
+      // worse user-facing failure than a silent miss, and the miss is logged (the inner catch
+      // below) so it is at least observable. Claiming AFTER a successful send instead would trade
+      // this for a WORSE failure mode: it would reopen the exact concurrent-redelivery double-post
+      // this claim exists to prevent, since two concurrent invocations would both reach `sendMessage`
+      // before either claims. Not applied for that reason.
       if (existingFabFile.sourceType === FabFileSourceType.SLACK) {
         try {
           const claimedSlackNotification = await fabFileRepository.claimIndexNotification(fabFileId, 'slack');
