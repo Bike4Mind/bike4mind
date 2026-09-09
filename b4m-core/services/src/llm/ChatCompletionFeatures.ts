@@ -2552,7 +2552,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // turn's FINAL top score, which is not known until the last batch has been scored. This is
       // the floor that ranks - it moves with the turn, so it keeps discriminating whichever band a
       // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
-      // everything or nothing (#2497).
+      // everything or nothing.
       //
       // Skipped when the top score is not positive. `topScore` is not derived from `pool` - it is
       // updated one line BEFORE the absolute-floor `continue`, so it tracks every finite scored
