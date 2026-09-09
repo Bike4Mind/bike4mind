@@ -41,7 +41,8 @@ import {
 } from '@server/dataLakes/convergencePauseScope';
 
 /**
- * How many rescue sends are in flight at once, matching driveLakeResyncPoll's sweep.
+ * How many rescue sends are in flight at once, matching driveLakeResyncPoll's sweep. Governs BOTH
+ * passes below, which share one tick.
  * The bound is what makes the per-file catch below safe: sendToQueue builds a fresh SQSClient per
  * call (server/utils/sqs.ts), so its retry token bucket never throttles down across the loop and
  * every failed send pays its full attempt budget with no back-off. Run one-at-a-time against a
@@ -175,13 +176,14 @@ export async function runStrandedVectorizeRescue(runLogger: Logger): Promise<num
   // Per-send catch so one throttled or unroutable send costs only itself: this is the last pass of
   // a scheduled task, so an escaping rejection would abandon every candidate behind it AND fail the
   // whole tick.
-  // Sequential, unlike the ENQUEUE_CONCURRENCY fan-out above - that bound does NOT apply here. It
-  // stays sequential to match the hosted twin, so bounding it is a change that belongs in both
-  // rather than a self-host-only edit. Worth knowing if that is ever revisited: this pass shares
-  // the 60s non-reentrant tick with runChunkRescueSweep, so the worst case the ENQUEUE_CONCURRENCY
-  // docblock describes is both passes' CHUNK_SCAN_BATCH inside one tick's budget.
+  // Same bounded fan-out as runChunkRescueSweep above, and for the reason its ENQUEUE_CONCURRENCY
+  // docblock gives: this pass shares the 60s non-reentrant tick with that sweep, so one tick has to
+  // absorb BOTH passes' CHUNK_SCAN_BATCH of sends. Run one-at-a-time against a degraded queue,
+  // where every failure pays its full attempt budget, that overruns the tick and costs the next one.
+  // Read the queue URL once: an unlinked-resource fault is one config error, not a log per file.
+  const queueUrl = Resource.fabFileChunkQueue.url;
   let sent = 0;
-  for (const file of candidates) {
+  const sendOne = async (file: (typeof candidates)[number]) => {
     try {
       // Deliberately UNSTAMPED, unlike the un-chunked sweep above (#2309): these files are already
       // chunked, and the handler's halt branch (fabFileChunk.ts, isConvergenceHalted) runs ABOVE the
@@ -190,7 +192,7 @@ export async function runStrandedVectorizeRescue(runLogger: Logger): Promise<num
       // and then throwing - so the resume never runs and this sweep re-sends the file every tick
       // until each message burns its retry ladder into the DLQ. Must stay in sync with the hosted
       // twin's identical reasoning in dataLakeBatchReconcile.ts.
-      await sendToQueue(Resource.fabFileChunkQueue.url, {
+      await sendToQueue(queueUrl, {
         fabFileId: String(file._id),
         userId: String(file.userId),
       });
@@ -198,6 +200,9 @@ export async function runStrandedVectorizeRescue(runLogger: Logger): Promise<num
     } catch (err) {
       runLogger.error(`[fabFileChunkScan] stranded-vectorize re-enqueue failed for ${file._id}: ${err}`);
     }
+  };
+  for (let i = 0; i < candidates.length; i += ENQUEUE_CONCURRENCY) {
+    await Promise.all(candidates.slice(i, i + ENQUEUE_CONCURRENCY).map(file => sendOne(file)));
   }
   if (sent > 0) {
     runLogger.info(`[fabFileChunkScan] re-enqueued ${sent} file(s) with a stranded vectorize hand-off`);

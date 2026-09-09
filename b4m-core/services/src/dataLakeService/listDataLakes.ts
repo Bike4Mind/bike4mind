@@ -9,8 +9,17 @@ import type {
   IOrganizationRepository,
   DataLakeConfig,
   ManageableDataLakeConfig,
+  TransitionalDataLakeSummary,
 } from '@bike4mind/common';
-import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  DATA_LAKE_TRANSITIONAL_STATUSES,
+  strandedCutoffMsFor,
+  resolveRetryAction,
+  toDataLakeConfig,
+  lakeMatchesAccess,
+  normalizeEntitlementKey,
+} from '@bike4mind/common';
 import { canManageLake, canShredLakeMemory, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
 import { grantedLakeIdsFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
@@ -122,6 +131,28 @@ interface ListDataLakesAdapters {
    * set" - see resolveFallbackSettings for why silence there is not harmless.
    */
   logger?: LakeAccessLogger;
+}
+
+/**
+ * `listDataLakes`-only options (#2425 P3 review): kept OUT of `ListDataLakesAdapters` on purpose,
+ * even though it is a sibling of `db`/`logger` there, because that type is shared with
+ * `listAllDataLakes`/`listArchivedDataLakes`/`listDeletedDataLakes` and none of them honor this
+ * field - two of them even run their own `grantedLakeIdsFor` call, so a field that looked
+ * type-valid there but was silently dropped would be worse than not having the option at all.
+ * Scoping it to a type only `listDataLakes` accepts keeps the field's type-checked surface equal
+ * to its actual support.
+ */
+interface ListDataLakesOptions extends ListDataLakesAdapters {
+  /**
+   * Optional pre-resolved grant-id set: skips this function's own `grantedLakeIdsFor` call when
+   * the caller already ran the identical query. Only safe to pass when the caller never threads
+   * `db.settings` above, so `resolveEnforceReadGrants` (and thus the `includeReaders` this
+   * function would otherwise resolve to) is always `false` - enforced below with a thrown error
+   * if both are supplied together, rather than left as a caller-observed precondition only.
+   * `handleList` (apps/client/server/slack/handleDataLakeCommand.ts) is the one caller today, and
+   * it satisfies that precondition by construction. Absent -> recomputes exactly as before.
+   */
+  grantedLakeIds?: string[];
 }
 
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
@@ -339,15 +370,23 @@ const toFallbackConfig = (
  */
 export const listDataLakes = async (
   ctx: AccessContext,
-  { db }: ListDataLakesAdapters
+  { db, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
 ): Promise<ManageableDataLakeConfig[]> => {
+  // The precomputed set is only valid under includeReaders=false (see the field's doc comment) -
+  // a caller that also threads `settings` could get includeReaders=true below, silently
+  // mismatching what the precomputed set was actually resolved with. Guarded rather than
+  // assumed, so that combination fails loudly instead of quietly dropping reader/org grants.
+  // Checked BEFORE the settings read below, so an invalid combination costs nothing.
+  if (precomputedGrantedLakeIds && db.settings) {
+    throw new Error(
+      'listDataLakes: grantedLakeIds and db.settings cannot both be supplied - the precomputed set ' +
+        'is only valid when includeReaders is forced false (no settings adapter)'
+    );
+  }
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds =
+    precomputedGrantedLakeIds ??
+    (await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders));
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
@@ -512,4 +551,63 @@ export const listDeletedDataLakes = async (
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
+};
+
+/**
+ * Lakes stranded in a transitional status (see DATA_LAKE_TRANSITIONAL_STATUSES) - the one list
+ * that surfaces a lake a crashed or timed-out lifecycle call left mid-operation. Every other list
+ * path asks for a disjoint set of STABLE statuses, so without this view such a lake renders
+ * nowhere and can only be found by reading its id out of the datastore.
+ *
+ * Narrowed three ways against the archived/deleted views it otherwise mirrors:
+ * - MANAGE-scoped, not read-scoped. The only action offered is a retry, which each lifecycle
+ *   service restricts to owner/admin/org-manager, so a caller who cannot manage the lake could do
+ *   nothing with the row. Filtering on `canManageLake` here also means nothing needs redacting.
+ * - includePublic:false, for the same reason the archived view passes it: a stranger holds no
+ *   management role on someone else's public lake.
+ * - Cutoff-filtered, per status (see strandedCutoffMsFor). A lake that entered 'archiving'
+ *   seconds ago is working, not stranded, so a list that showed it would mean "is busy" rather
+ *   than "needs attention".
+ */
+export const listTransitionalDataLakes = async (
+  ctx: AccessContext,
+  { db }: ListDataLakesAdapters
+): Promise<TransitionalDataLakeSummary[]> => {
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: [...DATA_LAKE_TRANSITIONAL_STATUSES],
+    includePublic: false,
+    grantedLakeIds,
+  });
+  const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
+  const now = Date.now();
+  return lakes
+    .filter(lake => canManageLake(lake, ctx, grantsByLake.get(lake.id)))
+    .filter(lake => {
+      // `new Date(...)`, not `.getTime()` on the field: it is a Date in-process but an ISO
+      // string once it has crossed a wire, and both shapes reach this function.
+      const movedAt = new Date(lake.updatedAt).getTime();
+      // NaN - a lake with no or an unparseable timestamp - is SHOWN, not hidden: the cutoff is
+      // there to withhold a lake we can prove is still busy, and an absent timestamp proves
+      // nothing. Failing closed would hide exactly the lake this list exists to surface.
+      return Number.isNaN(movedAt) || movedAt <= now - strandedCutoffMsFor(lake.status);
+    })
+    .map(lake => ({
+      id: lake.id,
+      name: lake.name,
+      slug: lake.slug,
+      fileTagPrefix: lake.fileTagPrefix,
+      status: lake.status,
+      updatedAt: lake.updatedAt,
+      // Resolved here rather than by the consumer: for 'restoring' the answer depends on the
+      // lake's sweep marks, which this narrow DTO deliberately does not carry, and a client that
+      // guessed could run the wrong axis's recovery - see resolveRetryAction.
+      retryAction: resolveRetryAction(lake),
+    }));
 };

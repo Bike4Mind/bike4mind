@@ -794,9 +794,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const docs = await this.fabFileModel
       .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsByIds') } })
       .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized')
-      .lean<
-        ({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]
-      >();
+      .lean<({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]>();
     // `.lean()` skips the `id` virtual, so map it explicitly rather than leaning on toJSON (which
     // would defeat the projection by hydrating the document first).
     return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));

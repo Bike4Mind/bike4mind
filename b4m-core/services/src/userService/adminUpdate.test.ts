@@ -185,6 +185,58 @@ describe('adminUpdateUser — audited credit adjustments', () => {
   });
 });
 
+describe('adminUpdateUser - signed creditDelta path', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes a positive creditDelta through a generic_add and stamps lastCreditsPurchasedAt', async () => {
+    const { adapters, createTransaction, incrementCredits, update } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50, creditReason: 'Bonus' }, adapters);
+
+    const [type, data] = createTransaction.mock.calls[0];
+    expect(type).toBe('generic_add');
+    expect(data.credits).toBe(50);
+    expect(data.metadata).toMatchObject({ actorId: ADMIN_ID, previousBalance: 100, resultingBalance: 150 });
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 50, expect.anything());
+    // A grant stamps the purchase timestamp even though the UI sends only creditDelta.
+    expect(update.mock.calls[0][0].lastCreditsPurchasedAt).toBeInstanceOf(Date);
+  });
+
+  it('routes a negative creditDelta through a generic_deduct', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -30 }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -30);
+  });
+
+  it('does not invert a deduction when the balance is already negative', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(-100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters);
+
+    // The clamp must not floor at -previousBalance (+100): that would turn a 50-credit
+    // deduction into a +100 grant. The deduction applies verbatim on a negative balance.
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -50);
+    expect(createTransaction.mock.calls[0][1].metadata).toMatchObject({
+      previousBalance: -100,
+      resultingBalance: -150,
+    });
+  });
+
+  it('applies a creditDelta to the doc write when no creditTransactions adapter is wired', async () => {
+    const { adapters, incrementCredits, update } = makeAdapters(100, { withCreditTransactions: false });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
+
+    // No ledger adapter: the delta must not be silently dropped - it lands on the doc write.
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(update.mock.calls[0][0].currentCredits).toBe(150);
+  });
+});
+
 describe('adminUpdateUser - preferences merge', () => {
   beforeEach(() => vi.clearAllMocks());
 

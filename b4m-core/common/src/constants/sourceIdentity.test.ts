@@ -37,8 +37,8 @@ describe('sourceIdentityKeyFor', () => {
     // the file name (folderTreeParser, the Drive walk), and the directory with or without a
     // trailing separator. A bare directory name is why the file name, not the separator, has to be
     // the discriminator - `docs` and `README.md` are the same shape.
-    const spellings = ['docs/README.md', 'docs/', 'docs'].map(
-      relativePath => sourceIdentityKeyFor({ relativePath, fileName: 'README.md' }, 'lake-1')
+    const spellings = ['docs/README.md', 'docs/', 'docs'].map(relativePath =>
+      sourceIdentityKeyFor({ relativePath, fileName: 'README.md' }, 'lake-1')
     );
     expect(spellings.map(identity => identity?.tier)).toEqual(['relativePath', 'relativePath', 'relativePath']);
     expect(new Set(spellings.map(identity => identity?.key)).size).toBe(1);

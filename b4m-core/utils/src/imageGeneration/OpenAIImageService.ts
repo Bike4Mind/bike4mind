@@ -26,6 +26,10 @@ const OPENAI_IMAGE_CLIENT_OPTS = { timeout: 8 * 60 * 1000, maxRetries: 0 } as co
 // particular handles a broader range of prompts than gpt-image-*.
 const ALTERNATIVE_IMAGE_MODELS = 'Flux Pro, Flux Dev, or Grok';
 
+// Only appends "..." when the prompt is actually cut, so a short prompt in a log line
+// doesn't misleadingly read as truncated.
+const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt);
+
 /**
  * Builds a user-friendly error when OpenAI's safety system blocks an image
  * request, guiding the user to rephrase or switch to an alternative model.
@@ -265,6 +269,10 @@ export class OpenAIImageService extends AIImageService {
 
           // IMPORTANT: GPT-Image models edit endpoint only supports: model, image (array), prompt
           // Do not pass any other parameters (size, response_format, etc.)
+          this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
+            model: editModel,
+            prompt: truncatePromptForLog(prompt),
+          });
           result = await openai.images.edit({
             model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
             image: [imageFile],
@@ -274,15 +282,18 @@ export class OpenAIImageService extends AIImageService {
           // Legacy models (DALL-E 2) use the variation endpoint
 
           const { style, quality, model, ...opts } = openaiOptions; // Remove unsupported params for variations
+          const variationSize = ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
+            '256x256' | '512x512' | '1024x1024';
 
+          this.logger.log('OpenAI image generation request (variation endpoint):', { ...opts, size: variationSize });
           result = await openai.images.createVariation({
             ...opts,
             image: imageFile,
-            size: ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
-              '256x256' | '512x512' | '1024x1024',
+            size: variationSize,
           });
         }
       } else {
+        this.logger.log('OpenAI image generation request:', { prompt: truncatePromptForLog(prompt), ...openaiOptions });
         result = await openai.images.generate({
           prompt,
           ...openaiOptions,
@@ -403,6 +414,15 @@ export class OpenAIImageService extends AIImageService {
       // absent size is omitted so OpenAI's own default sizing applies, as it did before.
       // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
       const forwardSize = isSupportedEditSize(editModel, size);
+
+      this.logger.log('OpenAI image edit request:', {
+        model: editModel,
+        prompt: truncatePromptForLog(prompt),
+        hasMask: !!maskFile,
+        n,
+        size,
+        response_format,
+      });
 
       const response = await openai.images.edit(
         isGPTImageModel(editModel)

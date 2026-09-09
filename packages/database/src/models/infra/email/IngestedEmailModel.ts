@@ -70,7 +70,7 @@ const EmailAIAnalysisSchema = new mongoose.Schema(
 const IngestedEmailSchema = new mongoose.Schema(
   {
     // Email Identifiers
-    messageId: { type: String, required: true, unique: true },
+    messageId: { type: String, required: true },
     inReplyTo: { type: String, required: false },
     references: { type: [String], default: [] },
     threadId: { type: String, required: true, index: true },
@@ -135,6 +135,13 @@ const IngestedEmailSchema = new mongoose.Schema(
 );
 
 // Compound Indexes (single-field indexes are defined inline in schema above)
+// Idempotency for SQS retries, scoped to the owner. NOT `messageId` alone: a Message-ID is chosen
+// by the sending mail system, so redirect-style forwarding delivers the same one to two tenants,
+// and a global constraint turns the second tenant's mail into an E11000 the queue can only DLQ.
+// Live rows only, for the same reason: softDeletePlugin hides a deleted row from the idempotency
+// lookup, so a full index would let it keep blocking a re-delivery the lookup says is new.
+// `deletedAt: null` rather than `$exists: false` - Mongo rejects the latter in a partial filter.
+IngestedEmailSchema.index({ messageId: 1, userId: 1 }, { unique: true, partialFilterExpression: { deletedAt: null } });
 IngestedEmailSchema.index({ threadId: 1, userId: 1 });
 IngestedEmailSchema.index({ userId: 1, receivedAt: -1 });
 IngestedEmailSchema.index({ organizationId: 1, receivedAt: -1 });
@@ -152,8 +159,8 @@ class IngestedEmailRepository extends BaseRepository<IIngestedEmailDocument> imp
     super(ingestedEmailModel);
   }
 
-  async findByMessageId(messageId: string): Promise<IIngestedEmailDocument | null> {
-    const result = await this.ingestedEmailModel.findOne({ messageId });
+  async findByMessageId(messageId: string, userId: string): Promise<IIngestedEmailDocument | null> {
+    const result = await this.ingestedEmailModel.findOne({ messageId, userId });
     return result?.toJSON() ?? null;
   }
 
