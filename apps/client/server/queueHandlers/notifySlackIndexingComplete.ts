@@ -1,7 +1,7 @@
 import { FabFileSourceType, type IDataLakeDocument, type IFabFileDocument } from '@bike4mind/common';
 import { dataLakeRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
-import { SlackClient } from '@bike4mind/slack';
+import { SlackClient, escapeSlackMrkdwn } from '@bike4mind/slack';
 import { Logger } from '@bike4mind/observability';
 import { decryptToken } from '@server/security/tokenEncryption';
 
@@ -52,6 +52,9 @@ export async function notifySlackIndexingComplete(
   // teamId path hasn't, so look it up now - only reached once a token is already confirmed.
   const lake = resolved.lake ?? (await resolveLake(fabFile, logger));
 
+  // `fileName` can come from an attacker-controlled webpage <title> (createByUrl.ts) - escaped so
+  // a value like "<!channel> URGENT" cannot post as a real broadcast/mention.
+  const fileName = escapeSlackMrkdwn(fabFile.fileName);
   const slackClient = new SlackClient(resolved.token, logger);
   await slackClient.sendMessage({
     channel,
@@ -60,8 +63,8 @@ export async function notifySlackIndexingComplete(
     // a real Slack-origin file, but the ingest paths don't structurally guarantee it) degrades to
     // the file-only wording rather than printing a hole in the sentence.
     text: lake
-      ? `"${fabFile.fileName}" finished indexing in *${lake.name}* and is now searchable.`
-      : `"${fabFile.fileName}" finished indexing and is now searchable.`,
+      ? `"${fileName}" finished indexing in *${lake.name}* and is now searchable.`
+      : `"${fileName}" finished indexing and is now searchable.`,
   });
 }
 
