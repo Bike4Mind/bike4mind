@@ -562,18 +562,33 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
     );
   });
 
-  it('bounds both floors to 0-100 at write time', () => {
+  it('bounds both floors at write time, integrally, and floors them differently at the bottom', () => {
     // The 100 ceiling is load-bearing, not cosmetic: the relative floor is multiplied by the turn's
     // top score, so a value above 100 would put the cutoff ABOVE the best candidate and starve
-    // every turn. min 0 is what makes "disabled" expressible.
+    // every turn.
     for (const key of FLOOR_KEYS) {
-      expect(settingsMap[key].min).toBe(0);
       expect(settingsMap[key].max).toBe(100);
       expect(() => settingsMap[key].schema.parse(-1)).toThrow();
       expect(() => settingsMap[key].schema.parse(101)).toThrow();
-      expect(settingsMap[key].schema.parse(0)).toBe(0);
       expect(settingsMap[key].schema.parse(100)).toBe(100);
+      // Integral at the write boundary rather than floored later by a reader, so the percent an
+      // admin sees is the percent the retrieval path actually compares against.
+      expect(settingsMap[key].int).toBe(true);
+      expect(() => settingsMap[key].schema.parse(85.5)).toThrow();
     }
+
+    // The two differ at the bottom of the range, and deliberately. 0 is what makes the RELATIVE
+    // floor's "disabled" expressible.
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.min).toBe(0);
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(0)).toBe(0);
+
+    // The ABSOLUTE floor stops at 1, because 0 there is not "disabled" but "unreachable": clearing
+    // a number field in the admin UI coerces to 0, and a 0 similarity floor makes the "no chunk
+    // cleared the floor" abstention impossible, so a wholly off-topic corpus would inject its best
+    // band instead of abstaining. 1% still effectively disables the gate for anyone who means to.
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.min).toBe(1);
+    expect(() => settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(0)).toThrow();
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(1)).toBe(1);
   });
 
   it('is settable at org and owner but NOT per lake, unlike dataLakeSearchMaxChunks', () => {

@@ -2072,9 +2072,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * cosine. `nonNegativeIntOr` rather than `positiveIntOr` because `0` is meaningful for both (a
    * disabled relative floor, an absent absolute one), so it must not be treated as unusable.
    *
-   * Never throws. `resolveScopedSettingValues` already guarantees that for settings failures, so the
-   * catch covers only a host with no adminSettings adapter wired at all - the same fail-open posture
-   * as the char budget, and the defaults it falls back to are behavior-preserving.
+   * Never throws, and the catch reaches wider than "no adminSettings adapter": the platform-only
+   * path calls `getSettingsValue` unguarded, so a settings or DB outage on an overlay-less host
+   * lands here too. (On the scoped path a missing adapter is swallowed inside the resolver and
+   * never reaches this catch.) Same fail-open posture as the char budget, and the defaults it
+   * falls back to are behavior-preserving.
    */
   private async resolveForcedRetrievalFloors(): Promise<ForcedRetrievalFloors> {
     const coded: ForcedRetrievalFloors = {
@@ -2114,21 +2116,31 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * scoped overlay is wired. When it is absent there is no override to find and the platform read is
    * byte-identical, so this takes the plain `getSettingsValue` route rather than requiring every host
    * to carry the overlay - the same optionality `scopedSettings` is already documented with on the
-   * db contract above, and the same two-path shape `resolveSearchBudgets` uses.
+   * db contract above, and the same two-path shape `resolveSearchBudgets` uses, inner guard
+   * included: a scoped failure degrades to the platform read, not to the coded defaults.
    */
   private async readForcedRetrievalFloorPcts(): Promise<{ relative: unknown; absolute: unknown }> {
     const { db, user } = this.chatCompletion;
     if (db.scopedSettings) {
-      const values = await resolveScopedSettingValues(
-        ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'],
-        scopeForCaller({ userId: user.id, organizationId: normalizeId(user.organizationId) }),
-        { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
-        { logger: this.logger }
-      );
-      return {
-        relative: values.forcedRetrievalRelativeFloorPct,
-        absolute: values.forcedRetrievalMinSimilarityPct,
-      };
+      try {
+        const values = await resolveScopedSettingValues(
+          ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'],
+          scopeForCaller({ userId: user.id, organizationId: normalizeId(user.organizationId) }),
+          { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
+          { logger: this.logger }
+        );
+        return {
+          relative: values.forcedRetrievalRelativeFloorPct,
+          absolute: values.forcedRetrievalMinSimilarityPct,
+        };
+      } catch (err) {
+        // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
+        // discard a platform-wide override for the duration of a transient scoped-read failure.
+        this.logger.warn(
+          '\u{1F512} Forced retrieval: scoped floor read failed; falling back to the platform values',
+          err
+        );
+      }
     }
     const [relative, absolute] = await Promise.all([
       db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
@@ -2532,13 +2544,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
       // everything or nothing (#2497).
       //
-      // Skipped when the top score is not positive. The reachable case is a top score of exactly
-      // 0 (an all-orthogonal band), where a fraction of 0 is still 0 and would admit everything
-      // anyway. A NEGATIVE top score cannot reach here today - the absolute floor is a percent, so
-      // it is never below 0, and `pool` therefore only holds non-negative scores - but the guard is
-      // written for it regardless, because a multiplicative floor inverts across zero
-      // (0.85 * -0.2 = -0.17, ABOVE the score it came from) and would reject even the best
-      // candidate if a future absolute floor ever admitted negatives.
+      // Skipped when the top score is not positive, and that guard is LOAD-BEARING today rather
+      // than written for a future floor. `topScore` is not derived from `pool`: it is updated one
+      // line BEFORE the absolute-floor `continue`, so it tracks every finite scored candidate while
+      // `pool` holds only those that cleared the floor. A turn whose scores are all negative
+      // therefore gets past the `scoredCount === 0` guard, leaves `pool` empty, and arrives here
+      // with `topScore` below zero. That matters because a multiplicative floor inverts across zero
+      // (0.85 * -0.2 = -0.17, ABOVE the score it came from), rejecting even the best candidate.
       //
       // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
       // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the

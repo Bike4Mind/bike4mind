@@ -8,7 +8,7 @@ import { Logger } from '@bike4mind/observability';
  * superset - so every real construction site is unaffected; this only stops the FIELD from
  * claiming a guarantee the class deliberately does not rely on.
  */
-interface PartialAdminSettingsLogger {
+export interface PartialAdminSettingsLogger {
   debug?: Logger['debug'];
   info?: Logger['info'];
   warn?: Logger['warn'];
@@ -36,12 +36,14 @@ export class AdminSettingsCache {
   /**
    * Every call through this field is optional-chained (`this.logger.debug?.()`).
    *
-   * A cache must not throw because it could not log, and this one is uniquely exposed to that: it is
-   * a process-wide singleton created with whichever logger happens to reach `getSettingsCache`
-   * first, and its callers (`getSettingsByNames`, the scoped-settings resolver) all wrap reads in a
-   * never-throw guard that degrades to coded defaults. So a logger missing a quieter level turned a
-   * successful settings read into a silent fallback - a wrong VALUE, reported nowhere, rather than
-   * an error anyone could see.
+   * A cache must not throw because it could not log, and this one is exposed to that: it is a
+   * process-wide singleton created with whichever logger happens to reach `getSettingsCache` first.
+   * What each caller then does with a throw varies, and it is mostly NOT a degrade-to-defaults
+   * guard: `getSettingsByNames` has none at all, the scoped resolver guards one layer out in
+   * `resolveAll`, and `resolveSpendLevers` deliberately rethrows to halt spend. So a logger missing
+   * a quieter level could surface as a silent wrong VALUE, as an unhandled rejection, or as a hard
+   * fail-closed, depending on who asked. `ScopedSettingsCache` is built by the same factory pair
+   * and still has one unguarded call - the same hazard, not a solved one.
    */
   private logger: PartialAdminSettingsLogger;
   private cleanupInterval: NodeJS.Timeout | null = null;
@@ -52,7 +54,10 @@ export class AdminSettingsCache {
   private static readonly DEVELOPMENT_TTL = 30 * 1000; // 30 seconds in development
   private static readonly CLEANUP_INTERVAL = 60 * 1000; // Clean up every minute
 
-  constructor(logger: Logger) {
+  // Widened to match the field: a full `Logger` is a superset, so every existing construction site
+  // is unaffected. Note `getSettingsCache`/`getSettingsByNames` above still narrow to `Logger`, so
+  // a partial logger cannot yet reach here through them.
+  constructor(logger: PartialAdminSettingsLogger) {
     this.logger = logger;
     this.startCleanupTimer();
   }

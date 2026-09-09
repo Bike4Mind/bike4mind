@@ -1,16 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { Logger } from '@bike4mind/observability';
-import { AdminSettingsCache } from './AdminSettingsCache';
+import { AdminSettingsCache, type PartialAdminSettingsLogger } from './AdminSettingsCache';
 
 describe('AdminSettingsCache tolerates a partial logger', () => {
   /**
    * The shape callers actually pass. `Logger` declares debug/info/warn/error, but this cache is a
    * process-wide singleton created with whichever logger reaches `getSettingsCache` first - in
    * practice often a hand-rolled test double or an adapter carrying only the levels its author
-   * needed. Every caller wraps its settings read in a never-throw guard that degrades to coded
-   * defaults, so a cache that threw while logging turned a good read into a silent wrong value.
+   * needed. What callers do with a throw varies - `getSettingsByNames` has no guard at all, the
+   * scoped resolver guards one layer out, `resolveSpendLevers` rethrows to halt spend - so a cache
+   * that threw while logging could surface as a silent wrong value or as an unhandled rejection.
    */
-  const partialLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+  // Typed as the widened parameter, not cast through `Logger`: the cast would pass whether or not
+  // the constructor actually accepts a partial logger, so it would assert nothing about the widening.
+  const partialLogger: PartialAdminSettingsLogger = { warn: vi.fn(), error: vi.fn() };
 
   it('invalidateAll still clears the cache instead of throwing on a missing log level', () => {
     const cache = new AdminSettingsCache(partialLogger);

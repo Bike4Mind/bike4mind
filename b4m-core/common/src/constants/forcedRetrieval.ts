@@ -44,9 +44,11 @@ export const FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT = 75;
  * A relative floor moves with the turn instead of assuming where the band is, so it keeps working
  * across corpora and survives a change of embedding model (which shifts the band wholesale).
  *
- * The 85 default is deliberately BEHAVIOR-PRESERVING, not tuned: the weakest-accepted-to-top ratio
- * observed on that lake was 0.8025/0.9140 ~= 0.878, so 85% admits everything the absolute floor
- * admitted and this default changes no production behavior on its own. It is a mechanism plus a
+ * The 85 default is BEHAVIOR-PRESERVING ON THE MEASURED BAND, not tuned: the weakest-accepted-to-top
+ * ratio observed on that lake was 0.8025/0.9140 ~= 0.878, so 85% admits everything the absolute floor
+ * admitted there. Read that as a claim about THAT band rather than a general no-op - the relative
+ * floor binds harder than a 75 absolute floor once a turn's top score exceeds ~0.882, so a corpus
+ * with a wider band can see chunks newly rejected at this default. It is a mechanism plus a
  * safe starting point, and it is meant to be tuned UPWARD once the band is known - which should
  * wait for the embedding migration (#471) and the ANN-cutover decision (#2526), both of which move
  * the distribution any value chosen today would have been fitted to.

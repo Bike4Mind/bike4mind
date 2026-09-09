@@ -3561,6 +3561,7 @@ export const settingsMap = {
     defaultValue: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
     min: 0,
     max: 100,
+    int: true,
     description:
       'How close to the best-scoring passage of the SAME turn a chunk must score to be injected on ' +
       'a Data-Lake-mode turn, as a percent of that top score. This is the floor that ranks; the ' +
@@ -3585,8 +3586,13 @@ export const settingsMap = {
     key: 'forcedRetrievalMinSimilarityPct',
     name: 'Forced Retrieval Absolute Floor (%)',
     defaultValue: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-    min: 0,
+    // min 1, not 0: clearing a number field in the admin UI coerces to 0, and 0 here makes the
+    // "no chunk cleared the similarity floor" abstention unreachable, so a wholly off-topic corpus
+    // would inject its best band instead of abstaining. 1% still effectively disables the gate for
+    // anyone who means to.
+    min: 1,
     max: 100,
+    int: true,
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
