@@ -47,7 +47,7 @@ const h = vi.hoisted(() => ({
   recordOperationalUsage: vi.fn(async () => undefined),
   spendNotifier: vi.fn(async () => undefined),
   notifySlackIndexingComplete: vi.fn(async () => undefined),
-  claimSlackIndexNotification: vi.fn(async () => true),
+  claimIndexNotification: vi.fn(async () => true),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -78,7 +78,7 @@ vi.mock('@bike4mind/database', () => ({
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
     advanceVectorizeProgress: h.advanceVectorizeProgress,
-    claimSlackIndexNotification: h.claimSlackIndexNotification,
+    claimIndexNotification: h.claimIndexNotification,
   },
   organizationRepository: { findById: h.organizationFindById },
   usageEventRepository: {},
@@ -339,6 +339,21 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
   });
+
+  // #2027 review: the "no Slack message on a failed vectorize" choice is correctly in the code
+  // (the notify call sits only in the isFileVectorized success branch), but nothing pinned it with
+  // a test - a future refactor could move the call above the success gate without any test
+  // noticing. A Slack-origin fixture, not just any failure, is the point: this must fail because
+  // the branch was never reached, not because sourceType happened to skip it anyway.
+  it('never claims or sends the Slack notification when vectorization fails, even for a Slack-origin file', async () => {
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile('batch-1'), sourceType: FabFileSourceType.SLACK });
+    h.getVector.mockRejectedValue(new Error('rate limit exceeded'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.claimIndexNotification).not.toHaveBeenCalled();
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
+  });
 });
 
 describe('fabFileVectorize handler - spend gate', () => {
@@ -582,7 +597,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
-    h.claimSlackIndexNotification.mockResolvedValue(true);
+    h.claimIndexNotification.mockResolvedValue(true);
     // `vi.clearAllMocks()` above resets call history but NOT a mockRejectedValue/mockResolvedValue
     // set by an earlier test - reset explicitly so one test's rejection can't leak into the next.
     h.notifySlackIndexingComplete.mockResolvedValue(undefined);
@@ -604,7 +619,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
-    expect(h.claimSlackIndexNotification).toHaveBeenCalledWith('ff1');
+    expect(h.claimIndexNotification).toHaveBeenCalledWith('ff1', 'slack');
     expect(h.notifySlackIndexingComplete).toHaveBeenCalledWith(unvectorizedFile('batch-1'), mockLogger);
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
@@ -614,11 +629,11 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     // Proves "at most once": a redelivered or concurrent completion message for the same file
     // must not post the reply a second time, even though the rest of completion still proceeds.
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
-    h.claimSlackIndexNotification.mockResolvedValue(false);
+    h.claimIndexNotification.mockResolvedValue(false);
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
-    expect(h.claimSlackIndexNotification).toHaveBeenCalledWith('ff1');
+    expect(h.claimIndexNotification).toHaveBeenCalledWith('ff1', 'slack');
     expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
@@ -626,7 +641,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
 
   it('#2027: a rejecting claim does not prevent the batch claim/increment from completing', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
-    h.claimSlackIndexNotification.mockRejectedValue(new Error('db unreachable'));
+    h.claimIndexNotification.mockRejectedValue(new Error('db unreachable'));
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
@@ -646,7 +661,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
-    expect(h.claimSlackIndexNotification).not.toHaveBeenCalled();
+    expect(h.claimIndexNotification).not.toHaveBeenCalled();
     expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
