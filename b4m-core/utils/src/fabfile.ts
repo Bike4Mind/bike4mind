@@ -169,7 +169,11 @@ export const getFileContent = async (
  * Content hash for per-lake FabFile dedup (`findByContentHashesInDataLake`). Shared by every
  * ingest path that needs to hash bytes before creating a FabFile - the Slack attachment path
  * (raw downloaded buffer) and the URL/link path (`fetchAndParseURL`'s extracted `textContent`) -
- * so the two cannot compute the same thing two different ways.
+ * so at least the HASHING ITSELF cannot drift between two copies of the same algorithm.
+ *
+ * This does NOT make `contentHash` one hash domain: the two callers feed it different inputs
+ * (raw bytes vs. extracted text), so the same document added once as an attachment and once as a
+ * link produces two different hashes and is not caught as a duplicate by this field.
  */
 export const computeContentHash = (content: string | Buffer): string =>
   createHash('sha256').update(content).digest('hex');
