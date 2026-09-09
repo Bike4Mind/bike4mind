@@ -843,6 +843,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async claimSlackIndexNotification(fabFileId: string): Promise<boolean> {
+    const res = await this.fabFileModel.updateOne(
+      { _id: fabFileId, slackIndexNotifiedAt: { $exists: false } },
+      { $set: { slackIndexNotifiedAt: new Date() } }
+    );
+    return res.modifiedCount === 1;
+  }
+
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
     if (!tag) return 0;
     // Anchored and escaped for the same reason as removeTagByUserId, which queries this same
@@ -2714,6 +2722,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
+    // Claim guard for the "finished indexing" Slack reply (#2027) - see IFabFile's field doc.
+    slackIndexNotifiedAt: { type: Date },
 
     ...ShareableDocumentSchema,
   },
