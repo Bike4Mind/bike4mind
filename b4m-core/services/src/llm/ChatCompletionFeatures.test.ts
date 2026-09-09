@@ -10,7 +10,11 @@ import {
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
-import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
+import {
+  UNLIMITED_HISTORY_COUNT,
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  LAKE_RECALL_K_DEFAULT,
+} from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -2526,6 +2530,132 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
     // returns [] (no entitled tags to resolve), so asserting the empty result alone would pass
     // whether or not the skip fired - which is exactly the vacuity this assertion replaces.
     expect(ctx.logger.log).toHaveBeenCalledWith(expect.stringContaining('[lakeMemory] skipped'));
+  });
+});
+
+/**
+ * The belief budget is the `lakeMemoryRecallK` admin setting, not the 8 this path used to hardcode
+ * (#2496). Resolution mirrors `resolveForcedRetrievalCharBudget` below, so these pin the same three
+ * properties: a configured value reaches the recall, anything unusable falls back LOUDLY, and a
+ * settings outage costs the turn its budget but never its card.
+ */
+describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
+  const LAKE_DOC = {
+    id: 'lake-acme',
+    slug: 'acme',
+    name: 'Acme',
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    createdByUserId: 'creator-1',
+  };
+
+  const makeCtx = (opts: { getSettingsValue?: () => unknown; lakes?: Array<Record<string, unknown>> } = {}) => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'viewer-1', tags: [], groups: [] },
+    personalCorpusOnly: false,
+    db: {
+      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(opts.lakes ?? [LAKE_DOC]),
+      },
+      adminSettings: {
+        getSettingsValue: vi.fn(async (key: string) =>
+          key === 'lakeMemoryRecallK' ? (opts.getSettingsValue ?? (() => undefined))() : undefined
+        ),
+      },
+    },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    recallLakeMemory: vi.fn().mockResolvedValue([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]),
+  });
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
+    const feature = new LakeMemoryFeature(ctx as unknown as ConstructorParameters<typeof LakeMemoryFeature>[0], []);
+    const messages = await feature.getContextMessages(
+      quest,
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'when does acme ship'
+    );
+    return { messages, k: ctx.recallLakeMemory.mock.calls[0]?.[0]?.k as number | undefined };
+  };
+
+  const warnedAbout = (ctx: ReturnType<typeof makeCtx>) =>
+    (ctx.logger.warn as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([first]) =>
+      String(first).includes('lakeMemoryRecallK')
+    );
+
+  it('forwards a configured value to the injected recall', async () => {
+    const ctx = makeCtx({ getSettingsValue: () => 40 });
+    const { k } = await run(ctx);
+    expect(k).toBe(40);
+    expect(warnedAbout(ctx)).toBe(false);
+  });
+
+  it('stamps the budget alongside beliefCount so a saturated turn is readable', async () => {
+    // beliefCount on its own cannot say whether the cap bound the turn. Recording the budget that
+    // was in force is what makes `beliefCount === beliefBudget` mean "saturated" on an eval row,
+    // rather than requiring someone to know what the setting was when the turn ran.
+    const ctx = makeCtx({ getSettingsValue: () => 40 });
+    const quest = makeQuest();
+    await run(ctx, quest);
+    expect(quest.promptMeta?.context?.lakeMemory).toEqual({
+      beliefCount: 1,
+      beliefBudget: 40,
+      dataLakeTags: ['datalake:acme'],
+    });
+  });
+
+  it('an unset setting falls back to LAKE_RECALL_K_DEFAULT, silently', async () => {
+    // Unset is the normal state of a fresh deployment, so it must not warn - only a set-but-
+    // unusable value or a failed read does.
+    const ctx = makeCtx({ getSettingsValue: () => undefined });
+    const { k } = await run(ctx);
+    expect(k).toBe(LAKE_RECALL_K_DEFAULT);
+    expect(warnedAbout(ctx)).toBe(false);
+  });
+
+  /**
+   * Defense-in-depth, not a production-reachable path: the real `getSettingsValue` runs the
+   * setting's own schema via `safeParse` first, so an unusable stored shape cannot reach
+   * `positiveIntOr`. This injects the raw shape directly to pin `positiveIntOr`'s OWN contract,
+   * which is what protects the call if that upstream sanitization is ever bypassed.
+   */
+  it('an unusable raw value falls back to the default and warns', async () => {
+    const ctx = makeCtx({ getSettingsValue: () => 'not-a-number' });
+    const { k } = await run(ctx);
+    expect(k).toBe(LAKE_RECALL_K_DEFAULT);
+    expect(warnedAbout(ctx)).toBe(true);
+  });
+
+  it('a settings-read failure costs the turn its budget but not its card', async () => {
+    const ctx = makeCtx({
+      getSettingsValue: () => {
+        throw new Error('settings store unavailable');
+      },
+    });
+    const { messages, k } = await run(ctx);
+    expect(k).toBe(LAKE_RECALL_K_DEFAULT);
+    expect(warnedAbout(ctx)).toBe(true);
+    // The whole point of the inner catch: a settings outage must not route into
+    // getContextMessages' outer catch, which would drop the hot card entirely.
+    expect(messages).toHaveLength(1);
+  });
+
+  it('reads the setting only once, and only after the no-lakes exit', async () => {
+    const grounded = makeCtx({ getSettingsValue: () => 40 });
+    await run(grounded);
+    const reads = (key: string, ctx: ReturnType<typeof makeCtx>) =>
+      (ctx.db.adminSettings.getSettingsValue as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([k]) => k === key
+      );
+    expect(reads('lakeMemoryRecallK', grounded)).toHaveLength(1);
+
+    // A turn with nothing in scope returns before the recall, so it must not spend a settings read
+    // on a budget it will never use.
+    const noLakes = makeCtx({ getSettingsValue: () => 40, lakes: [] });
+    await run(noLakes);
+    expect(reads('lakeMemoryRecallK', noLakes)).toHaveLength(0);
+    expect(noLakes.recallLakeMemory).not.toHaveBeenCalled();
   });
 });
 

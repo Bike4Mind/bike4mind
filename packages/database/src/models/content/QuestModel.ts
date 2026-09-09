@@ -45,6 +45,7 @@ const MessageTruncationSchema = subSchema({
 // `beliefCount` is required). Absent-or-fully-present, matching how the feature writes it.
 const LakeMemorySchema = subSchema({
   beliefCount: { type: Number, required: false },
+  beliefBudget: { type: Number, required: false },
   dataLakeTags: [{ type: String, required: false }],
 });
 

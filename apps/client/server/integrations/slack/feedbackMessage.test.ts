@@ -19,6 +19,23 @@ describe('buildPromptMetaSummary', () => {
     expect(summary).toContain('Lake beliefs: 3 (support-docs)');
   });
 
+  it('shows the belief budget alongside the count when the turn recorded one', () => {
+    // A report reading "Lake beliefs: 24" is the saturated case worth acting on; "3" out of the
+    // same 24 is not. Without the budget both render identically.
+    const summary = buildPromptMetaSummary({
+      context: { lakeMemory: { beliefCount: 24, beliefBudget: 24, dataLakeTags: ['support-docs'] } },
+    });
+    expect(summary).toContain('Lake beliefs: 24/24 (support-docs)');
+  });
+
+  it('falls back to the bare count for a turn recorded before the budget was tracked', () => {
+    const summary = buildPromptMetaSummary({
+      context: { lakeMemory: { beliefCount: 3, dataLakeTags: ['support-docs'] } },
+    });
+    expect(summary).toContain('Lake beliefs: 3 (support-docs)');
+    expect(summary).not.toContain('Lake beliefs: 3/');
+  });
+
   it('renders only the signals actually present', () => {
     const summary = buildPromptMetaSummary({ model: { name: 'claude-sonnet-5' } });
     expect(summary).toBe('Model: claude-sonnet-5');

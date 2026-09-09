@@ -43,6 +43,7 @@ export * from './constants/lakeAccessAudit';
 export * from './constants/feedbackRetention';
 export * from './constants/lakeConfigAudit';
 export * from './constants/forcedRetrieval';
+export * from './constants/lakeMemory';
 export * from './constants/knowledgeBaseSearch';
 export * from './constants/publish';
 export * from './constants/artifactElision';

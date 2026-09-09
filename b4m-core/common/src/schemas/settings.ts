@@ -19,6 +19,7 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
@@ -334,6 +335,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
   'forcedRetrievalCharBudget',
+  'lakeMemoryRecallK',
   'kbSearchDefaultResults',
   'kbSearchResultTokenBudget',
   'kbSearchMinRelevancePct',
@@ -856,8 +858,13 @@ export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT = 1;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT = 5;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX = 100;
 
-function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
+function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number; int?: boolean } & BaseSetting) {
   let numberSchema = z.coerce.number();
+  // Opt-in, not the factory default: several settings are genuine fractions (see
+  // ContextVerbatimWindowFraction), so integrality is a property of the setting rather than of
+  // "number setting". Where it IS set, it rejects at the write boundary instead of leaving a
+  // fractional value to be floored later by whichever reader happens to floor it.
+  if (config.int) numberSchema = numberSchema.int();
   if (config.min !== undefined) numberSchema = numberSchema.min(config.min);
   if (config.max !== undefined) numberSchema = numberSchema.max(config.max);
   return {
@@ -1471,6 +1478,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'kbSearchDefaultResults', order: 5 },
       { key: 'kbSearchResultTokenBudget', order: 6 },
       { key: 'kbSearchMinRelevancePct', order: 7 },
+      { key: 'lakeMemoryRecallK', order: 8 },
     ],
   },
   DATA_LAKE_COST: {
@@ -3451,6 +3459,29 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 7,
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  lakeMemoryRecallK: makeNumberSetting({
+    key: 'lakeMemoryRecallK',
+    name: 'Lake Memory Belief Budget',
+    defaultValue: LAKE_RECALL_K_DEFAULT,
+    min: 1,
+    max: LAKE_RECALL_K_MAX,
+    // A belief count, so 1.5 is not a lower setting - it is a typo. Without this the write path
+    // accepts it and `positiveIntOr` floors it silently at read time, which reports as 1.
+    int: true,
+    description:
+      'Most beliefs the lake memory hot-card injects on a Data-Lake-mode turn, shared across every ' +
+      'lake in scope. Recall still applies its cosine floor and the source-reachability gate first, ' +
+      'so raising this does not admit low-quality beliefs - it raises the ceiling on how many ' +
+      'QUALIFYING beliefs can actually be used, which was pinned at 8 (inherited from personal-' +
+      'memento recall) on no evidence beyond that inheritance. The sibling lever on the same turn is ' +
+      'Forced Retrieval Char Budget, which governs raw chunk text rather than extracted beliefs. ' +
+      'Platform-only for now, like that sibling: this read does not go through the scoped-settings ' +
+      'resolver, so a settableAt block here would be inert metadata at best and could arm the ' +
+      "resolver's fail-loud owner check at worst.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 8,
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',
