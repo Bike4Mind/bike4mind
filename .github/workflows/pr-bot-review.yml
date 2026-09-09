@@ -313,8 +313,11 @@ jobs:
             --allowedTools "Read,Grep,Glob,Agent,Task,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_reviews,mcp__github__get_pull_request_review_comments,mcp__github__get_issue,mcp__github__get_issue_comments,mcp__github__get_file_contents,mcp__github__list_commits,mcp__github__get_commit,mcp__github__create_pending_pull_request_review,mcp__github__add_comment_to_pending_review,mcp__github__submit_pending_pull_request_review,mcp__github__delete_pending_pull_request_review,mcp__github__create_and_submit_pull_request_review"
             # Deny beats allow, so these hold even if the list above is widened
             # later. Bash and the write tools are what "no general shell" means in
-            # practice; the Read specs keep the agent inside the working tree it is
-            # reviewing, out of the checkout's git metadata and out of process state.
+            # practice. The three Read specs fence the two places the GitHub App
+            # token is reachable: claude-code-action rewrites origin to
+            # https://x-access-token:<token>@... in the checkout's .git/config, and
+            # the token also lands in the --mcp-config argv, i.e. /proc/<pid>/cmdline.
+            # Reads elsewhere on the runner are NOT fenced.
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
