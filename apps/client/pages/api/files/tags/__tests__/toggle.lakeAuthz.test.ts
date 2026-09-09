@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   listByLake: vi.fn(),
   listActiveByLakes: vi.fn(),
-  findAllAccessibleByIds: vi.fn(),
+  findAllUpdateAccessByIds: vi.fn(),
   findById: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
@@ -45,7 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   dataLakeAccessGrantRepository: { listByLake: h.listByLake, listActiveByLakes: h.listActiveByLakes },
   fabFileRepository: {
-    shareable: { findAllAccessibleByIds: h.findAllAccessibleByIds },
+    shareable: { findAllUpdateAccessByIds: h.findAllUpdateAccessByIds },
     findById: h.findById,
     pushTagsByFabFileId: h.pushTagsByFabFileId,
     pullTagsByFabFileId: h.pullTagsByFabFileId,
@@ -104,7 +104,7 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
     h.listByLake.mockResolvedValue([]);
     h.listActiveByLakes.mockResolvedValue([]);
     const file = { id: 'f1', userId: 'u2', tags: [] };
-    h.findAllAccessibleByIds.mockResolvedValue([{ ...file, toJSON: () => file }]);
+    h.findAllUpdateAccessByIds.mockResolvedValue([{ ...file, toJSON: () => file }]);
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 0, totalChunkedChars: 0 });
   });
 
@@ -129,7 +129,7 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
   it('admits an org admin removing a file from the lake', async () => {
     h.administeredOrgIds = ['org-1'];
     const file = { id: 'f1', userId: 'u2', tags: [{ name: META, strength: 1 }] };
-    h.findAllAccessibleByIds.mockResolvedValue([{ ...file, toJSON: () => file }]);
+    h.findAllUpdateAccessByIds.mockResolvedValue([{ ...file, toJSON: () => file }]);
     // removeFileFromLake re-reads the file itself to compute which tags to pull.
     h.findById.mockResolvedValue(file);
     const { res } = makeRes();

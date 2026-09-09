@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  findAccessibleById: vi.fn(),
+  findUpdateAccessById: vi.fn(),
   update: vi.fn(),
   findByDatalakeTag: vi.fn(),
   // `findById` backs reconcileLakeTags' prefix-arm owner resolution; the mutable `store` in
@@ -46,7 +46,7 @@ vi.mock('@server/utils/storage', () => ({
 
 // Only `dataLakeRepository.findByDatalakeTag` and the fabFile persistence collaborators are
 // stubbed. `fabFileRepository` here is a bare object (not the real repository) since the route
-// only reaches `.shareable.findAccessibleById` and `.update` on the PUT path under test.
+// only reaches `.shareable.findUpdateAccessById` and `.update` on the PUT path under test.
 // Spread the real module first so a transitively-loaded model (Subscription, via the route's
 // dataLakes -> entitlements chain) still finds `mongoose`/`executeFacetCompatible`/BaseRepository
 // at import time - a full-replace mock omits those and fails the suite to load depending on which
@@ -76,7 +76,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   },
   fabFileChunkRepository: {},
   fabFileRepository: {
-    shareable: { findAccessibleById: h.findAccessibleById },
+    shareable: { findUpdateAccessById: h.findUpdateAccessById },
     update: h.update,
     findById: h.findById,
     pullTagsByFabFileId: h.pullTagsByFabFileId,
@@ -194,7 +194,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
   });
 
   it('stamps the lake prefix when the update keeps the meta-tag with no tag under that prefix', async () => {
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: [{ name: META, strength: 1 }] }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [{ name: META, strength: 1 }] }));
     makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [{ name: META, strength: 1 }] });
     const { res, json } = makeRes();
 
@@ -210,7 +210,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
   });
 
   it('preserves lake membership when a whole-array write drops the meta-tag', async () => {
-    h.findAccessibleById.mockResolvedValue(
+    h.findUpdateAccessById.mockResolvedValue(
       fabFile({
         tags: [
           { name: META, strength: 1 },
@@ -246,7 +246,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
   // the activation branch that emits the row.
   it('records the auto-activate when a joining file publishes a draft lake', async () => {
     h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: [] }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [] }));
     makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [] });
     // A lake with a member is by definition no longer a draft - fileCount > 0 is what makes the
     // flip eligible, which is why the suite default of 0 leaves every other case unaffected.
@@ -272,7 +272,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
     const previousTags = [{ name: 'notes', strength: 1 }];
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: previousTags }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
     const { res } = makeRes();
 
     await run({ fileName: 'renamed.txt' }, res);
@@ -288,7 +288,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
 
   it('stamps nothing for a body carrying only primaryTag and no tags', async () => {
     const previousTags = [{ name: 'notes', strength: 1 }];
-    h.findAccessibleById.mockResolvedValue(fabFile({ tags: previousTags }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
     const { res } = makeRes();
 
     await run({ primaryTag: META }, res);
@@ -330,7 +330,7 @@ describe('PUT /api/files/[id] - lake write authorization', () => {
     h.findByDatalakeTag.mockResolvedValue(ORG_LAKE);
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.find.mockResolvedValue([]);
-    h.findAccessibleById.mockResolvedValue(fabFile({ userId: 'u2' }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ userId: 'u2' }));
     makeStatefulFabFile({ id: FILE_ID, userId: 'u2', tags: [] });
   });
 
