@@ -1,4 +1,12 @@
-import { QuestMasterPlan, Quest, FabFile, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import {
+  QuestMasterPlan,
+  Quest,
+  FabFile,
+  fabFileRepository,
+  userRepository,
+  apiKeyRepository,
+  adminSettingsRepository,
+} from '@bike4mind/database';
 import { secureParameters, getSettingsByNames } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -268,6 +276,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw new Error('Access denied');
     }
 
+    // The subject whose entitlements authorize the plan's embedded images: the plan OWNER, not
+    // necessarily the caller. A collaborator reaching the plan via `sharedWith` exports it as the
+    // owner assembled it, so owner-uploaded figures - which are not individually shared with the
+    // collaborator - must be authorized against the owner or every figure degrades to a breadcrumb.
+    // (Owner exporting their own plan is unchanged: owner === caller.) Loaded once for the per-image
+    // check below (its `groups` feed the share predicate); a missing owner doc fails closed.
+    const exportUser = await userRepository.findById(plan.userId || userId);
+
     // Idempotency check: skip if ZIP already exists (must be after plan load to get slug)
     const slug = slugify(plan.goal);
     const finalZipKey = `exports/quest/${exportJobId}/questmaster-${slug}-${dateStr}.zip`;
@@ -428,6 +444,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           }
           if (fabFile && !isImageServeable(fabFile)) {
             throw new Error('Image is pending moderation review and is not available');
+          }
+
+          // Object-level guard: a tracked fab-file key embedded in the plan markdown must be
+          // accessible to the export subject (the plan owner, resolved above), or its bytes would
+          // leak (IDOR). Untracked keys (external/generated-image URLs) have no FabFile owner record
+          // and fall through unaffected - the same limitation the generated-image copy/serve paths
+          // carry. Lake-tag access isn't resolved here (a queue handler has no entitlement context),
+          // so a curated-lake image degrades to the breadcrumb below rather than leaking. Fails
+          // closed: a tracked file with no loadable export user is treated as inaccessible.
+          if (fabFile) {
+            const accessible = exportUser
+              ? await fabFileRepository.shareable.findAccessibleById(exportUser, fabFile.id)
+              : null;
+            if (!accessible) throw new Error('Image is not available');
           }
 
           const buffer = await storage.download(key);

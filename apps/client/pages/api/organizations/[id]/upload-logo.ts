@@ -1,4 +1,4 @@
-import { AppFileReservedTags, FileGeneratePresignedUrlRequestInput } from '@bike4mind/common';
+import { AppFileReservedTags, FileGeneratePresignedUrlRequestInput, isAllowedImageMimeType } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AppFile } from '@bike4mind/database/content';
 import { Organization } from '@bike4mind/database/infra';
@@ -33,6 +33,8 @@ const handler = baseApi().post(
 
     const ext = mime.extension(data.mimeType);
     if (!ext) throw new BadRequestError(`Invalid mime type ${data.mimeType}`);
+    if (!isAllowedImageMimeType(data.mimeType))
+      throw new BadRequestError(`Content type ${data.mimeType} is not allowed for logos`);
 
     const storage = new S3Storage(Resource.appFilesBucket.name);
 
@@ -60,8 +62,13 @@ const handler = baseApi().post(
         Organization.updateOne({ _id: orgId }, { logoFileId: file.id }).session(session),
       ]);
 
-      // Note: ACL not needed - bucket policy grants public read for organizations/* prefix
-      const presignedUrl = await storage.getSignedUrl(fileKey, 'put', { expiresIn: 600 });
+      // Note: ACL not needed - bucket policy grants public read for organizations/* prefix.
+      // Bind ContentType so the caller cannot PUT bytes under a different content type than
+      // the image type validated above (the browser PUT sends a matching Content-Type header).
+      const presignedUrl = await storage.getSignedUrl(fileKey, 'put', {
+        expiresIn: 600,
+        ContentType: data.mimeType,
+      });
 
       // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
       return { url: resolveBrowserAppFileUploadUrl(file.id, presignedUrl), fileId: file.id, fileKey };

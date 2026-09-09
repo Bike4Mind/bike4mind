@@ -41,3 +41,16 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
   if (lake.isPublic) return 'Public';
   return lake.organizationId ? 'Org' : 'Private';
 }
+
+/**
+ * Whether to offer the Drive connect control for a lake.
+ *
+ * Connecting Drive is an org-lake, owner/manager capability server-side: the status route 404s on
+ * a personal lake and 403s for a non-manager, so offering it in either case is a control that can
+ * only fail. Both render sites (SelectedLakeHeader and the wizard's SourceSelectionStep) derive
+ * the gate here - they drifted once when each held its own copy of the expression.
+ *
+ * Absent fields fail closed: an unknown scope or manage status renders no control.
+ */
+export const canConnectLakeDrive = (lake: { organizationId?: string | null; canManage?: boolean }): boolean =>
+  !!lake.organizationId && !!lake.canManage;

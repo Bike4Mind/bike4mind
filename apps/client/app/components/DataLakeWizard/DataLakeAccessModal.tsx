@@ -452,6 +452,15 @@ function GrantAccessForm({ view, onClose }: { view: LakeAccessView; onClose: () 
                   <Option value="curator">Curator - can also manage its files and settings</Option>
                 )}
               </Select>
+              {/* Consent disclosure, not a nicety: a curator grant is also injection trust
+                  (getAccessibleDataLakePrompts), so this lake's system prompt can enter their turns.
+                  Keep in step with isTrustedForInjection - see resolveLakeReadAccess.ts. */}
+              {role === 'curator' && (
+                <FormHelperText data-testid="datalake-grant-curator-help">
+                  A curator is also trusted with this lake&apos;s system prompt: it can enter their chats when they
+                  retrieve from this lake.
+                </FormHelperText>
+              )}
             </FormControl>
 
             <FormControl>

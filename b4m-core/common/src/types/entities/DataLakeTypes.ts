@@ -176,6 +176,23 @@ export interface TransitionalDataLakeSummary {
 }
 
 /**
+ * The statuses that may take NEW files: a draft (its first batch) or an active lake. Every ingest
+ * door shares this one list - the web batch-create and presign doors, the Slack door, the Drive
+ * connect door, the Drive ingest queue guard, and proposal approval - so admitting a future status
+ * is a decision made here, once, rather than at six call sites that each open-coded it.
+ */
+export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
+
+type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
+
+/**
+ * Narrows, so a caller that has proven a lake ingestable keeps that in the type. The cast is on the
+ * ARRAY, not the value: casting the value would erase the guard this exists to provide.
+ */
+export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngestableStatus =>
+  (LAKE_INGESTABLE_STATUSES as readonly (DataLakeStatus | undefined)[]).includes(status);
+
+/**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
  * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
  * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
@@ -248,9 +265,13 @@ export interface IDataLake {
    * this lake, on both channels - forced retrieval (KnowledgeRetrievalFeature) and the
    * model-driven knowledge tools (prependRetrievedLakePrompts) - resolved by
    * getAccessibleDataLakePrompts and rendered with the renderDataLakePromptSection defenses.
-   * Injected only for TRUSTED actors (the lake's creator, or a member of the lake's
-   * organization - see isTrustedForInjection); users reached via tag/entitlement grants read
-   * the lake WITHOUT this prompt. The org prompt stays authoritative on conflict. Editable
+   * Injected only for TRUSTED actors: the lake's creator, a member of the lake's organization (the
+   * #1674 governance path - see isTrustedForInjection), the holder of an owner/curator GRANT on it
+   * (#2495), or a manager admitted to a scoped session via `preauthorizedLakeIds`. A user who
+   * reaches the lake only by a tag, an entitlement, or a `reader` grant reads it WITHOUT this
+   * prompt. Note the org arm is membership, not manage rights - so "trusted" is deliberately
+   * curator-or-above for the GRANT arm specifically, not a property of the whole rule. The org
+   * prompt stays authoritative on conflict. Editable
    * only via canManageLake and withheld from non-managers by the server; uncapped, matching
    * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
@@ -536,10 +557,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * USER-principal grant IS the authorization and bypasses the org and requirement constraints;
    * `orgGrantedLakes` is keyed by the GRANTING org and bypasses only the requirement, so an org
    * grant can never reach a lake outside the org that issued it. Empty/absent adds no arm and
-   * cannot widen anything. Not every retrieval caller supplies them: getDataLakePrompts.ts
-   * deliberately omits them, since folding grants into the injection-trust decision is a separate
-   * piece of work (#1673) - an org-less transferred lake is denied by that trust gate regardless,
-   * so wiring the arm there today would be dead code.
+   * cannot widen anything.
+   *
+   * Callers do NOT all resolve the same grant set. Retrieval and browse pass the full reach from
+   * `grantedLakeReachFor`; getDataLakePrompts.ts (the injection path) supplies only
+   * `grantedLakeIds` since #2495, resolved with `includeReaders = false` and NO membership org ids
+   * - owner/curator USER grants alone, so `orgGrantedLakes` is always empty there. That narrowing
+   * is a permanent security floor, not a cutover lag: a reader's read access must never become
+   * authority to write instructions into another user's system prompt. So a lake present in these
+   * arms on the retrieval side may legitimately be absent from them on the injection side, and the
+   * two must not be assumed to move together.
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],

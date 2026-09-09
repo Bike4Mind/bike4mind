@@ -12,12 +12,24 @@ const GoogleDriveCallbackPage = () => {
   const search = useSearch({ strict: false });
 
   useEffect(() => {
-    const { code } = search as any;
+    const { code, state, error } = search as any;
+
+    // Consent denial (or any missing param) returns here with no code/state; bail
+    // instead of firing a request that could only fail state verification - and,
+    // now that rejection is a server-side security signal, log a cancel as a cancel.
+    if (error || !code || !state) {
+      toast.error(
+        error === 'access_denied' ? 'Google Drive connection cancelled.' : 'Error connecting to Google Drive'
+      );
+      navigate({ to: '/' });
+      return;
+    }
 
     api
-      .get(`/api/google-drive/callback?code=${code}`)
-      .catch(error => {
-        console.error('Error connecting to Google Drive:', error);
+      // Forward `state` so the API callback can verify the browser-binding nonce.
+      .get(`/api/google-drive/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`)
+      .catch(err => {
+        console.error('Error connecting to Google Drive:', err);
         toast.error('Error connecting to Google Drive');
       })
       .finally(() => {

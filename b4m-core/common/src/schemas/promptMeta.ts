@@ -173,6 +173,13 @@ const PromptMetaContextSchema = z.object({
   lakeMemory: z
     .object({
       beliefCount: z.number(),
+      // The `lakeMemoryRecallK` budget in force for the turn (#2496). Without it `beliefCount`
+      // is ambiguous on exactly the question the knob exists to answer: a row reading 8 could be
+      // "the cap bound" or "only 8 beliefs qualified", and telling those apart used to mean
+      // knowing what the setting happened to be when the turn ran. beliefCount === beliefBudget
+      // is now a readable saturation signal. Optional: turns recorded before this field existed
+      // have none, and it must not fail their Zod re-parse.
+      beliefBudget: z.number().optional(),
       dataLakeTags: z.array(z.string()),
     })
     .optional(),
@@ -417,6 +424,24 @@ export const RetrievalSummarySchema = z.object({
    * assuming it empties.
    */
   mode: z.enum(['forced', 'optional']).optional(),
+  /**
+   * Whether the knowledge-base when-to-retrieve guidance section actually shipped in this turn's
+   * tool prompt. Written only on turns that were OFFERED the knowledge tool, so absence means
+   * "not an offered turn" or "recorded before this field landed" - it never means "cleared".
+   *
+   * `false` is the load-bearing value here, not filler. Clearing the KnowledgeBaseRetrievalPrompt
+   * setting is the section's only off switch, so a turn recording `false` is the CONTROL arm of
+   * the A/B this field exists to make readable. Anything merging or folding this must preserve an
+   * explicit `false` rather than collapse it into absent - see mergeRetrievalSummary, which uses
+   * `??` and deliberately not `||` for that reason.
+   *
+   * MUST STAY IN SYNC with TWO gates, not one. ToolBuilder.buildToolPrompt emits the section iff
+   * the tool is offered AND the guidance string is non-empty; filterByPromptMode then drops the
+   * whole `toolPrompt` source, which no promptMode admits, so an offered tool is not sufficient.
+   * The ChatCompletionProcess seed site conjoins all three, and hands the first two to
+   * buildToolPrompt as the same consts, so the flag and the actual emission cannot drift.
+   */
+  knowledgeBaseGuidanceInjected: z.boolean().optional(),
   /**
    * Why the forced arm did not run on a turn that had it enabled. Only ever set with
    * `mode: 'forced'`, and only for the deliberate suppressions in

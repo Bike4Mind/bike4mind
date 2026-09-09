@@ -71,6 +71,9 @@ function mergeInjected(
  *   makes this first-writer-wins under the accumulator convention (`existing` is the earlier
  *   write), not last-writer-wins. Unlike the fields above it is NOT commutative when both sides
  *   carry a different reason.
+ * - knowledgeBaseGuidanceInjected: first-writer-wins pass-through. Only the seed writes it, and
+ *   `??` rather than `||` because an explicit `false` is a real value (the A/B control arm) that
+ *   a boolean OR against an absent incoming side would silently discard.
  * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
@@ -99,6 +102,8 @@ export function mergeRetrievalSummary(
     outcomeSeverity(incoming.outcome) > outcomeSeverity(existing.outcome) ? incoming.outcome : existing.outcome;
   const mode = existing.mode === 'forced' || incoming.mode === 'forced' ? 'forced' : (existing.mode ?? incoming.mode);
   const forcedSkipReason = existing.forcedSkipReason ?? incoming.forcedSkipReason;
+  const knowledgeBaseGuidanceInjected =
+    existing.knowledgeBaseGuidanceInjected ?? incoming.knowledgeBaseGuidanceInjected;
   const injectedLakePromptIds =
     existing.injectedLakePromptIds || incoming.injectedLakePromptIds
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
@@ -116,6 +121,7 @@ export function mergeRetrievalSummary(
     ...(outcome !== undefined ? { outcome } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
+    ...(knowledgeBaseGuidanceInjected !== undefined ? { knowledgeBaseGuidanceInjected } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),

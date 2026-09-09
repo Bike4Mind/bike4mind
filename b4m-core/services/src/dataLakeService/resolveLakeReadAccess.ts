@@ -61,6 +61,19 @@ export interface LakeAccessLogger {
  * row is never persisted in the first place, and that refusal is pinned by its own unit test. The
  * read-time containment above is defense in depth for rows written before it, or by any FUTURE
  * producer - which must apply the same rule.
+ *
+ * SECOND OBLIGATION ON THAT WRITE PATH (#2495): an owner/curator grant is no longer read-only in its
+ * effect. `getAccessibleDataLakePrompts` treats one as injection trust, so granting someone curator
+ * also grants them "my lake's systemPrompt may enter your system prompt on turns you retrieve from
+ * it".
+ *
+ * `manageLakeGrant` is the producer that raises that question directly: unlike `createDataLake` (which
+ * only seeds the creator) and `transferLakeOwnership` (whose `resolveLakeTransferAuthority` refuses a
+ * non-admin transfer of an ORG-LESS lake outright and constrains an org one to the owning org's own
+ * roster), it can name an ARBITRARY user, by email, on any lake the actor manages. That is a consent
+ * question, not just an access one, so the grant UI's curator option says what the role carries
+ * rather than letting it ship as an invisible side effect of a role picker. Keep that disclosure in
+ * step with the trust rule - a role that gains injection trust has to say so at the point of grant.
  */
 export function resolveReadGrant(
   ctx: Pick<AccessContext, 'userId' | 'organizationIds'>,

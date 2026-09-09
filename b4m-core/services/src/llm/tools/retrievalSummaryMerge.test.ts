@@ -225,6 +225,33 @@ describe('mergeRetrievalSummary', () => {
     });
   });
 
+  describe('knowledgeBaseGuidanceInjected', () => {
+    it('preserves an explicit false through a merge that never asserts the field', () => {
+      // The regression this pins: `false || undefined` is undefined, so a boolean-OR merge would
+      // drop the A/B's control arm into the unrecorded bucket and quietly bias the comparison.
+      const merged = mergeRetrievalSummary(base({ knowledgeBaseGuidanceInjected: false }), base());
+      expect(merged?.knowledgeBaseGuidanceInjected).toBe(false);
+    });
+
+    it('preserves a true through a later tool-arm write', () => {
+      const merged = mergeRetrievalSummary(
+        base({ knowledgeBaseGuidanceInjected: true }),
+        base({ attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'] })
+      );
+      expect(merged?.knowledgeBaseGuidanceInjected).toBe(true);
+    });
+
+    it('stays absent when neither side recorded it', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'knowledgeBaseGuidanceInjected' in merged).toBe(false);
+    });
+
+    it('takes the incoming value when the existing side never recorded it', () => {
+      const merged = mergeRetrievalSummary(base(), base({ knowledgeBaseGuidanceInjected: false }));
+      expect(merged?.knowledgeBaseGuidanceInjected).toBe(false);
+    });
+  });
+
   describe('preauthorizedLakeIdsUsed', () => {
     it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
       const merged = mergeRetrievalSummary(

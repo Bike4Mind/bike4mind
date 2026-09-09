@@ -418,6 +418,18 @@ describe('DataLakeAccessModal grant writes', () => {
     expect(screen.queryByRole('option', { name: /curator/i })).not.toBeInTheDocument();
   });
 
+  it('discloses that a curator is trusted with the lake system prompt, and only for curator', async () => {
+    // A curator grant is injection trust as well as access (getAccessibleDataLakePrompts), and the
+    // grantee is an arbitrary person the actor names - so the role picker has to say so.
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    expect(screen.queryByTestId('datalake-grant-curator-help')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('datalake-grant-role-select'));
+    await userEvent.click(screen.getByRole('option', { name: /curator/i }));
+    expect(screen.getByTestId('datalake-grant-curator-help')).toHaveTextContent(/system prompt/i);
+  });
+
   it('composes the chosen expiry date as the END of that day', async () => {
     // A date alone parses as midnight UTC, which the server refuses as already lapsed for a grant
     // dated today.

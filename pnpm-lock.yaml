@@ -39,6 +39,11 @@ overrides:
   deepmerge-ts@<8.0.0: ^8.0.1
   undici@>=7.0.0 <8.0.0: ^7.29.0
 
+patchedDependencies:
+  '@mui/joy@5.0.0-beta.52':
+    hash: 6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4
+    path: patches/@mui__joy@5.0.0-beta.52.patch
+
 importers:
 
   .:
@@ -316,7 +321,7 @@ importers:
         version: 5.18.0(@mui/material@5.18.0(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react@19.2.17)(react@19.2.7)
       '@mui/joy':
         specifier: ^5.0.0-beta.52
-        version: 5.0.0-beta.52(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 5.0.0-beta.52(patch_hash=6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4)(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@mui/material-nextjs':
         specifier: ^7.3.9
         version: 7.3.9(@emotion/cache@11.14.0)(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(next@16.2.11(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(@types/node@24.12.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
@@ -479,6 +484,9 @@ importers:
       idb-keyval:
         specifier: ^6.2.6
         version: 6.2.6
+      isolated-vm:
+        specifier: ^7.0.0
+        version: 7.0.0
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
@@ -897,6 +905,9 @@ importers:
 
   b4m-core/agents:
     dependencies:
+      '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
@@ -15265,7 +15276,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.17
 
-  '@mui/joy@5.0.0-beta.52(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@mui/joy@5.0.0-beta.52(patch_hash=6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4)(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
       '@babel/runtime': 7.29.7
       '@mui/base': 5.0.0-beta.40-1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)

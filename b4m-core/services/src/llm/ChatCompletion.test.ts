@@ -2794,6 +2794,7 @@ describe('ChatCompletionProcess', () => {
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
       promptMode?: 'raw';
+      requestTools?: string[];
       fabPromptMessages?: IMessage[];
       fabFileNotices?: FabFileNotice[];
     }) => {
@@ -2859,7 +2860,7 @@ describe('ChatCompletionProcess', () => {
       const body = {
         ...startQuestParams,
         ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
-        tools: [],
+        tools: opts.requestTools ?? [],
         projectId: undefined,
         organizationId: undefined,
       };
@@ -3049,7 +3050,71 @@ describe('ChatCompletionProcess', () => {
         });
 
         expect(enabledToolsArg).toContain('search_knowledge_base');
-        expect(retrieval).toEqual({ attempted: false, mode: 'optional', surfaces: [], dataLakeTags: [] });
+        expect(retrieval).toEqual({
+          attempted: false,
+          mode: 'optional',
+          surfaces: [],
+          dataLakeTags: [],
+          // false: this suite stubs getSettingsValue to undefined, so no guidance string resolves
+          // and the section does not ship. The populated case is its own test below.
+          knowledgeBaseGuidanceInjected: false,
+        });
+      });
+
+      /**
+       * Both arms of the A/B flag, driven through the real seed. Everything else in this suite runs
+       * with getSettingsValue stubbed to undefined, which only ever produces the `false` arm - so
+       * without these two the field could be hardwired to false and every other test would pass.
+       */
+      describe('records whether the guidance section shipped', () => {
+        const withGuidance = (value: string | undefined) => {
+          mockedGetSettingsValue.mockImplementation(((key: string) =>
+            key === 'KnowledgeBaseRetrievalPrompt' ? value : undefined) as typeof getSettingsValue);
+        };
+        afterEach(() => {
+          mockedGetSettingsValue.mockReset();
+        });
+
+        it('records true when the setting resolves a non-empty guidance string', async () => {
+          withGuidance('# KNOWLEDGE BASE\n\nsearch when it would settle the question.');
+          const { retrieval } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+          });
+          expect(retrieval?.knowledgeBaseGuidanceInjected).toBe(true);
+        });
+
+        it('records false when the setting is cleared - the A/B control arm', async () => {
+          // A cleared admin setting resolves to '' (this section is read 2-arg precisely so that
+          // stays '' instead of reverting to the default). The section drops, and the turn has to
+          // land in the control arm rather than look like a turn that was never instrumented.
+          withGuidance('');
+          const { retrieval } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+          });
+          expect(retrieval?.knowledgeBaseGuidanceInjected).toBe(false);
+          expect(retrieval).toHaveProperty('knowledgeBaseGuidanceInjected');
+        });
+
+        // The gate ToolBuilder does not own. A promptMode caller cannot receive the section at
+        // all - filterByPromptMode admits `toolPrompt` under no mode - but naming the tool itself
+        // still gets it OFFERED, since resolveEnabledTools unions requestTools ahead of
+        // skipAutoOffers. `raw` also leaves forced retrieval off, so the turn lands in the
+        // optional fold: recording `true` here would credit the treatment arm with a turn that
+        // saw no guidance, the one contamination the three-arm split exists to prevent.
+        it('records false under promptMode, where the tool prompt is filtered out entirely', async () => {
+          withGuidance('# KNOWLEDGE BASE\n\nsearch when it would settle the question.');
+          const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+            promptMode: 'raw',
+            requestTools: ['search_knowledge_base'],
+          });
+
+          expect(enabledToolsArg).toContain('search_knowledge_base');
+          expect(retrieval).toMatchObject({ mode: 'optional', knowledgeBaseGuidanceInjected: false });
+        });
       });
 
       it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
@@ -3088,6 +3153,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: ['knowledgeBaseSearch'],
           dataLakeTags: [],
+          // Survives the tool arm's later write, which never sets it - the flag is seeded once
+          // and must reach the fold intact or the A/B loses the turn. False here for the same
+          // stubbed-settings reason as above; what this pins is survival, not the value.
+          knowledgeBaseGuidanceInjected: false,
         });
       });
     });
@@ -3962,6 +4031,7 @@ describe('ChatCompletionProcess', () => {
         // preamble and `- ` bullets would inflate it by a fixed overhead and make it mean
         // something different here than on the surfaces this field is summed with.
         injected: { chunks: 1, chars: 'The X-200 pump has a 5-year warranty.'.length },
+        knowledgeBaseGuidanceInjected: false,
       });
     });
 
@@ -3995,6 +4065,10 @@ describe('ChatCompletionProcess', () => {
         // Recall completed, so the zero is RECORDED rather than unknown - the same distinction
         // 'ok' draws for the outcome, now drawn for the volume.
         injected: { chunks: 0, chars: 0 },
+        // false because this suite stubs getSettingsValue to undefined (see the restore note
+        // above), not because a forced turn cannot ship the section - these turns are forced AND
+        // offered the tool, so in production the resolved default would make this true.
+        knowledgeBaseGuidanceInjected: false,
       });
     });
 
@@ -4013,6 +4087,7 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        knowledgeBaseGuidanceInjected: false,
       });
     });
 
@@ -4035,6 +4110,7 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
+        knowledgeBaseGuidanceInjected: false,
       });
     });
   });

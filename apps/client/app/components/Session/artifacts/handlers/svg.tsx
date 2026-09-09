@@ -5,7 +5,7 @@ import type { SvgArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
-const sanitizeSvg = (raw: string): string =>
+export const sanitizeSvg = (raw: string): string =>
   DOMPurify.sanitize(raw, {
     USE_PROFILES: { svg: true, svgFilters: true },
     ADD_TAGS: [
@@ -40,10 +40,8 @@ const sanitizeSvg = (raw: string): string =>
       'image',
       'title',
       'desc',
-      'animate',
-      'animateTransform',
-      'animateMotion',
-      'set',
+      // SMIL animation tags (animate/animateTransform/animateMotion/set) are deliberately
+      // NOT allowed: they can rewrite an <a href> to javascript: at runtime (stored XSS).
     ],
     ALLOW_DATA_ATTR: false,
     ALLOW_UNKNOWN_PROTOCOLS: false,
