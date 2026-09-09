@@ -41,6 +41,7 @@ import {
 import { toast } from 'sonner';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import { armTrustedQuestLaunch } from '@client/app/utils/questLaunchIntent';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -370,6 +371,9 @@ function QuestsPage() {
     }
     setNewQuestModalOpen(false);
     setNewQuestGoal('');
+    // Mark this as an in-app, same-tab launch so /new may auto-submit the goal.
+    // An external /new?goal=... link (or post-login redirect) never sets this.
+    armTrustedQuestLaunch();
     // Navigate to new notebook with quest params using Tanstack Router's search property.
     // Embedding params in the URL string doesn't work with the useSearch() hook.
     navigate({

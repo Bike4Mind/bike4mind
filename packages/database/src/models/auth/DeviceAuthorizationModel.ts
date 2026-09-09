@@ -1,10 +1,21 @@
 import { IMongoDocument, IBaseRepository } from '@bike4mind/common';
 import mongoose, { Schema, model, Model } from 'mongoose';
-import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import BaseRepository from '@bike4mind/db-core';
 
+/**
+ * Deterministic digest for the device code lookup key. The raw device code is
+ * 64 bytes of CSPRNG output, so a plain SHA-256 is not brute-forceable and needs
+ * no salt - unlike a low-entropy secret. Being deterministic, it can be indexed,
+ * so a poll is an O(1) indexed lookup rather than a per-document bcrypt compare
+ * (an unauthenticated CPU-DoS vector). Store this; never store the raw code.
+ */
+export function digestDeviceCode(deviceCode: string): string {
+  return crypto.createHash('sha256').update(deviceCode).digest('hex');
+}
+
 export interface IDeviceAuthorizationDocument extends IMongoDocument {
-  deviceCode: string; // Hashed with bcrypt
+  deviceCode: string; // SHA-256 digest of the raw device code (see digestDeviceCode)
   userCode: string; // Plain text: "WXYZ-1234"
   status: 'pending' | 'approved' | 'denied' | 'expired' | 'consumed';
   userId: string | null;
@@ -51,6 +62,7 @@ const DeviceAuthorizationSchema = new Schema<IDeviceAuthorizationDocument>(
 // Indexes
 DeviceAuthorizationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
 DeviceAuthorizationSchema.index({ status: 1, expiresAt: 1 });
+DeviceAuthorizationSchema.index({ deviceCode: 1 }); // O(1) token-poll lookup
 
 export type IDeviceAuthorizationModel = Model<IDeviceAuthorizationDocument>;
 
@@ -88,21 +100,12 @@ class DeviceAuthorizationRepository
   }
 
   async findByDeviceCode(deviceCode: string): Promise<IDeviceAuthorizationDocument | null> {
-    // Get all pending/approved/denied authorizations that haven't expired
-    const pending = await this.find({
+    // O(1) indexed lookup by deterministic digest - no per-document bcrypt scan.
+    return this.findOne({
+      deviceCode: digestDeviceCode(deviceCode),
       status: { $in: ['pending', 'approved', 'denied'] },
       expiresAt: { $gt: new Date() },
     });
-
-    // Compare device code with each hashed device code
-    for (const auth of pending) {
-      const isMatch = await bcrypt.compare(deviceCode, auth.deviceCode);
-      if (isMatch) {
-        return auth;
-      }
-    }
-
-    return null;
   }
 
   async findPendingAndUnexpired(): Promise<IDeviceAuthorizationDocument[]> {

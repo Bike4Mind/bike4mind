@@ -5,6 +5,7 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   dataLakeProposalRepository,
+  organizationRepository,
   userRepository,
   adminSettingsRepository,
   fallbackLakeSettingsRepository,
@@ -39,6 +40,9 @@ const handler = baseApi()
       // the queue's only discovery surface - without it a reviewer has to open a lake's settings to
       // learn whether anything is waiting, which nobody does unprompted.
       dataLakeProposals: dataLakeProposalRepository,
+      // Org repo: resolves the org-admin rung of `canPreauthorize` for an admin caller, whose
+      // ctx.administeredOrgIds is deliberately zeroed. Without it that rung goes dark on this list.
+      organizations: organizationRepository,
     };
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
     const dataLakes = ctx.isAdmin

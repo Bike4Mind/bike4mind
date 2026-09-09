@@ -30,19 +30,25 @@ vi.mock('./ledgerMemoryStore', () => ({
 }));
 vi.mock('./factCipher', () => ({ createKeyProvider: () => ({}) }));
 
-const { createLedgerAppendSession } = await import('./mementoLedgerMirror');
+const { createLedgerAppendSession, writeFactToLedger } = await import('./mementoLedgerMirror');
 const { resolveSubject } = await import('@bike4mind/memory');
 
 // The subject/options a captured appendMemoryEvent call was made with.
 const callSubject = (i: number) => appendMemoryEventMock.mock.calls[i][3].subject as string;
 const callHashed = (i: number) => appendMemoryEventMock.mock.calls[i][4].subjectIsHashed as boolean;
 
-const LAKE = { principal: { kind: 'lake' as const, id: 'datalake:test' }, ownerUserId: 'owner-1' };
+const LAKE = {
+  principal: { kind: 'lake' as const, id: 'datalake:test' },
+  ownerUserId: 'owner-1',
+  startedAt: new Date('2026-01-01T00:00:00.000Z'),
+};
 
 describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    appendMemoryEventMock.mockResolvedValue(undefined);
+    // A truthy sealed event: the session now reads a falsy return as a shred REFUSAL and stops, so a
+    // mock resolving undefined would silently make every append look declined.
+    appendMemoryEventMock.mockResolvedValue({ seq: 0, hash: 'h', prevHash: null });
   });
 
   it('reads the profile once for the whole run and coalesces across existing AND same-run beliefs', async () => {
@@ -94,6 +100,42 @@ describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
     expect(readProfileMock).toHaveBeenCalledTimes(1);
   });
 
+  it('returns false on a shred refusal and keeps the refused belief OUT of the de-dup set', async () => {
+    // Ordering is the property here, not just the boolean. Recording a refused belief would make a
+    // later fact in the same run coalesce onto a subject that was never written: the assert would key
+    // on a non-existent belief, so the fact ends up unreachable rather than merely unwritten.
+    readProfileMock.mockResolvedValue({ principal: LAKE.principal, beliefs: [] });
+    const session = await createLedgerAppendSession(LAKE);
+
+    appendMemoryEventMock.mockResolvedValueOnce(null);
+    const refused = await session.append({
+      summary: 'the coolant pump model is XZ-40',
+      evidenceTier: 'external-facing',
+      embedding: [0, 1, 0],
+    });
+    expect(refused).toBe(false);
+
+    // A near-identical later fact keys on its OWN fresh subject, exactly as if the first append had
+    // never happened. Were the refused belief in the set, this would coalesce onto its subject instead.
+    const second = 'coolant pump is the XZ-40 unit';
+    const sealed = await session.append({ summary: second, evidenceTier: 'external-facing', embedding: [0, 1, 0] });
+
+    expect(sealed).toBe(true);
+    expect(appendMemoryEventMock).toHaveBeenCalledTimes(2);
+    expect(callSubject(1)).toBe(resolveSubject({ fact: second }));
+    expect(callHashed(1)).toBe(false);
+  });
+
+  it('returns true for a content-free summary, so a caller counting refusals does not miscount it', async () => {
+    // `true` means "nothing to write", NOT "written" - and it must not be conflated with a refusal:
+    // extractLakeMemory reads false as a shred refusal and stops the run, so returning false for an
+    // unkeyable summary would abort healthy runs on the first stopword-only fact.
+    const session = await createLedgerAppendSession(LAKE);
+
+    expect(await session.append({ summary: '   ', evidenceTier: 'external-facing' })).toBe(true);
+    expect(appendMemoryEventMock).not.toHaveBeenCalled();
+  });
+
   it('never reads the profile when no fact carries an embedding (lazy load)', async () => {
     const session = await createLedgerAppendSession(LAKE);
 
@@ -115,5 +157,46 @@ describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
     expect(appendMemoryEventMock).toHaveBeenCalledTimes(1);
     expect(callSubject(0)).toBe(resolveSubject({ fact: summary }));
     expect(callHashed(0)).toBe(false);
+  });
+});
+
+/**
+ * The single-fact user path and the crypto-shred fence.
+ *
+ * `writeFactToLedger` used to open its session with no `startedAt`, so the fence defaulted to the
+ * moment of the WRITE. Its only caller is a background memento job that runs an LLM extraction and an
+ * embedding call first, so an erase landing in that window was stamped BEFORE the default, lifted its
+ * own tombstone, and the fact landed after the erase - while the job logged that the fence had
+ * declined it. The fence instant must be the caller's, and must survive all the way to
+ * `appendMemoryEvent`.
+ */
+describe('writeFactToLedger - shred fence instant', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readProfileMock.mockResolvedValue(null);
+    appendMemoryEventMock.mockResolvedValue({ id: 'evt-1' });
+  });
+
+  it('forwards the CALLER work-start, not the moment of the write', async () => {
+    // Deliberately far in the past: a reintroduced `?? new Date()` default cannot coincide with it,
+    // so this assertion fails the moment the fence stops being the caller's clock.
+    const jobStartedAt = new Date('2026-03-01T00:00:00.000Z');
+
+    await writeFactToLedger({ userId: 'u1', summary: 'the user prefers dark mode', startedAt: jobStartedAt });
+
+    expect(appendMemoryEventMock).toHaveBeenCalledTimes(1);
+    expect(appendMemoryEventMock.mock.calls[0][4].startedAt).toEqual(jobStartedAt);
+  });
+
+  it('reports a refusal as false rather than throwing, so the job is not failed for behaving', async () => {
+    appendMemoryEventMock.mockResolvedValue(null);
+
+    const written = await writeFactToLedger({
+      userId: 'u1',
+      summary: 'a fact extracted before the erase',
+      startedAt: new Date('2026-03-01T00:00:00.000Z'),
+    });
+
+    expect(written).toBe(false);
   });
 });

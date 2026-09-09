@@ -160,4 +160,24 @@ describe('mergeRetrievalSummary', () => {
       expect(merged?.injectedLakePromptCount).toBe(1);
     });
   });
+
+  describe('preauthorizedLakeIdsUsed', () => {
+    it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['lake1'], preauthorizedLakeIdsUsed: ['lake1'] }),
+        base({ injectedLakePromptIds: ['lake1', 'lake2'], preauthorizedLakeIdsUsed: ['lake1'] })
+      );
+      expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
+    });
+
+    it('stays absent when neither side used a pre-authorized lake', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'preauthorizedLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('survives a side that never asserted the field', () => {
+      const merged = mergeRetrievalSummary(base({ preauthorizedLakeIdsUsed: ['lake1'] }), base());
+      expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
+    });
+  });
 });

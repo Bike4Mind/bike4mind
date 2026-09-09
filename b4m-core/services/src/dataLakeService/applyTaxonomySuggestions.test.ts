@@ -52,9 +52,16 @@ const makeAdapters = (opts?: {
   lakeDoc?: IDataLakeDocument | null;
   files?: ReturnType<typeof file>[];
   bulkUpdateTagsResult?: number;
+  /** Other lakes in the prefix-collision scope `decideStampPrefix` queries. */
+  scopeLakes?: IDataLakeDocument[];
 }) => ({
   db: {
-    dataLakes: { findById: vi.fn().mockResolvedValue(opts && 'lakeDoc' in opts ? opts.lakeDoc : lake()) },
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(opts && 'lakeDoc' in opts ? opts.lakeDoc : lake()),
+      // `decideStampPrefix`'s dynamic overlap lookup. Empty by default: the fixture lake's `acme:`
+      // prefix collides with nothing, so the gate permits and every other test reads as before.
+      find: vi.fn().mockResolvedValue(opts?.scopeLakes ?? []),
+    },
     batches: {
       findById: vi.fn().mockResolvedValue(opts && 'batchDoc' in opts ? opts.batchDoc : batch()),
       setTaxonomyStatusIfActive: vi.fn().mockResolvedValue(batch({ taxonomyStatus: 'applying' })),
@@ -204,15 +211,44 @@ describe('applyTaxonomySuggestions', () => {
     expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
   });
 
-  // A prefix colliding with a static-registry lake (opti:) has no owning document, so its read
-  // arm is an ownership bypass - create() already refuses such a prefix, so this only fires for
-  // a row that predates that check.
-  it('refuses to apply tags for a lake whose prefix overlaps a static-registry lake', async () => {
-    const adapters = makeAdapters({ lakeDoc: lake({ fileTagPrefix: 'opti:' }) });
+  // The four `decideStampPrefix` refusals, each of which this door used to ignore except the
+  // registry one (#2398). Refused BEFORE the guarded claim, so a bad prefix cannot leave the batch
+  // parked in 'applying'. `tagWriteDoorPrefixGate.test.ts` is what pins these to the identical
+  // refusal from `setDataLakeFileTags`; these cases pin that this door reaches the gate at all.
+  it.each([
+    // No owning document behind a static-registry prefix, so its read arm is an ownership bypass.
+    ['registry-prefix-overlap', 'opti:', /registry-prefix-overlap/],
+    // Would be dropped by every read arm, so the tags would be invisible to every query.
+    ['unusable-prefix', 'acme', /unusable-prefix/],
+    // Reaches the `datalake:` membership namespace.
+    ['reserved-namespace', 'datalake:acme:', /reserved-namespace/],
+  ])('refuses to apply tags for a lake whose prefix is %s', async (_reason, fileTagPrefix, expected) => {
+    const adapters = makeAdapters({ lakeDoc: lake({ fileTagPrefix }) });
 
     await expect(
       applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
-    ).rejects.toThrow(/overlaps a built-in data lake/i);
+    ).rejects.toThrow(expected);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  it('refuses to apply tags for a lake whose prefix overlaps another lake in scope', async () => {
+    const adapters = makeAdapters({
+      scopeLakes: [lake({ id: 'lake2', name: 'Lake Two', fileTagPrefix: 'acme:sub:' })],
+    });
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/prefix-overlap.*Lake Two/i);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the overlap check itself fails, rather than writing across an unverified overlap', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.find = vi.fn().mockRejectedValue(new Error('boom'));
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/could not verify/i);
     expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
   });
 

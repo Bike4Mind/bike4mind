@@ -28,6 +28,7 @@ import {
   FabFile,
   fabFileChunkRepository,
   projectRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fallbackLakeSettingsRepository,
   mongoose,
@@ -1103,6 +1104,13 @@ async function processExecution(
         model: execution.model,
       });
     }
+    if (orchestrationProfile && isNewExecution) {
+      // Persist the profile's denials so continuations can enforce them: the profile
+      // itself does not survive a Lambda handoff (startPayload.agentId is gone on a
+      // resume), and the delegation gate below reads these every invocation. Same
+      // durability pattern as enableLattice.
+      await agentExecutionRepository.persistProfileDeniedTools(executionId, orchestrationProfile.deniedTools);
+    }
     if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {
         profileId: orchestrationProfile.id,
@@ -1471,8 +1479,12 @@ async function processExecution(
 
     // Whether this run may offer each delegation surface - decided from the profile's
     // denials and the session contract, and consumed below at the dependency level.
+    // On a continuation the persisted-agent profile is not re-resolved (the surface-scoped
+    // optimizer profile is), so fall back to the denials persisted at resolution time -
+    // without this, a persisted agent's deniedTools stopped being enforced from the first
+    // permission card or handoff.
     const delegation = delegationOffer({
-      profileDeniedTools: orchestrationProfile?.deniedTools,
+      profileDeniedTools: orchestrationProfile?.deniedTools ?? execution.profileDeniedTools,
       session,
     });
     if (!delegation.offerDelegate || !delegation.offerDag) {
@@ -1502,6 +1514,9 @@ async function processExecution(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
+      // confirmed the session belongs to this run before this ToolBuilderDeps is built.
+      sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
       // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
       // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
       // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
@@ -1520,6 +1535,7 @@ async function processExecution(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls (add_entity / set_value / query). Without this
@@ -3223,6 +3239,9 @@ async function processSubagentDispatch(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
+      // confirmed the session belongs to this run before this ToolBuilderDeps is built.
+      sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
       // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
       // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
       // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
@@ -3238,6 +3257,7 @@ async function processSubagentDispatch(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Required for the Lattice opt-in pool below to actually work: the
         // Lattice tools persist models to Mongo and reload them by ObjectId on
@@ -3261,7 +3281,13 @@ async function processSubagentDispatch(
       model: child.model,
       precomputed: { adminSettingsEnforceCredits: false, models },
       apiKeyTable: apiKeyTable as ApiKeyTable,
-      agentStore,
+      // Same dependency gate as the top-level path: the delegate tool is injected as an
+      // object keyed on this dep, so a CHILD whose own record denies delegate_to_agent
+      // is enforced here or nowhere. The child gets no dagDispatcher, so only the
+      // delegate surface is load-bearing on this site.
+      agentStore: delegationOffer({ profileDeniedTools: agentDef.deniedTools, session }).offerDelegate
+        ? agentStore
+        : undefined,
       // Propagate delegation depth so the dispatched orchestrator's delegate_to_agent
       // tool starts at the right level and the depth cap fires correctly.
       depth,

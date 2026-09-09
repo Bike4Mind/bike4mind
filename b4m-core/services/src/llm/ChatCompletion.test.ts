@@ -359,6 +359,133 @@ describe('ChatCompletionProcess', () => {
       await expect(service.userHasAccessibleKnowledgeLake()).resolves.toBe(false);
       expect((service as any).logger.warn).toHaveBeenCalled();
     });
+
+    // This memo is not only the offer signal: the attachment classifier and the inline-defer plan
+    // read it too, so a pre-authorized lake missing here marks the corpus personal and suppresses
+    // the lake arms - the admitted session ends up MORE restricted than an ordinary one.
+    describe('pre-authorized lakes', () => {
+      const MANAGED = {
+        id: 'managed',
+        name: 'Managed Lake',
+        slug: 'managed-lake',
+        datalakeTag: 'datalake:managed',
+        fileTagPrefix: 'managed:',
+        status: 'active',
+        createdByUserId: 'someone-else',
+      };
+
+      const wire = (grantee: string) => {
+        (service as any).accessibleDataLakeAccessMemo = undefined;
+        (service as any).db = {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            findById: vi.fn().mockResolvedValue(MANAGED),
+          },
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
+          dataLakeAccessGrants: {
+            listActiveByLakes: vi
+              .fn()
+              .mockResolvedValue([
+                { dataLakeId: 'managed', principalType: 'user', principalId: grantee, role: 'curator' },
+              ]),
+          },
+        };
+        (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+        (service as any).entitlementsResolved = true;
+        (service as any).entitlementKeys = [];
+        (service as any).turnPreauthorizedLakeIds = ['managed'];
+      };
+
+      it('counts a pre-authorized lake the ordinary resolver returns nothing for', async () => {
+        wire('user1');
+
+        expect(await service.userHasAccessibleKnowledgeLake()).toBe(true);
+        expect((service as any).accessibleDataLakeAccessMemo.dataLakeTags).toContain('datalake:managed');
+      });
+
+      it('does not count one the caller no longer manages', async () => {
+        wire('someone-who-is-not-the-caller');
+
+        expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
+      });
+    });
+  });
+
+  // The assignment that makes the admission visible to the turn at all. It is an ORDERING
+  // invariant, not just an assignment: getAccessibleDataLakeAccess memoizes per turn, so a capture
+  // that ran after the first consumer would freeze an access set with the lake missing - and the
+  // whole re-check below it would then be pinning behaviour nothing reaches.
+  describe('per-turn pre-authorized capture', () => {
+    const wireMinimalTurn = () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any); // any: minimal model shape, as elsewhere in this file
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any); // any: minimal message shape, as elsewhere in this file
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+      return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+    };
+
+    it('captures the session ids onto the turn', async () => {
+      mockSession.userId = 'user1';
+      mockSession.preauthorizedLakeIds = ['managed'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect((service as any).turnPreauthorizedLakeIds).toEqual(['managed']);
+    });
+
+    it('captures before anything reads the memoized access set', async () => {
+      mockSession.userId = 'user1';
+      mockSession.preauthorizedLakeIds = ['managed'];
+      const body = wireMinimalTurn();
+      const seenAtEachRead: unknown[] = [];
+      vi.spyOn(service as any, 'getAccessibleDataLakeAccess').mockImplementation(async () => {
+        seenAtEachRead.push((service as any).turnPreauthorizedLakeIds);
+        return { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [], lakes: [] };
+      });
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(seenAtEachRead.length).toBeGreaterThan(0);
+      for (const seen of seenAtEachRead) expect(seen).toEqual(['managed']);
+    });
+
+    // vetPreauthorizedLakeIds' contract, pinned at the call site rather than only in isolation: a
+    // share or teammate reply must not inherit the owner's admission.
+    it('captures nothing when the acting user is not the session owner', async () => {
+      mockSession.userId = 'someone-else';
+      mockSession.preauthorizedLakeIds = ['managed'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect((service as any).turnPreauthorizedLakeIds).toBeUndefined();
+    });
   });
 
   describe('resolveCorpusInlinePlan (defer only the tool-retrievable corpus subset)', () => {

@@ -14,19 +14,11 @@ import type {
   LakeCandidateCapPressure,
   LakeGrantStatus,
 } from '@bike4mind/common';
-import { ORG_MEMBERSHIP_ACL_PERMISSIONS } from '@bike4mind/common';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 
 /** Default cap on audit events read for the history aggregation - see `historyTruncated`. */
 export const LAKE_ACCESS_VIEW_HISTORY_LIMIT = 2000;
-
-/**
- * The org `users[]` permissions that count as membership, DERIVED from the one shared definition
- * rather than hand-copied: the org channel's `holderCount` must count exactly the members the DB gate
- * (`OrganizationModel`'s `findMembershipOrgIds`) would admit, or an owner is shown a member total
- * larger than the set that can actually read - false reassurance a compliance reader cannot detect.
- */
-const ORG_MEMBER_PERMISSIONS = new Set<string>(ORG_MEMBERSHIP_ACL_PERMISSIONS);
 
 /**
  * Whether a grant is live at `now`. IDENTICAL boundary to the DB `buildActiveGrantFilter` and the
@@ -229,13 +221,13 @@ export async function assembleLakeAccessView(
     const org = orgById.get(orgChannel.value);
     if (org) {
       orgChannel.label = org.name;
-      // Members = the billing owner plus the users[] entries the gate would ADMIT (read/write
-      // permission), de-duplicated - see ORG_MEMBER_PERMISSIONS. Counting the raw ACL would overstate
-      // the total by including share-only members the gate denies, and an over-stated count is exactly
-      // the kind of false reassurance a compliance reader cannot detect.
-      const admitted = (org.users ?? []).filter(
-        u => u.userId && (u.permissions ?? []).some(p => ORG_MEMBER_PERMISSIONS.has(p))
-      );
+      // Members = the billing owner plus the users[] entries the gate would ADMIT, de-duplicated.
+      // Counting the raw ACL would overstate the total by including share-only members the gate
+      // denies, and an over-stated count is exactly the kind of false reassurance a compliance
+      // reader cannot detect. `orgAclRowConfersMembership` is the shared in-memory twin of the DB
+      // gate's own `$elemMatch` (`orgMembershipFilter`), so this count cannot drift from what
+      // `findMembershipOrgIds` admits - the drift the shared predicate exists to prevent.
+      const admitted = (org.users ?? []).filter(u => u.userId && orgAclRowConfersMembership(u));
       const memberIds = new Set<string>([org.userId, ...admitted.map(u => u.userId)].filter(Boolean));
       orgChannel.holderCount = memberIds.size;
     }
