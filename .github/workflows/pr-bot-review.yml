@@ -237,6 +237,16 @@ jobs:
           # second early so a review posted in the same second still compares >=.
           echo "at=$(date -u -d '1 second ago' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      - name: Install bubblewrap
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        run: |
+          # Must stay in sync with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB in the job env
+          # above: with the scrub on, the Claude CLI requires bwrap and its installer
+          # aborts without it. The runner image does not ship bubblewrap, so dropping
+          # this step silently reds every review with "Failed to install Claude Code".
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+
       - name: Run /bot-review
         id: bot_review
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
