@@ -196,7 +196,13 @@ const resolveGrantHeldLakeBySlug = async (
  * real lake that shadows a fallback slug resolves to the DB lake, and its denial is
  * final (no fallback retry). Denies with a NOT-FOUND-style error so a user who can't
  * see a lake can't confirm it exists. Every single-lake read and every batch/file
- * operation calls this first. Returns the lake on grant.
+ * operation calls this first (most through the `assertLakeAccess` wrapper below).
+ *
+ * Returns the lake AND the grants the gate itself read, so a caller that goes on to make a manage
+ * decision does not re-query them - the identical set `loadActiveLakeGrants` would return, active
+ * as of this call. `grants` is `[]` for a fallback lake and, importantly, ALSO `[]` when no
+ * `dataLakeAccessGrants` repo is wired: a caller building a manage decision on it must wire the
+ * repo, or every grant-carried rung silently disappears.
  *
  * Slug resolution (#2425): findBySlug's own-org/org-less arms miss a lake in an org the
  * caller isn't a member of, even when they hold a real owner/curator grant on it (e.g. a
@@ -207,11 +213,11 @@ const resolveGrantHeldLakeBySlug = async (
  * extra grants query only ever runs on a miss, matching the prior lazy-thunk design, but the
  * decision now lives here rather than inside the repository method.
  */
-export const assertLakeAccess = async (
+export const assertLakeAccessWithGrants = async (
   lakeIdOrSlug: string,
   ctx: AccessContext,
   { db, logger }: AssertLakeAccessAdapters
-): Promise<IDataLakeDocument> => {
+): Promise<{ lake: IDataLakeDocument; grants: LakeGrant[] }> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
     (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds)) ??
@@ -248,9 +254,20 @@ export const assertLakeAccess = async (
       });
     }
     if (!decision.allowed) throw new NotFoundError('Data lake not found');
-    return lake;
+    return { lake, grants };
   }
   const fallback = await resolveFallbackLake(lakeIdOrSlug, ctx, db.fallbackLakeSettings, logger);
   if (!fallback) throw new NotFoundError('Data lake not found');
-  return fallback;
+  return { lake: fallback, grants: [] };
 };
+
+/**
+ * The access gate, for the callers that need only the lake. See `assertLakeAccessWithGrants` for
+ * the contract; a caller that goes on to make a MANAGE decision should use that instead of
+ * re-reading the same grants.
+ */
+export const assertLakeAccess = async (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  adapters: AssertLakeAccessAdapters
+): Promise<IDataLakeDocument> => (await assertLakeAccessWithGrants(lakeIdOrSlug, ctx, adapters)).lake;
