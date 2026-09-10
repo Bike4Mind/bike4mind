@@ -439,8 +439,13 @@ describe('lakeMembershipsFrom', () => {
  * that come back.
  */
 describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
+  // Readable ids, deliberately: these rows exercise the grant RUNG, not id casting. They are not
+  // castable ObjectIds, so the resolver reports lakeViewComplete: false for them - use a hex id
+  // (see CASTABLE_LAKE_ID below) in any test where that flag is the subject.
   const grantRow = (dataLakeId: string, role: 'owner' | 'curator' | 'reader', principalId = 'grantee') =>
     ({ dataLakeId, principalType: 'user', principalId, role }) as never;
+
+  const CASTABLE_LAKE_ID = '650000000000000000000001';
 
   // A lake someone else created, whose gate the caller does not hold: unreachable except by grant.
   const theirGatedLake = dbLake({
@@ -644,6 +649,40 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     // unreachability. The rest of the view survives.
     expect(res.lakeViewComplete).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/access-grant lookup failed/), expect.anything());
+  });
+
+  it('keeps the view complete when every granted id can address a row', async () => {
+    const theirs = dbLake({
+      id: CASTABLE_LAKE_ID,
+      createdByUserId: 'original-creator',
+      requiredUserTag: 'TagIDoNotHold',
+    });
+
+    const res = await getDynamicDataLakeAccess(grantCtx([theirs], [grantRow(CASTABLE_LAKE_ID, 'owner')]));
+
+    expect(res.dataLakeTags).toEqual([`datalake:${CASTABLE_LAKE_ID}`]);
+    expect(res.lakeViewComplete).toBe(true);
+  });
+
+  it('admits an incomplete view when a granted id cannot address a row', async () => {
+    // The repo drops such an id from its `_id` arms instead of failing the query, so the lake is
+    // absent while the read reports success. Without this the caller cannot tell that absence from
+    // "you have no access", which is exactly what lakeViewComplete exists to distinguish.
+    const open = dbLake({ id: 'open', createdByUserId: 'original-creator', isPublic: true });
+    const logger = { warn: vi.fn() };
+
+    const res = await getDynamicDataLakeAccess({
+      ...grantCtx([open], [grantRow('legacy-uuid-not-an-objectid', 'owner')]),
+      logger: logger as never,
+    });
+
+    // The rest of the view survives - this narrows, it does not throw the turn away.
+    expect(res.dataLakeTags).toEqual(['datalake:open']);
+    expect(res.lakeViewComplete).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/getDynamicDataLakeAccess\.reach/),
+      expect.objectContaining({ skipped: ['legacy-uuid-not-an-objectid'] })
+    );
   });
 
   it('never asks for grants for an id-less caller', async () => {
