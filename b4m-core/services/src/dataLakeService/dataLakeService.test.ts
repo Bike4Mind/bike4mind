@@ -662,37 +662,63 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(result.find(l => l.id === 'granted')).toBeUndefined();
   });
 
-  it.each([
-    ['listDataLakes', listDataLakes] as const,
-    ['listArchivedDataLakes', listArchivedDataLakes] as const,
-    ['listDeletedDataLakes', listDeletedDataLakes] as const,
-  ])('%s hands findAccessible an org grant keyed by the ISSUING org', async (_name, listFn) => {
+  const orgGrantDb = () => {
+    const findAccessible = vi.fn().mockResolvedValue([]);
+    return {
+      findAccessible,
+      db: {
+        dataLakes: { findAccessible, find: vi.fn() },
+        settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+        dataLakeAccessGrants: {
+          listActiveByLakes: vi.fn().mockResolvedValue([]),
+          listByPrincipal: vi.fn(async (type: string, id: string) =>
+            type === 'organization' && id === 'orgA'
+              ? [{ dataLakeId: 'granted', principalType: type, principalId: id, role: 'reader' }]
+              : []
+          ),
+        },
+      },
+    };
+  };
+
+  it('listDataLakes hands findAccessible an org grant keyed by the ISSUING org', async () => {
     // The issuer is the only thing that makes the org half safe: the datastore ANDs each org's ids
     // with `organizationId: <that org>` (DataLakeModel `orgGrantArms`), which is the only place the
     // lake's own org is known. Flattening the map into `grantedLakeIds` on the way here routes it
     // into the unconditional USER arm, and an orgA grant then lifts an orgB lake's gate for a caller
     // who belongs to both. Deep equality on purpose - `objectContaining` on `grantedLakeIds` alone
     // cannot see the org half move.
-    const findAccessible = vi.fn().mockResolvedValue([]);
-    const db = {
-      dataLakes: { findAccessible, find: vi.fn() },
-      settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
-      dataLakeAccessGrants: {
-        listActiveByLakes: vi.fn().mockResolvedValue([]),
-        listByPrincipal: vi.fn(async (type: string, id: string) =>
-          type === 'organization' && id === 'orgA'
-            ? [{ dataLakeId: 'granted', principalType: type, principalId: id, role: 'reader' }]
-            : []
-        ),
-      },
-    };
+    const { findAccessible, db } = orgGrantDb();
 
-    await listFn(ctx({ userId: 'me', organizationIds: ['orgA', 'orgB'] }), { db } as never);
+    await listDataLakes(ctx({ userId: 'me', organizationIds: ['orgA', 'orgB'] }), { db } as never);
 
     expect(findAccessible.mock.calls[0]![1]).toMatchObject({
       grantedLakeIds: [],
       orgGrantedLakes: { orgA: ['granted'] },
     });
+  });
+
+  it.each([
+    ['listArchivedDataLakes', listArchivedDataLakes] as const,
+    ['listDeletedDataLakes', listDeletedDataLakes] as const,
+  ])('%s hands findAccessible no org reach at all, and no reader row', async (_name, listFn) => {
+    // The management views ask the MANAGE reach, which is user-principal owner/curator only. The org
+    // half is not merely empty here, it is never resolved: `findAccessible` drops `orgGrantArms`
+    // under includePublic:false, so passing one would be inert, and an org grant carries no role to
+    // narrow it by. Absence rather than a flattened id list is the point - flattening would route it
+    // into the unconditional USER arm, which is the hazard the sibling test above describes.
+    const { findAccessible, db } = orgGrantDb();
+
+    await listFn(ctx({ userId: 'me', organizationIds: ['orgA', 'orgB'] }), { db } as never);
+
+    const opts = findAccessible.mock.calls[0]![1];
+    expect(opts).toMatchObject({ includePublic: false, grantedLakeIds: [] });
+    expect(opts.orgGrantedLakes).toBeUndefined();
+    expect(db.dataLakeAccessGrants.listByPrincipal).not.toHaveBeenCalledWith(
+      'organization',
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('labels a reader-granted lake unmanageable even when another arm returns it', async () => {
@@ -1280,6 +1306,196 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
 
     expect('systemPrompt' in result[0]!).toBe(false);
+  });
+});
+
+/**
+ * The archived/deleted views pass includePublic:false on the stated ground that restore/cleanup is
+ * owner/admin-only, so a stranger must not see someone else's lake there - and then handed
+ * findAccessible the full READ reach, which admits `reader` rows and any-role org rows. A reader
+ * grant therefore did through the grant arm exactly what includePublic:false suppressed through the
+ * public arm. These pin the reach split by ROLE.
+ *
+ * Asserted on the findAccessible spy's `opts`, not on the returned rows: the reach is the thing
+ * under test, and a stub that echoed its input could not tell a narrowed reach from a wide one.
+ */
+describe('management views - the grant reach is manage-scoped, not read-scoped', () => {
+  // Dispatches on the principal so a membership org and an administered org are distinguishable -
+  // a stub returning one row for every call could not tell which arm asked.
+  const grantRepoFor = (rows: Record<string, { dataLakeId: string; role: string }[]>) => ({
+    listByPrincipal: vi
+      .fn()
+      .mockImplementation(
+        async (principalType: string, principalId: string) => rows[`${principalType}:${principalId}`] ?? []
+      ),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+  });
+
+  // The cutover setting is ON here to prove the manage reach does not consult it. That is the only
+  // thing it proves at this level: the read reach's reader/org arms are ALSO held back by the
+  // source-level READ_GRANT_ENFORCEMENT_READY interlock, so with it false the two reaches happen to
+  // agree on a reader row here. The reaches are compared where they provably differ in
+  // resolveLakeReadAccess.test.ts; these cases guard the wiring and the role split.
+  const dbFor = (grants: ReturnType<typeof grantRepoFor>) => ({
+    dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+    dataLakeAccessGrants: grants,
+    settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+  });
+
+  const reachPassedTo = (db: ReturnType<typeof dbFor>): string[] =>
+    db.dataLakes.findAccessible.mock.calls[0][1].grantedLakeIds;
+
+  it('withholds a reader-granted lake from the archived view even with the cutover ON', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'reader' }] }));
+
+    await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(reachPassedTo(db)).toEqual([]);
+  });
+
+  it('still reaches an owner/curator-granted lake (the reach is narrowed, not closed)', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+
+    await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(reachPassedTo(db)).toEqual(['granted']);
+  });
+
+  it('withholds an ORG-principal grant whatever the caller holds in the granting org', async () => {
+    const orgRows = { 'organization:orgA': [{ dataLakeId: 'granted', role: 'owner' }] };
+
+    // Not by admin rights and not by membership: with no lake document in hand the reach cannot
+    // apply canManageLake's lake-org containment, and these views redact rather than exclude, so an
+    // org grant admitted here would disclose a lake in a DIFFERENT org (see the cross-org case
+    // below). A same-org lake is unaffected - findAccessible's own administeredOrgIds arm carries it.
+    const asAdmin = dbFor(grantRepoFor(orgRows));
+    await listArchivedDataLakes(ctx({ userId: 'me', administeredOrgIds: ['orgA'] }), { db: asAdmin });
+    expect(reachPassedTo(asAdmin)).toEqual([]);
+
+    const asMember = dbFor(grantRepoFor(orgRows));
+    await listDeletedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db: asMember });
+    expect(reachPassedTo(asMember)).toEqual([]);
+  });
+
+  // The deleted view's docblock claims the archived view's rationale, so it must behave the same way.
+  it('applies the same split in the deleted view', async () => {
+    const reader = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'reader' }] }));
+    await listDeletedDataLakes(ctx({ userId: 'me' }), { db: reader });
+    expect(reachPassedTo(reader)).toEqual([]);
+
+    const curator = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+    await listDeletedDataLakes(ctx({ userId: 'me' }), { db: curator });
+    expect(reachPassedTo(curator)).toEqual(['granted']);
+  });
+
+  // The transitional view post-filters on canManageLake, so narrowing its reach cannot change its
+  // output - but it must not go the other way and start withholding a lake the filter would keep.
+  it('keeps a curator-granted lake reachable in the transitional view', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+
+    await listTransitionalDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(reachPassedTo(db)).toEqual(['granted']);
+  });
+
+  it('does not read the read-grant cutover flag at all', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+
+    await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    // A flag read here would mean an owner/curator grant - whose producers are live and unflagged -
+    // could be withheld by an operator toggle that has nothing to do with management.
+    expect(db.settings.getSettingsValue).not.toHaveBeenCalled();
+  });
+
+  it('degrades to an empty reach when no grant repo is wired', async () => {
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+      settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+    };
+
+    await listArchivedDataLakes(ctx({ userId: 'me', administeredOrgIds: ['orgA'] }), { db });
+
+    expect(db.dataLakes.findAccessible.mock.calls[0][1].grantedLakeIds).toEqual([]);
+  });
+});
+
+/**
+ * The cases above assert the reach on findAccessible's INPUT. These assert the views' output,
+ * because what the org arm's removal closes is a disclosure: the archived/deleted views redact
+ * fields and keep the row, so every lake the reach admits is a lake whose name and slug leave the
+ * service, however little the caller may then do with it.
+ *
+ * findAccessible is faked rather than stubbed here - the four arms these cases turn on (creator,
+ * member org, administered org, granted ids), mirroring DataLakeModel.findAccessible. It must stay
+ * in sync with that method's arms to keep meaning what it claims.
+ */
+describe("management views - an org grant on another org's lake discloses nothing", () => {
+  const findAccessibleFake = (all: IDataLakeDocument[]) =>
+    vi
+      .fn()
+      .mockImplementation(async (actor: AccessContext, opts: { grantedLakeIds?: string[] }) =>
+        all.filter(
+          l =>
+            l.createdByUserId === actor.userId ||
+            (!!l.organizationId &&
+              ((actor.organizationIds ?? []).includes(l.organizationId) ||
+                (actor.administeredOrgIds ?? []).includes(l.organizationId))) ||
+            (opts.grantedLakeIds ?? []).includes(l.id)
+        )
+      );
+
+  const dbWith = (all: IDataLakeDocument[], rows: Record<string, { dataLakeId: string; role: string }[]>) => ({
+    dataLakes: { findAccessible: findAccessibleFake(all), find: vi.fn() },
+    dataLakeAccessGrants: {
+      listByPrincipal: vi
+        .fn()
+        .mockImplementation(
+          async (principalType: string, principalId: string) => rows[`${principalType}:${principalId}`] ?? []
+        ),
+      listActiveByLakes: vi.fn().mockResolvedValue([]),
+    },
+    settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+  });
+
+  // orgB's lake, an orgA owner grant, an orgA admin who has nothing else on it: canManageLake denies
+  // the manage, so the list must not name the lake either.
+  const crossOrg = () => ({
+    lakes: [lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', organizationId: 'orgB' })],
+    grants: { 'organization:orgA': [{ dataLakeId: 'theirs', role: 'owner' }] },
+    actor: ctx({ userId: 'me', administeredOrgIds: ['orgA'] }),
+  });
+
+  it('keeps it out of the archived view', async () => {
+    const { lakes, grants, actor } = crossOrg();
+    const db = dbWith(lakes, grants);
+
+    expect(await listArchivedDataLakes(actor, { db })).toEqual([]);
+  });
+
+  it('keeps it out of the deleted view', async () => {
+    const { lakes, grants, actor } = crossOrg();
+    const db = dbWith(lakes, grants);
+
+    expect(await listDeletedDataLakes(actor, { db })).toEqual([]);
+  });
+
+  it("still shows an org MEMBER their own org's archived lake (the membership arm is untouched)", async () => {
+    const theirs = lake({ id: 'ours', slug: 'ours', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = dbWith([theirs], {});
+
+    const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
+
+    expect(result.map(l => l.id)).toEqual(['ours']);
+  });
+
+  it('still shows a USER owner grant, which carries its own authorization', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', organizationId: 'orgB' });
+    const db = dbWith([theirs], { 'user:me': [{ dataLakeId: 'theirs', role: 'owner' }] });
+
+    const result = await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.map(l => l.id)).toEqual(['theirs']);
   });
 });
 

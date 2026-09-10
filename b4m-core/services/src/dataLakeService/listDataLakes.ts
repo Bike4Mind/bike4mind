@@ -22,7 +22,12 @@ import {
 } from '@bike4mind/common';
 import { canManageLake, canShredLakeMemory, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
-import { grantedLakeReachFor, resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
+import {
+  grantedLakeReachFor,
+  manageGrantedLakeIdsFor,
+  resolveEnforceReadGrants,
+  type LakeAccessLogger,
+} from './resolveLakeReadAccess';
 
 /** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
 type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
@@ -517,25 +522,25 @@ export const listAllDataLakes = async (
  * this is a management view (restore is owner/admin-only), so it must NOT surface strangers'
  * public lakes; the owner still sees their own archived public lake via the owner arm.
  *
- * Returns raw documents, and the org arm still yields lakes the caller does not own, so the
- * editor-only fields are redacted per lake before they leave the service.
+ * The grant reach is MANAGE-scoped (`manageGrantedLakeIdsFor`), not the read reach the browse list
+ * uses: a `reader` grant is read access and confers no restore, so admitting one here would have
+ * surfaced a stranger's lake in a cleanup list - the same outcome includePublic:false is set to
+ * prevent, arriving through the grant arm instead of the public one. No cutover flag is read: the
+ * roles this reach admits are live and unflagged (see manageGrantedLakeIdsFor).
+ *
+ * Returns raw documents, and the org-MEMBERSHIP arm still yields lakes the caller cannot manage
+ * (pre-existing and intended - org members see their org's archived lakes), so the editor-only
+ * fields are still redacted per lake before they leave the service.
  */
 export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds = await manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: ['archived'],
     includePublic: false,
     grantedLakeIds,
-    orgGrantedLakes,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
@@ -544,25 +549,15 @@ export const listArchivedDataLakes = async (
 /**
  * Soft-deleted lakes accessible to the user (management view: cleanup / restore). includePublic:
  * false for the same reason as the archived view - a stranger has no management role on someone
- * else's public lake. Editor-only fields are redacted per lake, as in the archived view.
+ * else's public lake. The grant reach is MANAGE-scoped and the editor-only fields are redacted per
+ * lake, both for the archived view's reasons.
  */
 export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
-  const lakes = await db.dataLakes.findAccessible(ctx, {
-    statuses: ['deleted'],
-    includePublic: false,
-    grantedLakeIds,
-    orgGrantedLakes,
-  });
+  const grantedLakeIds = await manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
 };
@@ -574,9 +569,11 @@ export const listDeletedDataLakes = async (
  * nowhere and can only be found by reading its id out of the datastore.
  *
  * Narrowed three ways against the archived/deleted views it otherwise mirrors:
- * - MANAGE-scoped, not read-scoped. The only action offered is a retry, which each lifecycle
- *   service restricts to owner/admin/org-manager, so a caller who cannot manage the lake could do
- *   nothing with the row. Filtering on `canManageLake` here also means nothing needs redacting.
+ * - MANAGE-scoped, not read-scoped, at BOTH ends: the grant reach is `manageGrantedLakeIdsFor` and
+ *   the rows are then filtered on `canManageLake`. The only action offered is a retry, which each
+ *   lifecycle service restricts to owner/admin/org-manager, so a caller who cannot manage the lake
+ *   could do nothing with the row. The post-filter also means nothing needs redacting, and it makes
+ *   the reach narrowing a no-op here: the rows it drops are rows the filter was already dropping.
  * - includePublic:false, for the same reason the archived view passes it: a stranger holds no
  *   management role on someone else's public lake.
  * - Cutoff-filtered, per status (see strandedCutoffMsFor). A lake that entered 'archiving'
@@ -587,18 +584,11 @@ export const listTransitionalDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<TransitionalDataLakeSummary[]> => {
-  const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds = await manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: [...DATA_LAKE_TRANSITIONAL_STATUSES],
     includePublic: false,
     grantedLakeIds,
-    orgGrantedLakes,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   const now = Date.now();
