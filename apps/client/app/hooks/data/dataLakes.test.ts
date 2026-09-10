@@ -1515,7 +1515,8 @@ describe('the sharing doors on success', () => {
   });
 
   // `revoked: false` is the outcome the caller asked for, so not an error - but saying "revoked"
-  // would claim this call did something it did not. The honest copy is the whole point of the flag.
+  // would claim this call did something it did not. The honest copy is the whole point of the flag,
+  // and it names the race, because the caller's own double-click can no longer reach this arm.
   it('revoke says the grant was already gone rather than claiming it removed one', async () => {
     apiDelete.mockResolvedValueOnce({ data: { data: { revoked: false } } });
     const { result } = mountWith(() => useRevokeLakeAccess());
@@ -1524,7 +1525,9 @@ describe('the sharing doors on success', () => {
       await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u2' });
     });
 
-    expect(toast.success).toHaveBeenCalledWith('That principal no longer had access');
+    expect(toast.success).toHaveBeenCalledWith(
+      'That principal already had no access - someone else may have revoked it'
+    );
   });
 });
 

@@ -364,8 +364,12 @@ export function useRevokeLakeAccess() {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       // `revoked: false` means the grant was already gone - the outcome asked for, so not an error,
-      // but saying "revoked" would claim this call did something it did not.
-      toast.success(data.revoked ? 'Access revoked' : 'That principal no longer had access');
+      // but saying "revoked" would claim this call did something it did not. Naming the race is what
+      // keeps it from reading as "your revoke failed": the caller's own double-click can no longer
+      // land here (the confirm dialog disables while in flight), so another manager got there first.
+      toast.success(
+        data.revoked ? 'Access revoked' : 'That principal already had no access - someone else may have revoked it'
+      );
     },
     onError: (error: Error) => {
       const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
