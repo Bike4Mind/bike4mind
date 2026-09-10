@@ -281,6 +281,9 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
   );
 
   if (process.env.OPS_ALERT_EMAIL) {
+    // retainOnDelete: same reason as OobAlarmTopicEmailSub in dlqAlarms.ts -- the AWS
+    // provider cannot destroy a PendingConfirmation subscription, so retain it in AWS
+    // rather than leaving dangling state if the variable is removed before confirmation.
     new aws.sns.TopicSubscription(
       'WafOobAlarmTopicEmailSub',
       {
@@ -288,7 +291,7 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
         protocol: 'email',
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
-      { provider: wafProviderUsEast1 }
+      { provider: wafProviderUsEast1, retainOnDelete: true }
     );
   }
 
