@@ -1,5 +1,6 @@
 import type {
   BrowsePublicDataLakesResult,
+  DataLakeAccessRole,
   DataLakeConfig,
   DataLakeDocumentPurgeReceipt,
   DataLakeMembershipArm,
@@ -12,6 +13,7 @@ import type {
   IDataLakeBatchSummary,
   IDataLakeSpendResponse,
   IFabFileDocument,
+  DataLakePrincipalType,
   LakeAccessView,
   LakeOwnershipCandidateList,
   LakeHealthApiResponse,
@@ -211,16 +213,20 @@ export function useLakeAccessView(dataLakeId: string | null, enabled = true) {
     enabled: enabled && !!dataLakeId,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeAccessView; meta?: { canTransferOwnership?: boolean } }>(
-        `/api/data-lakes/${dataLakeId}/access`
-      );
+      const response = await api.get<{
+        data: LakeAccessView;
+        meta?: { canTransferOwnership?: boolean; readerGrantsEnforced?: boolean };
+      }>(`/api/data-lakes/${dataLakeId}/access`);
       // The capability is kept OUT of the view object it sits beside: the view is the artifact the CSV
       // export mirrors, and a per-viewer permission is not a fact about the lake's access.
       // Fails closed - an older server that omits `meta` hides the control rather than showing one
-      // whose action would 400.
+      // whose action would 400. `readerGrantsEnforced` fails closed the other way round, and for the
+      // same reason: absent, the UI keeps the "recorded but not yet in force" disclosure rather than
+      // quietly dropping it.
       return {
         view: response.data.data,
         canTransferOwnership: response.data.meta?.canTransferOwnership === true,
+        readerGrantsEnforced: response.data.meta?.readerGrantsEnforced === true,
       };
     },
     staleTime: 1000 * 30,
@@ -281,6 +287,89 @@ export function useTransferLakeOwnership() {
       // the organization that owns this data lake").
       const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to transfer ownership');
+    },
+  });
+}
+
+/** A grant request: the principal by id or (for a user) by email, plus the role and any expiry. */
+export interface GrantLakeAccessBody {
+  principalType: DataLakePrincipalType;
+  principalId?: string;
+  principalEmail?: string;
+  role: DataLakeAccessRole;
+  expiresAt?: string | null;
+}
+
+export interface RevokeLakeAccessBody {
+  principalType: DataLakePrincipalType;
+  principalId: string;
+}
+
+/**
+ * Grant a principal access to one lake, or re-role the grant they already hold. The routine sharing
+ * door: `owner` is refused by the server (ownership moves only through transfer), so the form does
+ * not offer it.
+ *
+ * Invalidates the lake list as well as the access view and the config history: the actor can target
+ * THEMSELVES (the form takes any email, their own included), so re-roling themselves down drops
+ * their own manage rung while `canManage` on the cached list still says otherwise - Settings and
+ * Access would stay lit until something else refetched and then 403. Same reasoning as
+ * `useTransferLakeOwnership`. The history goes too because this door records a config-change event.
+ */
+export function useGrantLakeAccess() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, ...body }: { id: string } & GrantLakeAccessBody) => {
+      const response = await api.post<{ data: { principalId: string; role: DataLakeAccessRole } }>(
+        `/api/data-lakes/${id}/grants`,
+        body
+      );
+      return response.data.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      toast.success('Access granted');
+    },
+    onError: (error: Error) => {
+      // Surface the server's own refusal text: every rejection on this door is the actionable kind
+      // ("use transfer ownership instead", "only be shared with the organization that owns it",
+      // "no account was found for that email address"), and axios would replace them all with
+      // "Request failed with status code 400". Body key is `error` (server/middlewares/errorHandler.ts).
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to grant access');
+    },
+  });
+}
+
+/** Revoke a principal's grant on a lake. The server refuses an ownership grant, so rows holding one
+ * do not offer this.
+ *
+ * Invalidates the list and the config history alongside the access view, for the same reasons as
+ * `useGrantLakeAccess`: the revoked principal may be the actor, and the door records an audit event. */
+export function useRevokeLakeAccess() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, principalType, principalId }: { id: string } & RevokeLakeAccessBody) => {
+      const response = await api.delete<{ data: { revoked: boolean } }>(`/api/data-lakes/${id}/grants`, {
+        params: { principalType, principalId },
+      });
+      return response.data.data;
+    },
+    onSuccess: (data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // `revoked: false` means the grant was already gone - the outcome asked for, so not an error,
+      // but saying "revoked" would claim this call did something it did not.
+      toast.success(data.revoked ? 'Access revoked' : 'That principal no longer had access');
+    },
+    onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to revoke access');
     },
   });
 }
