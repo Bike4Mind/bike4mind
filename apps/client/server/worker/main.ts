@@ -1,6 +1,7 @@
 import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, connectDB } from '@bike4mind/database';
+import { taskScheduleRepository, adminSettingsRepository, connectDB } from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -19,6 +20,7 @@ import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
+import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
 import { CHUNK_SCAN_BATCH } from './chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
@@ -199,6 +201,17 @@ async function main() {
     });
     await runStrandedVectorizeRescue(bootLogger).catch(err => {
       bootLogger.error(`[fabFileChunkScan] stranded-vectorize rescue sweep failed: ${err}`);
+    });
+    // Same tick re-scans FabFiles whose moderation scan never completed, so a stranded 'pending'
+    // file does not stay unservable forever. Isolated like the passes above.
+    await runModerationRescueSweep({
+      enabled:
+        getSettingsValue('ImageModerationEnabled', await getSettingsMap({ adminSettings: adminSettingsRepository })) ??
+        true,
+      limit: CHUNK_SCAN_BATCH,
+      logger: bootLogger,
+    }).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] moderation rescue sweep failed: ${err}`);
     });
   });
 
