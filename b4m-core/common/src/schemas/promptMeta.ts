@@ -519,7 +519,7 @@ export const RetrievalSummarySchema = z.object({
    * `preRelativeFloorCandidates` and `postRelativeFloorCandidates` are the ONE pair here that is
    * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
    * - the candidates left after the absolute similarity floor, and after the relative floor
-   * (PR #2567) trims them. `chunks` is what survived the char budget on top of that, so the three
+   * trims them. `chunks` is what survived the char budget on top of that, so the three
    * numbers bracket two independent trimmers:
    *
    *   pre -> [relative floor] -> post -> [char budget] -> chunks
@@ -537,8 +537,9 @@ export const RetrievalSummarySchema = z.object({
    * is the common case, not the exotic one: it is enabled inside the same forced-retrieval gate,
    * so on a lake-memory lake it writes on nearly every forced turn. Its chunks can be backed out
    * via `context.lakeMemory.beliefCount` (approximately - that count is pre-sanitization); its
-   * CHARS are recorded nowhere, so `chars` cannot be decontaminated at all. `pre - post` needs
-   * neither, which is the point of storing both.
+   * CHARS land only inside the shared sum, with no per-surface field to subtract them back out, so
+   * `chars` cannot be decontaminated at all. `pre - post` needs neither, which is the point of
+   * storing both.
    *
    * BOTH SATURATE, so `pre` counts what the SCAN REACHED, not what the corpus holds: `pool` is
    * truncated in-scan at FORCED_RETRIEVAL_MAX_SCORED_CHUNKS (256), over a scan itself bounded by

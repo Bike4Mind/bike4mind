@@ -2339,13 +2339,13 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(quest.promptMeta?.retrieval?.injected?.topScore).toBeCloseTo(1.0, 5);
   });
 
-  it('records the pre/post floor candidate counts so the floor own effect is measurable (#2571)', async () => {
+  it('records the pre/post floor candidate counts so the floor own effect is measurable', async () => {
     // All four scores clear the 0.75 absolute floor and enter the ranked pool; the relative floor
     // at its shipped default (85% of top score) keeps two. Without these, the turn is byte-
-    // identical in promptMeta to a corpus that only ever HAD two candidates - the ambiguity #2571
-    // was filed about. Asserted as a pair, and alongside `chunks`, because the whole point is that
-    // `pre - post` is the floor alone while `pre - chunks` also carries the char budget: here the
-    // budget does not bind, so post === chunks and the two happen to agree.
+    // identical in promptMeta to a corpus that only ever HAD two candidates - the ambiguity this
+    // pair exists to remove. Asserted as a pair, and alongside `chunks`, because the whole point
+    // is that `pre - post` is the floor alone while `pre - chunks` also carries the char budget:
+    // here the budget does not bind, so post === chunks and the two happen to agree.
     const { quest } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
     expect(quest.promptMeta?.retrieval?.injected?.preRelativeFloorCandidates).toBe(4);
     expect(quest.promptMeta?.retrieval?.injected?.postRelativeFloorCandidates).toBe(2);

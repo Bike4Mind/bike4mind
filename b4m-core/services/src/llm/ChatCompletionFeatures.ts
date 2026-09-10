@@ -2660,11 +2660,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           chars: 0,
           ...(scoredCount > 0 ? { topScore } : {}),
           // Necessarily 0, both of them - this is a recorded zero, NOT the trimmed-pool case the
-          // pair exists to expose. The exit is reached only when `sections` came out empty; the
-          // push into it in the loop above is unconditional, so an empty `sections` means an empty
-          // `scored`; and the top candidate always survives its own relative cutoff, so an empty
+          // pair exists to expose. The exit is reached only when `sections` came out empty. The
+          // walk above skips a candidate only via its budget `break`, and `used` starts at 0
+          // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
+          // an empty `sections` means an empty `scored`. And the top candidate always survives its
+          // own relative cutoff (`>=` against `topScore * fraction`, fraction <= 1), so an empty
           // `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE floor, which is exactly
-          // what the `chunks: 0` beside it says.
+          // what the `chunks: 0` beside it says. If that budget ever admits 0, this breaks.
           preRelativeFloorCandidates: ranked.length,
           postRelativeFloorCandidates: scored.length,
         });
