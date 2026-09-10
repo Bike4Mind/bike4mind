@@ -361,6 +361,20 @@ describe('sharingService - createInvite (permission capping)', () => {
     expect((invite as any).permissions).toEqual([Permission.read]);
   });
 
+  it('lets a share-only sharee grant read, which is what a share grant is for', async () => {
+    const db = dbFor(file({ users: [{ userId: SHAREE, permissions: [Permission.share] }] }));
+
+    const invite = await mint(asUser(SHAREE), db, [Permission.read]);
+
+    expect((invite as any).permissions).toEqual([Permission.read]);
+  });
+
+  it('still refuses update from a share-only sharee', async () => {
+    const db = dbFor(file({ users: [{ userId: SHAREE, permissions: [Permission.share] }] }));
+
+    await expect(mint(asUser(SHAREE), db, [Permission.update])).rejects.toThrow(BadRequestError);
+  });
+
   it('does not count a grant on a group the sharer is not in', async () => {
     const db = dbFor(file({ groups: [{ groupId: 'g-other', permissions: [Permission.read, Permission.update] }] }));
 

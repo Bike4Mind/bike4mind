@@ -1,5 +1,5 @@
 import {
-  heldPermissions,
+  grantablePermissions,
   IFabFileRepository,
   IGroupDocument,
   IInvite,
@@ -165,7 +165,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
 
             let grantPermissions: Permission[];
             if (inviter) {
-              const held = heldPermissions(fabfile as ShareableAccessShape, inviter.id, inviter.groups ?? []);
+              const held = grantablePermissions(fabfile as ShareableAccessShape, inviter.id, inviter.groups ?? []);
               grantPermissions = update.permissions.filter(permission => held.has(permission));
               if (grantPermissions.length === 0) return;
             } else if (fabfile.userId === session.userId) {

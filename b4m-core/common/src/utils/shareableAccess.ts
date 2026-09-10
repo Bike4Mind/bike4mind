@@ -63,3 +63,19 @@ export function heldPermissions(
 
   return held;
 }
+
+/**
+ * What an actor may GRANT to someone else, which is not the same as what they hold: `share` is the
+ * authority to give others access, so it carries `read` with it - a share grant that cannot convey
+ * read would be useless. Everything above read (update, delete, share) still has to be held
+ * outright, which is the escalation this cap exists to stop.
+ */
+export function grantablePermissions(
+  doc: ShareableAccessShape | null | undefined,
+  userId: string | undefined,
+  userGroups: readonly string[] = []
+): Set<Permission> {
+  const grantable = heldPermissions(doc, userId, userGroups);
+  if (grantable.has(Permission.share)) grantable.add(Permission.read);
+  return grantable;
+}

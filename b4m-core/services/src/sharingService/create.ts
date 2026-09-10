@@ -15,7 +15,7 @@ import {
   IUserRepository,
   Permission,
   ShareableAccessShape,
-  heldPermissions,
+  grantablePermissions,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -131,7 +131,7 @@ export const createInvite = async (
   // checks above, and their `users[]` means seats, not permission entries. The owner holds
   // everything, so this is a no-op on the common path.
   if (type === InviteType.FabFile || type === InviteType.Session || type === InviteType.Project) {
-    const held = heldPermissions(doc as ShareableAccessShape, user.id, user.groups ?? []);
+    const held = grantablePermissions(doc as ShareableAccessShape, user.id, user.groups ?? []);
     const overreach = rest.permissions.filter(permission => !held.has(permission));
     if (overreach.length) {
       throw new BadRequestError(`Cannot grant permissions you do not hold: ${overreach.join(', ')}`);
