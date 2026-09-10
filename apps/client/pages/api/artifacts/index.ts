@@ -1,8 +1,15 @@
 import { ArtifactTypeSchema, queryBool } from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
-import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
+import {
+  artifactRepository,
+  artifactContentRepository,
+  artifactVersionRepository,
+  sessionRepository,
+  questRepository,
+} from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertArtifactSourceRefsOwned } from '@server/utils/assertArtifactSourceRefsOwned';
 import { z } from 'zod';
 import qs from 'qs';
 
@@ -83,6 +90,24 @@ const handler = baseApi()
       }
 
       const validatedData = CreateArtifactSchema.parse(req.body);
+
+      // The refs below are written verbatim onto the new artifact, so a caller must own any it
+      // supplies - otherwise it could claim another user's session/quest/artifact as its source.
+      await assertArtifactSourceRefsOwned(
+        userId,
+        {
+          sessionId: validatedData.sessionId,
+          sourceQuestId: validatedData.sourceQuestId,
+          parentArtifactId: validatedData.parentArtifactId,
+        },
+        {
+          isOwnedSession: async (id, uid) => !!(await sessionRepository.findByIdAndUserId(id, uid)),
+          getQuestSessionId: async id =>
+            ((await questRepository.findById(id)) as { sessionId?: string } | null)?.sessionId ?? null,
+          getArtifactOwner: async id =>
+            ((await artifactRepository.findOne({ id })) as { userId?: string } | null)?.userId ?? null,
+        }
+      );
 
       const result = await artifactService.create(userId, validatedData, {
         db: {
