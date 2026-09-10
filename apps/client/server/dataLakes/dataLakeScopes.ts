@@ -57,7 +57,10 @@ interface ScopedRequest {
  * window exists to protect.
  *
  * A caller with no `apiKeyInfo` is a JWT/browser caller - the key gate never ran
- * for them and this must not either.
+ * for them and this must not either. `!held` relies on that caller's `scopes` being
+ * `undefined`, not `[]` - nothing upstream sets an empty array on a non-key request
+ * today, but if that ever changes this flips from "let JWT through" to "deny every
+ * zero-scope key".
  */
 function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
   const held = req.apiKeyInfo?.scopes;
