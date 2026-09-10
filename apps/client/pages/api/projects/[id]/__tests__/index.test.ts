@@ -3,8 +3,11 @@ import { createMocks } from 'node-mocks-http';
 
 /**
  * Route-layer coverage for PUT /api/projects/[id].
- * Pins that the URL id is authoritative over any body field, and that a missing
- * or array-valued id is rejected before the service is reached.
+ *
+ * The real protection against body-override attacks is that updateProjectBodySchema
+ * is a plain z.object() with no .passthrough(): Zod strips any id field from
+ * req.body before the spread is evaluated. The 'URL id wins' test documents that
+ * intent; the BadRequestError tests are load-bearing.
  */
 
 const mockRefs = vi.hoisted(() => ({

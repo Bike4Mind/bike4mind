@@ -6,6 +6,7 @@ import { partnerSignupRuleRepository, userRepository, withTransaction } from '@b
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { organizationService } from '@bike4mind/services';
+import { BadRequestError } from '@bike4mind/utils';
 import { toSafeOrganization } from '@bike4mind/common';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -42,7 +43,10 @@ const handler = baseApi()
   )
   .put(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const orgId = req.query.id!;
+      const orgId = req.query.id;
+      if (typeof orgId !== 'string' || !orgId) {
+        throw new BadRequestError('Invalid organization id');
+      }
 
       const body = updateOrgBodySchema.parse(req.body);
       const updatedOrganization = await organizationService.update(

@@ -11,9 +11,11 @@ const revokeBodySchema = z.object({
   projectId: z.string().optional(),
 });
 
+// Next.js passes query params as string | string[]; widen the interface so the
+// typeof guard below is honest rather than dead per the declared type.
 interface SharingParams {
-  id: string;
-  type: string;
+  id: string | string[];
+  type: string | string[];
 }
 
 // This endpoint is dispatched at different paths depending on the document type.

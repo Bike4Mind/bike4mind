@@ -3,8 +3,12 @@ import { createMocks } from 'node-mocks-http';
 
 /**
  * Route-layer coverage for /api/[type]/[id]/revokeSharing.
- * Pins that the URL id and type are authoritative (not overridable by the body),
- * and that a missing or array-valued id is rejected before the service is called.
+ *
+ * The real protection against body-override attacks is that revokeBodySchema is a
+ * plain z.object({ userId, projectId }) with no .passthrough(): Zod strips any id
+ * or type field from req.body before the spread is evaluated. The 'URL params win'
+ * tests document that intent and verify the URL values reach the service; the
+ * BadRequestError tests are load-bearing (they fail without the explicit guard).
  */
 
 const mockRefs = vi.hoisted(() => ({
