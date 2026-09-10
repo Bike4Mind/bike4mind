@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-03T08:39:26.666Z",
-  "notice": "Fallback defaults last maintained on 2026-09-03. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-09-10T02:37:05.550Z",
+  "notice": "Fallback defaults last maintained on 2026-09-10. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -27,7 +27,7 @@
         },
         "description": "AI21 Labs' balanced Jurassic-2 model offering good performance at moderate cost. Great for everyday tasks and general content generation.",
         "logoFile": "AI21Labs.png",
-        "rank": 50
+        "rank": 51
       }
     },
     {
@@ -278,7 +278,7 @@
         },
         "description": "Anthropic's most capable model, built for complex, long-running asynchronous tasks. Sustains days-long agentic work and delivers notably stronger vision than prior Claude models.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 0,
         "isSlowModel": true,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
@@ -314,7 +314,7 @@
         },
         "description": "Claude 4.5 Haiku with Anthropic. Latest iteration with the fastest performance and reliability.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 3,
         "trainingCutoff": "2025-07-01",
         "releaseDate": "2025-10-16"
       }
@@ -568,7 +568,7 @@
         },
         "description": "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 0,
         "isSlowModel": true,
         "releaseDate": "2026-07-24"
       }
@@ -604,7 +604,7 @@
         },
         "description": "Anthropic's high-performance Claude 4 model optimized for balanced speed and capability. Excellent for coding and production workloads.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2024-10-01",
         "releaseDate": "2025-05-23"
       }
@@ -639,7 +639,7 @@
         },
         "description": "Anthropic's most intelligent model in the Claude 4 family. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2025-07-01",
         "releaseDate": "2025-09-30"
       }
@@ -674,7 +674,7 @@
         },
         "description": "Anthropic's Claude 4.6 Sonnet model. Delivers enhanced performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2025-10-01",
         "releaseDate": "2026-02-19"
       }
@@ -710,7 +710,7 @@
         },
         "description": "Anthropic's newest Claude 5 Sonnet model. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 0,
+        "rank": 1,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
       }
@@ -1558,7 +1558,7 @@
         },
         "description": "Anthropic's earlier flagship model via AWS Bedrock. Claude 4.6 Opus delivers frontier intelligence with extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 0,
+        "rank": 1,
         "isSlowModel": true,
         "trainingCutoff": "2025-05-01",
         "releaseDate": "2026-02-06"
@@ -1595,7 +1595,7 @@
         },
         "description": "Anthropic's previous flagship model via AWS Bedrock. Claude 4.7 Opus delivers frontier intelligence with extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 0,
+        "rank": 1,
         "isSlowModel": true,
         "trainingCutoff": "2025-10-01",
         "releaseDate": "2026-04-17"
@@ -1632,7 +1632,7 @@
         },
         "description": "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 0,
+        "rank": 1,
         "isSlowModel": true,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-05-28"
@@ -1668,7 +1668,7 @@
         },
         "description": "Anthropic's Claude 4.6 Sonnet model via AWS Bedrock. Delivers enhanced performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2025-10-01",
         "releaseDate": "2026-02-19"
       }
@@ -1704,7 +1704,7 @@
         },
         "description": "Anthropic's newest Claude 5 Sonnet model via AWS Bedrock. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 0,
+        "rank": 1,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
       }
@@ -1795,7 +1795,7 @@
         },
         "description": "Reliable for general-purpose text generation and analysis with a standard context window, suitable for a wide range of applications.",
         "logoFile": "OpenAI_Logo.svg",
-        "rank": 0,
+        "rank": 4,
         "trainingCutoff": "2024-06-01"
       }
     },
@@ -1825,7 +1825,7 @@
         },
         "description": "OpenAI's balanced GPT-4.1 model offering optimal price-performance ratio. Ideal for tasks requiring intelligence and cost efficiency.",
         "logoFile": "OpenAI_Logo.svg",
-        "rank": 0,
+        "rank": 4,
         "trainingCutoff": "2024-06-01"
       }
     },
@@ -1856,7 +1856,7 @@
         },
         "description": "Designed for high-volume, low-cost processing with rapid response times, ideal for budget-conscious applications.",
         "logoFile": "OpenAI_Logo.svg",
-        "rank": 0,
+        "rank": 4,
         "trainingCutoff": "2024-06-01"
       }
     },
@@ -2299,7 +2299,7 @@
         },
         "description": "Compact GPT-5.4 variant balancing strong performance with lower cost. Great for everyday tasks needing solid reasoning and vision.",
         "logoFile": "OpenAI_Logo.svg",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2025-08-31",
         "releaseDate": "2026-03-17"
       }
@@ -2334,7 +2334,7 @@
         },
         "description": "Ultra-lightweight GPT-5.4 model optimized for speed and cost efficiency. Ideal for high-volume workloads and quick interactions.",
         "logoFile": "OpenAI_Logo.svg",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2025-08-31",
         "releaseDate": "2026-03-17"
       }
@@ -2404,7 +2404,7 @@
         },
         "description": "GPT-5.6 Luna - the fast, cost-efficient GPT-5.6 variant. Great for high-volume workloads that still need solid reasoning, vision, and tool use.",
         "logoFile": "OpenAI_Logo.svg",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-06-23"
       }
@@ -3332,7 +3332,7 @@
         },
         "description": "OpenAI's O3 reasoning model with broad capabilities and up-to-date training data. Superseded by O4 Mini for most use cases.",
         "logoFile": "OpenAI_Logo.svg",
-        "rank": 0,
+        "rank": 3,
         "isSlowModel": true,
         "trainingCutoff": "2024-06-01"
       }
@@ -3616,7 +3616,7 @@
         },
         "description": "Claude 4.5 Haiku via AWS Bedrock. Latest iteration with the fastest performance and reliability.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 3,
         "trainingCutoff": "2025-07-01",
         "releaseDate": "2025-10-16"
       }
@@ -3651,7 +3651,7 @@
         },
         "description": "Claude 4.1 Opus via AWS Bedrock. Latest iteration with improved performance and reliability. Routes across us-east-1, us-east-2, us-west-2.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 0,
+        "rank": 1,
         "isSlowModel": true,
         "trainingCutoff": "2025-08-01",
         "releaseDate": "2025-08-06"
@@ -3687,7 +3687,7 @@
         },
         "description": "Claude 4 Opus via AWS Bedrock. Anthropic's most capable model with enhanced reasoning and multimodal capabilities. Routes across us-east-1, us-east-2, us-west-2.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 0,
+        "rank": 1,
         "isSlowModel": true,
         "trainingCutoff": "2025-05-01",
         "releaseDate": "2025-05-23"
@@ -3723,7 +3723,7 @@
         },
         "description": "Claude 4 Sonnet via AWS Bedrock. Balanced model offering excellent performance at competitive pricing. Routes across us-east-1, us-east-2, us-west-2.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2025-05-01",
         "releaseDate": "2025-05-23"
       }
@@ -3758,7 +3758,7 @@
         },
         "description": "Anthropic's most intelligent model hosted in AWS Bedrock. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1,
+        "rank": 2,
         "trainingCutoff": "2025-07-01",
         "releaseDate": "2025-09-30"
       }

@@ -290,7 +290,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     return !listed && this._dispatch.for(model)?.thinkingStyle === 'adaptive';
   }
 
-  /** Static model info list - synchronous access for getPayload, also used by getModelInfo */
+  /**
+   * Static model info list - synchronous access for getPayload, also used by getModelInfo.
+   * `rank` must match the identically-named entry in anthropicBackend.ts: it is the same
+   * model, so the picker must not show the Bedrock copy above or below its direct twin.
+   */
   private getModelInfoList(): ModelInfo[] {
     return [
       {
@@ -419,7 +423,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 0,
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-05-01',
         releaseDate: '2025-05-23',
@@ -442,7 +446,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 0,
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-08-01',
         releaseDate: '2025-08-06',
@@ -465,7 +469,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 2,
         supportsTools: true,
         trainingCutoff: '2025-05-01',
         releaseDate: '2025-05-23',
@@ -491,7 +495,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-09-30',
         description:
@@ -511,7 +515,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 3,
         supportsTools: true,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-10-16',
@@ -560,7 +564,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // demoted below Sonnet 5 (the new default) — opt-in via picker
+        rank: 2,
         trainingCutoff: '2025-10-01',
         releaseDate: '2026-02-19',
         description:
@@ -586,7 +590,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 0, // new default workhorse tier
+        rank: 1, // the Opus and Fable flagships hold rank 0
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-07-01',
         description:
@@ -607,7 +611,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 0,
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-05-01',
         releaseDate: '2026-02-06',
@@ -631,7 +635,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 0,
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-10-01',
         releaseDate: '2026-04-17',
@@ -655,7 +659,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 0,
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',

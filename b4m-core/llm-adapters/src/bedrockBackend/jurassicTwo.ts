@@ -74,7 +74,7 @@ export default class JurassicTwoBedrockBackend extends BaseBedrockBackend {
         },
         supportsVision: false,
         logoFile: 'AI21Labs.png',
-        rank: 50,
+        rank: 51,
         description:
           "AI21 Labs' balanced Jurassic-2 model offering good performance at moderate cost. Great for everyday tasks and general content generation.",
       },
