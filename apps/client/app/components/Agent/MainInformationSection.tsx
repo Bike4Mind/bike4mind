@@ -170,7 +170,7 @@ const MainInformationSection: React.FC<MainInformationSectionProps> = ({
                       borderColor: 'divider',
                       borderRadius: '4px',
                       zIndex: 3,
-                      '&:hover': { backgroundColor: 'primary.dark' },
+                      '&:hover': { backgroundColor: 'primary.solidHoverBg' },
                     }}
                   >
                     <AddAPhotoIcon sx={{ fontSize: 10, color: 'text.tertiary' }} />
@@ -359,7 +359,7 @@ const MainInformationSection: React.FC<MainInformationSectionProps> = ({
                         border: '1px solid',
                         borderColor: 'divider',
                         borderRadius: '4px',
-                        '&:hover': { backgroundColor: 'primary.dark' },
+                        '&:hover': { backgroundColor: 'primary.solidHoverBg' },
                         zIndex: 3,
                       }}
                     >

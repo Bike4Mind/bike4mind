@@ -474,13 +474,13 @@ const GoogleDrive: React.FC<GoogleDriveProps> = ({ onFileProcessed, existingAcce
         sx={{
           width: '100%',
           textAlign: 'center',
-          backgroundColor: isSignedIn ? 'neutral.main' : 'transparent',
-          color: isSignedIn ? 'success.main' : 'neutral.main',
+          backgroundColor: isSignedIn ? 'neutral.solidBg' : 'transparent',
+          color: isSignedIn ? 'success.plainColor' : 'neutral.plainColor',
           border: '1px solid',
-          borderColor: isSignedIn ? 'success.main' : 'transparent',
+          borderColor: isSignedIn ? 'success.outlinedBorder' : 'transparent',
           '&:hover': {
-            backgroundColor: isSignedIn ? 'neutral.light' : 'transparent',
-            borderColor: isSignedIn ? 'success.main' : 'neutral.main',
+            backgroundColor: isSignedIn ? 'neutral.softBg' : 'transparent',
+            borderColor: isSignedIn ? 'success.outlinedBorder' : 'neutral.outlinedBorder',
           },
         }}
       >

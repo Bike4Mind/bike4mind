@@ -98,10 +98,10 @@ const ImageBrowserModal: React.FC<ImageBrowserModalProps> = ({
                   cursor: 'pointer',
                   p: 1,
                   transition: 'all 0.2s',
-                  '&:hover': { borderColor: 'primary.main' },
+                  '&:hover': { borderColor: 'primary.plainColor' },
                   ...(selectedImage?.id === file.id
                     ? {
-                        borderColor: 'primary.main',
+                        borderColor: 'primary.plainColor',
                         borderWidth: 2,
                       }
                     : {}),

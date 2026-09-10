@@ -324,7 +324,7 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
   if (status === 'completed') {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'success.softBg' }}>
-        <Typography level="body-sm" sx={{ color: 'success.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography level="body-sm" sx={{ color: 'success.softColor', display: 'flex', alignItems: 'center', gap: 1 }}>
           <CheckCircleOutline sx={{ fontSize: 16 }} />
           Notebook executed successfully ({executedCells}/{cellCount} cells)
         </Typography>
@@ -336,7 +336,7 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
   if (status === 'failed') {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'danger.softBg' }}>
-        <Typography level="body-sm" sx={{ color: 'danger.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography level="body-sm" sx={{ color: 'danger.softColor', display: 'flex', alignItems: 'center', gap: 1 }}>
           <ErrorOutline sx={{ fontSize: 16 }} />
           Notebook execution failed: {lastError || 'Unknown error'}
         </Typography>
@@ -359,12 +359,12 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
     const progress = cellCount > 0 ? Math.round((executedCells / cellCount) * 100) : 0;
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'primary.softBg' }}>
-        <Typography level="body-sm" sx={{ color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography level="body-sm" sx={{ color: 'primary.softColor', display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
           Executing notebook... ({executedCells}/{cellCount || '?'} cells, {progress}%)
         </Typography>
         {lastError && (
-          <Typography level="body-xs" sx={{ mt: 0.5, color: 'warning.main' }}>
+          <Typography level="body-xs" sx={{ mt: 0.5, color: 'warning.plainColor' }}>
             Last error: {lastError}
           </Typography>
         )}
@@ -376,7 +376,7 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
   if (error) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'danger.softBg' }}>
-        <Typography level="body-sm" sx={{ color: 'danger.main', mb: 1 }}>
+        <Typography level="body-sm" sx={{ color: 'danger.softColor', mb: 1 }}>
           {error}
         </Typography>
         <Button size="sm" variant="outlined" color="danger" onClick={handleExecute} disabled={isExecuting}>

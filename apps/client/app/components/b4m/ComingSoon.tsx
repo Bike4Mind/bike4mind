@@ -73,12 +73,7 @@ const ComingSoon = () => {
           onChange={handleEmailChange}
           sx={{ width: '100%', maxWidth: '400px' }}
         />
-        <Button
-          data-testid="coming-soon-submit-btn"
-          type="submit"
-          disabled={isSubmitting}
-          sx={{ mt: 2, backgroundColor: 'primary', '&:hover': { backgroundColor: 'primary.dark' } }}
-        >
+        <Button data-testid="coming-soon-submit-btn" type="submit" disabled={isSubmitting} sx={{ mt: 2 }}>
           Notify Me
         </Button>
       </Box>

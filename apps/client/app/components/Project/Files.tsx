@@ -418,7 +418,7 @@ const ProjectFiles: FC<{
                   borderRadius: 'inherit',
                 }}
               >
-                <Typography className="project-files-drag-text" level="h4" sx={{ color: 'primary.main' }}>
+                <Typography className="project-files-drag-text" level="h4" sx={{ color: 'primary.plainColor' }}>
                   {t('file_browser.drop_files_here')}
                 </Typography>
               </Box>

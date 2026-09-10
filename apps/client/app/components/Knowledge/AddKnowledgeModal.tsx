@@ -114,7 +114,7 @@ const AddKnowledgeModal: React.FC<AddKnowledgeModalProps> = ({ open, onClose }) 
         <Box
           sx={theme => ({
             border: '1px solid',
-            borderColor: isDragging ? 'primary.main' : 'divider',
+            borderColor: isDragging ? 'primary.plainColor' : 'divider',
             borderRadius: '8px',
             p: 3,
             mb: 2,

@@ -178,7 +178,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
   return (
     <Card variant="outlined" sx={{ mb: 2, p: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-        <SmartToyIcon sx={{ mr: 1, color: 'primary.main' }} />
+        <SmartToyIcon sx={{ mr: 1, color: 'primary.plainColor' }} />
         <Typography level="h4">Operations Model</Typography>
       </Box>
 

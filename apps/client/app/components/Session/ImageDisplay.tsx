@@ -25,9 +25,9 @@ const ImageDisplay: FC<ImageDisplayProps> = ({ imageUrl, error }) => {
           sx={{
             p: 2,
             border: '1px solid',
-            borderColor: 'error.main',
+            borderColor: 'danger.outlinedBorder',
             borderRadius: '8px',
-            bgcolor: 'error.softBg',
+            bgcolor: 'danger.softBg',
           }}
         >
           <Typography color="danger">{error.message}</Typography>

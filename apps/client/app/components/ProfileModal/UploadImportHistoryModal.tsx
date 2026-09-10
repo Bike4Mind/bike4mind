@@ -292,7 +292,7 @@ const UploadImportHistoryModal: FC<IUploadImportHistoryModalProps> = ({
               onDrop={handleDrop}
               sx={{
                 border: '2px dashed',
-                borderColor: isDragging ? 'primary.main' : 'neutral.outlinedBorder',
+                borderColor: isDragging ? 'primary.plainColor' : 'neutral.outlinedBorder',
                 borderRadius: 'sm',
                 p: 2,
                 textAlign: 'center',

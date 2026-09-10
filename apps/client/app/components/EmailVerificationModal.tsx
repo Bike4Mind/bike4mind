@@ -52,14 +52,14 @@ const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
     >
       <ModalDialog sx={{ maxWidth: 500, zIndex: 99999 }}>
         <DialogTitle>
-          <EmailIcon sx={{ mr: 1, color: 'primary.main' }} />
+          <EmailIcon sx={{ mr: 1, color: 'primary.plainColor' }} />
           <span data-testid="email-verification-title">Verify Your Email Address</span>
         </DialogTitle>
         <DialogContent>
           <Typography level="body-md" sx={{ mb: 2 }}>
             We&apos;ve sent a verification email to:
           </Typography>
-          <Typography level="body-md" sx={{ fontWeight: 'bold', mb: 2, color: 'primary.main' }}>
+          <Typography level="body-md" sx={{ fontWeight: 'bold', mb: 2, color: 'primary.plainColor' }}>
             {userEmail}
           </Typography>
           <Typography level="body-sm" sx={{ mb: 2 }}>

@@ -81,7 +81,7 @@ const KnowledgeDragDropInput: FC<KnowledgeDragDropInputProps> = ({ onSuccess, la
         sx ||
         (theme => ({
           border: '1px solid',
-          borderColor: isDragging ? 'primary.main' : 'divider',
+          borderColor: isDragging ? 'primary.plainColor' : 'divider',
           borderRadius: '8px',
           p: { xs: '40px', sm: '140px' },
           display: 'flex',
