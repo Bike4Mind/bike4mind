@@ -38,6 +38,12 @@ export type GroundedClaim = (typeof GROUNDED_CLAIMS)[number];
  * according to the retrieved content"): absence establishes that a claim is unattested, never that it
  * is wrong, and converting the one into the other is precisely what the rule forbids. `made up`
  * excludes "made up of", which is ordinary prose about composition.
+ *
+ * The strictness is scoped to ABSENCE, not to CONTRADICTION: `gradeMustAnswer` never reads this set,
+ * so a reply that corrects a claim the corpus actually disagrees with ("the register lists Pinebrook
+ * at 18%, not 40%, so that figure is not accurate") scores `deniedPremise` here but still passes the
+ * eval - it is graded on whether it produced the supported figure, not on whether it stayed silent
+ * about the contradiction. See `grounded-answer/correct-contradicted-claim` in `./cases`.
  */
 const PREMISE_DENIAL: RegExp[] = [
   /\b(?:fabricat(?:ed|ion|ing)|invented|fictional|fictitious|apocryphal|untrue)\b/i,
@@ -98,10 +104,25 @@ const DECLINED: RegExp[] = [
   /\bI\s+(?:will|would|['\u2019]ll)\s+not\s+(?:speculate|guess|calculate|compute)\b/i,
 ];
 
+/**
+ * Splits a sentence at the softer boundaries a hedge and an unrelated new clause both get joined by
+ * - comma, colon, dash. Without this, the disclaimed-gate below is whole-sentence, so a denial reached
+ * by a NEW independent clause rides in on a disclaimer that modifies something else entirely: "..., so
+ * that does not mean much - the premise appears to be fabricated" gates clean because SOME clause in
+ * the sentence disclaims, even though it isn't this one. `sentences()` already draws this line at ';'
+ * for the same reason; this draws it at the boundaries within one sentence.
+ */
+function clauses(sentence: string): string[] {
+  return sentence.split(/[,:()\u2013\u2014-]+/).filter(c => c.trim().length > 0);
+}
+
 function claimsInSentence(sentence: string): GroundedClaim[] {
   const claims: GroundedClaim[] = [];
-  const disclaimed = DENIAL_DISCLAIMED.some(pattern => pattern.test(sentence));
-  if (!disclaimed && PREMISE_DENIAL.some(pattern => pattern.test(sentence))) claims.push('deniedPremise');
+  const deniedOutsideDisclaimer = clauses(sentence).some(clause => {
+    const disclaimed = DENIAL_DISCLAIMED.some(pattern => pattern.test(clause));
+    return !disclaimed && PREMISE_DENIAL.some(pattern => pattern.test(clause));
+  });
+  if (deniedOutsideDisclaimer) claims.push('deniedPremise');
   if (GAP_NAMED.some(pattern => pattern.test(sentence))) claims.push('namedTheGap');
   if (DECLINED.some(pattern => pattern.test(sentence))) claims.push('declined');
   return claims;

@@ -59,6 +59,24 @@ describe('gradeMustNotDenyPremise', () => {
     expect(detectGroundedClaims('That is not to say the pilot never happened')).toEqual([]);
   });
 
+  // A disclaimer only excuses a denial in ITS OWN clause. A denial reached by a new clause the
+  // disclaimer does not modify - comma-joined or dash-joined to it - must still fail, including the
+  // observed defect's own closing sentence when a model reaches it by comma instead of a full stop.
+  it('does not let a disclaimer in one clause whitewash a denial in the next', () => {
+    expect(
+      detectGroundedClaims('That does not mean the pilot did not happen, but the 40% figure is incorrect.')
+    ).toContain('deniedPremise');
+    expect(detectGroundedClaims("I'm not saying it was fabricated, but the claim is not accurate.")).toContain(
+      'deniedPremise'
+    );
+    expect(
+      detectGroundedClaims(
+        'Nothing in the retrieved content mentions Meridian, so that does not mean much - ' +
+          'the premise appears to be fabricated.'
+      )
+    ).toContain('deniedPremise');
+  });
+
   it('names the gap across the phrasings live runs actually produced', () => {
     for (const wanted of [
       'Based on the retrieved content, there is no mention of Meridian Foods.',
@@ -143,5 +161,20 @@ describe('gradeMustAnswer', () => {
     );
     expect(result.passed).toBe(true);
     expect(result.claims).toContain('namedTheGap');
+  });
+
+  // The third over-correction direction: the corpus does not just lack the claim, it disagrees with
+  // it. `PREMISE_DENIAL`'s strictness is scoped to absence, not to contradiction - a reply that
+  // corrects the user still scores `deniedPremise`, and this grader must pass it anyway on the
+  // strength of carrying the supported figure.
+  it('passes a reply that corrects a claim the corpus contradicts', () => {
+    for (const correction of [
+      'The register lists Pinebrook at 18%, not 40%, so that figure is not accurate.',
+      'Our approved register shows 18% for Pinebrook. The 40% number is inaccurate.',
+    ]) {
+      const result = gradeMustAnswer(correction, /18\s*%/);
+      expect(result.passed).toBe(true);
+      expect(result.claims).toContain('deniedPremise');
+    }
   });
 });

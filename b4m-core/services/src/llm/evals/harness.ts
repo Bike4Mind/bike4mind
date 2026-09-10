@@ -41,11 +41,11 @@ export interface EvalGrade {
   reason: string;
 }
 
-export interface PromptEvalDefinition<TCase extends PromptEvalCase> {
+export interface PromptEvalDefinition<TCase extends PromptEvalCase, TGrade extends EvalGrade = EvalGrade> {
   cases: TCase[];
   /** The prompt under test, as the model will see it. Per-case because some evals vary the body. */
   systemPrompt: (evalCase: TCase) => string;
-  grade: (evalCase: TCase, reply: string) => EvalGrade;
+  grade: (evalCase: TCase, reply: string) => TGrade;
 }
 
 export interface PromptEvalConfig {
@@ -57,10 +57,10 @@ export interface PromptEvalConfig {
   samples?: number;
 }
 
-export interface PromptEvalCaseResult<TCase extends PromptEvalCase> {
+export interface PromptEvalCaseResult<TCase extends PromptEvalCase, TGrade extends EvalGrade = EvalGrade> {
   evalCase: TCase;
   /** One entry per sample, in order. */
-  samples: (EvalGrade & { reply: string })[];
+  samples: (TGrade & { reply: string })[];
   passRate: number;
 }
 
@@ -70,9 +70,9 @@ export interface PromptEvalCaseResult<TCase extends PromptEvalCase> {
  */
 class EmptyCompletionError extends Error {}
 
-async function complete<TCase extends PromptEvalCase>(
+async function complete<TCase extends PromptEvalCase, TGrade extends EvalGrade>(
   config: PromptEvalConfig,
-  definition: PromptEvalDefinition<TCase>,
+  definition: PromptEvalDefinition<TCase, TGrade>,
   evalCase: TCase
 ): Promise<string> {
   const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
@@ -109,23 +109,25 @@ async function complete<TCase extends PromptEvalCase>(
   return content;
 }
 
-export async function runPromptEval<TCase extends PromptEvalCase>(
+export async function runPromptEval<TCase extends PromptEvalCase, TGrade extends EvalGrade>(
   config: PromptEvalConfig,
-  definition: PromptEvalDefinition<TCase>
-): Promise<PromptEvalCaseResult<TCase>[]> {
+  definition: PromptEvalDefinition<TCase, TGrade>
+): Promise<PromptEvalCaseResult<TCase, TGrade>[]> {
   const samples = config.samples ?? 3;
-  const results: PromptEvalCaseResult<TCase>[] = [];
+  const results: PromptEvalCaseResult<TCase, TGrade>[] = [];
   for (const evalCase of definition.cases) {
-    const graded: (EvalGrade & { reply: string })[] = [];
+    const graded: (TGrade & { reply: string })[] = [];
     for (let i = 0; i < samples; i++) {
       try {
         const reply = await complete(config, definition, evalCase);
         graded.push({ ...definition.grade(evalCase, reply), reply });
       } catch (error) {
         // A blank completion is as loud recorded as it is thrown, and a sequential sweep takes
-        // minutes: aborting would throw away every case already graded.
+        // minutes: aborting would throw away every case already graded. Cast rather than reshaped:
+        // TGrade may require fields beyond EvalGrade (e.g. GroundedClaim[]), and a blank completion
+        // has none of those to report.
         if (!(error instanceof EmptyCompletionError)) throw error;
-        graded.push({ passed: false, reason: error.message, reply: '' });
+        graded.push({ passed: false, reason: error.message, reply: '' } as TGrade & { reply: string });
       }
     }
     results.push({
@@ -154,7 +156,9 @@ function verdict(passRate: number): 'PASS' | 'WARN' | 'FAIL' {
   return passRate >= MIN_PASS_RATE ? 'WARN' : 'FAIL';
 }
 
-export function formatEvalReport<TCase extends PromptEvalCase>(results: PromptEvalCaseResult<TCase>[]): string {
+export function formatEvalReport<TCase extends PromptEvalCase, TGrade extends EvalGrade = EvalGrade>(
+  results: PromptEvalCaseResult<TCase, TGrade>[]
+): string {
   const lines = results.map(r => {
     const failures = r.samples.filter(s => !s.passed);
     const detail = failures.length > 0 ? ` - ${failures[0].reason}` : '';

@@ -10,9 +10,12 @@
 import { runPromptEval, type PromptEvalCaseResult, type PromptEvalConfig, type PromptEvalDefinition } from '../harness';
 import { GROUNDED_CASES, type GroundedCase } from './cases';
 import { groundedSystemPrompt } from './corpus';
-import { gradeMustAnswer, gradeMustNotDenyPremise } from './grade';
+import { gradeMustAnswer, gradeMustNotDenyPremise, type GradeResult } from './grade';
 
-export const groundedNoInventionEval = (cases: GroundedCase[]): PromptEvalDefinition<GroundedCase> => ({
+// Grade type pinned explicitly (rather than the harness's EvalGrade default) so `claims` survives
+// into PromptEvalCaseResult - formatEvalReport printing what a sample was graded on is the obvious
+// next want, and the old AbstentionCaseResult carried them.
+export const groundedNoInventionEval = (cases: GroundedCase[]): PromptEvalDefinition<GroundedCase, GradeResult> => ({
   cases,
   // One corpus for every case: the control and the derive case have to see the same retrieved content
   // as the premise-challenge cases, or they are not measuring the same rule in the same context.
@@ -26,6 +29,6 @@ export const groundedNoInventionEval = (cases: GroundedCase[]): PromptEvalDefini
 export function runGroundedNoInventionEval(
   config: PromptEvalConfig,
   cases: GroundedCase[] = GROUNDED_CASES
-): Promise<PromptEvalCaseResult<GroundedCase>[]> {
+): Promise<PromptEvalCaseResult<GroundedCase, GradeResult>[]> {
   return runPromptEval(config, groundedNoInventionEval(cases));
 }
