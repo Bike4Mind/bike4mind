@@ -13,12 +13,13 @@
  */
 
 import { Box, Card, Chip, Typography } from '@mui/joy';
+import type { Theme } from '@mui/joy/styles';
 import { alpha, keyframes } from '@mui/system';
-import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import { compactButtonSx } from '@client/app/utils/buttonStyles';
 import { memo, type ReactNode } from 'react';
 import {
   SURFACE_HUES as HUES,
+  dataChipSx,
   inkFor,
   surfaceBackground,
   REDUCED_MOTION_OFF,
@@ -31,6 +32,7 @@ export {
   REDUCED_MOTION_OFF,
   cursorBlink,
   driftFloat,
+  dataChipSx,
   /** Historical name for the generic expanding-ring animation. */
   ringPing as sonarPing,
   StatTicker as TelemetryTicker,
@@ -236,15 +238,29 @@ export function DeckSectionHeader({ label, hint }: { label: string; hint?: strin
       >
         {label}
       </Typography>
-      <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider', opacity: 0.6 }} />
+      {/* ml auto rather than a stretching rule between the two: the hint still sits
+          at the far edge, without an empty element drawing a line to it. */}
       {hint && (
-        <Typography level="body-xs" sx={{ color: 'text.tertiary', whiteSpace: 'nowrap' }}>
+        <Typography level="body-xs" sx={{ ml: 'auto', color: 'text.tertiary', whiteSpace: 'nowrap' }}>
           {hint}
         </Typography>
       )}
     </Box>
   );
 }
+
+/* Console frame */
+
+/**
+ * A framed block on the /opti surfaces: hairline box on the panel ground. Shared
+ * so blocks wear the same frame rather than each mixing its own.
+ */
+export const consolePanelSx = (theme: Theme) => ({
+  borderRadius: '12px',
+  border: '1px solid',
+  borderColor: theme.palette.border.input,
+  backgroundColor: theme.palette.background.surface2,
+});
 
 /* Active brief */
 
@@ -263,7 +279,6 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
   objectiveLine,
   isDark,
   actions,
-  fromChat = false,
 }: {
   name: string;
   description?: string;
@@ -271,76 +286,64 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
   objectiveLine: string;
   isDark: boolean;
   actions?: ReactNode;
-  /** True when this brief is the one the AI chat last formulated (and hasn't been
-   *  hand-edited since); surfaces a persistent "synced from chat" provenance chip. */
-  fromChat?: boolean;
 }) {
-  const cyan = inkFor(HUES.cyan, isDark);
   return (
-    <Card
-      variant="outlined"
-      data-testid="opti-active-brief"
-      sx={{
-        borderColor: alpha(cyan, 0.55),
-        borderWidth: 2,
-        borderLeft: `5px solid ${cyan}`,
-        backgroundColor: alpha(cyan, isDark ? 0.1 : 0.06),
-        boxShadow: `0 0 22px -10px ${alpha(cyan, isDark ? 0.85 : 0.4)}`,
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-        <CenterFocusStrongIcon sx={{ fontSize: 16, color: cyan }} />
+    // No frame, ground or inset of its own: the brief is the first thing in the
+    // console column, and the panel around it already holds it. gap 0 because the
+    // lines inside carry their own spacing, and Joy's card gap stacked on top of
+    // that opened the block to twice the height of its content.
+    <Card variant="plain" data-testid="opti-active-brief" sx={{ gap: 0, '--Card-padding': '12px' }}>
+      {/* The surface's eyebrow: the label states what the block is, so it recedes
+          into a caption rather than announcing itself in a hue. Unspaced and at
+          reading size - tracked-out micro-caps read as decoration, not a word. */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: '8px' }}>
         <Typography
           level="body-xs"
           sx={{
             fontFamily: 'monospace',
-            fontWeight: 800,
-            letterSpacing: '0.14em',
+            fontSize: '12px',
+            fontWeight: 600,
             textTransform: 'uppercase',
-            color: cyan,
+            color: 'text.tertiary',
           }}
         >
           Active Brief — now solving
         </Typography>
-        {fromChat && (
-          <Chip
-            data-testid="opti-brief-from-chat"
-            size="sm"
-            variant="soft"
-            color="success"
-            startDecorator={<AutoAwesomeIcon sx={{ fontSize: 12 }} />}
-            sx={{ fontFamily: 'monospace', fontSize: '10px', fontWeight: 700 }}
-          >
-            synced from chat
-          </Chip>
-        )}
       </Box>
-      <Typography level="title-lg">{name}</Typography>
+      {/* Each line carries its own bottom margin: the card's own gap is off, so a
+          line that does not render (no description) takes no space with it. */}
+      <Typography level="title-lg" sx={{ mb: '16px' }}>
+        {name}
+      </Typography>
       {description && (
-        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+        <Typography level="body-sm" sx={{ color: 'text.secondary', mb: '16px' }}>
           {description}
         </Typography>
       )}
-      <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: '24px' }}>
         {stats.map(stat => (
-          <Chip
-            key={stat}
-            size="sm"
-            variant="outlined"
-            sx={{ fontFamily: 'monospace', fontSize: '10px', color: cyan, borderColor: alpha(cyan, 0.4) }}
-          >
+          <Chip key={stat} size="sm" variant="outlined" sx={dataChipSx(isDark)}>
             {stat}
           </Chip>
         ))}
-        <Chip
-          size="sm"
-          variant="outlined"
-          sx={{ fontFamily: 'monospace', fontSize: '10px', color: 'text.tertiary', borderColor: 'divider' }}
-        >
+        <Chip size="sm" variant="outlined" sx={dataChipSx(isDark)}>
           {objectiveLine}
         </Chip>
       </Box>
-      {actions && <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>{actions}</Box>}
+      {actions && (
+        <Box
+          sx={{
+            display: 'flex',
+            gap: '12px',
+            flexWrap: 'wrap',
+            // The card owns its footer metrics: whichever buttons a caller passes,
+            // the row reads at one size instead of at each caller's own default.
+            '& > button': compactButtonSx,
+          }}
+        >
+          {actions}
+        </Box>
+      )}
     </Card>
   );
 });
