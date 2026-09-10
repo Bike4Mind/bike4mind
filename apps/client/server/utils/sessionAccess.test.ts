@@ -4,10 +4,12 @@ import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/co
 import { assertSessionAccess, canAccessSession, filterReadableQuests } from './sessionAccess';
 
 const mockSessionFindById = vi.fn();
+const mockSessionFindAllByIds = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findById: (...args: unknown[]) => mockSessionFindById(...args),
+    findAllByIds: (...args: unknown[]) => mockSessionFindAllByIds(...args),
   },
 }));
 
@@ -122,12 +124,17 @@ describe('sessionAccess', () => {
     const ownedSession = new Types.ObjectId().toString();
     const foreignSession = new Types.ObjectId().toString();
 
+    // findAllByIds resolves each distinct sessionId to its document; the filter keys readability by
+    // `session.id`, so every fixture carries an `id` matching its ObjectId string.
+    const sessionDocs: Record<string, any> = {
+      [ownedSession]: { id: ownedSession, userId: userA, users: [] },
+      [foreignSession]: { id: foreignSession, userId: userB, users: [] },
+    };
+
     beforeEach(() => {
-      mockSessionFindById.mockImplementation(async (id: string) => {
-        if (id === ownedSession) return { userId: userA, users: [] };
-        if (id === foreignSession) return { userId: userB, users: [] };
-        return null;
-      });
+      mockSessionFindAllByIds.mockImplementation(async (ids: string[]) =>
+        ids.map(id => sessionDocs[id]).filter(Boolean)
+      );
     });
 
     it("keeps the owner's quests and drops a foreign quest", async () => {
@@ -145,7 +152,7 @@ describe('sessionAccess', () => {
       expect(result).toEqual([]);
     });
 
-    it('loads each distinct session only once', async () => {
+    it('loads distinct sessions once, resolving soft-deleted ones too', async () => {
       await filterReadableQuests(
         [
           { _id: 'q1', sessionId: ownedSession },
@@ -153,14 +160,27 @@ describe('sessionAccess', () => {
         ],
         userA
       );
-      expect(mockSessionFindById).toHaveBeenCalledTimes(1);
+      expect(mockSessionFindAllByIds).toHaveBeenCalledTimes(1);
+      expect(mockSessionFindAllByIds).toHaveBeenCalledWith([ownedSession], { includeDeleted: true });
     });
 
     it('keeps a quest whose session is shared with the caller', async () => {
       const shared = new Types.ObjectId().toString();
-      mockSessionFindById.mockResolvedValue({ userId: userB, users: [{ userId: userA, permissions: [] }] });
+      sessionDocs[shared] = { id: shared, userId: userB, users: [{ userId: userA, permissions: [] }] };
       const result = await filterReadableQuests([{ _id: 'q1', sessionId: shared }], userA);
       expect(result).toHaveLength(1);
+    });
+
+    it('keeps an owner-only session via the ownerId arm when the caller cannot read it', async () => {
+      // A sharee exports a plan the owner built: a session only the owner can read is still a
+      // genuine part of the plan, so the owner arm keeps it even though the caller is denied.
+      const result = await filterReadableQuests([{ _id: 'q1', sessionId: ownedSession }], userB, userA);
+      expect(result).toHaveLength(1);
+    });
+
+    it('drops a doctored session readable by neither the owner nor the caller', async () => {
+      const result = await filterReadableQuests([{ _id: 'q1', sessionId: foreignSession }], userA, userA);
+      expect(result).toEqual([]);
     });
   });
 });
