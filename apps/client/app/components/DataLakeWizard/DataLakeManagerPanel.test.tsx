@@ -1086,7 +1086,7 @@ describe('DataLakeManagerPanel - purge confirmation', () => {
     expect(screen.getByTestId('datalake-purge-confirm')).toBeInTheDocument();
   };
 
-  it('names the attached Drive folder, so the stranding hazard is visible before an irreversible purge', async () => {
+  it('names the attached Drive folder, so the sync the purge ends is visible beforehand', async () => {
     useLakeDriveConnection.mockReturnValue({
       data: { folderName: 'Q3-Reports', driveFolderId: 'fld_1', status: 'connected' },
       isError: false,
@@ -1094,23 +1094,30 @@ describe('DataLakeManagerPanel - purge confirmation', () => {
     });
     await openPurgeDialog();
 
-    expect(screen.getByTestId('datalake-purge-drive-warning')).toHaveTextContent('Q3-Reports');
+    const notice = screen.getByTestId('datalake-purge-drive-warning');
+    expect(notice).toHaveTextContent('Q3-Reports');
+    // The purge sweep releases the connection itself, so the copy must not send the user off to
+    // disconnect first, nor claim the folder is stuck afterwards - it said both before teardown
+    // learned to release it.
+    expect(notice).not.toHaveTextContent(/disconnect/i);
+    expect(notice).toHaveTextContent(/can be connected to another lake/i);
     expect(screen.queryByTestId('datalake-purge-drive-unknown')).not.toBeInTheDocument();
   });
 
-  it('warns when the connection could not be READ, instead of silently omitting the warning', async () => {
-    // The dangerous collapse: a failed read is not "no connection". Staying silent here would let
-    // the user purge and permanently strand the Drive claim on that folder (#1807) - the exact
-    // outcome this warning exists to prevent, hidden by a transient error.
+  it('says so when the connection could not be READ, instead of silently omitting the notice', async () => {
+    // A failed read is not "no connection": going quiet would name the folder sync on some purges
+    // and not others, with nothing the user can see to explain the difference.
     useLakeDriveConnection.mockReturnValue({ data: undefined, isError: true, isLoading: false });
     await openPurgeDialog();
 
-    expect(screen.getByTestId('datalake-purge-drive-unknown')).toBeInTheDocument();
+    const notice = screen.getByTestId('datalake-purge-drive-unknown');
+    // Pins the reversed-teardown wording so a revert back to "leaves it stranded" fails loudly.
+    expect(notice).toHaveTextContent(/nothing in google drive is deleted/i);
     expect(screen.queryByTestId('datalake-purge-drive-warning')).not.toBeInTheDocument();
   });
 
   it('stays quiet for a lake with no connection, so an ordinary purge is not nagged', async () => {
-    // A 404 (personal lake, or genuinely no connection) resolves to null and must NOT read as an error.
+    // A personal lake (or any lake with genuinely no connection) resolves to null and must NOT read as an error.
     useLakeDriveConnection.mockReturnValue({ data: null, isError: false, isLoading: false });
     await openPurgeDialog();
 

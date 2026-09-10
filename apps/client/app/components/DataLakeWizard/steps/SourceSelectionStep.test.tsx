@@ -245,10 +245,10 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
     expect(screen.queryByTestId('source-toggle-taxonomy')).toBeNull();
   });
   describe('the Drive connect control is gated the way its sibling is', () => {
-    // Connecting Drive is an org-lake, owner/manager capability server-side: the status route 404s
-    // on a personal lake and 403s for a non-manager. This render site was ungated, so opening Add
-    // files on a personal lake fired a guaranteed-404 GET /drive-connection and rendered a
-    // permanently disabled Connect button. SelectedLakeHeader already gates on exactly this.
+    // Connecting Drive is an org-lake, owner/manager capability server-side: a personal lake has no
+    // org to hold a connection, and the status route 404s for a non-manager. This render site was
+    // ungated, so opening Add files on a personal lake fired a pointless GET /drive-connection and
+    // rendered a permanently disabled Connect button. SelectedLakeHeader already gates on this.
     const appendTo = (over: Partial<WizardTargetLake> = {}) =>
       useDataLakeWizardStore.setState({
         targetLake: {
@@ -272,7 +272,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
     });
 
     it('renders NO connect control for a non-manager on an org lake', () => {
-      // The 403 half of the same gate. Without it the two render sites disagree, which is what let
+      // The non-manager half of the same gate. Without it the two render sites disagree, which let
       // this one drift in the first place.
       appendTo({ canManage: false });
       renderStep();

@@ -97,8 +97,8 @@ describe('SelectedLakeHeader', () => {
     ['a personal lake', { organizationId: undefined }],
     ['an org lake the caller cannot manage', { canManage: false }],
   ])('withholds the Drive control on %s', (_label, over) => {
-    // Server-side the status route 404s on a personal lake and 403s for a non-manager, so a
-    // control here could only ever fail.
+    // Server-side a personal lake has no org to hold a connection and the status route 404s for a
+    // non-manager, so a control here could only ever fail.
     renderHeader(over as Partial<ManageableDataLakeConfig>);
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });

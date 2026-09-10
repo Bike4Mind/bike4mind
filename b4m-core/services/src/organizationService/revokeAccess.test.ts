@@ -57,6 +57,11 @@ describe('organizationService - revokeAccess', () => {
         },
         users: {
           removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
+          // Default: the removed user has no home-org pointer, so the clear below is a no-op and the
+          // org-update assertions in the existing cases stay exact. Cases that exercise the clear
+          // override findById.
+          findById: vi.fn().mockResolvedValue(null),
+          update: vi.fn().mockResolvedValue(undefined),
         },
       },
     };
@@ -179,6 +184,23 @@ describe('organizationService - revokeAccess', () => {
         users: [secondUser],
       })
     );
+  });
+
+  it('clears the removed user organizationId when it pointed at this org (stale-org billing fix)', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue({ id: 'user1', organizationId: 'org1' });
+
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.users.findById).toHaveBeenCalledWith('user1');
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith({ id: 'user1', organizationId: null });
+  });
+
+  it('leaves the removed user organizationId alone when it points at a different org', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue({ id: 'user1', organizationId: 'other-org' });
+
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
   });
 
   it('should validate and secure parameters', async () => {

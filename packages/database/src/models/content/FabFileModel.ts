@@ -667,6 +667,35 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toObject());
   }
 
+  async findAccessibleInIds(
+    ids: string[],
+    access: { userId: string; userGroups?: string[] },
+    lakeAccess?: AttachmentLakeAccess
+  ) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    // Lake arms mirror `getAccessibleFiles` (the attachment door): a file the caller can reach ONLY
+    // through data-lake membership must resolve here too, or this predicate would be narrower than
+    // the door that admitted the file and silently drop lake-only images. Same builder, same
+    // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
+    const lakeArms = buildLakeArms({
+      lakeMemberships: lakeAccess?.lakeMemberships,
+      dataLakeTags: lakeAccess?.dataLakeTags,
+      dataLakeTagPrefixes: lakeAccess?.dataLakeTagPrefixes,
+    });
+    const result = await this.fabFileModel.find({
+      _id: { $in: convertIds(validIds) },
+      // owner + user-share + group-share (buildOwnershipConditions) + global-read + lake arms - the
+      // shares-aware equivalent of the CASL FabFile read rule for callers with no req.ability.
+      $or: [
+        ...buildOwnershipConditions(access.userId, { userGroups: access.userGroups }),
+        { isGlobalRead: true },
+        ...lakeArms.map(arm => ({ $and: [arm, { archivedAt: null }] })),
+      ],
+    });
+    return result.map(d => d.toObject());
+  }
+
   /**
    * Metadata-only fetch for a set of ids. The heavy fields AND the URL-bearing
    * ones are projected out (see METADATA_ONLY_PROJECTION), so a caller that only

@@ -1,7 +1,7 @@
 // packages/client/pages/api/agents/index.ts
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { agentRepository, userRepository, withTransaction, fabFileRepository } from '@bike4mind/database';
+import { agentRepository, userRepository, withTransaction } from '@bike4mind/database';
 import {
   IAgent,
   IAgentCapabilities,
@@ -9,10 +9,9 @@ import {
   supportedChatModels,
   supportedImageModels,
   UserLevelType,
-  isImageServeable,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { getFilesStorage } from '@server/utils/storage';
+import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
 import {
   validateToolList,
   validateMaxIterations,
@@ -26,81 +25,6 @@ import {
 interface IAgentWithSystemPrompt extends IAgent {
   systemPrompt?: string;
 }
-
-// Helper function to refresh avatar URLs for agents
-const refreshAgentAvatarUrls = async (agents: IAgent[]): Promise<IAgent[]> => {
-  const refreshedAgents = await Promise.all(
-    agents.map(async agent => {
-      // Skip if no portrait URL
-      if (!agent.visual?.portraitUrl) {
-        return agent;
-      }
-
-      try {
-        // Extract the filename from the S3 URL
-        // URLs look like: https://bucket.s3.region.amazonaws.com/filename.ext?params
-        const url = new URL(agent.visual.portraitUrl);
-        const pathname = url.pathname; // This gives us "/filename.ext"
-        const filename = pathname.substring(1); // Remove the leading "/"
-
-        if (!filename || !filename.includes('.')) {
-          return agent;
-        }
-
-        // The filePath in the database should be just the filename (without fab-files/ prefix)
-        const filePath = filename;
-
-        // Find the corresponding FabFile to get proper signed URL
-        const fabFile = await fabFileRepository.findOne({ filePath });
-        // Don't re-mint a signed URL for a held/blocked avatar image.
-        if (fabFile && fabFile.filePath && isImageServeable(fabFile)) {
-          // Check if the current URL is expired (older than 50 minutes)
-          const now = new Date();
-          const isExpired = !fabFile.fileUrlExpireAt || fabFile.fileUrlExpireAt <= now;
-
-          if (isExpired) {
-            // Generate a new signed URL
-            const newSignedUrl = await getFilesStorage().getSignedUrl(fabFile.filePath);
-
-            if (newSignedUrl) {
-              // Update the FabFile with the new URL and expiration
-              const newExpireAt = new Date(now.getTime() + 3600 * 1000);
-              await fabFileRepository.update({
-                ...fabFile,
-                fileUrl: newSignedUrl,
-                fileUrlExpireAt: newExpireAt,
-              });
-
-              // Return the agent with the new URL
-              return {
-                ...agent,
-                visual: {
-                  ...agent.visual,
-                  portraitUrl: newSignedUrl,
-                },
-              };
-            }
-          } else {
-            // URL is still valid, use the existing one
-            return {
-              ...agent,
-              visual: {
-                ...agent.visual,
-                portraitUrl: fabFile.fileUrl || agent.visual.portraitUrl,
-              },
-            };
-          }
-        }
-      } catch (error) {
-        console.error(`Error refreshing avatar URL for agent ${agent.name}:`, error);
-      }
-
-      return agent;
-    })
-  );
-
-  return refreshedAgents;
-};
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
@@ -122,7 +46,7 @@ const handler = baseApi()
     const data: IAgent[] = result.data;
 
     // Refresh avatar URLs for all agents BEFORE returning response
-    const agentsWithRefreshedAvatars = await refreshAgentAvatarUrls(data);
+    const agentsWithRefreshedAvatars = await refreshAgentAvatarUrls(data, req.user!.id);
 
     res.json({
       ...result,

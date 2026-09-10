@@ -680,6 +680,31 @@ export function lakeMatchesAccess(
 }
 
 /**
+ * The names of the access arms `DataLakeModel.findAccessible` ORs together, in the order that
+ * method emits them. What each one admits, and the condition that includes it, lives with the code
+ * that implements it - `buildAccessibleQuery` in
+ * `packages/database/src/models/ai/DataLakeModel.ts` - deliberately NOT restated here, since a
+ * second copy of the semantics is pinned by nothing and would go stale invisibly from another
+ * package. `orgGrant` is the one name that can label several disjuncts (one per granting org).
+ *
+ * The `ctx.isAdmin` bypass is deliberately NOT an arm: it replaces the whole `$or` rather than
+ * adding a disjunct, so an admin context yields zero arms.
+ *
+ * This inventory is the seam two suites check themselves against, so adding an arm to the real
+ * query without naming it here (or naming it here without teaching the service-layer fake about
+ * it) fails loudly instead of quietly weakening what those tests claim:
+ *
+ * - `packages/database/src/models/ai/DataLakeModel.accessArms.test.ts` - every label sits in front
+ *   of the disjunct it names, per context, and a maximal context reaches every name.
+ * - `b4m-core/services/src/dataLakeService/dataLakeService.test.ts` - `ARM_COVERAGE` beside the
+ *   in-memory `findAccessible` fake declares a position on every name (that fake is a deliberate
+ *   SUBSET of the real query, so its job is arm awareness, not output equality).
+ */
+export const FIND_ACCESSIBLE_ARMS = ['owner', 'public', 'orgGate', 'orgAdmin', 'grant', 'orgGrant'] as const;
+
+export type FindAccessibleArm = (typeof FIND_ACCESSIBLE_ARMS)[number];
+
+/**
  * Single projection from a persisted lake document to the lightweight DataLakeConfig
  * the access filters operate on. Centralized so the `requiredEntitlement` field (and any
  * future field) cannot be silently dropped at one of the many former inline projections.

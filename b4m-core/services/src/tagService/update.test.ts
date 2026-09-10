@@ -510,4 +510,59 @@ describe('tagService - update', () => {
       expect(renameOrder).toBeLessThan(recomputeOrder);
     });
   });
+
+  /**
+   * The audit principal on the auto-activate row a prefix-arm rename can emit. Sibling of #1964's
+   * tag-toggle door: this path built its actor with no `auditPrincipal`, so a key-driven rename
+   * that published a draft lake recorded the human instead of the key. Removing `auditPrincipal`
+   * from the actor at update.ts's recompute call turns the key case red.
+   */
+  describe('auto-activate audit principal', () => {
+    const auditSpy = () => {
+      const record = vi.fn().mockResolvedValue({});
+      return { db: { lakeConfigChangeEvents: { record } }, record };
+    };
+
+    const drivingActivation = (audit: ReturnType<typeof auditSpy>) => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake({ status: 'draft' })]);
+      // fileCount > 0 is what makes the flip eligible (see recomputeLakeStats).
+      (mockFabFileRepo.computeDataLakeStats as Mock).mockResolvedValue({
+        fileCount: 1,
+        totalSizeBytes: 10,
+        totalChunkedChars: 0,
+      });
+      (mockDataLakeRepo.activateIfDraft as Mock).mockResolvedValue(true);
+      return { db: { ...adapters.db, ...audit.db } };
+    };
+
+    it('names the API key, not the human, when a key-driven rename publishes a draft lake', async () => {
+      const audit = auditSpy();
+      const withAudit = {
+        ...drivingActivation(audit),
+        auditPrincipal: { principalKind: 'apiKey' as const, principalId: 'key-abc', onBehalfOfUserId: userId },
+      };
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'auto-activate',
+          principalKind: 'apiKey',
+          principalId: 'key-abc',
+          onBehalfOfUserId: userId,
+        })
+      );
+    });
+
+    it('still names the tag owner when no key is involved', async () => {
+      const audit = auditSpy();
+
+      await update(userId, { id: existingTagId, name: 'archived' }, drivingActivation(audit));
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: userId })
+      );
+    });
+  });
 });

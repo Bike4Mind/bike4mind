@@ -18,8 +18,9 @@ import { fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
 import { z } from 'zod';
 
 const copyGeneratedImageSchema = z.object({
@@ -41,12 +42,13 @@ const handler = baseApi()
       const { user } = req;
       const { imageS3Key, fileName } = copyGeneratedImageSchema.parse(req.body);
 
-      // NOTE: `imageS3Key` is a caller-supplied key into the generated-images bucket, and there is
-      // no per-object ownership check here - generated images are stored at bare uuid keys with no
-      // DB row or userId-scoped prefix recording who created them, so nothing server-side can decide
-      // whether this key is the caller's. Closing this needs an ownership model for generated images
-      // (owner-scoped keys at generation time, or a ledger), a change spanning the generation tools
-      // and the generated-content serve route - tracked as its own follow-up, out of scope here.
+      // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
+      // any user's image into their own files by supplying its key. Only copy an image the caller
+      // created (or one shared with them via the source chat).
+      if (!(await userCanAccessGeneratedImage(imageS3Key, user.id))) {
+        throw new ForbiddenError('You do not have access to this image');
+      }
+
       const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
 
       const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
