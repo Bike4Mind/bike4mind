@@ -59,14 +59,15 @@ const handler = baseApi()
     const input = GrantInput.parse(req.body);
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // The gate hands back the active grants it read to make its own decision, so the manage gate
+    // inside the service is applied to that same set rather than re-reading the lake and its grants.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const data = await dataLakeService.grantLakeAccess(actor, lake.id, input, {
+    const data = await dataLakeService.grantLakeAccess(actor, lake, grants, input, {
       db: {
-        dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
         ...lakeConfigAuditDb,
@@ -84,14 +85,15 @@ const handler = baseApi()
     });
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // The gate hands back the active grants it read to make its own decision, so the manage gate
+    // inside the service is applied to that same set rather than re-reading the lake and its grants.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const data = await dataLakeService.revokeLakeAccess(actor, lake.id, input, {
+    const data = await dataLakeService.revokeLakeAccess(actor, lake, grants, input, {
       db: {
-        dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
         ...lakeConfigAuditDb,

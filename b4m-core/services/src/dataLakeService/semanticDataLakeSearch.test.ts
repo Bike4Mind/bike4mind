@@ -4,9 +4,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // above the floor, which is what the pre-existing exclusion/scoping tests assume.
 // mockCreateEmbeddingService is a spy (not just a stub) so multi-model tests can assert exactly
 // which models were embedded and how many times.
-const { mockCosine, mockCreateEmbeddingService } = vi.hoisted(() => ({
+const { mockCosine, mockCreateEmbeddingService, mockGenerateEmbedding } = vi.hoisted(() => ({
   mockCosine: vi.fn(() => 0.9),
   mockCreateEmbeddingService: vi.fn(),
+  // Defaulted in beforeEach to the model-encoding vector every other test assumes; overridable so
+  // the empty-embedding return path can be exercised.
+  mockGenerateEmbedding: vi.fn(),
 }));
 
 // Mock only the embedding/provider helpers from the utils barrel; keep the real
@@ -26,7 +29,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
     EmbeddingFactory: class {
       createEmbeddingService(model: string) {
         mockCreateEmbeddingService(model);
-        return { generateEmbedding: async () => [model.length, 0] };
+        return { generateEmbedding: async () => mockGenerateEmbedding(model) };
       }
     },
   };
@@ -44,6 +47,8 @@ beforeEach(() => {
   mockCosine.mockReset();
   mockCosine.mockReturnValue(0.9);
   mockCreateEmbeddingService.mockClear();
+  mockGenerateEmbedding.mockReset();
+  mockGenerateEmbedding.mockImplementation((model: string) => [model.length, 0]);
 });
 
 const baseParams = (): SemanticDataLakeSearchParams => ({
@@ -418,7 +423,7 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.fileBudgetHit).toBe(true);
     expect(result.scan.truncated).toBe(true);
     expect(result.scan.filesMatching).toBe(50);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'), expect.any(Object));
   });
 
   it('a corpus that exactly fills the chunk budget is NOT reported as truncated', async () => {
@@ -457,7 +462,7 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBe(5);
     expect(result.scan.chunkBudgetHit).toBe(true);
     expect(result.scan.truncated).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'), expect.any(Object));
   });
 
   it('never requests more than one page beyond the page size - the enforceable memory bound', async () => {
@@ -504,6 +509,95 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
         },
       } as never)
     ).rejects.toThrow('cursor did not advance');
+  });
+});
+
+/**
+ * Truncation is decided on THREE return paths, and until the reporting seam moved to the
+ * entrypoints only the first of them said anything: a budgeted scan warned, while a scope whose
+ * every file was retrieval-excluded and a scope whose query embedding came back empty both
+ * returned a truncated corpus in silence. The metric feeding the `dataLakeScanTruncated` alarm
+ * rides the same seam, so a path that reports nothing is a path the alarm cannot see.
+ */
+describe('semanticDataLakeSearch truncation reporting covers every return path', () => {
+  // Over the file budget with a page still pending, so fileBudgetHit is set before either
+  // downstream return can be reached. The 'MARK - ' prefix only matters to the exclusion test
+  // below; it is inert for the others.
+  const overBudgetPage = () =>
+    filesAdapter([
+      {
+        data: Array.from({ length: 2 }, (_, i) => ({ id: `f${i}`, fileName: `MARK - F${i}.pdf`, tags: [] })),
+        hasMore: true,
+        total: 50,
+      },
+    ]);
+
+  it('reports truncation when the file budget was hit and EVERY scoped file is retrieval-excluded', async () => {
+    const logger = makeLogger();
+    const findVectors = pagingChunkMock([]);
+
+    const result = await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        logger: logger as never,
+        budgets: { maxFiles: 2, filePageSize: 2 },
+        // Both scoped files carry the marker, so fileIds is empty and the search returns before
+        // any ranking - the path that used to drop the signal entirely. Markers are anchored
+        // leading + word-boundary, hence the 'MARK - ' prefix rather than a bare substring.
+        retrievalFilter: { excludeFilenameMarkers: ['MARK'] },
+      },
+      {
+        db: { fabfiles: { search: overBudgetPage() }, fabfilechunks: { findVectorsByFabFileIds: findVectors } },
+      } as never
+    );
+
+    expect(findVectors).not.toHaveBeenCalled();
+    expect(result.scan.truncated).toBe(true);
+    expect(result.scan.fileBudgetHit).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'), {
+      entrypoint: 'lake-scoped',
+      cause: 'files',
+    });
+  });
+
+  it('reports truncation when the file budget was hit and the query embedding came back empty', async () => {
+    const logger = makeLogger();
+    mockGenerateEmbedding.mockResolvedValue([]);
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), logger: logger as never, budgets: { maxFiles: 2, filePageSize: 2 } },
+      {
+        db: {
+          fabfiles: { search: overBudgetPage() },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) },
+        },
+      } as never
+    );
+
+    // The scope walk hit its budget BEFORE the embedding failed, so the corpus really is
+    // incomplete - reporting it as complete here is what made this path invisible.
+    expect(result.scan.fileBudgetHit).toBe(true);
+    expect(result.scan.truncated).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'), {
+      entrypoint: 'lake-scoped',
+      cause: 'files',
+    });
+  });
+
+  it('stays silent on a complete scan - an alarm that fires on healthy lakes is worthless', async () => {
+    const logger = makeLogger();
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), logger: logger as never }, {
+      db: {
+        fabfiles: {
+          search: filesAdapter([{ data: [{ id: 'f1', fileName: 'F1.pdf', tags: [] }], hasMore: false, total: 1 }]),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 2)) },
+      },
+    } as never);
+
+    expect(result.scan.truncated).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'), expect.anything());
   });
 });
 
@@ -945,6 +1039,32 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
     expect(result.scan.fileBudgetHit).toBe(true);
     expect(result.scan.truncated).toBe(true);
     expect(result.scan.filesMatching).toBe(3);
+  });
+
+  /**
+   * The Entrypoint dimension is what tells an operator WHICH surface truncated - a curated agent
+   * kbScope and a lake search have different fixes (recurate vs raise the budget), and the alarm
+   * is otherwise one undifferentiated count.
+   */
+  it('attributes the allow-list surface to its own entrypoint, so a truncating surface is identifiable', async () => {
+    const logger = makeLogger();
+    const { adapters } = scopedAdapters({
+      files: [
+        { id: 'a', fileName: 'A.pdf', tags: [] },
+        { id: 'b', fileName: 'B.pdf', tags: [] },
+      ],
+    });
+
+    const result = await fileScopedSemanticSearch(
+      { ...scopedParams(['a', 'b']), logger: logger as never, budgets: { maxFiles: 1 } },
+      adapters as never
+    );
+
+    expect(result.scan.truncated).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'), {
+      entrypoint: 'file-scoped',
+      cause: 'files',
+    });
   });
 
   it('reports a complete allow-list scan as not truncated', async () => {

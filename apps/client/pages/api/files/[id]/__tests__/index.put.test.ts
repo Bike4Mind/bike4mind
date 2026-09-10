@@ -131,13 +131,14 @@ const makeRes = () => {
 // a real 24-hex ObjectId string rather than a readable slug.
 const FILE_ID = '507f1f77bcf86cd799439011';
 
-const req = (body: unknown, id: string = FILE_ID, userId = 'u1') =>
+const req = (body: unknown, id: string = FILE_ID, userId = 'u1', apiKeyInfo?: { keyId: string }) =>
   ({
     method: 'PUT',
     user: { id: userId, isAdmin: false },
     ability: {},
     query: { id },
     body,
+    apiKeyInfo,
     logger: { updateMetadata: vi.fn(), error: vi.fn(), warn: vi.fn() },
   }) as never;
 
@@ -146,6 +147,9 @@ const run = (body: unknown, res: unknown, id?: string) =>
 
 const runAs = (userId: string, body: unknown, res: unknown) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, FILE_ID, userId), res);
+
+const runWithKey = (keyId: string, body: unknown, res: unknown) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, FILE_ID, 'u1', { keyId }), res);
 
 const fabFile = (overrides: Record<string, unknown> = {}) => ({
   id: FILE_ID,
@@ -266,6 +270,31 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
         // activateIfDraft checks nothing (see recomputeLakeStats).
         manageRung: 'system',
         changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
+      })
+    );
+  });
+
+  // The API-key half of the case above, on the same real chain. #1964 fixed this misattribution on
+  // the tag-toggle door; the PUT door had the identical gap - the route attached no principal, so
+  // `updateFabFile` built its `reconcileLakeTags` actor without one and the fallback named the
+  // human. Dropping the route's `auditPrincipal` line turns this red while every other case here
+  // stays green.
+  it('names the API key, not the human, when a key-driven join publishes a draft lake', async () => {
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [] }));
+    makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [] });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 12, totalChunkedChars: 0 });
+    h.activateIfDraft.mockResolvedValue(true);
+    const { res } = makeRes();
+
+    await runWithKey('key-abc', { tags: [{ name: META, strength: 1 }] }, res);
+
+    expect(h.recordConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'auto-activate',
+        principalKind: 'apiKey',
+        principalId: 'key-abc',
+        onBehalfOfUserId: 'u1',
       })
     );
   });

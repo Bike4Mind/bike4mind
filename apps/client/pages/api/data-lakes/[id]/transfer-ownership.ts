@@ -60,13 +60,14 @@ const handler = baseApi()
     const ctx = await toAccessContext(req);
 
     // Resolve + access-gate the lake first, so a caller who can't even see it gets a not-found
-    // (no existence leak). The service then applies the stricter transfer authorization.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // (no existence leak). The service then applies the stricter transfer authorization, to the
+    // grants this gate already read rather than a second copy of them.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const result = await dataLakeService.transferLakeOwnership(actor, lake.id, newOwnerUserId, {
+    const result = await dataLakeService.transferLakeOwnership(actor, lake, grants, newOwnerUserId, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,

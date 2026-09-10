@@ -418,7 +418,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     timestamp: { type: Date, required: true },
     type: { type: String, required: true },
     // NOT required, despite the TS type being `prompt: string`. An assistant-side voice turn is
-    // created by upsertBySessionIdAndConversationItemId (a bare upsert - no validators) which sets
+    // created by upsertVoiceTranscriptTurn (a bare upsert - no validators) which sets
     // only replies/status/type/timestamp, so prompt-less quests are normal on disk. `required: true`
     // could therefore never protect the write that omits it; it only fired on create(), the copy
     // path, turning someone else's prompt-less turn into a failed fork/snip/clone of a whole
@@ -791,12 +791,32 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return { ...result.toObject(), id: result._id.toString() } as Pick<IChatHistoryItemDocument, 'id' | 'status'>;
   }
 
-  async upsertBySessionIdAndConversationItemId(
+  /**
+   * Upsert the quest row for one voice-transcript turn.
+   *
+   * Keyed on (sessionId, conversationItemId, OWNER) - not on the first two alone. The
+   * conversationItemId is minted by the voice client, so on a session shared with write access a
+   * second user could otherwise reuse another user's item id and overwrite their turn in place.
+   * With the owner in the key a reused id creates that caller's own row instead of taking one
+   * over.
+   *
+   * `promptMeta.session.id` is written on insert because Mongo seeds an upserted document only
+   * from the equality filter, which supplies the owner but not the session id its sub-schema
+   * also requires. Rows written before this owner binding existed carry no promptMeta at all and
+   * so will no longer be matched - a voice session live across the deploy inserts a fresh row
+   * rather than updating its earlier one.
+   */
+  async upsertVoiceTranscriptTurn(
     sessionId: string,
     conversationItemId: string,
+    ownerUserId: string,
     data: Partial<IChatHistoryItemDocument>
   ) {
-    return this.model.findOneAndUpdate({ sessionId, conversationItemId }, { $set: data }, { upsert: true, new: true });
+    return this.model.findOneAndUpdate(
+      { sessionId, conversationItemId, 'promptMeta.session.userId': ownerUserId },
+      { $set: data, $setOnInsert: { 'promptMeta.session.id': sessionId } },
+      { upsert: true, new: true }
+    );
   }
 
   // Flag a quest as stopped so an in-flight ChatCompletionProcess cancellation
@@ -904,6 +924,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return !!(await this.model.exists({ sessionId }));
   }
 
+  // Session ids of every quest whose `images` array references this generated-file key. Generated
+  // images are stored under owner-less keys, so this is the only server-side link from a key back
+  // to the chat (and thus the owner) that produced it - see userCanAccessGeneratedImage. Includes
+  // soft-deleted quests: a key from a deleted turn still belongs to that session's owner.
+  async findSessionIdsByImage(image: string): Promise<string[]> {
+    if (!image) return [];
+    const docs = await this.model.find({ images: image }, { sessionId: 1 }).setOptions({ includeDeleted: true });
+    return [...new Set(docs.map(d => d.sessionId))];
+  }
+
   /**
    * Quests stuck at `status: 'running'` whose `updatedAt` has gone stale, oldest first.
    * Shape is `StaleRunningQuestView`, declared below the class.
@@ -986,6 +1016,11 @@ function initializeQuestModel() {
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
+
+    // Multikey index backing findSessionIdsByImage: the generated-image authz lookup runs on every
+    // serve/copy of a generated image, so this key -> session resolution must not be a collection
+    // scan. Sparse: most quests carry no images.
+    ChatHistoryItemSchema.index({ images: 1 }, { name: 'images', sparse: true });
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });

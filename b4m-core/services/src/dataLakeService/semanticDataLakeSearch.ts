@@ -30,6 +30,7 @@ import {
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
 import { recordDataLakeSearchMetrics } from './dataLakeSearchMetrics';
+import { reportScanTruncation, type ScanTruncationReport, type SearchEntrypoint } from './scanTruncationMetrics';
 import { isVectorSearchReady, partitionByVectorSearchReadiness } from './vectorSearchEligibility';
 import {
   buildRetrievalUnavailableReport,
@@ -815,7 +816,14 @@ async function rankChunksForFiles(args: {
     const mismatch = createEmbeddingMismatchAccumulator(excludedForeignFiles(new Set()), embeddingModel);
     mismatch.queryEmbeddingFailed();
     return {
-      ...emptyResult(embeddingModel, budgets, { filesMatching: args.filesMatching, filesScoped: fileIds.length }),
+      // fileBudgetHit rides along deliberately: the scope walk already hit its budget before the
+      // embedding failed, so dropping it here would report a truncated corpus as complete.
+      ...emptyResult(embeddingModel, budgets, {
+        filesMatching: args.filesMatching,
+        filesScoped: fileIds.length,
+        truncated: args.fileBudgetHit,
+        fileBudgetHit: args.fileBudgetHit,
+      }),
       embeddingMismatch: mismatch.report(),
       retrievalUnavailable,
       supersession,
@@ -1157,12 +1165,11 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  if (scan.truncated) {
-    logger?.warn?.(
-      `[semanticSearch] TRUNCATED scan: ranked ${scan.chunksScanned} chunks across ${scan.filesScanned}/${scan.filesMatching} files ` +
-        `(maxFiles=${scan.budgets.maxFiles}, maxChunks=${scan.budgets.maxChunks}) - results rank an INCOMPLETE corpus`
-    );
-  } else if (scan.chunksScanned > 0 && scan.chunksSkippedDimensionMismatch === scan.chunksScanned) {
+  // Truncation is reported by the entrypoint wrappers, not here: this function is only one of
+  // three return paths that can set `scan.truncated`. The suppression the old else-if provided is
+  // kept explicitly - a budgeted prefix that happens to be entirely foreign-model says nothing
+  // about the whole corpus, so the diagnosis below would be guessing.
+  if (!scan.truncated && scan.chunksScanned > 0 && scan.chunksSkippedDimensionMismatch === scan.chunksScanned) {
     // Guarded on ALL chunks mismatching: a few stale chunks mid-revectorize are expected and must
     // stay quiet, but an entire corpus in the wrong vector space can never return anything.
     logger?.warn?.(
@@ -1226,7 +1233,41 @@ async function rankChunksForFiles(args: {
   };
 }
 
+/**
+ * The one place a truncated search is reported. Both public entrypoints are thin wrappers around
+ * their real bodies so that every internal return path - a budgeted scan, an empty query
+ * embedding, a fully retrieval-excluded scope - passes through here. Reporting from the ranking
+ * core instead would see only the first of the three.
+ */
+async function withTruncationReport(
+  entrypoint: SearchEntrypoint,
+  result: SemanticDataLakeSearchResult,
+  logger?: Logger
+): Promise<SemanticDataLakeSearchResult> {
+  const { scan } = result;
+  if (!scan.truncated) return result;
+
+  const report: ScanTruncationReport = {
+    fileBudgetHit: scan.fileBudgetHit,
+    chunkBudgetHit: scan.chunkBudgetHit,
+    filesScanned: scan.filesScanned,
+    filesMatching: scan.filesMatching,
+    chunksScanned: scan.chunksScanned,
+    maxFiles: scan.budgets.maxFiles,
+    maxChunks: scan.budgets.maxChunks,
+  };
+  await reportScanTruncation(entrypoint, report, logger);
+  return result;
+}
+
 export async function semanticDataLakeSearch(
+  params: SemanticDataLakeSearchParams,
+  adapters: SemanticDataLakeSearchAdapters
+): Promise<SemanticDataLakeSearchResult> {
+  return withTruncationReport('lake-scoped', await lakeScopedSearch(params, adapters), params.logger);
+}
+
+async function lakeScopedSearch(
   params: SemanticDataLakeSearchParams,
   adapters: SemanticDataLakeSearchAdapters
 ): Promise<SemanticDataLakeSearchResult> {
@@ -1371,6 +1412,13 @@ export interface FileScopedSemanticSearchAdapters {
  * deleted/archived files curated into a scope contribute nothing.
  */
 export async function fileScopedSemanticSearch(
+  params: FileScopedSemanticSearchParams,
+  adapters: FileScopedSemanticSearchAdapters
+): Promise<SemanticDataLakeSearchResult> {
+  return withTruncationReport('file-scoped', await fileScopedSearch(params, adapters), params.logger);
+}
+
+async function fileScopedSearch(
   params: FileScopedSemanticSearchParams,
   adapters: FileScopedSemanticSearchAdapters
 ): Promise<SemanticDataLakeSearchResult> {

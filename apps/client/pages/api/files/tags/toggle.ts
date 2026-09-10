@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 const handler = baseApi().post(
@@ -62,6 +63,10 @@ const handler = baseApi().post(
       // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived from
       // the user document the service is handed.
       administeredOrgIds: ctx.administeredOrgIds,
+      // Matches every other audited config-write door (#1917): undefined for a session caller,
+      // the key's principal for a `b4m_live_` caller - so a toggle that auto-activates a draft
+      // lake attributes the History row to the key, not the human.
+      auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
       logger: req.logger,
     });
 

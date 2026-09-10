@@ -445,9 +445,12 @@ export interface ChunkRescueMessage extends Record<string, unknown> {
  * stamping the running lake's id would re-chunk it and rewrite the paused lake's passages, so it
  * stamps no id and lets the platform value decide.
  *
- * One shape does NOT come back, and stamping unconditionally is what routes it there: a MEDIA file is
- * admitted by the scan filter only through `chunkRebuildRequestedAt`, and the halt write nulls that
- * field, so once halted it leaves the filter for good and needs a manual reprocess. Tracked in #2224.
+ * A MEDIA file used to be the one shape that did NOT come back: it is admitted by the scan filter
+ * only through `chunkRebuildRequestedAt`, and the halt write nulls that field, so once halted it left
+ * the filter for good and needed a manual reprocess. That strand is closed - the filter now also
+ * admits a media file whose stall reason is `rechunkPaused`, which is the durable record of the same
+ * fact the stamp carried (see buildFabFileChunkScanFilter's media exclusion). Stamping unconditionally
+ * is still what routes such a file here, so this remains the site that decides whether it halts.
  *
  * THROWS on a candidate with no `userId`. `userId` is required on every FabFile, so this is a
  * corrupt row rather than an expected state - and the sweep's per-file catch turns the throw into a

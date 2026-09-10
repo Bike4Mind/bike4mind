@@ -1093,7 +1093,10 @@ DataLakeBatchSchema.index({ userId: 1, taxonomyStatus: 1, updatedAt: -1 });
 // updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
 DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 
-const DataLakeBatchModel =
+// Exported like its sibling `DataLakeModel` above: app code goes through
+// `dataLakeBatchRepository`, but the operator scripts under packages/scripts/migrate read models
+// directly (see check-datalake-prefix-whitespace.ts, which reads stored taxonomy suffixes).
+export const DataLakeBatchModel =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
   mongoose.model<IDataLakeBatchDocument>('DataLakeBatch', DataLakeBatchSchema);
 

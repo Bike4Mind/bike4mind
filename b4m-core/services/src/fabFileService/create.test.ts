@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
@@ -163,6 +164,62 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(persistedData.mimeType).toBe('audio/mpeg');
     // Stored under the generated-audio prefix with an .mp3 extension.
     expect(persistedData.filePath).toMatch(/^generated-audio\/.+\.mp3$/);
+  });
+});
+
+describe('createFabFile MaxFileSize enforcement - cleared setting no longer blocks every upload (#2456)', () => {
+  const mockUserId = 'user-123';
+
+  let mockAdapters: CreateFabFileAdapters;
+  let fabFilesCreate: Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The admin-settings cache key is process-wide ('all_settings'), not scoped to this test's
+    // db mock - without invalidating it, whichever test in this file populates it first would
+    // leak its findAll() result into every later test in this file.
+    invalidateSettingsCache();
+
+    fabFilesCreate = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    mockAdapters = {
+      db: {
+        fabFiles: { create: fabFilesCreate },
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([{ settingName: 'MaxFileSize', settingValue: '' }]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          findById: vi.fn().mockResolvedValue({ id: mockUserId, storageLimit: 1000, currentStorageSize: 0 }),
+        },
+      },
+      storage: {
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed-url'),
+        upload: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as CreateFabFileAdapters;
+  });
+
+  // Not undoing our own beforeEach - guarding the NEXT describe block in this file from it.
+  // The admin-settings cache this block populates (`MaxFileSize: ''`) is process-wide, so
+  // without this it would leak forward and feed every describe block that runs after this
+  // one, not just the tests inside it.
+  afterEach(() => {
+    invalidateSettingsCache();
+  });
+
+  it('accepts a normal-sized upload when MaxFileSize is stored as a cleared empty string', async () => {
+    await expect(
+      createFabFile(
+        mockUserId,
+        {
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          fileSize: 10 * 1024 * 1024, // 10MB - well under the 30MB default, well over a stray 0
+          type: KnowledgeType.FILE,
+        },
+        mockAdapters
+      )
+    ).resolves.toBeDefined();
   });
 });
 

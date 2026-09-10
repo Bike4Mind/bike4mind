@@ -1,4 +1,10 @@
-import { IDataLakeRepository, IFabFileRepository, ITagRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IDataLakeRepository,
+  IFabFileRepository,
+  ITagRepository,
+  IUserDocument,
+  LakeAuditPrincipal,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import {
@@ -55,6 +61,13 @@ interface TagUpdateAdapters {
    * same reason the audit repos are.
    */
   logger?: LakeConfigAuditAdapters['logger'];
+  /**
+   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
+   * `lakeConfigAuditPrincipal`. Rides on the actor handed to recomputeLakeStats, so a key-driven
+   * rename that flips a draft lake to active names the key rather than the human it acts for,
+   * matching every other audited config-write door (#1917).
+   */
+  auditPrincipal?: LakeAuditPrincipal;
 }
 
 /**
@@ -81,7 +94,7 @@ interface TagUpdateAdapters {
  * lakes' stats.
  */
 export const update = async (userId: string, params: TagUpdateParams, adapters: TagUpdateAdapters) => {
-  const { db, logger } = adapters;
+  const { db, logger, auditPrincipal } = adapters;
   const { id, ...rest } = secureParameters(params, tagUpdateSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -165,7 +178,9 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
     );
     // See tagService/remove: the tag owner is the principal, and the rung stays `system`.
     await Promise.all(
-      affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false } }))
+      affectedLakes.map(lake =>
+        recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false, auditPrincipal } })
+      )
     );
   }
 

@@ -71,8 +71,11 @@ const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) } as never, json };
 };
-const req = (body: unknown, user: Record<string, unknown> = { id: 'u1', isAdmin: false }) =>
-  ({ method: 'POST', body, user }) as never;
+const req = (
+  body: unknown,
+  user: Record<string, unknown> = { id: 'u1', isAdmin: false },
+  apiKeyInfo?: { keyId: string }
+) => ({ method: 'POST', body, user, apiKeyInfo }) as never;
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
 describe('POST /api/files/tags/toggle', () => {
@@ -155,6 +158,31 @@ describe('POST /api/files/tags/toggle', () => {
       expect.anything()
     );
     expect(h.toggleTags.mock.calls[0][0]).toBe('u1');
+  });
+
+  // #1964: this is the door #1917 wired the other four config-write routes through but not this
+  // one, so a key-driven toggle that auto-activates a draft lake recorded the human instead of the
+  // key. A service-level test alone cannot catch a route that never resolves the principal at
+  // all - see toggleTags.test.ts's "auto-activate audit principal (#1964)" for the service-side
+  // half of this regression.
+  it('resolves the caller as the auditPrincipal for a key-authenticated toggle', async () => {
+    const { res } = makeRes();
+
+    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }, { id: 'u1', isAdmin: false }, { keyId: 'key-abc' }), res);
+
+    expect(h.toggleTags.mock.calls[0][2].auditPrincipal).toEqual({
+      principalKind: 'apiKey',
+      principalId: 'key-abc',
+      onBehalfOfUserId: 'u1',
+    });
+  });
+
+  it('passes no auditPrincipal for an ordinary session toggle', async () => {
+    const { res } = makeRes();
+
+    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }), res);
+
+    expect(h.toggleTags.mock.calls[0][2].auditPrincipal).toBeUndefined();
   });
 
   it('survives a malformed tags payload rather than throwing on the gate', async () => {

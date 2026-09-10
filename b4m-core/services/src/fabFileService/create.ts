@@ -108,10 +108,11 @@ export interface CreateFabFileAdapters {
   administeredOrgIds?: string[];
 }
 
-// Only reached when the `MaxFileSize` settings row exists but fails the schema's `z.coerce`
-// (e.g. a non-numeric stored value) - a missing row never gets here, since the schema's own
-// `.prefault(30)` already resolves `getSettingsValue` to 30 before this default arg is
-// consulted. Matches that prefault value so the two cases can't diverge if the schema changes.
+// Only reached when the `MaxFileSize` settings row exists but fails the schema (a non-numeric
+// stored value, or a cleared field - stored as '', which coerces to 0 and fails the schema's
+// `min: 1`) - a missing row never gets here, since the schema's own `.prefault(30)` already
+// resolves `getSettingsValue` to 30 before this default arg is consulted. Matches that prefault
+// value so the two cases can't diverge if the schema changes.
 const DEFAULT_MAX_FILE_SIZE = 30;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 

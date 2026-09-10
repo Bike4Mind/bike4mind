@@ -1161,6 +1161,50 @@ if (isMonitoredStage) {
     },
   });
 
+  /**
+   * Alarm: data-lake retrieval scanned only a budgeted prefix of the corpus
+   *
+   * A truncated scan returns a well-formed, plausibly-ranked result set built from an INCOMPLETE
+   * corpus, so it is invisible from the outside: no error, no empty result, nobody files a
+   * ticket. This is the alarm the $vectorSearch cutover work asked for - the first lake to
+   * outgrow DATA_LAKE_SEARCH_MAX_FILES_DEFAULT (5,000) or DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT
+   * (100,000) would otherwise degrade quietly.
+   *
+   * Threshold 0 over one hour: steady state is genuinely zero (the whole production corpus is
+   * well under both budgets today), so a single truncated search is the signal, and waiting for
+   * a sustained rate would just mean more users get short-corpus answers first. The operator
+   * response is to raise the budget or shard the lake, which is not urgent enough to page -
+   * hence Medium, matching deprecatedModelRequest's "silent, needs a human decision" shape.
+   *
+   * Reuses the DataLakeStuckBatches topic, as the taxonomy alarm above already does: it is the
+   * de-facto data-lake ops topic, and topics are not subscribed in IaC anyway.
+   *
+   * Metric emitted by: b4m-core/services/src/dataLakeService/scanTruncationMetrics.ts ->
+   * reportScanTruncation, wired from both public search entrypoints in semanticDataLakeSearch.ts.
+   * Namespace: Lumina5/DataLakeRetrieval / ScanTruncated
+   * Alarms on the Stage-only dimension set; the Cause/Entrypoint set is for attribution only.
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeScanTruncated', {
+    name: `${$app.name}-${$app.stage}-data-lake-scan-truncated`,
+    alarmDescription:
+      'A data-lake search ranked only a budgeted prefix of the corpus - retrieval is returning incomplete results without erroring',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ScanTruncated',
+    namespace: 'Lumina5/DataLakeRetrieval',
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 0,
+    dimensions: { Stage: $app.stage },
+    // No emission means no search truncated, which is the healthy state.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    tags: {
+      Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
   // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
   // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
   // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future

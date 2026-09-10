@@ -169,8 +169,29 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
-  it('404s a personal (org-less) lake', async () => {
+  it('GET resolves a null connection for a personal (org-less) lake, rather than 404ing', async () => {
+    // A personal lake genuinely has no connection to report - that's "no connection", not a
+    // failure, so the client needs to be able to tell it apart from a denied/missing-lake read.
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+    expect(json).toHaveBeenCalledWith({ connection: null });
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+  });
+
+  it('DELETE 404s a personal (org-less) lake', async () => {
+    // DELETE goes through resolveOrgLake, the one path GET no longer exercises since it inlined
+    // its own org-less short-circuit - so this is the only remaining coverage of that guard.
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    const { res } = makeRes();
+    await expect(run(makeReq('DELETE'), res)).rejects.toThrow(/not found/i);
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+  });
+
+  it('GET 404s when the lake itself does not exist', async () => {
+    h.dlFindById.mockResolvedValue(null);
     const { res } = makeRes();
     await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();

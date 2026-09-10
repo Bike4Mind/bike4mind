@@ -89,6 +89,13 @@ export const applyTaxonomySuggestions = async (
   if (prefixDecision.overlapCheckFailed) {
     throw new BadRequestError(UNVERIFIED_PREFIX_OVERLAP_REFUSAL);
   }
+  // The gate's NORMALIZED prefix, never `lake.fileTagPrefix` - same as the sibling door
+  // (`setDataLakeFileTags`, step 5) and the backfill migration. Writing under the raw stored value
+  // for a row that predates the create schema's trim would mint ` acme:legal`, which the read arms
+  // and the tag-count aggregates normalize straight past (#2467). The tag builders below normalize
+  // too, so this is belt-and-braces rather than the only guard - but it is what makes the door's
+  // intent readable, and it keeps every write door quoting one value.
+  const prefix = prefixDecision.prefix;
 
   // Guarded claim: only a batch whose suggestions are 'ready' (and not already being applied
   // by a concurrent request) proceeds. Also blocks re-applying an already-'applied' batch
@@ -143,13 +150,11 @@ export const applyTaxonomySuggestions = async (
 
     const updates = files.flatMap(file => {
       const relativePath = file.relativePath ?? file.fileName;
-      const folderTags = folderTagForFile(relativePath, lake.fileTagPrefix);
+      const folderTags = folderTagForFile(relativePath, prefix);
       const folderTagNames = new Set(folderTags.map(t => t.name));
       // The folder tag is already on the file from upload - keep only the taxonomy-derived
       // portion so re-running this can never duplicate it.
-      const newTags = tagsForFile(relativePath, taxonomySet, lake.fileTagPrefix).filter(
-        t => !folderTagNames.has(t.name)
-      );
+      const newTags = tagsForFile(relativePath, taxonomySet, prefix).filter(t => !folderTagNames.has(t.name));
       if (newTags.length === 0) return [];
 
       const existingTags = file.tags ?? [];

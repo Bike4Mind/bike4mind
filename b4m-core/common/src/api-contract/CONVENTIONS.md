@@ -109,9 +109,17 @@ serves every *thrown* error body regardless of which schema the contract declare
 status, so a bespoke error schema (`InsufficientCreditsErrorSchema`,
 `ttsErrorResponseSchema`) would omit a field the wire carries. Those derive from
 `ApiErrorSchema` via `.extend()` rather than re-declaring `error`/`request_id`, which is
-also what makes the sunset a single edit. Write a bespoke error schema from scratch only
-when the body is `res.status(...).json(...)`-ed rather than thrown and so never passes
-through the middleware - `ttsResponseTooLargeSchema` is the one such case, and says so.
+also what makes the sunset a single edit.
+
+**The predicate is per body, not per status.** Write a bespoke error schema from scratch
+only when *no* body for that status is thrown; a status reachable both ways keeps the
+envelope, because the fields errorHandler adds (`request_id`, and `name` until its
+sunset) are then genuinely optional rather than absent. Directly written
+bodies are ordinary, not exceptional: `/api/ai/tts` writes a body for every error status
+it declares - and, through its upstream-4xx passthrough, for several it does not - while
+only three of them (`401`, `422`, `429`) can also be reached by a throw.
+`ttsResponseTooLargeSchema` is the current example of a status no throw can reach, and
+says so; `ttsErrorResponseSchema` documents the mixed case.
 
 **[gated]** Now that the runtime and the spec agree, the middleware is pinned to the
 envelope: `errorHandler.test.ts` asserts every key `errorHandler` adds is one
@@ -313,6 +321,7 @@ mistakes "CI passed" for "conventions met":
 
 | Rule | Why it is not gated |
 |---|---|
+| A bespoke error schema is used only where no body is thrown | Whether a body is thrown or `res.status(...).json(...)`-ed lives in handler control flow, not the contract, exactly like the status-condition rule below. So nothing catches a bespoke schema on a status a throw can reach, which then omits whatever errorHandler adds to that body. |
 | A condition maps to the status this guide gives it | The gate checks only that a status is in the allowed *set*. Nothing checks that "no provider key configured" is the `503` the table says - and `/api/ai/tts` returns `401` for it today. Not structurally derivable: the condition lives in handler control flow, not the contract. |
 | `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |
 | Wire fields are `snake_case` | Requires walking Zod shapes, and today's schemas deliberately accept camelCase aliases, so the check would fail on arrival. Needs the alias metadata to exist first. |

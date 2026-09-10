@@ -20,6 +20,7 @@ export function useNavigationExecutor() {
   const navigate = useNavigate();
   const setActiveTab = useAdminModal(state => state.setActiveTab);
   const requestFamily = useOptiNavigation(state => state.requestFamily);
+  const hostHandlesFamilyInPlace = useOptiNavigation(state => state.hostHandlesFamilyInPlace);
   const setFileBrowserOpen = useFileBrowser(state => state.setOpen);
 
   const execute = useCallback(
@@ -56,6 +57,9 @@ export function useNavigationExecutor() {
           } else {
             requestFamily(intent.target, undefined, { userInitiated: true });
           }
+          // A host showing the console in its own pane is already on screen and owns
+          // its own way back, so the request above is the whole navigation.
+          if (hostHandlesFamilyInPlace) break;
           // Name the target view in the search params rather than leaving the route to
           // its default, which would render the wrong view for a frame before the
           // consumer switches. The updater form is required: router-core passes a plain
@@ -66,7 +70,7 @@ export function useNavigationExecutor() {
         }
       }
     },
-    [navigate, setActiveTab, requestFamily, setFileBrowserOpen]
+    [navigate, setActiveTab, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace]
   );
 
   return execute;
