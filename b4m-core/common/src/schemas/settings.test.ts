@@ -845,6 +845,26 @@ describe('LakeAccessAuditRetentionDays cannot be configured below the floor', ()
   });
 });
 
+describe('MaxFileSize cannot coerce a cleared field to a real 0', () => {
+  // A cleared admin field is stored as '', which z.coerce.number() reads as 0 - a value that
+  // PASSES validation, so the schema's own `.prefault(30)` (undefined-only) never fires and
+  // every caller sees a real 0MB limit instead of the intended default. The `min: 1` floor
+  // makes that coerced 0 fail validation instead, so callers (getSettingsValue's safeParse
+  // fallback) land on the default the way an unset row already does.
+  it('rejects both a cleared field and an explicit 0, unlike prefault-only defaulting', () => {
+    expect(() => settingsMap.MaxFileSize.schema.parse('')).toThrow();
+    expect(() => settingsMap.MaxFileSize.schema.parse(0)).toThrow();
+  });
+
+  it('still prefaults an unset row to 30', () => {
+    expect(settingsMap.MaxFileSize.schema.parse(undefined)).toBe(30);
+  });
+
+  it('accepts a genuinely configured value', () => {
+    expect(settingsMap.MaxFileSize.schema.parse('50')).toBe(50);
+  });
+});
+
 describe('AbstentionPrompt default carries the anti-invention licence', () => {
   // The always-on backstop is the ONLY anti-invention text on a normal turn that answers WITHOUT
   // searching the knowledge base. (A promptMode session strips it like any authored prompt, so that

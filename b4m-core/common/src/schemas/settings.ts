@@ -2820,6 +2820,8 @@ export const settingsMap = {
     key: 'MaxFileSize',
     name: 'Max File Size',
     defaultValue: 30,
+    min: 1, // clearing the field stores '', which z.coerce.number() reads as 0 - without a floor
+    // that 0 passes validation as a real limit and every upload gets refused
     description: 'The maximum file size allowed for uploads in MB.',
     category: 'Knowledge',
     group: API_SERVICE_GROUPS.KNOWLEDGE.id,
