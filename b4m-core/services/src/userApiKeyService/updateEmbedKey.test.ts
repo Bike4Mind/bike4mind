@@ -198,4 +198,26 @@ describe('userApiKeyService - updateEmbedKey agent ownership', () => {
     await updateEmbedKey('user1', { keyId: 'key-1', agentId: 'agent-2' }, deps(repo, makeOrgs(), orgAgent));
     expect(stored.agentId).toBe('agent-2');
   });
+
+  it('fails closed when a rebind is requested but the agents adapter is absent', async () => {
+    const repo = makeRepo(embedKey());
+    // agents is optional on the type; a rebind must never skip the ownership check.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const noAgents = { db: { userApiKeys: repo, organizations: makeOrgs() } } as any;
+
+    await expect(updateEmbedKey('user1', { keyId: 'key-1', agentId: 'agent-2' }, noAgents)).rejects.toThrow(
+      /agents adapter is required/i
+    );
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('configures origins/branding without an agents adapter (no rebind requested)', async () => {
+    const stored = embedKey();
+    const repo = makeRepo(stored);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const noAgents = { db: { userApiKeys: repo, organizations: makeOrgs() } } as any;
+
+    await updateEmbedKey('user1', { keyId: 'key-1', allowedOrigins: ['https://ok.example.com'] }, noAgents);
+    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ allowedOrigins: ['https://ok.example.com'] }));
+  });
 });
