@@ -82,6 +82,13 @@ export const InviteSchema = new Schema<IInviteDocument>(
       type: String,
       required: false,
     },
+    // Who minted the invite, distinct from `username` (a display label, not an id).
+    // Absent on invites created before this field existed; accept.ts falls back to
+    // conservative behavior for those.
+    inviterId: {
+      type: String,
+      required: false,
+    },
     accepted: {
       type: Number,
       required: true,

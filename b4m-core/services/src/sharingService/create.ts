@@ -200,6 +200,10 @@ export const createInvite = async (
     name,
     // username of the user who is sharing instead of owner of the file
     username: user.username,
+    // Who minted the invite -- accept.ts's Session arm caps propagated file grants to
+    // what this user actually holds, so an attached file the inviter cannot share
+    // does not silently inherit the invite's permissions.
+    inviterId: user.id,
   };
 
   const invite = await db.invites.create(build);

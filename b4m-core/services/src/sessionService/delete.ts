@@ -35,8 +35,21 @@ export const deleteSession = async (
 
   await db.sessions.update(session);
   await db.projects.removeSession(session.id);
+
+  // A shared session can carry files another collaborator uploaded into it - those are theirs,
+  // not the session owner's. Deleting the session must only destroy the owner's own files;
+  // an attached file owned by someone else just loses the owner's derived grant, mirroring the
+  // owned-vs-shared-in split in DELETE /api/files.
   const fabFiles = await db.fabFiles.find({ sessionId: session.id });
-  await db.fabFiles.deleteManyInIds(fabFiles.map(f => f.id));
+  const ownedFiles = fabFiles.filter(file => file.userId === userId);
+  const sharedInFiles = fabFiles.filter(file => file.userId !== userId);
+
+  await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
+  for (const file of sharedInFiles) {
+    file.users = file.users.filter(user => user.userId.toString() !== userId);
+    await db.fabFiles.update(file);
+  }
+
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
 
   return mostRecent;

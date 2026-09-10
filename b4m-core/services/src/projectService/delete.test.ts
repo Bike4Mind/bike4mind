@@ -1,19 +1,46 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { deleteProject } from './delete';
-import { createMockProjectRepository } from '../__tests__/utils/testUtils';
-import { IProjectDocument, IProjectRepository } from '@bike4mind/common';
+import {
+  createMockProjectRepository,
+  createMockFabFileRepository,
+  createMockSessionRepository,
+  createMockUserRepository,
+} from '../__tests__/utils/testUtils';
+import {
+  IFabFileRepository,
+  IProjectDocument,
+  IProjectRepository,
+  ISessionRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('projectService - delete', () => {
   const userId = 'test-user-123';
   let mockProjectRepo: IProjectRepository;
-  let adapters: { db: { projects: IProjectRepository } };
+  let mockFabFileRepo: IFabFileRepository;
+  let mockSessionRepo: ISessionRepository;
+  let mockUserRepo: IUserRepository;
+  let adapters: {
+    db: {
+      projects: IProjectRepository;
+      sessions: ISessionRepository;
+      fabFiles: IFabFileRepository;
+      users: IUserRepository;
+    };
+  };
 
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
+    mockFabFileRepo = createMockFabFileRepository();
+    mockSessionRepo = createMockSessionRepository();
+    mockUserRepo = createMockUserRepository();
     adapters = {
       db: {
         projects: mockProjectRepo,
+        sessions: mockSessionRepo,
+        fabFiles: mockFabFileRepo,
+        users: mockUserRepo,
       },
     };
   });
@@ -78,5 +105,54 @@ describe('projectService - delete', () => {
 
     expect(mockProjectRepo.findByIdAndUserId).toHaveBeenCalledWith('', userId);
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
+  });
+
+  describe('cascade grant removal', () => {
+    it('strips a former members project-derived grant from the projects files and sessions', async () => {
+      const projectId = 'test-project-id';
+      const memberId = 'member-456';
+      const fileId = 'file-001';
+      const sessionId = 'session-001';
+
+      const project: IProjectDocument = {
+        id: projectId,
+        name: 'Test Project',
+        description: 'Test Description',
+        userId,
+        sessionIds: [sessionId],
+        fileIds: [fileId],
+        systemPrompts: [],
+        isGlobalRead: false,
+        isGlobalWrite: false,
+        users: [{ userId: memberId, permissions: ['read'], projectId }],
+        groups: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      const file = {
+        id: fileId,
+        userId,
+        users: [{ userId: memberId, permissions: ['read'], projectId }],
+      };
+      const session = {
+        id: sessionId,
+        userId,
+        users: [{ userId: memberId, permissions: ['read'], projectId }],
+      };
+
+      (mockProjectRepo.findByIdAndUserId as Mock).mockResolvedValue(project);
+      (mockProjectRepo.update as Mock).mockResolvedValue(project);
+      (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([file]);
+      (mockSessionRepo.findAllByIds as Mock).mockResolvedValue([session]);
+      (mockUserRepo.findById as Mock).mockResolvedValue({ id: memberId });
+      (mockFabFileRepo.shareable.findAccessibleById as Mock).mockResolvedValue(file);
+      (mockSessionRepo.shareable.findAccessibleById as Mock).mockResolvedValue(session);
+
+      await deleteProject(userId, { id: projectId }, adapters);
+
+      expect(mockFabFileRepo.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+      expect(mockSessionRepo.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    });
   });
 });

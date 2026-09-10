@@ -2,6 +2,7 @@ import {
   IFabFileRepository,
   IProjectDocument,
   IProjectRepository,
+  ISessionDocument,
   ISessionRepository,
   IUserRepository,
 } from '@bike4mind/common';
@@ -74,11 +75,35 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     );
   } else {
     document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
+
+    // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
+    // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
+    // grants live. A projectId-tagged entry is independently governed by that project, so it is
+    // left alone here exactly as the project-scoped branch above leaves other grants alone.
+    if (type === 'sessions') {
+      await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
+    }
   }
 
   await dbModel.update(document);
 
   return document;
+};
+
+const revokeSessionKnowledgeFileGrants = async (
+  parameters: { session: ISessionDocument; userIdToRevoke: string },
+  adapters: RevokeSharingAdapters
+) => {
+  const { session, userIdToRevoke } = parameters;
+  const { db } = adapters;
+
+  const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
+  for (const file of files) {
+    const remaining = file.users.filter(user => !(user.userId.toString() === userIdToRevoke && !user.projectId));
+    if (remaining.length === file.users.length) continue;
+    file.users = remaining;
+    await db.fabFiles.update(file);
+  }
 };
 
 export const revokeFromProject = async (

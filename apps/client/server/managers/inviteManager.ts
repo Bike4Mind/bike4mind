@@ -1,5 +1,24 @@
-import { IFabFile, IGroup, IInviteDocument, IOrganization, ISession, InviteType } from '@bike4mind/common';
-import { FabFile, Group, Organization, Session, User } from '@bike4mind/database';
+import {
+  IFabFile,
+  IGroup,
+  IInviteDocument,
+  IOrganization,
+  ISession,
+  InviteType,
+  IUserDocument,
+} from '@bike4mind/common';
+import {
+  FabFile,
+  Group,
+  Organization,
+  Session,
+  User,
+  fabFileRepository,
+  sessionRepository,
+  projectRepository,
+  organizationRepository,
+} from '@bike4mind/database';
+import { sharingService } from '@bike4mind/services';
 
 export const getInviteDetails = async (invite: IInviteDocument, includeUser?: boolean) => {
   const inviteWithDetails = invite;
@@ -46,6 +65,33 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
 
   return inviteWithDetails;
 };
+
+/**
+ * Gates a single-invite GET to the same population accept/refuse already redeem for:
+ * a named recipient (pending or already accepted), or a caller with share authority on
+ * the underlying document (the cancelInviteById/authorizeByInviteType check). Anyone
+ * else must be turned into a 404 by the caller -- a 403 would confirm the id exists.
+ */
+export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<boolean> {
+  const email = user.email?.toLowerCase();
+  const named = [...(invite.recipients?.pending ?? []), ...(invite.recipients?.accepted ?? [])];
+  if (email && named.some(recipient => recipient.toLowerCase() === email)) {
+    return true;
+  }
+
+  try {
+    await sharingService.authorizeByInviteType(user, invite.type, invite.documentId, {
+      fabFiles: fabFileRepository,
+      sessions: sessionRepository,
+      projects: projectRepository,
+      organizations: organizationRepository,
+      groups: Group,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Invitee-facing serialization for an invite. Keeps the `recipients` shape -- the

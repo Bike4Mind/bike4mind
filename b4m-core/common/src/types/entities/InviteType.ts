@@ -58,6 +58,8 @@ export type IBaseInvite = {
 
   name?: string;
   username?: string;
+  // Who minted the invite. Absent on invites created before this field existed.
+  inviterId?: string;
 
   expiresAt: undefined | Date;
 };

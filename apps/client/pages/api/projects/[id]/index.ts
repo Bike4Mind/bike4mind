@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ProjectEvents } from '@bike4mind/common';
-import { projectRepository, userRepository } from '@bike4mind/database';
+import { fabFileRepository, projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -78,6 +78,9 @@ const handler = baseApi()
       {
         db: {
           projects: projectRepository,
+          sessions: sessionRepository,
+          fabFiles: fabFileRepository,
+          users: userRepository,
         },
       }
     );

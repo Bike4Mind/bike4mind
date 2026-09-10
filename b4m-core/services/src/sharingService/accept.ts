@@ -1,4 +1,5 @@
 import {
+  heldPermissions,
   IFabFileRepository,
   IGroupDocument,
   IInvite,
@@ -10,6 +11,7 @@ import {
   IShareableDocument,
   IUserDocument,
   Permission,
+  ShareableAccessShape,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -65,6 +67,11 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
 
   const invite = await db.invites.findById(id);
   if (!invite) throw new NotFoundError('Invite not found');
+
+  // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
+  if (invite.expiresAt && invite.expiresAt < new Date()) {
+    throw new UnprocessableEntityError('Invite has expired');
+  }
 
   if (invite.remaining <= 0) {
     throw new UnprocessableEntityError('Invite has no remaining users');
@@ -142,15 +149,33 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       const session = await db.sessions.findById(invite.documentId);
       if (!session) throw new NotFoundError('Session not found');
 
-      // If session has files, share these as well
+      // A session's knowledgeIds can point at files the inviter neither owns nor holds
+      // share on (e.g. attached from someone else's shared session), so accepting must
+      // not launder access to those files through the invite. Cap each file's grant at
+      // what the INVITER actually holds on it, not the invite's face-value permissions.
+      // A legacy invite with no inviterId falls back to the conservative case: only
+      // propagate to files the session owner themselves owns.
+      const inviter = invite.inviterId ? await db.users.findById(invite.inviterId) : null;
+
       if (session.knowledgeIds && session.knowledgeIds.length > 0) {
         await Promise.all(
           session.knowledgeIds.map(async knowledgeId => {
             const fabfile = await db.fabFiles.findById(knowledgeId);
-            if (fabfile) {
-              pushShareable(fabfile, update);
-              await db.fabFiles.update(fabfile);
+            if (!fabfile) return;
+
+            let grantPermissions: Permission[];
+            if (inviter) {
+              const held = heldPermissions(fabfile as ShareableAccessShape, inviter.id, inviter.groups ?? []);
+              grantPermissions = update.permissions.filter(permission => held.has(permission));
+              if (grantPermissions.length === 0) return;
+            } else if (fabfile.userId === session.userId) {
+              grantPermissions = update.permissions;
+            } else {
+              return;
             }
+
+            pushShareable(fabfile, { ...update, permissions: grantPermissions });
+            await db.fabFiles.update(fabfile);
           })
         );
       }

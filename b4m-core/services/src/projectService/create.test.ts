@@ -1,18 +1,27 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { createProject } from './create';
 import { createMockProjectRepository } from '../__tests__/utils/testUtils';
+import { createShareableFake } from '../__tests__/utils/shareableFake';
 import { IProjectDocument, IProjectRepository } from '@bike4mind/common';
 
 describe('projectService - create', () => {
   const userId = 'test-user-123';
   let mockProjectRepo: IProjectRepository;
-  let adapters: { db: { projects: IProjectRepository } };
+  let adapters: {
+    db: {
+      projects: IProjectRepository;
+      fabFiles: { shareable: ReturnType<typeof createShareableFake> };
+      sessions: { shareable: ReturnType<typeof createShareableFake> };
+    };
+  };
 
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
     adapters = {
       db: {
         projects: mockProjectRepo,
+        fabFiles: { shareable: createShareableFake([]) },
+        sessions: { shareable: createShareableFake([]) },
       },
     };
   });
@@ -41,7 +50,7 @@ describe('projectService - create', () => {
 
     (mockProjectRepo.create as Mock).mockResolvedValueOnce(expectedProject);
 
-    const result = await createProject(userId, params, adapters);
+    const result = await createProject({ id: userId }, params, adapters);
 
     expect(result).toEqual(expectedProject);
     expect(mockProjectRepo.create).toHaveBeenCalledWith({
@@ -68,6 +77,14 @@ describe('projectService - create', () => {
       fileIds: ['file-1', 'file-2'],
     };
 
+    // All owned by the creator, so both lists fully resolve.
+    adapters.db.fabFiles = {
+      shareable: createShareableFake(params.fileIds.map(id => ({ id, userId, users: [], groups: [] }))),
+    };
+    adapters.db.sessions = {
+      shareable: createShareableFake(params.sessionIds.map(id => ({ id, userId, users: [], groups: [] }))),
+    };
+
     const expectedProject: IProjectDocument = {
       id: 'test-project-id',
       name: params.name,
@@ -86,7 +103,7 @@ describe('projectService - create', () => {
 
     (mockProjectRepo.create as Mock).mockResolvedValueOnce(expectedProject);
 
-    const result = await createProject(userId, params, adapters);
+    const result = await createProject({ id: userId }, params, adapters);
 
     expect(result).toEqual(expectedProject);
     expect(mockProjectRepo.create).toHaveBeenCalledWith({
@@ -111,6 +128,6 @@ describe('projectService - create', () => {
       description: '', // Invalid: empty string
     };
 
-    await expect(createProject(userId, invalidParams, adapters)).rejects.toThrow();
+    await expect(createProject({ id: userId }, invalidParams, adapters)).rejects.toThrow();
   });
 });

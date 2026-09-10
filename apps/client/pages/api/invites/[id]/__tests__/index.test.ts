@@ -28,7 +28,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const cancelInviteById = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/services', () => ({ sharingService: { cancelInviteById } }));
+const authorizeByInviteType = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', () => ({ sharingService: { cancelInviteById, authorizeByInviteType } }));
 vi.mock('@bike4mind/database', () => ({
   Invite: { findById: vi.fn() },
   inviteRepository: {},
@@ -78,7 +79,12 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("keeps only the caller's own recipient entry, dropping co-invitees", async () => {
-    (Invite.findById as any).mockResolvedValue({ id: 'inv-1' });
+    (Invite.findById as any).mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
+    });
     getInviteDetails.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
@@ -95,5 +101,54 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
     expect(body.recipients.pending).toEqual(['me@x.com']);
     expect(JSON.stringify(body)).not.toContain('other@x.com');
     expect(JSON.stringify(body)).not.toContain('third@x.com');
+  });
+});
+
+/**
+ * The GET handler previously returned any invite's document name, owner username,
+ * permissions and message to ANY authenticated caller holding the id. It must now gate
+ * on the same population accept/refuse redeem for: a named recipient, or a caller with
+ * share authority on the underlying document.
+ */
+describe('GET /api/invites/[id] - authorization gate', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 404 (not 403) for a caller who is neither a recipient nor share-authorized', async () => {
+    (Invite.findById as any).mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'inv-1' } });
+    (req as any).user = { id: 'u1', email: 'stranger@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
+  it('allows a caller with share authority on the underlying document even when not a named recipient', async () => {
+    (Invite.findById as any).mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockResolvedValue(undefined);
+    getInviteDetails.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'inv-1' } });
+    (req as any).user = { id: 'owner-1', email: 'owner@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(getInviteDetails).toHaveBeenCalled();
   });
 });

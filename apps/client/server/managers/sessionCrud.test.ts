@@ -12,6 +12,9 @@ const {
   sessionRepoFindById,
   sessionRepoFindByIdAndUserId,
   accessibleBySpy,
+  favoriteRepoFind,
+  userRepoFindById,
+  defineAbilitiesForSpy,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -47,6 +50,9 @@ const {
     sessionRepoFindById: vi.fn(),
     sessionRepoFindByIdAndUserId: vi.fn(),
     accessibleBySpy: vi.fn(() => ({ ofType: () => ({}) })),
+    favoriteRepoFind: vi.fn(),
+    userRepoFindById: vi.fn(),
+    defineAbilitiesForSpy: vi.fn(),
   };
 });
 
@@ -63,15 +69,20 @@ vi.mock('@bike4mind/database', () => ({
   User: UserMock,
   mongoose: { Types: { ObjectId: class {} } },
   compareMongoIds: (a: unknown, b: unknown) => String(a) === String(b),
-  favoriteRepository: { find: vi.fn() },
+  favoriteRepository: { find: favoriteRepoFind },
   fabFileRepository: {},
   projectRepository: {},
   agentRepository: {},
-  userRepository: { update: userRepoUpdate },
+  userRepository: { update: userRepoUpdate, findById: userRepoFindById },
+}));
+
+vi.mock('@server/auth/ability', () => ({
+  default: defineAbilitiesForSpy,
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({
-  Session: { modelName: 'Session' },
+  // find is shared with SessionModelMock so tests can drive both bindings from one mock.
+  Session: { modelName: 'Session', find: SessionModelMock.find },
   sessionRepository: {
     findById: sessionRepoFindById,
     findByIdAndUserId: sessionRepoFindByIdAndUserId,
@@ -93,7 +104,7 @@ vi.mock('@casl/mongoose', () => ({
   accessibleBy: accessibleBySpy,
 }));
 
-import { getOrCreateSession, createSession } from './sessionCrud';
+import { getOrCreateSession, createSession, getFavoriteSessionByUser } from './sessionCrud';
 import {
   notifySessionCreated,
   logSessionCreatedEvent,
@@ -226,6 +237,26 @@ describe('sessionCrud', () => {
     it('sets the user lastNotebookId when setLastNotebook is requested', async () => {
       await createSession('user-1', { name: 'My NB' }, allowAbility, { setLastNotebook: true });
       expect(UserMock.updateOne).toHaveBeenCalledWith({ _id: 'user-1' }, { lastNotebookId: 'new-session-id' });
+    });
+  });
+
+  describe('getFavoriteSessionByUser', () => {
+    beforeEach(() => {
+      favoriteRepoFind.mockResolvedValue([{ documentId: 'fav-session-1' }]);
+      userRepoFindById.mockResolvedValue({ id: 'user-1' });
+      defineAbilitiesForSpy.mockReturnValue(allowAbility);
+      SessionModelMock.find.mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+    });
+
+    it('re-checks the callers current access instead of trusting the stored favorite row', async () => {
+      await getFavoriteSessionByUser('user-1');
+
+      expect(userRepoFindById).toHaveBeenCalledWith('user-1');
+      expect(defineAbilitiesForSpy).toHaveBeenCalledWith({ id: 'user-1' });
+      expect(accessibleBySpy).toHaveBeenCalledWith(allowAbility, 'read');
+
+      const query = SessionModelMock.find.mock.calls[0][0];
+      expect(query.$and).toEqual(expect.arrayContaining([{}, { _id: { $in: ['fav-session-1'] } }]));
     });
   });
 });

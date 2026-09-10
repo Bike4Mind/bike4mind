@@ -1,5 +1,5 @@
 import { IInvite, IUserDocument } from '@bike4mind/common';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const refuseInviteSchema = z.object({
@@ -32,6 +32,11 @@ export const refuseInvite = async (
   const { id } = secureParameters(parameters, refuseInviteSchema);
 
   const invite = await db.invites.findByIdAndPendingEmail(id, user.email);
+
+  // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
+  if (invite.expiresAt && invite.expiresAt < new Date()) {
+    throw new UnprocessableEntityError('Invite has expired');
+  }
 
   if (invite.recipients) {
     invite.recipients.pending = invite.recipients.pending?.filter(p => p !== user.email);

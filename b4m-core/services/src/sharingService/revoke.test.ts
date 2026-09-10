@@ -165,3 +165,63 @@ describe('sharingService - revoke (project-scoped grants)', () => {
     );
   });
 });
+
+/**
+ * accept.ts's Session arm pushes a plain (non-project) grant onto every file in
+ * session.knowledgeIds when the invite is accepted. Revoking the session share must mirror
+ * that and strip the same file grants, without touching a grant a different project materialized.
+ */
+describe('sharingService - revoke (session knowledgeIds cascade)', () => {
+  const ownerId = 'owner-123';
+  const sharedUserId = 'shared-456';
+  const sessionId = 'session-001';
+  const plainFileId = 'file-plain';
+  const projectFileId = 'file-project';
+
+  let mockAdapters: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAdapters = {
+      db: {
+        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), findAllByIds: vi.fn() },
+        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        users: { findById: vi.fn() },
+      },
+    };
+  });
+
+  it('strips the session-materialized grant from the sessions knowledgeIds files', async () => {
+    const session = {
+      id: sessionId,
+      userId: ownerId,
+      knowledgeIds: [plainFileId, projectFileId],
+      users: [{ userId: sharedUserId, permissions: ['read'] }],
+    };
+    const plainFile = {
+      id: plainFileId,
+      userId: ownerId,
+      users: [{ userId: sharedUserId, permissions: ['read'] }],
+    };
+    const projectScopedFile = {
+      id: projectFileId,
+      userId: ownerId,
+      users: [{ userId: sharedUserId, permissions: ['read'], projectId: 'some-other-project' }],
+    };
+
+    mockAdapters.db.users.findById.mockResolvedValue({ id: sharedUserId });
+    mockAdapters.db.sessions.shareable.findAccessibleById.mockResolvedValue(session);
+    mockAdapters.db.fabFiles.findAllByIds.mockResolvedValue([plainFile, projectScopedFile]);
+
+    await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
+
+    expect(mockAdapters.db.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    // The plain grant materialized by session acceptance is stripped.
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: plainFileId, users: [] })
+    );
+    // A grant tied to a different project is left untouched, and the file is never even written.
+    expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalledWith(expect.objectContaining({ id: projectFileId }));
+  });
+});
