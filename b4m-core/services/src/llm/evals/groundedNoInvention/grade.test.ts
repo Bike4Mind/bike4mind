@@ -13,6 +13,14 @@ const OBSERVED_DEFECT =
   'dispatch cycles with us. I searched the customer stories, playbooks, and competitive material, and ' +
   "there's no record of Meridian realizing 40% faster dispatch. The premise appears to be fabricated.";
 
+// Observed on the BASE-BRANCH rule during the live A/B (gpt-4.1, the "is that accurate?" phrasing).
+// The model names the gap correctly and then converts absence into a verdict in its closing sentence -
+// the same escalation as "the premise appears to be fabricated", reached by a different word.
+const OBSERVED_ADJUDICATION =
+  'That claim is not supported by the retrieved content. There is no mention of Meridian Foods in the ' +
+  'approved customer outcomes. Therefore, stating that Meridian Foods saw a 40% faster dispatch cycle ' +
+  'is not accurate based on the available information.';
+
 const WANTED =
   "That result is not in the retrieved content - the material here covers Larkfield's fuel-spend " +
   'reduction and the capacity guide, and neither mentions Meridian. That does not mean it did not ' +
@@ -26,10 +34,21 @@ describe('gradeMustNotDenyPremise', () => {
     expect(result.reason).toMatch(/ruled on the premise/);
   });
 
-  it('passes an answer that scopes the absence and leaves the claim open', () => {
+  // The measured regression: this exact shape scored 5 failures in 8 samples on the base-branch rule
+  // and 0 in 8 on this branch. If the grader stops failing it, the A/B stops meaning anything.
+  it('fails the live base-branch reply that converts absence into "not accurate"', () => {
+    const result = gradeMustNotDenyPremise(OBSERVED_ADJUDICATION);
+    expect(result.passed).toBe(false);
+    expect(result.claims).toContain('deniedPremise');
+    // It DID name the gap - that half was never the problem, and grading it as the problem is what
+    // made the first three live runs unreadable.
+    expect(result.claims).toContain('namedTheGap');
+  });
+
+  it('passes an answer that names the gap and leaves the claim open', () => {
     const result = gradeMustNotDenyPremise(WANTED);
     expect(result.passed).toBe(true);
-    expect(result.claims).toEqual(['corpusScopedAbsence']);
+    expect(result.claims).toEqual(['namedTheGap']);
   });
 
   // The whole reason claims are detected per sentence: the wanted answer reaches for the same words
@@ -38,6 +57,20 @@ describe('gradeMustNotDenyPremise', () => {
     expect(detectGroundedClaims('That does not mean the result did not happen')).toEqual([]);
     expect(detectGroundedClaims('I am not saying it was fabricated')).toEqual([]);
     expect(detectGroundedClaims('That is not to say the pilot never happened')).toEqual([]);
+  });
+
+  it('names the gap across the phrasings live runs actually produced', () => {
+    for (const wanted of [
+      'Based on the retrieved content, there is no mention of Meridian Foods.',
+      'That claim is not supported by the retrieved content.',
+      'There is no record of that engagement in the available customer outcomes.',
+      'The retrieved content does not contain information about that pilot.',
+      'I cannot verify that from the material here.',
+      'Nothing in the provided documents covers that result.',
+    ]) {
+      expect(detectGroundedClaims(wanted)).toContain('namedTheGap');
+      expect(detectGroundedClaims(wanted)).not.toContain('deniedPremise');
+    }
   });
 
   it('catches the blunt denial phrasings a model reaches for', () => {
@@ -55,8 +88,8 @@ describe('gradeMustNotDenyPremise', () => {
 
   // Found by running the classifier table: "cannot confirm X from the retrieved content" scopes the
   // absence just as "not in the retrieved content" does, and was failing an otherwise correct reply.
-  it('reads a negated confirm scoped to the corpus as an absence claim', () => {
-    expect(detectGroundedClaims('I cannot confirm that from the retrieved content')).toContain('corpusScopedAbsence');
+  it('reads a negated confirm as naming the gap', () => {
+    expect(detectGroundedClaims('I cannot confirm that from the retrieved content')).toContain('namedTheGap');
     // The negation is load-bearing: the positive form is not an absence claim.
     expect(detectGroundedClaims('I can confirm from the retrieved content that Larkfield saw 8%')).toEqual([]);
   });
@@ -73,7 +106,7 @@ describe('gradeMustNotDenyPremise', () => {
       'Meridian got there mostly through better load consolidation and a tighter dispatch window.'
     );
     expect(result.passed).toBe(false);
-    expect(result.reason).toMatch(/did not scope the absence/);
+    expect(result.reason).toMatch(/answered without naming the gap/);
   });
 });
 
@@ -109,6 +142,6 @@ describe('gradeMustAnswer', () => {
       /\b5\b/
     );
     expect(result.passed).toBe(true);
-    expect(result.claims).toContain('corpusScopedAbsence');
+    expect(result.claims).toContain('namedTheGap');
   });
 });

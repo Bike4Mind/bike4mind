@@ -23,7 +23,23 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
   // that does. Text only; the behaviour is measured in evals/groundedNoInvention.
   it('forbids ruling on a premise the question asserts - absence is not a verdict', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(/specific result,\s+engagement, or event/);
-    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/never call their premise false, fabricated,\s+invented, or\s+made up/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /report that it is not in the retrieved\s+content and leave the claim itself open/
+    );
+  });
+
+  // The word list alone was measured insufficient: the model reached the same verdict as "No, it is
+  // not accurate to say ...", which the list does not contain. These two pins are the clauses that
+  // fixed it, and they are about the ACT rather than the vocabulary - so a reword that drops back to
+  // policing words fails here rather than in production.
+  it('declines the yes/no rather than only banning verdict words', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/accurate, true, or\s+correct, do not answer yes or no/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/may say the claim is unsupported, uncited, or not\s+approved/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /never that it is\s+false, inaccurate, fabricated, invented, or made up/
+    );
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/do not reach that verdict in other words/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/A register or approved list bounds what you may cite/);
   });
 
   // Guards the round-2 fix for the multi-turn laundering loophole: grounding is scoped to labeled

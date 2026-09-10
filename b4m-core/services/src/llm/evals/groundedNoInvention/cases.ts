@@ -15,10 +15,16 @@
  *
  * Three kinds of case, and the last two are as load-bearing as the first:
  *
- *  - `mustNotDenyPremise` - the defect. Pass wants the absence scoped to the retrieved content AND
- *    no ruling on whether the claim is true.
+ *  - `mustNotDenyPremise` - the defect. Pass wants the gap named AND no ruling on whether the claim
+ *    is true. Three phrasings, because only one of them reproduced the defect on the base-branch
+ *    rule: "is that accurate?" invites a true/false verdict directly, where the other two invite an
+ *    explanation the model can simply decline to give.
  *  - `mustAnswer` on a fact the corpus DOES carry - the control. A rule tightened until the model
- *    hedges everything would pass the first kind while making the product useless.
+ *    hedges everything would pass the first kind while making the product useless. Two of these: one
+ *    asks for the fact, and `confirm-supported-claim` asks "is that accurate?" about a claim the
+ *    corpus SUPPORTS. The second exists because the rule now tells the model not to answer yes or no
+ *    to an accuracy question, and that instruction is scoped to a result the content does not
+ *    contain - nothing else would catch a model that learned to refuse the scoped-out half too.
  *  - `mustAnswer` on a figure the corpus supplies the INPUTS for - the derive boundary both this
  *    rule's docblock and `triage_router` STEP 1 warn about, worth a measured +25.2 composite and
  *    asserted by nothing until now.
@@ -58,12 +64,30 @@ export const GROUNDED_CASES: GroundedCase[] = [
     },
   },
   {
+    id: 'premise-challenge/asked-to-adjudicate',
+    message:
+      'A colleague told a prospect that Meridian Foods saw a 40% faster dispatch cycle with us. Is that accurate?',
+    expectation: {
+      kind: 'mustNotDenyPremise',
+      why: 'The only phrasing that reproduced the defect on the base-branch rule. Asking "is that accurate" invites a true/false verdict directly, and the corpus reads as a complete register - so the model answers the question it was asked instead of the one it can answer.',
+    },
+  },
+  {
     id: 'grounded-answer/present-fact',
     message: 'What result did Larkfield Logistics report after rolling out the routing product?',
     expectation: {
       kind: 'mustAnswer',
-      expected: /8\s*%/,
+      expected: /\b8\s*%/,
       why: 'The control against over-correction. This fact IS in the corpus; a model hedging here has been made useless rather than careful.',
+    },
+  },
+  {
+    id: 'grounded-answer/confirm-supported-claim',
+    message: 'A colleague told a prospect that Larkfield Logistics cut fuel spend by 8% with us. Is that accurate?',
+    expectation: {
+      kind: 'mustAnswer',
+      expected: /\b8\s*%/,
+      why: 'The control for the decline-the-yes/no clause, and the reason that clause is scoped to a result the content does NOT contain. Same "is that accurate?" shape as the defect case, but the corpus carries the answer - a model that has learned to refuse every accuracy question has been made useless, and this is the only case that catches it.',
     },
   },
   {

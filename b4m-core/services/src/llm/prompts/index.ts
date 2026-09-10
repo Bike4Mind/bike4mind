@@ -35,15 +35,27 @@
  * The premise-challenge shape is the same slide with the specific supplied by the QUESTION - "how did
  * <vendor> get <N>% faster with us". Retrieval returns nothing, the model scopes the absence correctly
  * for a sentence or two, then escalates past abstention into a verdict on the claim ("the premise
- * appears to be fabricated"). The clause above did not reach it: its enumeration is entity-shaped
- * (product, capability, partnership, offering) and a claimed RESULT is none of those, so the closing
- * sentence names that case directly. It is the worst-travelling form of the failure - it reads as
- * adjudicated rather than merely unknown, and a rep repeats it to the prospect it was about.
+ * appears to be fabricated"). The entity-shaped enumeration above did not reach it - product,
+ * capability, partnership, offering, and a claimed RESULT is none of those - so the closing sentences
+ * name that case directly. It is the worst-travelling form of the failure: it reads as adjudicated
+ * rather than merely unknown, and a rep repeats it to the prospect it was about.
  *
- * That sentence forbids a CHARACTERISATION, not a computation, so it leaves the derive licence below
- * untouched: nothing in it tells the model to stop doing arithmetic in front of the user. The
- * behavioural half is measured in evals/groundedNoInvention, whose `derive/` case exists to catch a
- * future reword that does cross that line.
+ * DO NOT REPAIR THIS BY EXTENDING THE WORD LIST. The first fix for the shape above did exactly that,
+ * adding "false, fabricated, invented, made up" - and measured against the full retrieval stack the
+ * model simply answered "No, it is not accurate to say <vendor> saw <N>%", reaching the same verdict
+ * with none of the listed words. That is the ORIGINAL defect's flaw repeated one level down: an
+ * enumeration is only ever as wide as the paraphrases someone thought of. Hence the three clauses that
+ * replaced it, none of which is a word: decline the yes/no outright; say which speech act IS allowed
+ * instead (unsupported, uncited, not approved for external use), because a ban with nowhere to go is
+ * what left the model reaching for a synonym; and name what those failing replies actually reasoned
+ * from - a corpus that presents itself as a complete register reads as a complete world. The word list
+ * survives only as an illustration inside the second clause.
+ *
+ * Those clauses forbid a CHARACTERISATION of a claim, not a computation, so they leave the derive
+ * licence below untouched: nothing in them tells the model to stop doing arithmetic in front of the
+ * user. Nor do they suppress CONFIRMING a claim the retrieved content does support - they are scoped
+ * to a result the content does not contain, and evals/groundedNoInvention has a case for each of those
+ * two over-corrections (`derive/`, `grounded-answer/confirm-supported-claim`).
  *
  * A MEASURED BEHAVIOUR DEPENDS ON THIS RULE'S SCOPE. `triage_router` STEP 1 (apps/client/server/utils/
  * systemPrompts/defaults.ts) tells the model to DERIVE figures the request supplies the inputs for -
@@ -71,8 +83,12 @@ export const GROUNDED_NO_INVENTION_RULE =
   'retrieved content (and, where useful, where it might be confirmed) rather than denying it. ' +
   'That holds for a claim the question itself asserts. When the user asks about a specific result, ' +
   'engagement, or event the retrieved content does not contain, report that it is not in the retrieved ' +
-  'content and leave the claim itself open - never call their premise false, fabricated, invented, or ' +
-  'made up. Reporting the limits of what you retrieved is not a ruling on what happened.';
+  'content and leave the claim itself open. If they ask whether such a claim is accurate, true, or ' +
+  'correct, do not answer yes or no. Report what the retrieved content does and does not show: you ' +
+  'may say the claim is unsupported, uncited, or not approved for external use, but never that it is ' +
+  'false, inaccurate, fabricated, invented, or made up, and do not reach that verdict in other words. ' +
+  'A register or approved list bounds what you may cite, not what happened. Reporting the limits of ' +
+  'what you retrieved is not a ruling on what happened.';
 
 /**
  * Shared prompt snippet for preview-first tool confirmation rules.
