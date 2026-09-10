@@ -199,8 +199,10 @@ describe('createFabFile MaxFileSize enforcement - cleared setting no longer bloc
     } as unknown as CreateFabFileAdapters;
   });
 
-  // Undo this block's own beforeEach fetch (`MaxFileSize: ''`), so it doesn't leak forward into
-  // every describe block that runs after this one in the same file.
+  // Not undoing our own beforeEach - guarding the NEXT describe block in this file from it.
+  // The admin-settings cache this block populates (`MaxFileSize: ''`) is process-wide, so
+  // without this it would leak forward and feed every describe block that runs after this
+  // one, not just the tests inside it.
   afterEach(() => {
     invalidateSettingsCache();
   });
