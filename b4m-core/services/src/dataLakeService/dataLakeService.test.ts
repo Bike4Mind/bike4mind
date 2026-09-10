@@ -1333,10 +1333,8 @@ describe('management views - the grant reach is manage-scoped, not read-scoped',
     listActiveByLakes: vi.fn().mockResolvedValue([]),
   });
 
-  // The cutover setting is ON here to prove the manage reach does not consult it. That is the only
-  // thing it proves at this level: the read reach's reader/org arms are ALSO held back by the
-  // source-level READ_GRANT_ENFORCEMENT_READY interlock, so with it false the two reaches happen to
-  // agree on a reader row here. The reaches are compared where they provably differ in
+  // The read-grant setting is ON here to prove the manage reach does not consult it. That is the
+  // only thing it proves at this level. The reaches are compared where they provably differ in
   // resolveLakeReadAccess.test.ts; these cases guard the wiring and the role split.
   const dbFor = (grants: ReturnType<typeof grantRepoFor>) => ({
     dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
