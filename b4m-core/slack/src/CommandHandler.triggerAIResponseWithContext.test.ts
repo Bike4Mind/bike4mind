@@ -118,6 +118,14 @@ describe('triggerAIResponseWithContext', () => {
     expect(result).toBe('Invalid model: "gpt-nope" is not available');
   });
 
+  it('falls back to the generic string for an HTTPError with an empty message', async () => {
+    invoke.mockRejectedValue(new BadRequestError(''));
+
+    const result = await makeHandler().triggerAIResponseWithContext('session-1', 'hi', '');
+
+    expect(result).toBe('Sorry, I encountered an error processing your request.');
+  });
+
   it('keeps the generic string for an unrecognized thrown error', async () => {
     invoke.mockRejectedValue(new Error('ECONNRESET at socket layer'));
 
