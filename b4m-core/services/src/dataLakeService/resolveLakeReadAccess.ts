@@ -30,6 +30,9 @@ export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
  */
 export const READ_GRANT_ENFORCEMENT_READY = true;
 
+/** Backing store for `resolveEnforceReadGrants`' optional per-turn flag read. */
+const enforceFlagByTurn = createScopedAsyncMemo<boolean>();
+
 /** Minimal diagnostic sink - a structural subset of the app Logger, so no dependency is added here. */
 export interface LakeAccessLogger {
   info?: (message: string, meta?: unknown) => void;
@@ -186,15 +189,29 @@ export function resolveLakeReadAccess(
  * one both resolve to ENFORCE, not to `false`. For the missing row that is the intended cutover
  * default; for a malformed row it is indistinguishable from it here, and the settings layer is where
  * that would have to be told apart.
+ *
+ * Pass `turnScope` from a caller that runs per TOOL CALL to collapse the flag read to one per turn -
+ * see the call site for why the memo wraps the raw read rather than this function's answer.
  */
 export async function resolveEnforceReadGrants(
   settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
-  logger?: LakeAccessLogger
+  logger?: LakeAccessLogger,
+  turnScope?: object
 ): Promise<boolean> {
   if (!settings) return false;
   let intent = false;
   try {
-    intent = (await settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY)) === true;
+    // `getSettingsValue` caches nothing (AdminSettingsModel round-trips to Mongo per call), so a
+    // resolver that runs per TOOL CALL re-reads this flag every time. `turnScope` collapses that to
+    // one read per turn; omitting it keeps the read unmemoized, which is what the once-per-request
+    // browse and manage callers want.
+    //
+    // The MEMO SEES THE RAW READ, deliberately, so the throw below still reaches the catch on every
+    // attempt and the rejection is evicted rather than cached. Memoizing this function's own return
+    // instead would cache the report-only `false` a transient failure produces, holding retrieval
+    // narrowed for the rest of the turn with nothing left to say why.
+    const readFlag = () => settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY).then(value => value === true);
+    intent = turnScope ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag) : await readFlag();
   } catch (err) {
     logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
     return false;
@@ -318,6 +335,11 @@ const reachByTurn = createScopedAsyncMemo<LakeGrantReach>();
  * because a reader's READ access must not become authority to write instructions into another
  * user's system prompt. A user-keyed memo would silently merge two sets whose separation is
  * exactly the point. Org ids are sorted so caller-side ordering cannot split an entry in two.
+ *
+ * The two sites DO share an entry when their arguments coincide - enforcement off and a caller who
+ * belongs to no org, where both pass `(false, [])`. That is correct rather than a widening: same
+ * function, same arguments, same rows. The floor injection depends on is the arguments it passes,
+ * which the memo cannot change; what the key prevents is one site being handed the OTHER's set.
  *
  * The grant repo is NOT in the key - being an object, it cannot be - so `turnScope` has to be the
  * object that OWNS it (a ToolContext owns `db.dataLakeAccessGrants`). Handing one scope two

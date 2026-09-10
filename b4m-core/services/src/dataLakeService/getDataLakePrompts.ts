@@ -4,15 +4,8 @@ import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 import { filterStillManagedLakes, type ManageRecheckAdapter } from './filterStillManagedLakes';
 import { grantedLakeReachForTurn } from './resolveLakeReadAccess';
-import { createScopedAsyncMemo } from './scopedAsyncMemo';
+import { membershipOrgIdsForTurn } from './membershipOrgIdsForTurn';
 import { isDatalakeTagWellFormed } from './createDataLake';
-
-/**
- * Per-turn memo for the membership read below. Keyed on the caller, its only argument, and scoped
- * to the shared context object so it lives exactly as long as the turn - the same reason and the
- * same lifetime as the grant read three lines under it (see createScopedAsyncMemo).
- */
-const membershipOrgIdsByTurn = createScopedAsyncMemo<string[]>();
 
 /**
  * The distinct `datalake:*` provenance tags among a bag of file tag names - i.e. which lakes a set
@@ -186,7 +179,8 @@ export async function getAccessibleDataLakePrompts(
     );
   }
   // Same membership resolution as getDynamicDataLakeAccess - resolved from `db.organizations`,
-  // never from a selected-org pointer (#1674).
+  // never from a selected-org pointer (#1674) - and now through the same per-turn memo, so the two
+  // resolvers share ONE read per turn rather than one each per tool call.
   //
   // Resolved outside the try/catch below on purpose: within THIS resolver, a transient failure
   // here propagates rather than being silently folded into "no prompts" by the fail-safe catch
@@ -195,13 +189,10 @@ export async function getAccessibleDataLakePrompts(
   // denies, never grants). The placement buys observability into where a failure originated, not
   // a stronger deny guarantee than returning [] outright would have given.
   //
-  // Memoized per turn, because this resolver runs per TOOL CALL. That contract is per ATTEMPT, not
-  // per turn: the memo evicts a rejection, so the next tool call re-reads and throws again rather
-  // than inheriting a cached "member of nothing". A membership CHANGE mid-turn is not picked up -
-  // the same per-turn snapshot the grant read below takes, and bounded the same way.
-  const organizationIds = userId
-    ? await membershipOrgIdsByTurn(context, userId, () => context.db.organizations.findMembershipOrgIds(userId))
-    : [];
+  // That contract is per ATTEMPT, not per turn - the memo evicts a rejection, so the next tool call
+  // re-reads and throws again rather than inheriting a cached "member of nothing". See
+  // membershipOrgIdsForTurn for what the per-turn snapshot does and does not cover.
+  const organizationIds = userId ? await membershipOrgIdsForTurn(context, userId, context.db.organizations) : [];
 
   // The lake ids the caller reaches by an owner/curator grant (see GRANT ARM in the doc comment).
   // Resolved BEFORE the lake read for the same reason as in getDynamicDataLakeAccess: a grant-held

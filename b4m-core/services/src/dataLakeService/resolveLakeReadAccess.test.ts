@@ -467,6 +467,80 @@ describe('grantedLakeReachForTurn - one read per turn per distinct argument set'
       orgGrantedLakes: {},
     });
   });
+
+  it('lets the two sites share an entry when their arguments coincide', async () => {
+    // Enforcement off and a caller in no org: retrieval and injection both pass `(false, [])`, so
+    // one read serves both. Correct, not a widening - the floor is the arguments each site passes.
+    const grants = repo();
+    const scope = turn();
+
+    const retrieval = await grantedLakeReachForTurn(scope, 'u1', [], grants, false);
+    const injection = await grantedLakeReachForTurn(scope, 'u1', [], grants, false);
+
+    expect(injection).toEqual(retrieval);
+    expect(grants.listByPrincipal).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveEnforceReadGrants - the flag read collapses per turn only when scoped', () => {
+  // No default for `value`: `settingsRepo(undefined)` must actually serve `undefined` (the
+  // no-row case), which a parameter default would swallow into the default instead.
+  const settingsRepo = (value: unknown) => ({
+    getSettingsValue: vi.fn(async () => value) as never,
+  });
+  const turn = () => ({});
+
+  it('reads the flag once per turn when given a scope', async () => {
+    // AdminSettingsModel caches nothing, so an unscoped resolver running per tool call re-queries
+    // Mongo for this flag every time.
+    const settings = settingsRepo(true);
+    const scope = turn();
+
+    expect(await resolveEnforceReadGrants(settings, undefined, scope)).toBe(true);
+    expect(await resolveEnforceReadGrants(settings, undefined, scope)).toBe(true);
+    expect(settings.getSettingsValue).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reads per call with no scope, so the once-per-request callers are unchanged', async () => {
+    const settings = settingsRepo(true);
+    await resolveEnforceReadGrants(settings);
+    await resolveEnforceReadGrants(settings);
+    expect(settings.getSettingsValue).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT share the flag between two turns', async () => {
+    const settings = settingsRepo(true);
+    await resolveEnforceReadGrants(settings, undefined, turn());
+    await resolveEnforceReadGrants(settings, undefined, turn());
+    expect(settings.getSettingsValue).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache the report-only answer a failed flag read produces', async () => {
+    // The memo wraps the RAW read, so the throw still reaches the fail-safe catch on each attempt
+    // and the rejection is evicted. Memoizing the resolved boolean instead would hold retrieval
+    // narrowed to report-only for the rest of the turn on one transient failure.
+    const settings = {
+      getSettingsValue: vi.fn().mockRejectedValueOnce(new Error('settings down')).mockResolvedValue(true) as never,
+    };
+    const logger = { warn: vi.fn() };
+    const scope = turn();
+
+    expect(await resolveEnforceReadGrants(settings, logger, scope)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('enforce-flag read failed'), expect.any(Error));
+    expect(await resolveEnforceReadGrants(settings, logger, scope)).toBe(true);
+    expect(settings.getSettingsValue).toHaveBeenCalledTimes(2);
+  });
+
+  it('memoizes a falsy flag too, rather than re-reading it as a miss', async () => {
+    // `undefined` (no row) and `false` are both legitimate settled answers - a memo that only
+    // cached truthy values would leave the read un-collapsed on exactly the report-only install.
+    const settings = settingsRepo(undefined);
+    const scope = turn();
+
+    expect(await resolveEnforceReadGrants(settings, undefined, scope)).toBe(false);
+    expect(await resolveEnforceReadGrants(settings, undefined, scope)).toBe(false);
+    expect(settings.getSettingsValue).toHaveBeenCalledTimes(1);
+  });
 });
 
 /**

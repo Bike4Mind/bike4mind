@@ -660,4 +660,56 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     expect(listByPrincipal).not.toHaveBeenCalled();
     expect(res.dataLakeTags).toEqual([]);
   });
+
+  /**
+   * This resolver runs per TOOL CALL - three tool-layer entry points forward the same `ToolContext`
+   * (resolveSessionLakeAccess, resolveAttachmentLakeAccess, knowledgeBaseRetrieve) - so a turn using
+   * two knowledge tools re-issued all three of its reads. Both calls here share ONE context object,
+   * which is what those entry points do.
+   */
+  describe('per-turn read collapse', () => {
+    it('issues one grant, membership and flag read for two resolutions in the same turn', async () => {
+      const ctx = grantCtx([theirGatedLake], [grantRow('theirs', 'owner')], { enforce: true });
+
+      const first = await getDynamicDataLakeAccess(ctx);
+      const second = await getDynamicDataLakeAccess(ctx);
+
+      expect(second.dataLakeTags).toEqual(first.dataLakeTags);
+      expect(second.dataLakeTags).toEqual(['datalake:theirs']);
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
+      expect(ctx.db.organizations.findMembershipOrgIds).toHaveBeenCalledTimes(1);
+      expect(ctx.db.adminSettings?.getSettingsValue).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT share any of the three between two turns', async () => {
+      // Two contexts are two requests. A hit across them would keep honoring a grant, a membership
+      // or an enforcement setting that changed a request ago.
+      await getDynamicDataLakeAccess(grantCtx([theirGatedLake], [grantRow('theirs', 'owner')], { enforce: true }));
+      const second = grantCtx([theirGatedLake], [grantRow('theirs', 'owner')], { enforce: true });
+      await getDynamicDataLakeAccess(second);
+
+      expect(second.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
+      expect(second.db.organizations.findMembershipOrgIds).toHaveBeenCalledTimes(1);
+      expect(second.db.adminSettings?.getSettingsValue).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-reads the grants after a failure instead of reporting the view complete', async () => {
+      // The fail-closed contract this resolver already had: a failed grant read narrows the view AND
+      // says so via lakeViewComplete. A cached rejection would leave the second call narrowed while
+      // silently reporting complete.
+      const ctx = grantCtx([theirGatedLake], [grantRow('theirs', 'owner')], { enforce: true });
+      (ctx.db.dataLakeAccessGrants?.listByPrincipal as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('grants down')
+      );
+
+      const failed = await getDynamicDataLakeAccess(ctx);
+      expect(failed.dataLakeTags).toEqual([]);
+      expect(failed.lakeViewComplete).toBe(false);
+
+      const recovered = await getDynamicDataLakeAccess(ctx);
+      expect(recovered.dataLakeTags).toEqual(['datalake:theirs']);
+      expect(recovered.lakeViewComplete).toBe(true);
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(2);
+    });
+  });
 });
