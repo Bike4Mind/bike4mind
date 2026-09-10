@@ -171,6 +171,20 @@ describe('blogImageUpload', () => {
       expect(getBlogUploadErrorMessage(err, 'default message')).toBe('Request failed with status code 400');
     });
 
+    it('treats an empty envelope error field as absent and falls through to the axios message', () => {
+      // The `&& data.error` guard exists so an empty string does not win over the real message.
+      const err = axiosErrorWith({ error: '' });
+
+      expect(getBlogUploadErrorMessage(err, 'default message')).toBe('Request failed with status code 400');
+    });
+
+    it('falls through to the axios message when the AxiosError has no response at all', () => {
+      // A network-level failure has no `response`, so the envelope read is skipped entirely.
+      const err = new AxiosError('Network Error', 'ERR_NETWORK');
+
+      expect(getBlogUploadErrorMessage(err, 'fallback')).toBe('Network Error');
+    });
+
     it('uses a plain Error message when the failure is not an AxiosError', () => {
       expect(getBlogUploadErrorMessage(new Error('boom'), 'fallback')).toBe('boom');
     });

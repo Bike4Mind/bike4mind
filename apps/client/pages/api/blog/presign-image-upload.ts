@@ -17,6 +17,7 @@ interface PresignImageUploadResponse {
 }
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MiB - a presign is a promise to the host, so bound it here
 
 /**
  * Server-side presign for a blog image upload. The blog API key lives in
@@ -34,7 +35,12 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
     if (!fileName?.trim() || !mimeType?.trim() || typeof fileSize !== 'number') {
       throw new BadRequestError('fileName, fileSize and mimeType are required');
     }
-    if (!ALLOWED_IMAGE_TYPES.includes(mimeType)) {
+    // typeof alone lets NaN/-1/9e15 through to the third-party presign.
+    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_IMAGE_BYTES) {
+      throw new BadRequestError(`fileSize must be between 1 and ${MAX_IMAGE_BYTES} bytes`);
+    }
+    // Client-supplied and case-varying: normalize before the allowlist check.
+    if (!ALLOWED_IMAGE_TYPES.includes(mimeType.trim().toLowerCase())) {
       throw new BadRequestError('Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.');
     }
     if (!user.blogIntegration?.apiKey || !user.blogIntegration?.baseUrl) {
