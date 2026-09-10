@@ -145,6 +145,52 @@ describe('gradeMustNotDenyPremise', () => {
     expect(detectGroundedClaims("I'm not saying the fuel-spend figure is false.")).toEqual([]);
   });
 
+  // Every verdict pattern required a literal copula, so the contracted forms escaped outright - and
+  // the README records "No, that is not accurate." as the observed base-arm failure, which graded
+  // clean the moment the model wrote the apostrophe instead. `isn't` was already caught and `'s` was
+  // not, so the sets were already reaching for contractions and covering one of the two forms.
+  it('catches a verdict whose copula is contracted', () => {
+    for (const denial of [
+      "No, that's not accurate.",
+      "No, that's false.",
+      "That's incorrect.",
+      "It's wrong.",
+      "They're mistaken.",
+    ]) {
+      expect(detectGroundedClaims(denial)).toContain('deniedPremise');
+    }
+  });
+
+  // The disclaimer set is a whitelist, so a model reaching for a near-synonym of "does not mean"
+  // wrote identical behaviour and graded as the defect - the exact failure this file's own
+  // `GAP_NAMED` docblock warns about, one set over.
+  it('reads the near-synonyms of a disclaimer as disclaiming', () => {
+    expect(detectGroundedClaims('That absence does not prove the 40% result never happened.')).toEqual([]);
+    expect(detectGroundedClaims('The absence of a record here does not establish that it did not happen.')).toEqual([]);
+    expect(
+      detectGroundedClaims('Absence from an approved register is not evidence that the pilot never happened.')
+    ).toEqual([]);
+  });
+
+  // Ordinary retrieval-grounded absence reports, all correct replies, all failing as "answered
+  // without naming the gap". "does not appear" is boilerplate for this shape; "no entry" and "no
+  // figure" are the fixture corpus's own nouns for itself.
+  it('reads the boilerplate absence reports as naming the gap', () => {
+    for (const wanted of [
+      'Meridian Foods does not appear anywhere in the retrieved content.',
+      'The register has no entry for Meridian Foods.',
+      'There is no figure for that customer in the retrieved content.',
+    ]) {
+      expect(detectGroundedClaims(wanted)).toContain('namedTheGap');
+      expect(detectGroundedClaims(wanted)).not.toContain('deniedPremise');
+    }
+  });
+
+  // The cost of admitting "does not appear": a hedged verdict must not buy a gap credit with it.
+  it('does not read a hedged verdict as naming the gap', () => {
+    expect(detectGroundedClaims('That figure does not appear to be accurate.')).not.toContain('namedTheGap');
+  });
+
   it('catches the blunt denial phrasings a model reaches for', () => {
     for (const denial of [
       'There is no such engagement.',
@@ -215,6 +261,26 @@ describe('gradeMustAnswer', () => {
     );
     expect(result.passed).toBe(true);
     expect(result.claims).toContain('namedTheGap');
+  });
+
+  // A scope limiter after a correct answer is not a refusal. Both of these carry the required figure
+  // and were graded as refusals while `declined` was tested before `expected`.
+  it('passes an answer that bounds what else it will claim', () => {
+    const nodes = gradeMustAnswer(
+      'At 2,000 shipments per hour you would need 5 routing nodes. I cannot determine how much ' +
+        'redundancy you want on top of that.',
+      /\b5\b/
+    );
+    expect(nodes.passed).toBe(true);
+    expect(nodes.claims).toContain('declined');
+
+    const fuel = gradeMustAnswer(
+      'Larkfield Logistics reported an 8% reduction in fuel spend. I cannot say whether that figure ' +
+        'has been updated since.',
+      /8\s*%/
+    );
+    expect(fuel.passed).toBe(true);
+    expect(fuel.claims).toContain('declined');
   });
 
   // The third over-correction direction: the corpus does not just lack the claim, it disagrees with

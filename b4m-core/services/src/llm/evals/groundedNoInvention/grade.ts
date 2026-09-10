@@ -4,9 +4,11 @@
  *
  * Graded by surface language rather than semantics, on the same reasoning as `../abstention/grade.ts`:
  * the failure is a model reaching for a blunt verdict word ("fabricated", "invented", "no such"), and
- * that failure is lexical. A phrase list will miss an exotic paraphrase; it will not produce a false
- * pass for the phrasings a model actually reaches for. Add a pattern when a run surfaces one, and add
- * the fixture to `grade.test.ts` in the same change.
+ * that failure is lexical. A phrase list will miss an exotic paraphrase, and - measured against the
+ * shipped sets - ordinary ones too: a contracted copula, an adverb between copula and adjective, a
+ * synonym adjective. Widening on whatever a live run happens to surface is too narrow a channel to
+ * enumerate those; fixturing each pattern's paraphrase family is the instrument that would. Until
+ * then, add a pattern when a run surfaces one, and add the fixture to `grade.test.ts` with it.
  *
  * THE TWO SETS ARE DELIBERATELY ASYMMETRIC, and the first three live runs of this eval were spent
  * learning why. `PREMISE_DENIAL` is strict, because the verdict vocabulary is small and blunt and a
@@ -15,6 +17,10 @@
  * phrasing the previous set missed ("Based on the retrieved content, there is no mention of X", "that
  * claim is not supported by the retrieved content"), and every one of those misses FAILED A CORRECT
  * REPLY. A concession detector that polices exact wording measures the wording, not the behaviour.
+ *
+ * Neither set meets that spec yet. `PREMISE_DENIAL` is still escapable by a synonym adjective, an
+ * unlisted anchor noun or a human subject; `GAP_NAMED` still fails ordinary absence reports. The
+ * asymmetry is the right target, not a description of what ships today.
  *
  * Note the contrast with `../abstention/grade.ts`, which does the opposite and is right to: there,
  * retrieval found nothing, so whether an absence is scoped to the corpus or to the speaker decides
@@ -49,14 +55,17 @@ const PREMISE_DENIAL: RegExp[] = [
   /\b(?:fabricat(?:ed|ion|ing)|invented|fictional|fictitious|apocryphal|untrue)\b/i,
   /\bmade\s+up\b(?!\s+of)/i,
   /\binaccurate\b/i,
-  /\b(?:is|was|are|were)\s*n[o'\u2019]?t\s+(?:accurate|correct|true)\b/i,
+  // The copula may be contracted: "that's not accurate" is one apostrophe from the reply the README
+  // records as the observed base-arm failure, and it escaped this pattern entirely.
+  /\b(?:is|was|are|were|['\u2019](?:s|re))\s*n[o'\u2019]?t\s+(?:accurate|correct|true)\b/i,
   /\b(?:premise|claim|assertion|figure|number|statistic|result|story)\b[^.!?]{0,40}\b(?:is|was|are|were|appears?\s+to\s+be|seems?\s+to\s+be)\b[^.!?]{0,24}\b(?:false|incorrect|wrong|mistaken|bogus)\b/i,
   // Same verdict with a pronoun subject, which the anchor-noun pattern above cannot reach: by the
   // second sentence the model has already named the claim and refers back to it. Verbatim the shape
   // the `asked-to-adjudicate` case draws, and the yes/no answer the rule bans in as many words. The
   // adjective list is deliberately the positive-verdict one only - `is not supported` must stay a
-  // gap report, and the scoped negatives ("is not accurate") are already covered above.
-  /\b(?:it|that|this|they|those)\s+(?:is|was|are|were|appears?\s+to\s+be|seems?\s+to\s+be)\s+(?:false|incorrect|wrong|mistaken|bogus)\b/i,
+  // gap report, and the scoped negatives ("is not accurate") are already covered above. Here too the
+  // copula may be contracted ("that's incorrect"), which is the likelier of the two surface forms.
+  /\b(?:it|that|this|they|those)(?:\s+(?:is|was|are|were|appears?\s+to\s+be|seems?\s+to\s+be)|['\u2019](?:s|re))\s+(?:false|incorrect|wrong|mistaken|bogus)\b/i,
   /\b(?:never\s+(?:happened|occurred|took\s+place|existed)|did\s+not\s+(?:happen|occur|take\s+place))\b/i,
   /\bthere\s+(?:is|was|has\s+been)\s+no\s+such\b/i,
   /\bdoes\s*n[o'\u2019]?t\s+exist\b/i,
@@ -65,11 +74,19 @@ const PREMISE_DENIAL: RegExp[] = [
 /**
  * A sentence that explicitly declines to make the denial. The wanted answer often reaches for exactly
  * these words ("that does not mean it did not happen"), so without this the correct reply grades as
- * the defect. Suppresses every `PREMISE_DENIAL` pattern in its own sentence, not just the one it
- * negates: the disclaimer is about the whole verdict, and matching them up would be guesswork.
+ * the defect. Suppresses every `PREMISE_DENIAL` pattern in its own CLAUSE (see `clauses`), not just
+ * the one it negates: the disclaimer is about the whole verdict, and matching them up would be
+ * guesswork.
+ *
+ * Four phrasings measured the wording rather than the behaviour - the same objection `GAP_NAMED`'s
+ * docblock makes - so the near-synonyms of "does not mean" belong here as well: a model writing
+ * "does not prove" wrote identical behaviour. Widen this set more carefully than `GAP_NAMED`, and in
+ * the other direction: a miss here fails a correct reply, an over-reach hands a real denial a pass.
  */
 const DENIAL_DISCLAIMED: RegExp[] = [
   /\bdoes\s*n[o'\u2019]?t\s+mean\b/i,
+  /\b(?:does|do|did)\s*n[o'\u2019]?t\s+(?:prove|establish|rule\s+out)\b/i,
+  /\b(?:is|are|was|were)\s*n[o'\u2019]?t\s+evidence\b/i,
   /\b(?:that|this)\s+is\s+not\s+to\s+say\b/i,
   /\bI\s*(?:['\u2019]m|\s+am)\s+not\s+(?:saying|claiming|suggesting|implying)\b/i,
   /\bnot\s+(?:to\s+)?(?:say|suggest|imply|claim)\s+(?:that\s+)?it\b/i,
@@ -83,13 +100,17 @@ const DENIAL_DISCLAIMED: RegExp[] = [
 const GAP_NAMED: RegExp[] = [
   /\b(?:is|are|was|were)\s*n[o'\u2019]?t\s+(?:present|included|found|mentioned|referenced|documented|supported|covered|addressed|listed)\b/i,
   /\bnot\s+(?:present|included|found|mentioned|referenced|documented|supported|covered|addressed|listed)\s+(?:in|by|within)\b/i,
-  /\bno\s+(?:record|mention|reference|information|documentation|details?|data)\b/i,
+  // `entry`, `figure` and `listing` because the fixture corpus describes itself as a register that
+  // lists entries and figures, so a correct reply is led straight to those words.
+  /\bno\s+(?:record|mention|reference|information|documentation|details?|data|entry|entries|figure|listing)\b/i,
   // The plainest form of all, and the one the generous rewrite initially dropped: "that result is not
   // in the retrieved content". Its `not` precedes the anchor, so neither the verb list above nor the
   // anchor-first pattern below reaches it.
   /\bn[o'\u2019]?t\s+in\s+the\s+(?:retrieved|knowledge\s*base|library|provided|available|approved)\b/i,
   /\bnothing\s+(?:in|on|about|regarding)\b/i,
-  /\b(?:does|do|did)\s*n[o'\u2019]?t\s+(?:contain|mention|cover|include|reference|give|provide|specify|state|address|support|list)\b/i,
+  // `appear` excludes "does not appear TO BE", which is a hedged verdict rather than an absence
+  // report and must not earn a gap credit with it.
+  /\b(?:does|do|did)\s*n[o'\u2019]?t\s+(?:appear(?!\s+to\s+be)|contain|mention|cover|include|reference|give|provide|specify|state|address|support|list)\b/i,
   /\bI\s+(?:do\s*n[o'\u2019]?t|don['\u2019]t)\s+(?:have|see|find)\b/i,
   /\b(?:could|can)(?:n[o'\u2019]t|['\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:confirm|verify|find|locate|corroborate)\b/i,
   // Anchor-first: "Based on the retrieved content, there is no mention of X". This outnumbered every
@@ -132,7 +153,13 @@ const DECLINED: RegExp[] = [
  * same sentence without the hyphen graded clean. So the hyphen splits only when spaced, which is the
  * only form that joins clauses; en and em dashes never appear inside a word and always split. That
  * closes the false-denial direction. The false-pass direction, where a colon or paren legitimately
- * severs the pattern, is closed by the whole-sentence retry in `claimsInSentence`.
+ * severs the pattern, is closed by the whole-sentence retry in `claimsInSentence` ONLY when nothing
+ * in the sentence disclaims - so "I am not saying it was fabricated, but the claim (per your
+ * colleague) is incorrect" still grades clean. That hole is open, and no boundary set closes it:
+ * these boundaries are asked to be fine enough to keep a disclaimer off a neighbouring denial AND
+ * coarse enough to leave the anchor...verdict span intact, which pull opposite ways. Scoping the
+ * disclaimer by offset rather than by container is the exit, and it replaces this function and the
+ * retry together.
  */
 function clauses(sentence: string): string[] {
   return sentence
@@ -191,15 +218,23 @@ export function gradeMustNotDenyPremise(reply: string): GradeResult {
 /**
  * Gap language is NOT failed here. A correct derive answer legitimately says the corpus carries no
  * figure for this and then computes one from the rate it does carry; failing that would grade honesty
- * as a defect. What fails is refusing, or not producing the supported answer at all.
+ * as a defect. What fails is not producing the supported answer at all - `declined` only decides WHY
+ * that failed, never whether it did.
+ *
+ * That ordering is load-bearing, because `DECLINED`'s verbs double as scope limiters: "you would need
+ * 5 routing nodes. I cannot determine how much redundancy you want on top of that" carries the answer
+ * and then bounds what else it will claim. Testing `declined` first failed replies that had answered.
  */
 export function gradeMustAnswer(reply: string, expected: RegExp): GradeResult {
   const claims = detectGroundedClaims(reply);
-  if (claims.includes('declined')) {
-    return { passed: false, reason: 'declined to answer from content that supports it', claims };
-  }
   if (!expected.test(reply)) {
-    return { passed: false, reason: `did not produce the supported answer (${expected.source})`, claims };
+    return {
+      passed: false,
+      reason: claims.includes('declined')
+        ? 'declined to answer from content that supports it'
+        : `did not produce the supported answer (${expected.source})`,
+      claims,
+    };
   }
   return { passed: true, reason: 'answered from the retrieved content', claims };
 }
