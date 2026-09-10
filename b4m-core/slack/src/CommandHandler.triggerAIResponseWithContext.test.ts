@@ -105,13 +105,21 @@ describe('triggerAIResponseWithContext', () => {
   });
 
   it('surfaces the message from an HTTPError-shaped error that fails instanceof (cross-realm)', async () => {
-    // Simulates @bike4mind/common resolving as two module realms: a plain object shaped
-    // like an HTTPError (has statusCode + message) but NOT an instance of the imported
-    // HTTPError class - this is exactly what isHttpError's duck-type fallback is for.
-    const crossRealmError = Object.assign(new Error('Invalid model: "gpt-nope" is not available'), {
-      statusCode: 400,
-    });
-    invoke.mockRejectedValue(crossRealmError);
+    // Simulates @bike4mind/common resolving as two module realms: a class carrying the
+    // exact shape a real BadRequestError constructor produces (statusCode, a name ending
+    // in "Error", and an additionalInfo key) but NOT an instance of the imported HTTPError
+    // class - this is exactly what isHttpError's duck-type fallback is for. A plain
+    // `Object.assign(new Error(...), { statusCode })` would NOT trigger the fallback,
+    // since it lacks a matching `.name` and an `additionalInfo` key.
+    class OtherRealmBadRequestError extends Error {
+      statusCode = 400;
+      additionalInfo?: Record<string, unknown>;
+      constructor(message: string) {
+        super(message);
+        this.name = 'BadRequestError';
+      }
+    }
+    invoke.mockRejectedValue(new OtherRealmBadRequestError('Invalid model: "gpt-nope" is not available'));
 
     const result = await makeHandler().triggerAIResponseWithContext('session-1', 'hi', '');
 
