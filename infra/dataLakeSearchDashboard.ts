@@ -40,6 +40,13 @@ if (isMonitoredStage) {
             // the shape that matters is the crossover: files the index kept off the scan path
             // rising while scanned chunks fall toward zero. Scanned chunks turning back up is
             // the regression.
+            //
+            // Two reasons a flat line here is not automatically a regression. The left series is
+            // Atlas-only by construction (the saturation branch is gated on canUseAtlas), so on a
+            // self-host/OpenSearch deploy it is a structural zero meaning "not applicable" and the
+            // crossover can never happen. And the right series is emitted from the ranking core,
+            // which the empty-embedding and fully-excluded-scope return paths never reach, so it
+            // counts scanning on ranked searches rather than on all of them.
             title: 'ANN Coverage vs Brute-Force Scanning',
             metrics: [
               [

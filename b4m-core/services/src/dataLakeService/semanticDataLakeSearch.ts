@@ -1123,7 +1123,10 @@ async function rankChunksForFiles(args: {
   // and a zero on annUnrankedFilesLeftOffScan is precisely the regression this metric watches for.
   await recordDataLakeSearchMetrics(
     {
-      backend: canUseAtlas ? 'atlas' : 'opensearch',
+      // Three-way, unlike the log lines above: a dimension value partitions the metric
+      // permanently, so "no backend ran" cannot be folded into 'opensearch' the way it can be
+      // shrugged off in a log field read in context.
+      backend: canUseAtlas ? 'atlas' : canUseOpenSearch ? 'opensearch' : 'none',
       annUnrankedFilesLeftOffScan: scan.annUnrankedFilesLeftOffScan,
       chunksScanned: scan.chunksScanned,
       annHits: scan.annHits,

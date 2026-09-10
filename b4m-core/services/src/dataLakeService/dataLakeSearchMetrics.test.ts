@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ILogger } from '@bike4mind/observability';
 
@@ -101,6 +102,17 @@ describe('recordDataLakeSearchMetrics', () => {
     expect(dataFor('ChunksScanned')[1].Dimensions).toContainEqual({ Name: 'Backend', Value: 'opensearch' });
   });
 
+  // Neither ANN gate is reachable with the vector-search flag off, so this is the entire
+  // pre-cutover population - not an edge case. A dimension value partitions the metric
+  // permanently and CloudWatch cannot relabel published datapoints, so folding it into
+  // 'opensearch' would misattribute every one of those searches with no way back.
+  it('keeps "no backend ran" as its own dimension value', async () => {
+    await recordDataLakeSearchMetrics({ ...metrics, backend: 'none' });
+
+    expect(dataFor('ChunksScanned')[1].Dimensions).toContainEqual({ Name: 'Backend', Value: 'none' });
+    expect(dataFor('ChunksScanned')[0].Dimensions).toEqual([{ Name: 'Stage', Value: 'production' }]);
+  });
+
   // SEED_STAGE_NAME comes from DEFAULT_LAMBDA_ENVIRONMENT, so only an SST deploy sets it. This is
   // also what keeps a CLI, self-host or test run from publishing to a CloudWatch it has no
   // credentials for - and this emitter sits on the search request path.
@@ -118,5 +130,32 @@ describe('recordDataLakeSearchMetrics', () => {
 
     await expect(recordDataLakeSearchMetrics(metrics, logger)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to emit'), expect.any(Object));
+  });
+
+  // The "never throws" contract has to survive a logger that is missing warn, or the handler
+  // meant to keep a metrics outage off the request path becomes the thing that fails the search.
+  it('never throws when the fallback logger cannot warn', async () => {
+    send.mockRejectedValue(new Error('throttled'));
+
+    await expect(recordDataLakeSearchMetrics(metrics, {} as unknown as ILogger)).resolves.toBeUndefined();
+  });
+});
+
+// The assertions above pin the published literals; these pin the other end of the same contract.
+// infra/ cannot import this module (SST loads it outside the package graph), so the dashboard
+// carries the strings by hand and nothing links the two - a rename here ships green and leaves
+// the dashboard graphing a metric that no longer exists, which is the silent-success failure the
+// metrics were added to detect in the first place.
+describe('infra/dataLakeSearchDashboard.ts stays in sync', () => {
+  const dashboard = readFileSync(new URL('../../../../infra/dataLakeSearchDashboard.ts', import.meta.url), 'utf8');
+
+  it.each([
+    ['Lumina5/DataLakeRetrieval'],
+    [ANN_UNRANKED_FILES_LEFT_OFF_SCAN_METRIC],
+    [CHUNKS_SCANNED_METRIC],
+    [ANN_HITS_METRIC],
+    [ANN_MODELS_QUERIED_METRIC],
+  ])('graphs %s', literal => {
+    expect(dashboard).toContain(literal);
   });
 });

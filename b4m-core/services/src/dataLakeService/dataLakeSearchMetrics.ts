@@ -36,8 +36,15 @@ export const ANN_HITS_METRIC = 'AnnHits';
 /** Distinct embedding models queried - cap pressure on MAX_ALTERNATE_ANN_MODELS. */
 export const ANN_MODELS_QUERIED_METRIC = 'AnnModelsQueried';
 
-/** Which retrieval backend served the search. Dimension value - keep stable. */
-export type DataLakeSearchBackend = 'atlas' | 'opensearch';
+/**
+ * Which retrieval backend served the search. Dimension value - keep stable.
+ *
+ * 'none' is a real state, not a placeholder: both backend gates are conjoined with
+ * vectorSearchEnabled, so with the flag off (or on with no queryable index) no ANN path ran at
+ * all. Folding that into 'opensearch' would attribute the entire pre-cutover population to a
+ * backend that never served it, and CloudWatch datapoints cannot be relabelled afterwards.
+ */
+export type DataLakeSearchBackend = 'atlas' | 'opensearch' | 'none';
 
 export interface DataLakeSearchMetrics {
   backend: DataLakeSearchBackend;
@@ -65,7 +72,17 @@ export async function recordDataLakeSearchMetrics(metrics: DataLakeSearchMetrics
   try {
     // Fresh client per call: warm Lambda containers outlive their credentials,
     // and a module-level client captures expired ones (see server/utils/cloudwatch.ts).
-    const client = new CloudWatchClient({ region: process.env.AWS_REGION || 'us-east-2' });
+    //
+    // Bounded because this is awaited on the search request path, unlike the sibling truncation
+    // emitter which its caller reaches only on a rare condition. The SDK defaults are 3 attempts
+    // and NO socket timeout at all, so an unconfigured client caps out at the Lambda timeout.
+    // One attempt and a ~1s ceiling: a dropped datapoint is cheaper than a second of latency on
+    // every search, and the graph reads the same either way at this volume.
+    const client = new CloudWatchClient({
+      region: process.env.AWS_REGION || 'us-east-2',
+      maxAttempts: 1,
+      requestHandler: { connectionTimeout: 500, requestTimeout: 1000 },
+    });
     const timestamp = new Date();
     const stageOnly = [{ Name: 'Stage', Value: stage }];
     // A CloudWatch alarm matches one exact dimension set, so the Stage-only datapoint is the
@@ -96,7 +113,9 @@ export async function recordDataLakeSearchMetrics(metrics: DataLakeSearchMetrics
       })
     );
   } catch (error) {
-    (logger ?? Logger.globalInstance).warn('[semanticSearch] Failed to emit data-lake search metrics', {
+    // Optional-chained like the sibling emitters: the "never throws" contract above has to hold
+    // for a partial logger too, or the catch itself takes down the search it was protecting.
+    (logger ?? Logger.globalInstance)?.warn?.('[semanticSearch] Failed to emit data-lake search metrics', {
       backend: metrics.backend,
       error: error instanceof Error ? error.message : String(error),
     });
