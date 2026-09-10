@@ -313,6 +313,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       : undefined,
     connectedAt: new Date(),
     status: 'connected' as const,
+    // New connections default to read-only. This only applies here (connect
+    // time); existing connections retain whatever writeEnabled value they had
+    // before -- there is no retroactive migration.
     writeEnabled: false,
     ...(rootPageId && { rootPageId }),
   };

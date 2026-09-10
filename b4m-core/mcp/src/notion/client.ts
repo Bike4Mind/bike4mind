@@ -11,13 +11,17 @@ import { debug, debugError, debugWarn } from './logger.js';
 
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 1000;
-const MAX_RETRY_AFTER_MS = 60_000;
+// Capped at 5s so the retry loop cannot outlive the mcpHandler Lambda's 20s
+// wall-clock budget (SST default; no timeout is declared in infra/mcp.ts).
+// 60_000 was above that ceiling and could never prevent the Lambda from being
+// killed mid-sleep; a single Retry-After response could blow the whole budget.
+const MAX_RETRY_AFTER_MS = 5_000;
 
 function backoffMs(attempt: number, retryAfterHeader: string | null): number {
   if (retryAfterHeader) {
     const seconds = Number(retryAfterHeader);
-    // Clamp rather than discard: a capped Retry-After still beats falling back to
-    // the 1s exponential delay that an out-of-range header used to trigger.
+    // Clamp rather than discard: honoring a server-supplied hint (even capped)
+    // is still better than ignoring it and falling back to exponential backoff.
     if (Number.isFinite(seconds) && seconds > 0) {
       return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
     }

@@ -731,7 +731,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
 
     /** Single-use nonce for Notion OAuth; set at connect, consumed at callback. */
-    pendingNotionOAuthNonce: { type: String, required: false },
+    pendingNotionOAuthNonce: { type: String, required: false, select: false },
 
     blogIntegration: {
       default: null,

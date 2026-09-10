@@ -13,9 +13,10 @@ import { debugWarn } from '../logger.js';
 
 export const MAX_ANCESTRY_DEPTH = 10;
 export const MAX_ANCESTRY_CONCURRENCY = 3;
-/** Hard wall-clock budget for a single ancestry walk, in ms. Prevents
- *  sustained 429 retries from accumulating into minutes of sleep. */
-export const ANCESTRY_DEADLINE_MS = 30_000;
+/** Hard wall-clock budget for a single ancestry walk, in ms. Must stay well
+ *  below the mcpHandler Lambda's 20s wall-clock timeout so the deadline can
+ *  actually fire; 30_000 was above that ceiling and could never preempt a walk. */
+export const ANCESTRY_DEADLINE_MS = 10_000;
 
 /** Strips dashes and lowercases a Notion UUID for stable comparison. */
 export function normalizeId(id: string): string {
