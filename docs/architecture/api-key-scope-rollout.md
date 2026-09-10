@@ -170,6 +170,14 @@ to a question it cannot see.
    either precondition proves nothing; do not take the skip, because step 5's
    cross-check is the safety net you would be giving up along with it. Otherwise the
    result is your re-mint list.
+
+   The preflight takes one `scopes` set per call. A family whose routes split into more than
+   one `requiredScopes` group (the way data lakes split into read/write, query, and share) needs
+   one preflight run per group, unioned into a single re-mint list - a single run over the whole
+   prefix with every scope in the family reports a key as `allow` the moment it holds any ONE of
+   them, hiding the keys that would 403 at a route requiring a scope that key does not hold.
+
+
 3. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
 4. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.
 5. Re-mint the keys from step 2 with their owners. Watch

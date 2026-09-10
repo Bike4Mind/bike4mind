@@ -30,6 +30,7 @@ import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -124,6 +125,7 @@ const handler = baseApi()
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
+    assertDataLakeTagWriteScope(req, candidateTagNames);
     // No `members` here: this is a whole-array write, so the payload cannot distinguish a join
     // from a resend, and `reconcileLakeTags` (inside `updateFabFile` below) runs the admission
     // contract over every lake this write actually JOINS - meta-tag and prefix-arm alike - with the

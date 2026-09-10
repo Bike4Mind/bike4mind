@@ -20,6 +20,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { dataLakeService } from '@bike4mind/services';
 import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -78,6 +79,7 @@ const handler = baseApi().post(
       // (ctx) + the grant repo so a transferred owner / curator / org admin can upload here too,
       // matching the batch presign door (generate-presigned-urls-batch.ts).
       const requestedTagNames = (data.tags ?? []).map(t => t.name);
+      assertDataLakeTagWriteScope(req, requestedTagNames);
       const ctx = await toAccessContext(req);
       await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
         db: {

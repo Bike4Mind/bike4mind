@@ -7,8 +7,10 @@ import {
   DATA_LAKE_READ_OR_SHARE_SCOPES,
   DATA_LAKE_SHARE_SCOPES,
   DATA_LAKE_WRITE_SCOPES,
+  DATA_LAKE_QUERY_SCOPES,
   assertDataLakeShareScope,
   assertDataLakeWriteScope,
+  assertDataLakeTagWriteScope,
 } from './dataLakeScopes';
 
 const key = (...scopes: ApiKeyScope[]) => ({ apiKeyInfo: { scopes } });
@@ -33,6 +35,7 @@ describe('data-lake API-key scopes', () => {
       ...DATA_LAKE_WRITE_SCOPES,
       ...DATA_LAKE_SHARE_SCOPES,
       ...DATA_LAKE_READ_OR_SHARE_SCOPES,
+      ...DATA_LAKE_QUERY_SCOPES,
     ];
     expect(all).not.toContain(ApiKeyScope.ADMIN);
   });
@@ -41,6 +44,20 @@ describe('data-lake API-key scopes', () => {
     expect(DATA_LAKE_READ_SCOPES).toContain(ApiKeyScope.DATALAKE_WRITE);
     expect(() => assertDataLakeWriteScope(key(ApiKeyScope.DATALAKE_WRITE))).not.toThrow();
     expect(() => assertDataLakeWriteScope(key(ApiKeyScope.DATALAKE_READ))).toThrow(/datalake:write/);
+  });
+
+  it('lets a query key reach the read-gated routes it calls back into, but not the reverse', () => {
+    expect(DATA_LAKE_READ_SCOPES).toContain(ApiKeyScope.DATALAKE_QUERY);
+    expect(DATA_LAKE_QUERY_SCOPES).not.toContain(ApiKeyScope.DATALAKE_READ);
+    expect(DATA_LAKE_QUERY_SCOPES).not.toContain(ApiKeyScope.DATALAKE_WRITE);
+  });
+
+  it('gates a lake-membership tag write only when the tag list actually reaches into a lake', () => {
+    expect(() => assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['datalake:some-lake'])).toThrow(
+      /datalake:write/
+    );
+    expect(() => assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_WRITE), ['datalake:some-lake'])).not.toThrow();
+    expect(() => assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['plain-tag'])).not.toThrow();
   });
 
   it('does not let a write key re-share a lake', () => {

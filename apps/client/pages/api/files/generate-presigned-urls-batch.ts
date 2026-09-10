@@ -21,6 +21,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
@@ -78,6 +79,7 @@ const handler = baseApi().post(async (req: Request, res) => {
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
   // through per-file tags. Gate every such tag with the same write check.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
+  assertDataLakeTagWriteScope(req, clientMetaTags);
   await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
     db: {
       dataLakes: dataLakeRepository,

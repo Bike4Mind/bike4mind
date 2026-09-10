@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import {
@@ -50,11 +51,15 @@ describe('apiKeyScopes catalog', () => {
     expect(genericValues).toContain(ApiKeyScope.OPTIHASHI_COMPUTE);
   });
 
-  it('keeps the OptiHashi spend scope out of the read and read/write presets', () => {
-    // The presets are built from the `:read`/`:write` suffixes (UserApiKeysTab),
-    // so `optihashi:compute` must not carry one - otherwise a "Read & write" key
-    // silently gains the ability to commission billable compute.
-    expect(ApiKeyScope.OPTIHASHI_COMPUTE.endsWith(':read')).toBe(false);
-    expect(ApiKeyScope.OPTIHASHI_COMPUTE.endsWith(':write')).toBe(false);
+  it('keeps every spend scope out of the read and read/write presets', () => {
+    // The presets are built from the `:read`/`:write` suffixes (UserApiKeysTab), so a scope that
+    // commissions billable work must not carry one - otherwise a "Read-only" or "Read & write" key
+    // silently gains the ability to spend. Table, not one-off asserts, so a future spend scope
+    // (the way `datalake:query` joined `optihashi:compute`) has to be added here to pass.
+    const spendScopes = [ApiKeyScope.OPTIHASHI_COMPUTE, ApiKeyScope.DATALAKE_QUERY];
+    for (const scope of spendScopes) {
+      expect(scope.endsWith(':read'), `${scope} must not end in :read`).toBe(false);
+      expect(scope.endsWith(':write'), `${scope} must not end in :write`).toBe(false);
+    }
   });
 });

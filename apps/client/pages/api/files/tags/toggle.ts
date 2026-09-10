@@ -13,7 +13,7 @@ import {
 import { fileTagRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -37,9 +37,7 @@ const handler = baseApi().post(
     // files:write-only key keeps working. But when the payload actually reaches into a lake (a
     // datalake:* meta-tag), an API-key caller must hold datalake:write - otherwise a key minted for
     // file tagging alone could add/remove a file from a lake it cannot otherwise write into.
-    if (dataLakeService.extractDataLakeMetaTags(toggledTags).length > 0) {
-      assertDataLakeWriteScope(req);
-    }
+    assertDataLakeTagWriteScope(req, toggledTags);
     const settingsStores = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
     // No `members` here on purpose: a toggle is direction-neutral, so this route cannot tell a join
     // from a leave and would refuse removals. The admission contract (#1680) runs inside
@@ -70,6 +68,9 @@ const handler = baseApi().post(
       // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived from
       // the user document the service is handed.
       administeredOrgIds: ctx.administeredOrgIds,
+      // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
+      // resolved file list) - called only when the service actually finds a prefix-arm join/leave.
+      assertWriteScope: () => assertDataLakeWriteScope(req),
       logger: req.logger,
     });
 
