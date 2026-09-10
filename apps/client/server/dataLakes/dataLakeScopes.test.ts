@@ -70,6 +70,11 @@ describe('data-lake API-key scopes', () => {
     expect(() => assertDataLakeShareScope({})).not.toThrow();
   });
 
+  it('denies a key caller whose scopes came back undefined or empty, rather than failing open', () => {
+    expect(() => assertDataLakeWriteScope({ apiKeyInfo: {} })).toThrow(/datalake:write/);
+    expect(() => assertDataLakeWriteScope({ apiKeyInfo: { scopes: [] } })).toThrow(/datalake:write/);
+  });
+
   it('honors staging, so the grace period covers the per-method asserts too', () => {
     process.env[SCOPE_STAGING_ENV_VAR] = ApiKeyScope.DATALAKE_WRITE;
     expect(() => assertDataLakeWriteScope(key(ApiKeyScope.AI_CHAT))).not.toThrow();

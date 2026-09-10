@@ -57,14 +57,15 @@ interface ScopedRequest {
  * window exists to protect.
  *
  * A caller with no `apiKeyInfo` is a JWT/browser caller - the key gate never ran
- * for them and this must not either. `!held` relies on that caller's `scopes` being
- * `undefined`, not `[]` - nothing upstream sets an empty array on a non-key request
- * today, but if that ever changes this flips from "let JWT through" to "deny every
- * zero-scope key".
+ * for them and this must not either. That check is on `apiKeyInfo` itself, not on
+ * `scopes`: a key caller whose `scopes` came back undefined (apiKeyAuth.ts writes
+ * `scopes: validation.scopes!`, a non-null assertion over an optional field) still
+ * has `apiKeyInfo` set, and treating a missing `scopes` array as "let it through"
+ * would fail open for exactly the caller this gate exists to check.
  */
 function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
-  const held = req.apiKeyInfo?.scopes;
-  if (!held) return;
+  if (!req.apiKeyInfo) return;
+  const held = req.apiKeyInfo.scopes ?? [];
   const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
   if (decideScopeGate(required, held, staged).outcome !== 'deny') return;
   throw new ForbiddenError(message);

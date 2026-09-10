@@ -185,7 +185,6 @@ to a question it cannot see.
    re-mint list - enumerate every `requiredScopes`/in-handler assert site for the scope, not just
    the ones under its "home" prefix.
 
-
 3. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
 4. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.
 5. Re-mint the keys from step 2 with their owners. Watch
@@ -196,6 +195,13 @@ to a question it cannot see.
    gate is now live. Wait for the log to go quiet, not for step 5's re-mints to be
    dispatched - this is the step that starts rejecting, and a key whose owner has not
    yet rotated is still calling until the traffic says otherwise.
+
+   Removal order matters when one route accepts several of these scopes together: staging
+   is all-or-nothing per route (every scope it accepts must be staged for the grace period
+   to apply), so dropping one scope from the list before its siblings flips every such route
+   to denying immediately, for any key that had been relying on the grace period for a
+   different scope in that same set. Remove all of a route's staged scopes together, not one
+   at a time.
 
 Do not skip the last step quietly. A scope left in the list forever is a gate that has
 never once enforced.

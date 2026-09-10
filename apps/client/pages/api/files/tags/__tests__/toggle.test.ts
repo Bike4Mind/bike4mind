@@ -78,7 +78,7 @@ const makeRes = () => {
 const req = (
   body: unknown,
   user: Record<string, unknown> = { id: 'u1', isAdmin: false },
-  apiKeyInfo?: { keyId: string }
+  apiKeyInfo?: { keyId: string; scopes?: string[] }
 ) => ({ method: 'POST', body, user, apiKeyInfo }) as never;
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
@@ -172,7 +172,16 @@ describe('POST /api/files/tags/toggle', () => {
   it('resolves the caller as the auditPrincipal for a key-authenticated toggle', async () => {
     const { res } = makeRes();
 
-    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }, { id: 'u1', isAdmin: false }, { keyId: 'key-abc' }), res);
+    // A real API key always carries scopes; this test is about auditPrincipal resolution, not the
+    // scope gate itself, so it holds the write scope the tag toggle requires.
+    await call(
+      req(
+        { ids: ['f1'], tags: ['datalake:lake'] },
+        { id: 'u1', isAdmin: false },
+        { keyId: 'key-abc', scopes: ['datalake:write'] }
+      ),
+      res
+    );
 
     expect(h.toggleTags.mock.calls[0][2].auditPrincipal).toEqual({
       principalKind: 'apiKey',
