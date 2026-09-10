@@ -1298,6 +1298,9 @@ importers:
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1080.0
         version: 3.1080.0
+      '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@aws-sdk/client-s3':
         specifier: ^3.1080.0
         version: 3.1080.0
