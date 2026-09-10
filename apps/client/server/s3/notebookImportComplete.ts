@@ -1,7 +1,7 @@
 /* eslint @typescript-eslint/no-explicit-any: "error" */
 import { InboxType, isImageServeable } from '@bike4mind/common';
 import type { ArtifactType } from '@bike4mind/common';
-import { artifactService, notebookImportService } from '@bike4mind/services';
+import { artifactService, notebookImportService, moderateImageOrThrow } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
@@ -17,9 +17,15 @@ import {
   User,
   withTransaction,
   importHistoryJobRepository,
+  imageModerationIncidentRepository,
+  adminSettingsRepository,
 } from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
+import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
+import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
 import { withContext } from '@server/s3/utils';
-import type { ClientSession, FilterQuery } from 'mongoose';
+import type { ClientSession, FilterQuery, Types } from 'mongoose';
 import type {
   IArtifactContentDocument,
   IArtifactDocument,
@@ -177,7 +183,7 @@ const processNotebookImport = async (
   logger: Logger,
   importHistoryJobId: string
 ) => {
-  return withTransaction(async session => {
+  const result = await withTransaction(async session => {
     const s3 = new S3Storage(bucket);
 
     try {
@@ -318,6 +324,48 @@ const processNotebookImport = async (
       ]);
     }
   });
+
+  // Post-commit: the import stamped every knowledge file 'pending', because the upload-time S3 scan
+  // fires before the row exists inside the still-open import transaction and always bails. Now that
+  // the rows are committed and their bytes are in storage, scan them the same way objectCreated.ts
+  // does. Keyed by filePath. Attacker-supplied bytes, so this is not optional - it is the moderation
+  // gate imports would otherwise skip.
+  const filePaths = result.importedKnowledgeFilePaths ?? [];
+  if (filePaths.length) {
+    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    const storage = getFilesStorage();
+    await moderateImportedKnowledgeFiles({
+      filePaths,
+      userId,
+      enabled: getSettingsValue('ImageModerationEnabled', settings) ?? true,
+      service: new RekognitionImageModerationService(logger),
+      incidents: imageModerationIncidentRepository,
+      moderateImageOrThrow,
+      moderate: moderateUploadedFile,
+      logger,
+      claim: async filePath => {
+        const claimed = await FabFile.findOneAndUpdate(
+          { filePath, moderationStatus: { $in: ['pending', null] } },
+          { $set: { moderationStatus: 'scanning' } },
+          { new: true }
+        );
+        return claimed ? { _id: claimed._id, id: claimed.id, mimeType: claimed.mimeType } : null;
+      },
+      persist: async (_id, patch) => {
+        await FabFile.updateOne({ _id: _id as Types.ObjectId }, { $set: patch });
+      },
+      release: async _id => {
+        await FabFile.updateOne(
+          { _id: _id as Types.ObjectId, moderationStatus: 'scanning' },
+          { $set: { moderationStatus: 'pending' } }
+        );
+      },
+      downloadBytes: filePath => storage.download(filePath),
+      downloadPartialBytes: (filePath, length) => storage.downloadRange(filePath, length),
+    });
+  }
+
+  return result;
 };
 
 export const dispatch = withContext(async (event, context, logger) => {
