@@ -77,6 +77,16 @@ describe('gradeMustNotDenyPremise', () => {
     ).toContain('deniedPremise');
   });
 
+  // The clause split above exists to keep a disclaimer from whitewashing a denial in another clause,
+  // but the compound anchor...verdict pattern spans up to 64 chars and can legitimately cross a plain
+  // aside comma that introduces no competing clause. Confirmed against the grader as written: all
+  // three returned `[]` before comma-splitting was scoped to only split before a coordinator.
+  it('does not let a comma-bracketed aside break the compound anchor...verdict pattern', () => {
+    expect(detectGroundedClaims('The premise, unfortunately, is false.')).toContain('deniedPremise');
+    expect(detectGroundedClaims('That claim, based on what I found, is incorrect.')).toContain('deniedPremise');
+    expect(detectGroundedClaims('The figure, as reported, appears to be mistaken.')).toContain('deniedPremise');
+  });
+
   it('names the gap across the phrasings live runs actually produced', () => {
     for (const wanted of [
       'Based on the retrieved content, there is no mention of Meridian Foods.',

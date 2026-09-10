@@ -105,15 +105,22 @@ const DECLINED: RegExp[] = [
 ];
 
 /**
- * Splits a sentence at the softer boundaries a hedge and an unrelated new clause both get joined by
- * - comma, colon, dash. Without this, the disclaimed-gate below is whole-sentence, so a denial reached
- * by a NEW independent clause rides in on a disclaimer that modifies something else entirely: "..., so
- * that does not mean much - the premise appears to be fabricated" gates clean because SOME clause in
- * the sentence disclaims, even though it isn't this one. `sentences()` already draws this line at ';'
- * for the same reason; this draws it at the boundaries within one sentence.
+ * Splits a sentence at the boundaries a hedge and a competing new clause get joined by. Colon, paren
+ * and dash always split: a denial reached by a NEW independent clause must not ride in on a disclaimer
+ * that modifies something else entirely - "..., so that does not mean much - the premise appears to be
+ * fabricated" must not gate clean just because SOME clause in the sentence disclaims. `sentences()`
+ * already draws this line at ';' for the same reason; this draws it within one sentence.
+ *
+ * A comma only splits when it precedes a coordinator ("but", "so", ...): that is the shape every
+ * observed disclaimer-vs-denial case actually takes. A comma bracketing a plain aside - "the premise,
+ * unfortunately, is false" - is NOT a competing clause, and splitting it apart broke the anchor...
+ * verdict pattern's span for no reason: confirmed live, `detectGroundedClaims` returned `[]` for that
+ * sentence under the unconditional split, because "premise" and "is false" landed in different pieces.
  */
 function clauses(sentence: string): string[] {
-  return sentence.split(/[,:()\u2013\u2014-]+/).filter(c => c.trim().length > 0);
+  return sentence
+    .split(/[:()\u2013\u2014-]+|,\s*(?=(?:but|so|yet|however|though|still|and)\b)/i)
+    .filter(c => c.trim().length > 0);
 }
 
 function claimsInSentence(sentence: string): GroundedClaim[] {
