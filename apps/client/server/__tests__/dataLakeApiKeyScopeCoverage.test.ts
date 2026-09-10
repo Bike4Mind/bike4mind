@@ -37,9 +37,14 @@ function routeFiles(dir: string): string[] {
   });
 }
 
-/** Splits a handler chain into [method, body] pairs - body runs to the next `.method(` or EOF. */
+/**
+ * Splits a handler chain into [method, body] pairs - body runs to the next `.method(` or EOF.
+ * Not anchored to a leading newline: a handler chained onto the `baseApi(...)` line itself (e.g.
+ * `baseApi().post(...)`, as in articles.ts and tag-counts.ts) would otherwise produce no block and
+ * never get scanned.
+ */
 function methodBlocks(source: string): Array<{ method: string; body: string }> {
-  const opener = /\n\s*\.(get|post|put|patch|delete)\(/g;
+  const opener = /\.(get|post|put|patch|delete)\(/g;
   const starts: Array<{ method: string; index: number }> = [];
   for (const match of source.matchAll(opener)) {
     starts.push({ method: match[1], index: match.index! });

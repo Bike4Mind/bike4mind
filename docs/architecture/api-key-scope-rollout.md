@@ -36,7 +36,9 @@ Two generated/declared files trail step 1 and are gated in CI, not locally:
 
 Where a surface both reads state and commissions billable work, give it two scopes,
 not one. A key that only reads is then *structurally* unable to spend - which is what
-lets an agent hold one. `optihashi:read` / `optihashi:compute` is the reference pair.
+lets an agent hold one. `optihashi:read` / `optihashi:compute` is the reference pair;
+`datalake:read` / `datalake:query` (semantic-search, rlm-answer) is the same split for
+data lakes.
 
 Keep the suffix honest: the New-Key modal builds its "Read-only" and "Read & write"
 presets from the `:read` and `:write` suffixes, so a spend scope must carry neither,
@@ -50,9 +52,9 @@ and can refuse on its own.
 `requiredScopes` is per ROUTE, not per method, so a file with a `.get` and a `.post`
 cannot ask for two different scopes at the door. Declare the weaker (read) gate there
 and assert the stronger one at the top of the mutating handler -
-`assertHearthWriteScope` for Hearth, `assertDataLakeWriteScope` /
-`assertDataLakeShareScope` (`apps/client/server/dataLakes/dataLakeScopes.ts`) for data
-lakes. Two rules that assert has to follow:
+`assertDataLakeWriteScope` / `assertDataLakeShareScope`
+(`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes. Two rules an assert
+in this family has to follow:
 
 - **Let a caller with no `apiKeyInfo` through.** That is a JWT/browser caller, for whom
   the key gate never ran either.
@@ -60,6 +62,14 @@ lakes. Two rules that assert has to follow:
   ignored staging would reject exactly the grandfathered keys the staging window exists
   to protect, and it would do so from inside a route whose door said it was in a grace
   period.
+
+Hearth's own equivalent, `assertHearthWriteScope`, is a narrower cousin, not an instance
+of this pattern: it checks `hearth:write` directly rather than via `decideScopeGate`, so
+it does NOT honor `API_KEY_SCOPE_STAGING`, and it separately special-cases `admin:*`
+(`scopes.includes(ApiKeyScope.ADMIN)`) - something the data-lake asserts deliberately
+never do, since `admin:*` is excluded from this family's scopes precisely so it stays
+unstageable-but-absent rather than unstageable-and-listed. Follow the data-lake asserts
+as the template for a new family; do not copy Hearth's shape.
 
 Do not list `admin:*` among a family's `requiredScopes` while it is rolling out. A route
 is in its grace period only while EVERY scope it accepts is staged, and `admin:*` can

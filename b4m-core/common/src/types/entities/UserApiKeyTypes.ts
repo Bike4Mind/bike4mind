@@ -66,6 +66,15 @@ export enum ApiKeyScope {
    * what a key minted to keep a lake's files current asked for.
    */
   DATALAKE_SHARE = 'datalake:share',
+  /**
+   * Run a retrieval query that spends LLM/search budget against a lake: semantic search and the
+   * RLM answer endpoint. Deliberately NOT suffixed `:read` - {@link DATALAKE_READ} feeds the
+   * New-Key modal's "Read-only" preset (`s.value.endsWith(':read')`), and a key an operator mints
+   * expecting that preset to be free must not auto-join a scope that commissions billable work.
+   * Mirrors {@link OPTIHASHI_COMPUTE}'s split from {@link OPTIHASHI_READ}. Never implied by
+   * {@link DATALAKE_READ} or {@link DATALAKE_WRITE} - spend on a lake is opt-in on its own.
+   */
+  DATALAKE_QUERY = 'datalake:query',
 }
 
 export enum ApiKeyStatus {

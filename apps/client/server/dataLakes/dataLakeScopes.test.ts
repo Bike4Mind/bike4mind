@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import {
@@ -12,6 +12,12 @@ import {
 } from './dataLakeScopes';
 
 const key = (...scopes: ApiKeyScope[]) => ({ apiKeyInfo: { scopes } });
+
+// Cleared both before and after: the ambient environment (e.g. a real deploy-shaped
+// API_KEY_SCOPE_STAGING loaded via .env) must not leak into the first test either.
+beforeEach(() => {
+  delete process.env[SCOPE_STAGING_ENV_VAR];
+});
 
 afterEach(() => {
   delete process.env[SCOPE_STAGING_ENV_VAR];

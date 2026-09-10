@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { dataLakeService } from '@bike4mind/services';
 import { DATA_LAKE_ACCESS_ROLES, DATA_LAKE_PRINCIPAL_TYPES } from '@bike4mind/common';
 import { dataLakeRepository, dataLakeAccessGrantRepository, userRepository } from '@bike4mind/database';
@@ -52,7 +53,7 @@ interface GrantsQuery {
  * DELETE takes the principal in the query rather than a body: the pair is an identifier, and a
  * request body on DELETE is unevenly supported by intermediaries.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request<{}, unknown, unknown, GrantsQuery>, res) => {
     const { id } = req.query;

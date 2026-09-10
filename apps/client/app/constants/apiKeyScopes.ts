@@ -123,8 +123,14 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.DATALAKE_READ,
     label: 'Data Lakes: Read',
-    description: 'List, browse, and search data lakes the key owner can already reach',
-    endpoints: ['GET /api/data-lakes', 'GET /api/data-lakes/:id', 'POST /api/data-lakes/semantic-search'],
+    description: 'List and browse data lakes the key owner can already reach',
+    endpoints: ['GET /api/data-lakes', 'GET /api/data-lakes/:id'],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_QUERY,
+    label: 'Data Lakes: Query',
+    description: 'Run a retrieval query against a lake. Spends credits - not part of the Read-only preset',
+    endpoints: ['POST /api/data-lakes/semantic-search', 'POST /api/data-lakes/rlm-answer'],
   },
   {
     value: ApiKeyScope.DATALAKE_WRITE,

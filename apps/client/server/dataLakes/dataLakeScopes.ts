@@ -20,6 +20,13 @@ export const DATA_LAKE_WRITE_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_WRITE
 
 export const DATA_LAKE_SHARE_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_SHARE];
 
+/**
+ * Gate for a route that spends LLM/search budget against a lake (semantic-search, rlm-answer).
+ * Deliberately its own scope, not a member of DATA_LAKE_READ_SCOPES - `datalake:read` ends in
+ * `:read` and auto-joins the New-Key modal's "Read-only" preset, which must stay non-spending.
+ */
+export const DATA_LAKE_QUERY_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_QUERY];
+
 /** Gate for a route whose read method is open to readers and whose write method re-shares the lake. */
 export const DATA_LAKE_READ_OR_SHARE_SCOPES: ApiKeyScope[] = [...DATA_LAKE_READ_SCOPES, ApiKeyScope.DATALAKE_SHARE];
 

@@ -19,10 +19,18 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags },
-  fabFilesService: { toggleTags: h.toggleTags },
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    dataLakeService: {
+      assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags,
+      // Real implementation: a pure prefix filter, and the scope-gate branch under test needs it
+      // to actually recognize a `datalake:*` tag rather than a blanket mock.
+      extractDataLakeMetaTags: actual.dataLakeService.extractDataLakeMetaTags,
+    },
+    fabFilesService: { toggleTags: h.toggleTags },
+  };
+});
 vi.mock('@bike4mind/database', () => ({
   // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
   // rather than omitted because this mock REPLACES the whole module: a missing export is an
@@ -167,5 +175,49 @@ describe('POST /api/files/tags/toggle', () => {
       [],
       expect.anything()
     );
+  });
+
+  it('refuses an API key without datalake:write when the payload names a lake meta-tag', async () => {
+    const { res } = makeRes();
+
+    await expect(
+      call(
+        {
+          method: 'POST',
+          body: { ids: ['f1'], tags: ['datalake:lake'] },
+          user: { id: 'u1' },
+          apiKeyInfo: { scopes: [] },
+        },
+        res
+      )
+    ).rejects.toThrow(/datalake:write/);
+    expect(h.toggleTags).not.toHaveBeenCalled();
+  });
+
+  it('lets an API key holding datalake:write toggle a lake meta-tag', async () => {
+    const { res, json } = makeRes();
+
+    await call(
+      {
+        method: 'POST',
+        body: { ids: ['f1'], tags: ['datalake:lake'] },
+        user: { id: 'u1' },
+        apiKeyInfo: { scopes: ['datalake:write'] },
+      },
+      res
+    );
+
+    expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
+  });
+
+  it('lets an API key with no data-lake scope toggle a plain, non-lake tag', async () => {
+    const { res, json } = makeRes();
+
+    await call(
+      { method: 'POST', body: { ids: ['f1'], tags: ['color:red'] }, user: { id: 'u1' }, apiKeyInfo: { scopes: [] } },
+      res
+    );
+
+    expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
   });
 });
