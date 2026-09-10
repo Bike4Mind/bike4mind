@@ -147,7 +147,7 @@ describe('sharingService - createInvite (project arm authority)', () => {
     createInvite(user, { id, type: InviteType.Project, permissions: [Permission.read] } as any, { db });
 
   it('creates an invite when the caller has share access, scoped to that caller and id', async () => {
-    findShareAccessById.mockResolvedValue({ id: PROJECT_ID, name: PROJECT_NAME });
+    findShareAccessById.mockResolvedValue({ id: PROJECT_ID, name: PROJECT_NAME, userId: 'owner-2' });
     const user = asUser('owner-2');
 
     const invite = await create(user);
@@ -189,8 +189,16 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     db = {
       invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-3', ...(build as object) })) },
       users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
-      fabFiles: { shareable: { findShareAccessById: vi.fn(async () => ({ id: FILE_ID, fileName: FILE_NAME })) } },
-      projects: { shareable: { findShareAccessById: vi.fn(async () => ({ id: PROJECT_ID, name: PROJECT_NAME })) } },
+      fabFiles: {
+        shareable: {
+          findShareAccessById: vi.fn(async () => ({ id: FILE_ID, fileName: FILE_NAME, userId: 'owner-3' })),
+        },
+      },
+      projects: {
+        shareable: {
+          findShareAccessById: vi.fn(async () => ({ id: PROJECT_ID, name: PROJECT_NAME, userId: 'owner-4' })),
+        },
+      },
     };
   });
 
@@ -285,6 +293,136 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     const invite = await createFabFile(['a@x.com', 'a']);
 
     expect((invite as any).remaining).toBe(1);
+    expect((invite as any).recipients.pending).toEqual(['a@x.com']);
+  });
+});
+
+/**
+ * A sharee re-sharing a document must not be able to mint permissions they do not themselves
+ * hold: with `share` alone they could otherwise issue a link carrying `update`/`delete` and
+ * redeem it on their own account.
+ */
+describe('sharingService - createInvite (permission capping)', () => {
+  const FILE_ID = 'file-cap';
+  const OWNER = 'owner-cap';
+  const SHAREE = 'sharee-cap';
+
+  const asUser = (id: string, groups: string[] = []) =>
+    ({ id, username: 'u', isAdmin: false, groups }) as unknown as IUserDocument;
+
+  const file = (overrides: Record<string, unknown>) => ({
+    id: FILE_ID,
+    fileName: 'doc.pdf',
+    userId: OWNER,
+    users: [],
+    groups: [],
+    ...overrides,
+  });
+
+  const dbFor = (doc: unknown) => ({
+    invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-cap', ...(build as object) })) },
+    users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+    fabFiles: { shareable: { findShareAccessById: vi.fn(async () => doc) } },
+  });
+
+  const mint = (user: IUserDocument, db: unknown, permissions: Permission[]) =>
+    createInvite(user, { id: FILE_ID, type: InviteType.FabFile, permissions } as any, { db } as any);
+
+  it('refuses a permission the sharer does not hold, naming it', async () => {
+    const db = dbFor(file({ users: [{ userId: SHAREE, permissions: [Permission.read, Permission.share] }] }));
+
+    await expect(mint(asUser(SHAREE), db, [Permission.update])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('update')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('allows the permissions the sharer does hold', async () => {
+    const db = dbFor(file({ users: [{ userId: SHAREE, permissions: [Permission.read, Permission.share] }] }));
+
+    const invite = await mint(asUser(SHAREE), db, [Permission.read]);
+
+    expect((invite as any).permissions).toEqual([Permission.read]);
+  });
+
+  it('lets the owner mint anything', async () => {
+    const db = dbFor(file({}));
+
+    const invite = await mint(asUser(OWNER), db, [Permission.update, Permission.delete]);
+
+    expect((invite as any).permissions).toEqual([Permission.update, Permission.delete]);
+  });
+
+  it('counts a grant the sharer holds through a group', async () => {
+    const db = dbFor(file({ groups: [{ groupId: 'g1', permissions: [Permission.read, Permission.share] }] }));
+
+    const invite = await mint(asUser(SHAREE, ['g1']), db, [Permission.read]);
+
+    expect((invite as any).permissions).toEqual([Permission.read]);
+  });
+
+  it('does not count a grant on a group the sharer is not in', async () => {
+    const db = dbFor(file({ groups: [{ groupId: 'g-other', permissions: [Permission.read, Permission.update] }] }));
+
+    await expect(mint(asUser(SHAREE, ['g1']), db, [Permission.update])).rejects.toThrow(BadRequestError);
+  });
+});
+
+/**
+ * Usernames are self-set and unvalidated, so an account may hold a username that is another
+ * person's email address. An email-shaped recipient must resolve against the email field only,
+ * or a share addressed to that person lands in the impostor's account instead.
+ */
+describe('sharingService - createInvite (email-shaped recipients)', () => {
+  const FILE_ID = 'file-resolve';
+  const OWNER = 'owner-resolve';
+
+  let db: any;
+
+  beforeEach(() => {
+    db = {
+      invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-resolve', ...(build as object) })) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      fabFiles: {
+        shareable: { findShareAccessById: vi.fn(async () => ({ id: FILE_ID, fileName: 'doc.pdf', userId: OWNER })) },
+      },
+    };
+  });
+
+  const share = (recipients: string[]) =>
+    createInvite(
+      { id: OWNER, username: 'u', isAdmin: false } as IUserDocument,
+      { id: FILE_ID, type: InviteType.FabFile, permissions: [Permission.read], recipients } as any,
+      { db }
+    );
+
+  it('does not resolve an email-shaped recipient against a self-set username', async () => {
+    // The impostor's username IS the victim's email address; only the victim's real account
+    // should ever satisfy 'victim@x.com'.
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'impostor@x.com', username: 'victim@x.com' }]);
+
+    await expect(share(['victim@x.com'])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('victim@x.com')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('still resolves an email-shaped recipient against the real email holder', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [
+      { email: 'impostor@x.com', username: 'victim@x.com' },
+      { email: 'victim@x.com', username: 'victim' },
+    ]);
+
+    const invite = await share(['victim@x.com']);
+
+    expect((invite as any).recipients.pending).toEqual(['victim@x.com']);
+  });
+
+  it('still resolves a plain username', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'a@x.com', username: 'alice' }]);
+
+    const invite = await share(['alice']);
+
     expect((invite as any).recipients.pending).toEqual(['a@x.com']);
   });
 });

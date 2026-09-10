@@ -81,3 +81,87 @@ describe('sharingService - revoke', () => {
     ).rejects.toThrow(NotFoundError);
   });
 });
+
+/**
+ * The project-scoped arm must strip only the target user's project-derived grant. It used to
+ * drop every entry carrying that projectId, so revoking one member (or a member leaving)
+ * deleted every other member's access to the same file.
+ */
+describe('sharingService - revoke (project-scoped grants)', () => {
+  const ownerId = 'owner-123';
+  const leavingId = 'leaving-456';
+  const coMemberId = 'co-member-789';
+  const fileId = 'file-001';
+  const projectId = 'project-001';
+
+  let mockAdapters: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAdapters = {
+      db: {
+        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        users: { findById: vi.fn() },
+      },
+    };
+  });
+
+  it('removes only the target member, leaving co-members on the same project', async () => {
+    const document = {
+      id: fileId,
+      userId: ownerId,
+      users: [
+        { userId: leavingId, permissions: ['read'], projectId },
+        { userId: coMemberId, permissions: ['read'], projectId },
+      ],
+    };
+    mockAdapters.db.users.findById.mockResolvedValue({ id: leavingId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(document);
+
+    await revoke(leavingId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({ users: [{ userId: coMemberId, permissions: ['read'], projectId }] })
+    );
+  });
+
+  it('leaves the target own direct share intact when revoking the project-derived one', async () => {
+    const document = {
+      id: fileId,
+      userId: ownerId,
+      users: [
+        { userId: leavingId, permissions: ['read'], projectId },
+        { userId: leavingId, permissions: ['read', 'update'] },
+      ],
+    };
+    mockAdapters.db.users.findById.mockResolvedValue({ id: leavingId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(document);
+
+    await revoke(ownerId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read', 'update'] }] })
+    );
+  });
+
+  it('does not touch a grant another project materialized for the same user', async () => {
+    const document = {
+      id: fileId,
+      userId: ownerId,
+      users: [
+        { userId: leavingId, permissions: ['read'], projectId },
+        { userId: leavingId, permissions: ['read'], projectId: 'project-other' },
+      ],
+    };
+    mockAdapters.db.users.findById.mockResolvedValue({ id: leavingId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(document);
+
+    await revoke(ownerId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read'], projectId: 'project-other' }] })
+    );
+  });
+});

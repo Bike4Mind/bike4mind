@@ -14,6 +14,8 @@ import {
   IUserDocument,
   IUserRepository,
   Permission,
+  ShareableAccessShape,
+  heldPermissions,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -123,6 +125,19 @@ export const createInvite = async (
   if (!doc) throw new BadRequestError('Document not found');
   if (!name) throw new NotFoundError('no name');
 
+  // An invite must never carry a permission its minter does not hold, or a sharee with `share`
+  // could mint themselves `update`/`delete` and redeem the link. Scoped to the three shareable
+  // types: Organization and Group invites are membership grants gated by their own authority
+  // checks above, and their `users[]` means seats, not permission entries. The owner holds
+  // everything, so this is a no-op on the common path.
+  if (type === InviteType.FabFile || type === InviteType.Session || type === InviteType.Project) {
+    const held = heldPermissions(doc as ShareableAccessShape, user.id, user.groups ?? []);
+    const overreach = rest.permissions.filter(permission => !held.has(permission));
+    if (overreach.length) {
+      throw new BadRequestError(`Cannot grant permissions you do not hold: ${overreach.join(', ')}`);
+    }
+  }
+
   const recipientsArray = recipients ?? [];
   const users = await db.users.findAllByEmailsOrUsernames(recipientsArray, recipientsArray);
   const isLinkOnlyInvite = recipients?.length === 0;
@@ -145,7 +160,12 @@ export const createInvite = async (
     const resolvable = users.filter((u): u is IUserDocument & { email: string } => Boolean(u.email));
     const resolved = recipientsArray.map(recipient => {
       const lower = recipient.toLowerCase();
-      const matches = resolvable.filter(u => u.email.toLowerCase() === lower || u.username.toLowerCase() === lower);
+      // A string containing '@' is an email address and resolves against the email field only.
+      // Usernames are self-set and unvalidated, so matching them against an email-shaped input
+      // lets someone claim another person's address and receive shares meant for them.
+      const matches = resolvable.filter(u =>
+        recipient.includes('@') ? u.email.toLowerCase() === lower : u.username.toLowerCase() === lower
+      );
       if (matches.length === 0) throw new BadRequestError(`Could not find a user for: ${recipient}`);
       if (matches.length > 1) throw new BadRequestError(`More than one user matches: ${recipient}`);
       return matches[0].email;

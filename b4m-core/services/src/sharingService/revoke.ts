@@ -61,12 +61,16 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   const userIndex = document.users.findIndex(user => user.userId.toString() === userIdToRevoke);
   if (userIndex === -1) throw new NotFoundError(`User not found in document`);
 
+  // Every arm removes the TARGET user's entry and nobody else's. The project-scoped arm used
+  // `userId !== target && projectId !== scope`, which also deleted every co-member's
+  // project-derived grant, so one member leaving stripped the whole project's access.
   if (type === 'projects') {
-    document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke && user.projectId !== id);
+    document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
     await revokeFromProject({ project: document as IProjectDocument, userIdToRevoke }, adapters);
   } else if (projectId) {
+    // Scoped: drop only the grant this project materialized, leaving any direct share intact.
     document.users = document.users.filter(
-      user => user.userId.toString() !== userIdToRevoke && user.projectId !== projectId
+      user => !(user.userId.toString() === userIdToRevoke && user.projectId === projectId)
     );
   } else {
     document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
