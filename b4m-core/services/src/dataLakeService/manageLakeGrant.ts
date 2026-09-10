@@ -7,7 +7,7 @@ import type {
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake, resolveLakeManageRung, type ManageActor } from './manageRule';
+import { canManageLake, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { grantChange } from './diffLakeConfig';
@@ -104,8 +104,8 @@ async function loadManageableLake(
  * for routine sharing (a curator is there to hand out reader access), but letting it hand out its
  * OWN rung makes curatorship self-propagating: an owner who appoints one curator has, from that
  * moment, no way to bound the set of people who manage the lake, and no rung above reader is ever
- * required again. Refused by naming the winning rung rather than re-deriving it, so this stays
- * exactly one rung of `canManageLake` and cannot drift from it.
+ * required again. Refused only when a curator grant is the actor's ONLY authority here, so a
+ * principal who manages this lake by some other rung and happens to hold one too is unaffected.
  *
  * Idempotent: `upsertGrant` is keyed on (lake, principalType, principalId), so re-granting the same
  * role on the same terms converges and records NO audit event (`grantChange` returns null) - a
@@ -119,7 +119,10 @@ async function loadManageableLake(
  * grant that failed.
  *
  * Reader grants are RECORDED here and RESOLVED at read time only while the `EnforceLakeReadGrants`
- * platform setting is on - the source interlock has flipped, so that setting is now the whole gate.
+ * platform setting is on - the source interlock has flipped, so that setting is the whole
+ * OPERATOR-facing gate, and it defaults to ON. One path still forces readers off independently of
+ * it: a caller that wired no settings adapter cannot resolve the setting and degrades to `false`
+ * rather than guess (`listDataLakes.ts`, `resolveLakeReadAccess.ts`).
  * The access route reports the resolved state to the UI (`meta.readerGrantsEnforced`) rather than
  * letting a row look live when it admits nobody.
  */
@@ -148,13 +151,21 @@ export async function grantLakeAccess(
     throw new BadRequestError(ownerRefusal);
   }
 
-  // Non-transitive curatorship - see the note above. Judged on the rung that authorized THIS actor,
-  // so an owner or org admin who also holds a curator grant is unaffected: `resolveLakeManageRung`
-  // reports the strongest lake-side relationship and returns `grant-curator` only when nothing above
-  // it applies. Ordered AFTER the owner-row refusal deliberately: a curator aiming at an ownership
-  // row is being told the wrong thing if the reply is about their own rung - the row is the reason.
-  if (input.role === 'curator' && resolveLakeManageRung(lake, actor, grants) === 'grant-curator') {
-    throw new BadRequestError('Curators cannot grant curator access; ask an owner or an organization admin');
+  // Non-transitive curatorship - see the note above. Asked by re-running the GATE without the
+  // actor's own curator grant, so it refuses exactly the actor whose sole authority is that grant.
+  // Deliberately NOT an equality test against `resolveLakeManageRung`: that function's order is
+  // tuned for audit display (`platform-admin` is reported last on purpose), so `grant-curator`
+  // outranks both admin rungs there and an equality form refused an org admin and a platform admin
+  // who also held a curator grant - the two principals this exemption exists for. Ordered AFTER the
+  // owner-row refusal: a curator aiming at an ownership row is told the wrong thing if the reply is
+  // about their own rung - the row is the reason.
+  if (input.role === 'curator') {
+    const withoutOwnCuratorGrant = grants.filter(
+      g => !(g.principalType === 'user' && g.principalId === actor.userId && g.role === 'curator')
+    );
+    if (!canManageLake(lake, actor, withoutOwnCuratorGrant)) {
+      throw new BadRequestError('Curators cannot grant curator access; ask an owner or an organization admin');
+    }
   }
 
   // A lapsed row conferred nothing, so it is neither an expiry worth keeping nor an honest `before`.

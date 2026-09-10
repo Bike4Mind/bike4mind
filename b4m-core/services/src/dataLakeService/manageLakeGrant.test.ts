@@ -309,6 +309,43 @@ describe('grantLakeAccess', () => {
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
+  /**
+   * The refusal is "a curator grant is your ONLY authority here", not "you hold a curator grant".
+   * The earlier form compared `resolveLakeManageRung` to `grant-curator`, and that function orders
+   * rungs for AUDIT DISPLAY - `grant-curator` before `org-admin`, with `platform-admin` reported
+   * last on purpose - so an admin who also held a curator grant on the lake was refused and told to
+   * "ask an owner or an organization admin", which they were. It failed closed, so nothing leaked;
+   * these two are the reason nobody would have noticed.
+   */
+  it.each([
+    { who: 'an ORG ADMIN of the lake own org', actor: { userId: 'cur', isAdmin: false, administeredOrgIds: ['org1'] } },
+    { who: 'a PLATFORM ADMIN', actor: { userId: 'cur', isAdmin: true } },
+  ])('lets $who who ALSO holds a curator grant grant curator', async ({ actor }) => {
+    const { adapters, upsertGrant } = makeAdapters({ grants: curatorGrants });
+    await grantLakeAccess(
+      actor as ManageActor,
+      'lake1',
+      { principalType: 'user', principalEmail: 'u1@b.c', role: 'curator' },
+      adapters
+    );
+    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ role: 'curator' }));
+  });
+
+  it('still refuses an org admin of some OTHER org who holds only a curator grant here', async () => {
+    // The anti-cheat for the pair above: exempting on "has administeredOrgIds at all" would pass
+    // them. The org rung has to actually apply to THIS lake.
+    const { adapters, upsertGrant } = makeAdapters({ grants: curatorGrants });
+    await expect(
+      grantLakeAccess(
+        { userId: 'cur', isAdmin: false, administeredOrgIds: ['org-other'] },
+        'lake1',
+        { principalType: 'user', principalEmail: 'u1@b.c', role: 'curator' },
+        adapters
+      )
+    ).rejects.toThrow(/curators cannot grant curator access/i);
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
   it('lets an OWNER grant curator - the refusal is the rung, not the role', async () => {
     // The anti-cheat for the test above: a blanket refusal of `curator` would pass it too.
     const { adapters, upsertGrant } = makeAdapters();
