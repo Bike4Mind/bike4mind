@@ -111,7 +111,7 @@ describe('/api/data-lakes/[id]/grants', () => {
     expect(h.grantLakeAccess).not.toHaveBeenCalled();
   });
 
-  it('revokes from the query pair', async () => {
+  it('revokes from the query pair, and wires the audit repos', async () => {
     const { res, json } = makeRes();
     await call({ method: 'DELETE', query: { id: 'my-lake', principalType: 'user', principalId: 'u2' } }, res);
 
@@ -119,7 +119,12 @@ describe('/api/data-lakes/[id]/grants', () => {
       expect.objectContaining({ userId: 'u1' }),
       'lake-oid-1',
       { principalType: 'user', principalId: 'u2' },
-      expect.anything()
+      // Pinned on THIS door too, not just the grant one: revoking is the single most audit-relevant
+      // write on a lake, and dropping the shared helper here compiles and leaves every other suite
+      // green while the event goes unrecorded. Service-level tests cannot see route wiring.
+      expect.objectContaining({
+        db: expect.objectContaining({ lakeConfigChangeEvents: expect.anything(), adminSettings: expect.anything() }),
+      })
     );
     expect(json).toHaveBeenCalledWith({ data: { revoked: true } });
   });

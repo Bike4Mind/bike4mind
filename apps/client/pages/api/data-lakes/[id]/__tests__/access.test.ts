@@ -184,8 +184,9 @@ describe('GET /api/data-lakes/[id]/access', () => {
   });
 
   it('reports whether reader grants are actually enforced yet, outside the artifact', async () => {
-    // Until READ_GRANT_ENFORCEMENT_READY flips, a reader grant is recorded and admits nobody. The
-    // UI needs to say so; the CSV must not, since this is platform state, not a fact about the lake.
+    // Whether a reader grant admits anyone is platform state (the `EnforceLakeReadGrants` setting),
+    // so the UI needs it and the CSV must not carry it - it is not a fact about the lake. Pins the
+    // passthrough, not the value: the route reports what the resolver returns.
     h.resolveEnforceReadGrants.mockResolvedValue(true);
     const { res, json } = makeRes();
     await call(req({ id: 'lake1' }), res);

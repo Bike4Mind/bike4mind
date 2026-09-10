@@ -197,11 +197,11 @@ export async function getAccessibleDataLakePrompts(
   // way - a lake retrieval grounds on but injection distrusts is exactly the gap #2495 closes.
   // Sharing the helper is not by itself a lockstep guarantee: the two call sites already pass
   // different arguments, and today's agreement rests on both pinning `includeReaders = false`.
-  // That agreement is MEANT to break at the cutover, in the deny direction only - see below.
+  // That agreement is MEANT to be broken by the cutover, in the deny direction only - see below.
   //
   // But `includeReaders: false` here is a PERMANENT security floor, NOT the cutover default it is
-  // at the other call sites. When READ_GRANT_ENFORCEMENT_READY flips, `getDynamicDataLakeAccess`
-  // and browse widen to reader/org-principal grants and THIS SITE MUST NOT FOLLOW: a READER's read
+  // at the other call sites. That cutover has HAPPENED: `getDynamicDataLakeAccess` and browse have
+  // widened to reader/org-principal grants, and THIS SITE MUST NOT FOLLOW - a READER's read
   // access must not become authority to write instructions into another user's system prompt
   // (injection lands in the system prompt, a higher-trust position than the retrieved content
   // `renderRetrievedContentBlock` sanitizes precisely because it is untrusted). A test asserts this

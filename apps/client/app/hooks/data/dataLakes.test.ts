@@ -1442,6 +1442,92 @@ describe('the needs-attention list and its retry', () => {
  * helper was already correct and already present in this file: the defect was in which handlers
  * called it, which only a test that mounts the hook can observe.
  */
+/**
+ * The SUCCESS paths of the two sharing doors. The refusal table below covers their error arm only,
+ * which left the whole of the rest untested: invert the revoke toast's ternary, or drop either
+ * hook's `configHistoryOf` invalidation so the History tab in the same modal serves stale rows,
+ * and the suite stays green.
+ *
+ * Keys are asserted as literal prefixes rather than through `dataLakeKeys`, for the reason spelled
+ * out above `lakeMemoryPollInterval`: building the expectation from the helper the hook calls would
+ * still pass if that helper drifted away from what the query is keyed under.
+ */
+describe('the sharing doors on success', () => {
+  const mountWith = <T>(hook: () => T) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { invalidate, ...renderHook(hook, { wrapper }) };
+  };
+
+  beforeEach(() => {
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiDelete.mockReset();
+  });
+
+  it('grant refreshes the access view, the history and the lake LIST', async () => {
+    apiPost.mockResolvedValueOnce({ data: { data: { principalId: 'u2', role: 'reader' } } });
+    const { result, invalidate } = mountWith(() => useGrantLakeAccess());
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        id: 'lake1',
+        principalType: 'user',
+        principalEmail: 'a@b.co',
+        role: 'reader',
+      });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/grants', {
+      principalType: 'user',
+      principalEmail: 'a@b.co',
+      role: 'reader',
+    });
+    const keys = invalidate.mock.calls.map(c => JSON.stringify(c[0]?.queryKey));
+    // The list goes too because the actor can target THEMSELVES: re-roling their own grant down
+    // drops their manage rung while a cached `canManage` still lights Settings and Access.
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(toast.success).toHaveBeenCalledWith('Access granted');
+  });
+
+  it('revoke sends the principal pair as QUERY params, and refreshes the same three', async () => {
+    apiDelete.mockResolvedValueOnce({ data: { data: { revoked: true } } });
+    const { result, invalidate } = mountWith(() => useRevokeLakeAccess());
+
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u2' });
+    });
+
+    // The pair is an identifier and DELETE bodies are unevenly supported by intermediaries, so the
+    // door reads them off the query string - the route parses nothing else.
+    expect(apiDelete).toHaveBeenCalledWith('/api/data-lakes/lake1/grants', {
+      params: { principalType: 'user', principalId: 'u2' },
+    });
+    const keys = invalidate.mock.calls.map(c => JSON.stringify(c[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(toast.success).toHaveBeenCalledWith('Access revoked');
+  });
+
+  // `revoked: false` is the outcome the caller asked for, so not an error - but saying "revoked"
+  // would claim this call did something it did not. The honest copy is the whole point of the flag.
+  it('revoke says the grant was already gone rather than claiming it removed one', async () => {
+    apiDelete.mockResolvedValueOnce({ data: { data: { revoked: false } } });
+    const { result } = mountWith(() => useRevokeLakeAccess());
+
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u2' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('That principal no longer had access');
+  });
+});
+
 describe('server refusal text reaches the toast', () => {
   const mountHook = <T>(hook: () => T): { result: { current: T } } => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
