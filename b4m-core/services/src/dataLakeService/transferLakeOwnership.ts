@@ -1,13 +1,13 @@
 import type {
   IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
   IDataLakeRepository,
   IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
-import { resolveEffectiveOwnerIds } from './manageRule';
+import { BadRequestError, normalizeId } from '@bike4mind/utils';
+import { resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
-import { loadActiveLakeGrants } from './authorizeLakeManage';
 import {
   isOrgOwnershipCandidate,
   resolveLakeTransferAuthority,
@@ -25,8 +25,8 @@ interface TransferLakeOwnershipAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
-    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>;
+    dataLakes: Pick<IDataLakeRepository, 'update'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'upsertGrant'>;
     users: Pick<IUserRepository, 'findById'>;
     organizations: Pick<IOrganizationRepository, 'findById'>;
   };
@@ -84,18 +84,14 @@ export interface TransferLakeOwnershipResult {
  */
 export const transferLakeOwnership = async (
   actor: LakeTransferActor,
-  dataLakeId: string,
+  lake: IDataLakeDocument,
+  grants: LakeGrant[],
   newOwnerUserId: string,
   { db, logger }: TransferLakeOwnershipAdapters
 ): Promise<TransferLakeOwnershipResult> => {
-  const lake = await db.dataLakes.findById(dataLakeId);
-  if (!lake) {
-    throw new NotFoundError('Data lake not found');
-  }
   // Fallback lakes have no document and no createdByUserId to seed from - grants are refused.
   assertLakeGrantable(lake);
 
-  const grants = await loadActiveLakeGrants(lake, { db });
   const lakeOrg = normalizeId(lake.organizationId);
   // Shared with the candidate listing behind the transfer picker, so the option set a manager is
   // offered and the gate this write applies can never drift apart.
@@ -183,9 +179,11 @@ export const transferLakeOwnership = async (
     const warn = (msg: string, meta: unknown) => (logger ? logger.warn(msg, meta) : console.warn(msg, meta));
     try {
       // The return value matters as much as the throw: `BaseModel.update` is a `findOneAndUpdate`
-      // that RESOLVES `null` when no document matches, so a lake deleted between this function's
-      // opening `findById` and this final write (several awaits apart - grant upserts, user and org
-      // lookups) would no-op with no exception for the catch to see. Checking the result is what
+      // that RESOLVES `null` when no document matches, so a lake deleted between the route's access
+      // gate (where this lake was resolved) and this final write - several awaits apart: grant
+      // upserts, user and org lookups - would no-op with no exception for the catch to see. The
+      // window is one round-trip wider than when this function resolved the lake itself. Checking
+      // the result is what
       // makes "never fails silently" true for BOTH shapes, not just the throwing one.
       const stamped = await db.dataLakes.update({ id: lake.id, ...stamp });
       if (!stamped) {
