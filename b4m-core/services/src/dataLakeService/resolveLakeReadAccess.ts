@@ -6,6 +6,7 @@ import type {
 } from '@bike4mind/common';
 import { classifyLakeAccess, type LakeAccessArm } from './classifyLakeAccess';
 import type { LakeGrant } from './manageRule';
+import { createScopedAsyncMemo } from './scopedAsyncMemo';
 
 /** The platform cutover flag governing whether read-grant resolution is enforced or report-only. */
 export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
@@ -246,6 +247,10 @@ export interface LakeGrantReach {
  *    would 404 on open - listing it would be incoherent, so it is excluded until enforce.
  * The org arm keys off MEMBERSHIP (`organizationIds`), distinct from the org-MANAGE rung (admin
  * rights).
+ *
+ * A NEW PARAMETER HERE MUST BE ADDED TO `grantedLakeReachForTurn`'S MEMO KEY, which is built from
+ * this signature's arguments by hand. An argument the key omits merges two call sites that meant to
+ * differ - and the sites that differ, differ on exactly the security floor (see that key's doc).
  */
 export const grantedLakeReachFor = async (
   userId: string,
@@ -290,6 +295,51 @@ export const grantedLakeReachFor = async (
     orgGrantedLakes: Object.fromEntries(Array.from(byOrg, ([orgId, lakeIds]) => [orgId, Array.from(lakeIds)])),
   };
 };
+
+/** Backing store for `grantedLakeReachForTurn` - see its doc for what the key has to cover. */
+const reachByTurn = createScopedAsyncMemo<LakeGrantReach>();
+
+/**
+ * `grantedLakeReachFor`, resolved at most ONCE per turn per distinct argument set. For the callers
+ * that run it repeatedly inside one request: the knowledge tools resolve lake access per TOOL
+ * CALL, so a turn that grounds through forced retrieval and then calls both `search` and
+ * `retrieve` issues this read four times over. `turnScope` must be an object whose lifetime IS
+ * the turn - the shared `ToolContext`, built once per request in `generateTools` and closed over
+ * by every tool. Callers that read once, and every browse/manage caller, keep calling
+ * `grantedLakeReachFor` directly.
+ *
+ * THE REACH IT RETURNS IS SHARED between every caller that hits the entry, so treat it as
+ * read-only: mutating either half would reach the other calls in the turn. Today's consumers copy
+ * the ids out (`grantedLakeIds` into a Set) or hand the whole reach to a query that only reads it.
+ *
+ * THE KEY COVERS `includeReaders` AND `organizationIds`, not just the user. The retrieval and
+ * prompt-injection sites pass deliberately different arguments and are meant to stay diverged:
+ * retrieval follows the enforced cutover, while injection pins `includeReaders: false` forever,
+ * because a reader's READ access must not become authority to write instructions into another
+ * user's system prompt. A user-keyed memo would silently merge two sets whose separation is
+ * exactly the point. Org ids are sorted so caller-side ordering cannot split an entry in two.
+ *
+ * The grant repo is NOT in the key - being an object, it cannot be - so `turnScope` has to be the
+ * object that OWNS it (a ToolContext owns `db.dataLakeAccessGrants`). Handing one scope two
+ * different grant repos would share one entry between them.
+ *
+ * The reach is a per-turn SNAPSHOT: `activeAsOf` is captured by the first call, and a grant
+ * revoked or lapsed after it stays honored for the rest of that turn. Deliberate - a turn is
+ * seconds long, the alternative is the repeated read this exists to remove, and the retrieval side
+ * already snapshots this way - `knowledgeBaseRetrieve` holds one resolved lake-access set for the
+ * length of a tool call (`dynamicAccessPromise`). The manage re-check on a session's pre-authorized
+ * ids is NOT part of the snapshot: `filterStillManagedLakes` reads `listActiveByLakes` per call.
+ */
+export const grantedLakeReachForTurn = (
+  turnScope: object,
+  userId: string,
+  organizationIds: string[],
+  grants?: PrincipalGrantLookup,
+  includeReaders = false
+): Promise<LakeGrantReach> =>
+  reachByTurn(turnScope, JSON.stringify([userId, includeReaders, [...organizationIds].sort()]), () =>
+    grantedLakeReachFor(userId, organizationIds, grants, includeReaders)
+  );
 
 /**
  * Lake ids the caller can reach via a MANAGE-conferring active grant - the narrower sibling of

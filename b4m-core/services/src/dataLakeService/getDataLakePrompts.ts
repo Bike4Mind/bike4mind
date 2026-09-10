@@ -3,8 +3,16 @@ import type { DataLakeConfig, IDataLakeDocument } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 import { filterStillManagedLakes, type ManageRecheckAdapter } from './filterStillManagedLakes';
-import { grantedLakeReachFor } from './resolveLakeReadAccess';
+import { grantedLakeReachForTurn } from './resolveLakeReadAccess';
+import { createScopedAsyncMemo } from './scopedAsyncMemo';
 import { isDatalakeTagWellFormed } from './createDataLake';
+
+/**
+ * Per-turn memo for the membership read below. Keyed on the caller, its only argument, and scoped
+ * to the shared context object so it lives exactly as long as the turn - the same reason and the
+ * same lifetime as the grant read three lines under it (see createScopedAsyncMemo).
+ */
+const membershipOrgIdsByTurn = createScopedAsyncMemo<string[]>();
 
 /**
  * The distinct `datalake:*` provenance tags among a bag of file tag names - i.e. which lakes a set
@@ -186,18 +194,28 @@ export async function getAccessibleDataLakePrompts(
   // may still catch this throw and degrade to an empty scope, which is ALSO fail-closed (it
   // denies, never grants). The placement buys observability into where a failure originated, not
   // a stronger deny guarantee than returning [] outright would have given.
-  const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
+  //
+  // Memoized per turn, because this resolver runs per TOOL CALL. That contract is per ATTEMPT, not
+  // per turn: the memo evicts a rejection, so the next tool call re-reads and throws again rather
+  // than inheriting a cached "member of nothing". A membership CHANGE mid-turn is not picked up -
+  // the same per-turn snapshot the grant read below takes, and bounded the same way.
+  const organizationIds = userId
+    ? await membershipOrgIdsByTurn(context, userId, () => context.db.organizations.findMembershipOrgIds(userId))
+    : [];
 
   // The lake ids the caller reaches by an owner/curator grant (see GRANT ARM in the doc comment).
   // Resolved BEFORE the lake read for the same reason as in getDynamicDataLakeAccess: a grant-held
   // lake matches none of that query's tag/org/public arms, so its ids have to go IN as the query's
   // grant arm rather than be filtered out of the result.
   //
-  // Uses the same helper as the retrieval resolver, so the two sides resolve a grant row the same
-  // way - a lake retrieval grounds on but injection distrusts is exactly the gap #2495 closes.
-  // Sharing the helper is not by itself a lockstep guarantee: the two call sites already pass
-  // different arguments, and today's agreement rests on both pinning `includeReaders = false`.
-  // That agreement is MEANT to be broken by the cutover, in the deny direction only - see below.
+  // Uses the same helper as the retrieval resolver - through `grantedLakeReachForTurn`, whose only
+  // addition is the per-turn memo this site needs because it runs per TOOL CALL - so the two sides
+  // resolve a grant row the same way: a lake retrieval grounds on but injection distrusts is
+  // exactly the gap #2495 closes. Sharing the helper is not by itself a lockstep guarantee: the two
+  // call sites already pass different arguments, and today's agreement rests on both pinning
+  // `includeReaders = false`. That agreement is MEANT to be broken by the cutover, in the deny
+  // direction only - see below. The memo keys on those arguments for that reason, so the two sites
+  // cannot collide in it either.
   //
   // But `includeReaders: false` here is a PERMANENT security floor, NOT the cutover default it is
   // at the other call sites. That cutover has HAPPENED: `getDynamicDataLakeAccess` and browse have
@@ -223,7 +241,13 @@ export async function getAccessibleDataLakePrompts(
       // Only the USER-principal reach is consumed. `orgGrantedLakes` is empty by construction
       // here (no membership org ids, `includeReaders` false) and is deliberately not forwarded to
       // the query, so the org-principal arm cannot activate on this path even if that changes.
-      const reach = await grantedLakeReachFor(userId, [], context.db.dataLakeAccessGrants, INCLUDE_READER_GRANTS);
+      const reach = await grantedLakeReachForTurn(
+        context,
+        userId,
+        [],
+        context.db.dataLakeAccessGrants,
+        INCLUDE_READER_GRANTS
+      );
       for (const id of reach.grantedLakeIds) grantedLakeIds.add(id);
     } catch (err) {
       // Fail closed, loudly: the arm contributes nothing, which denies a legitimate curator their
