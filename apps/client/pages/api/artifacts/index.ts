@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertArtifactSourceRefsOwned } from '@server/utils/assertArtifactSourceRefsOwned';
+import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
 import { z } from 'zod';
 import qs from 'qs';
 
@@ -91,9 +91,11 @@ const handler = baseApi()
 
       const validatedData = CreateArtifactSchema.parse(req.body);
 
-      // The refs below are written verbatim onto the new artifact, so a caller must own any it
-      // supplies - otherwise it could claim another user's session/quest/artifact as its source.
-      await assertArtifactSourceRefsOwned(
+      // The refs below are written verbatim onto the new artifact, so a caller must be entitled to
+      // any it supplies - otherwise it could claim another user's session/quest/artifact as its
+      // source. Sessions are shareable, so the bar is access (owner or shared), matching the
+      // collaborator-in-a-shared-session flow; artifacts are not shareable, so parent is owner-only.
+      await assertArtifactSourceRefsAccessible(
         userId,
         {
           sessionId: validatedData.sessionId,
@@ -101,7 +103,7 @@ const handler = baseApi()
           parentArtifactId: validatedData.parentArtifactId,
         },
         {
-          isOwnedSession: async (id, uid) => !!(await sessionRepository.findByIdAndUserId(id, uid)),
+          isAccessibleSession: async id => !!(await sessionRepository.shareable.findAccessibleById(req.user!, id)),
           getQuestSessionId: async id =>
             ((await questRepository.findById(id)) as { sessionId?: string } | null)?.sessionId ?? null,
           getArtifactOwner: async id =>

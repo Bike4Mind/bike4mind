@@ -1,66 +1,79 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ForbiddenError } from '@bike4mind/common';
-import { assertArtifactSourceRefsOwned, type ArtifactRefOwnershipDeps } from './assertArtifactSourceRefsOwned';
+import { ForbiddenError } from '@server/utils/errors';
+import { assertArtifactSourceRefsAccessible, type ArtifactRefAccessDeps } from './assertArtifactSourceRefsAccessible';
 
 const OWNER = 'user-1';
 
-function deps(overrides: Partial<ArtifactRefOwnershipDeps> = {}): ArtifactRefOwnershipDeps {
+function deps(overrides: Partial<ArtifactRefAccessDeps> = {}): ArtifactRefAccessDeps {
   return {
-    // Default: the owner owns everything.
-    isOwnedSession: vi.fn(async (_id: string, uid: string) => uid === OWNER),
-    getQuestSessionId: vi.fn(async () => 'session-owned-by-owner'),
+    // Default: the caller can access everything.
+    isAccessibleSession: vi.fn(async () => true),
+    getQuestSessionId: vi.fn(async () => 'session-accessible'),
     getArtifactOwner: vi.fn(async () => OWNER),
     ...overrides,
   };
 }
 
-describe('assertArtifactSourceRefsOwned', () => {
+describe('assertArtifactSourceRefsAccessible', () => {
   it('passes when no refs are supplied (nothing to check)', async () => {
     const d = deps();
-    await expect(assertArtifactSourceRefsOwned(OWNER, {}, d)).resolves.toBeUndefined();
-    expect(d.isOwnedSession).not.toHaveBeenCalled();
+    await expect(assertArtifactSourceRefsAccessible(OWNER, {}, d)).resolves.toBeUndefined();
+    expect(d.isAccessibleSession).not.toHaveBeenCalled();
   });
 
-  it('passes when every supplied ref is owned', async () => {
+  it('passes when every supplied ref is accessible', async () => {
     await expect(
-      assertArtifactSourceRefsOwned(OWNER, { sessionId: 's1', sourceQuestId: 'q1', parentArtifactId: 'a1' }, deps())
+      assertArtifactSourceRefsAccessible(
+        OWNER,
+        { sessionId: 's1', sourceQuestId: 'q1', parentArtifactId: 'a1' },
+        deps()
+      )
     ).resolves.toBeUndefined();
   });
 
-  it('rejects a sessionId the caller does not own', async () => {
-    const d = deps({ isOwnedSession: vi.fn(async () => false) });
-    await expect(assertArtifactSourceRefsOwned(OWNER, { sessionId: 'someone-elses' }, d)).rejects.toBeInstanceOf(
+  it('passes for a session shared with the caller (access, not ownership)', async () => {
+    // A collaborator in a session the owner shared with them creates artifacts stamped with the
+    // owner's sessionId; access is granted though the caller does not own the session.
+    const d = deps({ isAccessibleSession: vi.fn(async () => true) });
+    await expect(
+      assertArtifactSourceRefsAccessible(OWNER, { sessionId: 'shared-with-me' }, d)
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects a sessionId the caller cannot access', async () => {
+    const d = deps({ isAccessibleSession: vi.fn(async () => false) });
+    await expect(assertArtifactSourceRefsAccessible(OWNER, { sessionId: 'someone-elses' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
   });
 
-  it('rejects a sourceQuestId whose session the caller does not own', async () => {
+  it('rejects a sourceQuestId whose session the caller cannot access', async () => {
     const d = deps({
-      getQuestSessionId: vi.fn(async () => 'session-owned-by-someone-else'),
-      isOwnedSession: vi.fn(async () => false),
+      getQuestSessionId: vi.fn(async () => 'session-not-accessible'),
+      isAccessibleSession: vi.fn(async () => false),
     });
-    await expect(assertArtifactSourceRefsOwned(OWNER, { sourceQuestId: 'q-other' }, d)).rejects.toBeInstanceOf(
+    await expect(assertArtifactSourceRefsAccessible(OWNER, { sourceQuestId: 'q-other' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
   });
 
   it('rejects a sourceQuestId that does not exist', async () => {
     const d = deps({ getQuestSessionId: vi.fn(async () => null) });
-    await expect(assertArtifactSourceRefsOwned(OWNER, { sourceQuestId: 'ghost' }, d)).rejects.toBeInstanceOf(
+    await expect(assertArtifactSourceRefsAccessible(OWNER, { sourceQuestId: 'ghost' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
   });
 
-  it('rejects a parentArtifactId owned by another user', async () => {
+  it('rejects a parentArtifactId owned by another user (artifacts are not shareable)', async () => {
     const d = deps({ getArtifactOwner: vi.fn(async () => 'user-2') });
-    await expect(assertArtifactSourceRefsOwned(OWNER, { parentArtifactId: 'a-other' }, d)).rejects.toBeInstanceOf(
+    await expect(assertArtifactSourceRefsAccessible(OWNER, { parentArtifactId: 'a-other' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
   });
 
   it('rejects a parentArtifactId that does not exist', async () => {
     const d = deps({ getArtifactOwner: vi.fn(async () => null) });
-    await expect(assertArtifactSourceRefsOwned(OWNER, { parentArtifactId: 'ghost' }, d)).rejects.toBeInstanceOf(
+    await expect(assertArtifactSourceRefsAccessible(OWNER, { parentArtifactId: 'ghost' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
   });
