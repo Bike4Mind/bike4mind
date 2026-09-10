@@ -1949,6 +1949,8 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       outcome: 'ok',
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: ['datalake:x'],
+      // A completed search that injected nothing - recorded, not left unknown.
+      injected: { chunks: 0, chars: 0 },
     });
   });
 
@@ -1962,8 +1964,19 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
     const ctx = makeContext({
       db: {
         fabfiles: {
+          // `vectorized: true` matters: makeContext's default retrievalFilter is vectorizedOnly,
+          // so a file without it is dropped by filterRetrievalExcluded and this test silently
+          // exercises the NO-HITS branch instead of the one it names.
           search: vi.fn().mockResolvedValue({
-            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            data: [
+              {
+                id: 'f1',
+                fileName: 'Handbook retired notes.pdf',
+                tags: [{ name: 'datalake:x' }],
+                vectorized: true,
+                mimeType: 'application/pdf',
+              },
+            ],
             total: 1,
           }),
         },
@@ -1974,11 +1987,18 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
 
     const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
     const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    // Guards the branch this test is about: the hits write is the one carrying citables.
+    expect((retrievalCall?.[0] as { promptMeta: { citables?: unknown[] } }).promptMeta.citables).toHaveLength(1);
     expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
       attempted: true,
       outcome: 'ok',
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: ['datalake:x'],
+      // NO `injected` (the exact-match assertion is what pins its absence). This arm matches file
+      // METADATA and emits names, types and tags - the model gets no passage content, so the
+      // output tells it to call retrieve_knowledge_content, and THAT tool decides the turn's
+      // passage volume while recording none. A zero here would survive the merge and assert a
+      // starve on a turn grounded on the whole document; unknown is the honest answer.
     });
   });
 
@@ -2106,6 +2126,126 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: [],
     });
+  });
+});
+
+describe('search_knowledge_base injected volume', () => {
+  const passage = (over: Record<string, unknown> = {}) => ({
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags: [],
+    chunkText: 'pto accrues monthly',
+    score: 0.81,
+    fileCreatedAt: null,
+    ...over,
+  });
+
+  /** Wires the deps the semantic arm needs so it actually runs rather than falling through. */
+  const semanticCtx = () =>
+    makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+  const retrievalWrites = (ctx: ToolContext) =>
+    (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => (c[0] as { promptMeta?: { retrieval?: { injected?: unknown } } })?.promptMeta?.retrieval)
+      .filter(Boolean);
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('reports passages, served characters and the best score from the semantic arm', async () => {
+    const hits = [passage(), passage({ chunkId: 'c2', chunkText: 'holidays accrue too', score: 0.62 })];
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: hits,
+      totalChunksSearched: 9,
+      filesInScope: 1,
+      chunksScored: 9,
+    });
+    const ctx = semanticCtx();
+
+    await run(ctx);
+
+    // Two PASSAGES from ONE document: `chunks` is per-passage, which is exactly the count
+    // `citables` (deduped per file, and 1 here) cannot express. `chars` is the served text, so a
+    // reader can tell a two-line answer from a budget-filling one.
+    expect(retrievalWrites(ctx)).toContainEqual(
+      expect.objectContaining({
+        outcome: 'ok',
+        injected: {
+          chunks: 2,
+          chars: hits[0].chunkText.length + hits[1].chunkText.length,
+          topScore: 0.81,
+        },
+      })
+    );
+  });
+
+  it('leaves the volume unknown when the semantic arm finds nothing and the keyword arm hits', async () => {
+    // The turn that inverts the ticket's failure mode: semantic scores nothing above the floor,
+    // the keyword arm finds files and tells the model to fetch their text, and
+    // retrieve_knowledge_content - which then injects whole documents - records no volume. Any
+    // zero written here becomes the turn's final value (mergeInjected keeps the one-sided value),
+    // so a fully grounded turn would persist an affirmative "recorded starve".
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [],
+      totalChunksSearched: 9,
+      filesInScope: 1,
+      chunksScored: 9,
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+          getAccessibleFiles: vi.fn(),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const writes = retrievalWrites(ctx);
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every(r => r?.injected === undefined)).toBe(true);
+  });
+
+  it('records no volume when the semantic arm throws, so a failure stays unknown rather than zero', async () => {
+    semanticDataLakeSearchMock.mockRejectedValue(new Error('embedding provider down'));
+    const ctx = semanticCtx();
+
+    await run(ctx);
+
+    const failed = retrievalWrites(ctx).find(r => r?.outcome === 'failed');
+    expect(failed).toBeDefined();
+    // The throwing surface reports no volume at all - it broke, so its volume is unknown, and a
+    // zero from it would be a lie. The keyword arm that runs next reports its own honest zero
+    // (it completed and injected no passage content), which is why the merged turn ends up
+    // 'failed' beside `chunks: 0`: worst-of outcome, sum-of-completions volume.
+    expect(failed?.injected).toBeUndefined();
   });
 });
 
@@ -2775,6 +2915,35 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
       expect(out).toContain('a configured relevance threshold filtered out every candidate passage');
       expect(out).toContain('Tell the user the knowledge base may be returning partial results');
+    });
+
+    it('does not blame the floor when nothing was compared - an unembedded lake is not a filtered one', async () => {
+      // Zero results is equally true of a corpus that was never vectorized, so attributing it to the
+      // threshold points the model (and the operator reading the log) at a knob that never ran.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [],
+        totalChunksSearched: 0,
+        filesInScope: 3,
+        chunksScored: 0,
+        scan: { ...scan, chunksScanned: 0, annHits: 0 },
+      });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).not.toContain('a configured relevance threshold filtered out every candidate passage');
+      expect(clampLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('relevance floor'));
+    });
+
+    it('still blames the floor on an ANN-served lake, which legitimately scores zero chunks', async () => {
+      // The guard must be `comparedNoPassages`, not `chunksScored > 0`: an Atlas/OpenSearch lake
+      // answers entirely from ANN hits and reports chunksScored 0 even when the floor did the work.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [],
+        totalChunksSearched: 0,
+        filesInScope: 3,
+        chunksScored: 0,
+        scan: { ...scan, chunksScanned: 0, annFilesQueried: 3, annHits: 12, annModelsQueried: 1 },
+      });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).toContain('a configured relevance threshold filtered out every candidate passage');
     });
 
     it('an org-rung override on kbSearchMinRelevancePct reaches minScore end-to-end', async () => {

@@ -21,6 +21,7 @@ import {
   isDataLakeTagName,
   matchesTagPrefixArm,
   type IUserDocument,
+  isLakeIngestable,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
@@ -29,7 +30,10 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
 import defineAbilitiesFor from '@server/auth/ability';
 import { getFilesStorage } from '@server/utils/storage';
-import { getValidConnectionDriveAccessToken } from '@server/integrations/google/drive/common';
+import {
+  disableDriveConnectionForLake,
+  getValidConnectionDriveAccessToken,
+} from '@server/integrations/google/drive/common';
 import { createDriveClient } from '@server/integrations/google/drive/driveClient';
 import { walkFolder, fetchDriveFileContent } from '@server/integrations/google/drive/driveContent';
 import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
@@ -411,6 +415,30 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.warn('[driveLakeIngest] target data lake not found; dropping', { connectionId });
       // Same reasoning as the connection-not-found exit above: a continuation reaching here still
       // owns an adopted batch that needs settling.
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim(null);
+      return;
+    }
+    // A non-ingestable lake is a no-op here, not a failure.
+    // This is also the convergence point for the enabled flag: the lifecycle transition disables
+    // the connection write-time, but that only covers transitions after this shipped, and its port
+    // is best-effort (see dataLakeService/ports.ts). Having proven the lake is not writable, heal
+    // forward - the disable is idempotent, so one poll retires a connection archived before this
+    // deploy, a lost best-effort disable, or a connect/archive race that re-stamped enabled.
+    if (!isLakeIngestable(lake.status)) {
+      logger.info('[driveLakeIngest] target data lake is not writable; dropping', {
+        connectionId,
+        lakeStatus: lake.status,
+      });
+      try {
+        await disableDriveConnectionForLake(lake.id);
+      } catch (e) {
+        // Never fail the drop over the heal: the next poll drops again and retries the disable.
+        logger.warn('[driveLakeIngest] could not disable connection for a non-writable lake', {
+          connectionId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await releaseClaim(null);
       return;

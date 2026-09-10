@@ -14,6 +14,7 @@ import {
   type AdminSettingDoc,
   ABSTENTION_PROMPT,
   WEB_SEARCH_FRESHNESS_PROMPT,
+  KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -24,7 +25,13 @@ import {
   LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
 } from '../constants/lakeAccessAudit';
-import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import {
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+} from '../constants/forcedRetrieval';
+import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
@@ -529,6 +536,110 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
   });
 });
 
+describe('forced-retrieval relevance floors are levers (#2497)', () => {
+  const FLOOR_KEYS = ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'] as const;
+
+  it('defaults to the shared constants rather than hand-copied literals', () => {
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.defaultValue).toBe(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT);
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.defaultValue).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
+  });
+
+  it('keeps the absolute floor percent in step with the cosine fraction it replaced', () => {
+    // The percent is what an admin edits; the fraction is what the retrieval path compares against.
+    // Pinned together because the setting exists to REPLACE a hardcoded use of the fraction, and a
+    // change to one that missed the other would silently move the floor.
+    expect(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    // 0 is a MEANINGFUL value for both (disabled relative floor / absent absolute floor), so a
+    // prefault that silently landed on it would disable the lever instead of defaulting it.
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(undefined)).toBe(
+      FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT
+    );
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(undefined)).toBe(
+      FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT
+    );
+  });
+
+  it('bounds both floors at write time, integrally, and floors them differently at the bottom', () => {
+    // The 100 ceiling is load-bearing, not cosmetic: the relative floor is multiplied by the turn's
+    // top score, so a value above 100 would put the cutoff ABOVE the best candidate and starve
+    // every turn.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].max).toBe(100);
+      expect(() => settingsMap[key].schema.parse(-1)).toThrow();
+      expect(() => settingsMap[key].schema.parse(101)).toThrow();
+      expect(settingsMap[key].schema.parse(100)).toBe(100);
+      // Integral at the write boundary rather than floored later by a reader, so the percent an
+      // admin sees is the percent the retrieval path actually compares against.
+      expect(settingsMap[key].int).toBe(true);
+      expect(() => settingsMap[key].schema.parse(85.5)).toThrow();
+    }
+
+    // The two differ at the bottom of the range, and deliberately. 0 is what makes the RELATIVE
+    // floor's "disabled" expressible.
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.min).toBe(0);
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(0)).toBe(0);
+
+    // The ABSOLUTE floor stops at 1, because clearing a number field in the admin UI coerces to 0,
+    // so 0 reads as an emptied field rather than as intent. 1% still effectively disables the gate.
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.min).toBe(1);
+    expect(() => settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(0)).toThrow();
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(1)).toBe(1);
+  });
+
+  it('is settable at org and owner but NOT per lake, unlike dataLakeSearchMaxChunks', () => {
+    // Deliberate, and the reason is structural rather than an oversight: one forced-retrieval turn
+    // scans an uncapped SET of lakes into a single pool with a single top score, so there is no one
+    // lake for a narrower rung to key on. Same call as kbSearchMinRelevancePct, whose corpus has the
+    // same shape. If a per-lake floor is ever wanted it needs per-lake top scores first, not just
+    // this rung.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+      expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
+    }
+    expect(settingsMap.dataLakeSearchMaxChunks.scope?.settableAt).toContain(SettingScopeLevel.Lake);
+  });
+
+  it('declares a scope, so the read path must go through the scoped resolver', () => {
+    // The inverse of forcedRetrievalCharBudget's assertion above. That one is platform-only because
+    // it is read via getSettingsValue, which ignores settableAt; these two are read via
+    // resolveScopedSettingValues, which honors it. A future change that pointed them back at
+    // getSettingsValue would silently drop every override, so the scope block is the signal that
+    // the resolver is required.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].scope).toBeDefined();
+    }
+  });
+
+  it('defaults the relative floor low enough to preserve behavior on the measured band', () => {
+    // The shipped default is a mechanism plus a safe starting point, NOT a tuned value. On the
+    // production lake this issue was measured against (166 injected chunks) the weakest accepted
+    // score was 0.8025 against a per-turn best of 0.9140, so anything at or below that ratio admits
+    // everything the absolute floor admitted and changes no production behavior on its own.
+    // Raising this default is a deliberate tuning decision that should follow the embedding
+    // migration, not precede it - this test is what makes such a change visible in review.
+    const weakestAcceptedRatio = 0.8025 / 0.914;
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100).toBeLessThan(weakestAcceptedRatio);
+  });
+
+  it('renders in the embedding group so an admin can actually reach both', () => {
+    // A lever nobody can find is the failure mode this issue cites in its own Related section.
+    // The two assertions below are not the same check, and only the second one is the runtime gate:
+    // AdminSettingsTab enumerates `Object.values(settingsMap)` and buckets each entry by its OWN
+    // `group` field (AdminSettingsTab.tsx:134 and :407), then orders within a group by its `order`
+    // (:571) - which is also what makes the two descriptions' "above"/"below" wording true. The
+    // group's `settings` array is never dereferenced by the render path; it is a hand-maintained
+    // index that only this suite enforces, so it is checked here to keep the two from drifting.
+    const keys = API_SERVICE_GROUPS.EMBEDDING.settings.map(entry => entry.key);
+    for (const key of FLOOR_KEYS) {
+      expect(keys).toContain(key);
+      expect(settingsMap[key].group).toBe(API_SERVICE_GROUPS.EMBEDDING.id);
+    }
+  });
+});
+
 describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
   // Same drift class as forcedRetrievalCharBudget above: before this setting existed,
   // KB_SEARCH_DEFAULT_RESULTS was a hand-copied literal (5) local to the tool's own file. Both now
@@ -630,6 +741,77 @@ describe('kbSearchMinRelevancePct (#1955)', () => {
   });
 });
 
+describe('lakeMemoryRecallK agrees with the lake-memory recall fallback (#2496)', () => {
+  // Same drift class as forcedRetrievalCharBudget above: before this setting existed the belief
+  // budget was a literal 8 in recallLakeMemory.ts. The setting's default and the coded fallback a
+  // settings outage returns to now both import LAKE_RECALL_K_DEFAULT, so this pins that they
+  // cannot silently diverge.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.lakeMemoryRecallK.defaultValue).toBe(LAKE_RECALL_K_DEFAULT);
+    // Pin the literal too, and say why: the whole point of the change is that the budget is no
+    // longer 8, so a default that drifted back down to the old value should fail here.
+    expect(settingsMap.lakeMemoryRecallK.defaultValue).toBeGreaterThan(8);
+  });
+
+  it('is platform-only, like its sibling forcedRetrievalCharBudget', () => {
+    // Deliberate, not an oversight - see the setting's own description. LakeMemoryFeature reads it
+    // directly rather than through the scoped-settings resolver, so a settableAt block here would
+    // be inert at best and could arm the resolver's fail-loud owner check at worst.
+    expect(settingsMap.lakeMemoryRecallK.scope).toBeUndefined();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    // 0 would be worse than the old hardcoded 8: it disables the card outright, and silently.
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(undefined)).toBe(LAKE_RECALL_K_DEFAULT);
+  });
+
+  it('rejects 0 and negatives at write time', () => {
+    expect(settingsMap.lakeMemoryRecallK.min).toBe(1);
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(0)).toThrow();
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(-1)).toThrow();
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(1)).toBe(1);
+  });
+
+  it('rejects a value above the declared ceiling at write time', () => {
+    // A fat-fingered extra zero (24 -> 240) otherwise passes validation cleanly and then sheds
+    // conversation history via the overflow-recovery loop, which looks nothing like a
+    // misconfigured setting. Same reasoning as forcedRetrievalCharBudget's max.
+    expect(settingsMap.lakeMemoryRecallK.max).toBe(LAKE_RECALL_K_MAX);
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(LAKE_RECALL_K_MAX + 1)).toThrow();
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(LAKE_RECALL_K_MAX)).toBe(LAKE_RECALL_K_MAX);
+  });
+
+  it('rejects a fractional budget rather than letting a reader floor it', () => {
+    // A belief count has no fractional meaning, so 1.5 is a typo, not a lower setting. Without the
+    // `int` flag it passes min/max cleanly and is then floored to 1 by positiveIntOr at read time -
+    // a 24x cut to lake grounding that reports as a successful save. Verified live: the real
+    // PUT /api/settings/update returns 422 for 1.5 and leaves the stored value untouched.
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(1.5)).toThrow();
+    // The admin UI submits its number field as a string, so coercion must still work.
+    expect(settingsMap.lakeMemoryRecallK.schema.parse('24')).toBe(24);
+  });
+
+  it('does not make integrality the default for every number setting', () => {
+    // `int` is opt-in on makeNumberSetting precisely because genuine fractions exist. If a future
+    // change flips it to the factory default, this fails instead of silently rejecting every
+    // fraction setting's own default value.
+    expect(settingsMap.ContextVerbatimWindowFraction.schema.parse(0.55)).toBe(0.55);
+  });
+
+  it('is registered in the EMBEDDING group at the order the admin UI actually sorts by', () => {
+    // Two surfaces that can disagree: AdminSettingsTab buckets by `settingsMap[key].group` and
+    // sorts by `settingsMap[key].order`, while API_SERVICE_GROUPS.settings is the declared
+    // manifest. A setting present in only one, or carrying two different orders, renders somewhere
+    // nobody intended - so pin that both agree and the order is still unique in the group.
+    const entry = API_SERVICE_GROUPS.EMBEDDING.settings.find(s => s.key === 'lakeMemoryRecallK');
+    expect(entry).toBeDefined();
+    expect(settingsMap.lakeMemoryRecallK.group).toBe(API_SERVICE_GROUPS.EMBEDDING.id);
+    expect(settingsMap.lakeMemoryRecallK.order).toBe(entry!.order);
+    const orders = API_SERVICE_GROUPS.EMBEDDING.settings.map(s => s.order);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+});
+
 describe('EMBEDDING settings group registration (#1955)', () => {
   it('lists kbSearchDefaultResults, kbSearchResultTokenBudget and kbSearchMinRelevancePct with unique order values', () => {
     const keys = ['kbSearchDefaultResults', 'kbSearchResultTokenBudget', 'kbSearchMinRelevancePct'];
@@ -710,6 +892,58 @@ describe('WebSearchFreshnessPrompt default tells the model when to search', () =
 
   it('ships as the WebSearchFreshnessPrompt setting default (no drift between const and setting)', () => {
     expect(settingsMap.WebSearchFreshnessPrompt.defaultValue).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
+  });
+});
+
+describe('KnowledgeBaseRetrievalPrompt default tells the model when to retrieve', () => {
+  // Same shape of failure as the web-search nudge, measured the same way: search_knowledge_base
+  // was offered on 1,591 optional-path production turns over 30 days and called on 319 of them
+  // (20.1%), while its tool description covered only HOW to search and never WHEN. Two clauses
+  // carry the whole effect, so pin both.
+  it('directs the model to search before answering from its weights', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/search_knowledge_base/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/labels, not content/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a retrieval it did
+  // not need - the same failure global forced retrieval already showed on out-of-corpus questions,
+  // arriving by a different route.
+  it('names the cases that do NOT need a search', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/do not search when/i);
+  });
+
+  // A small attached corpus is INLINED rather than deferred to retrieval, and forced retrieval
+  // steps aside entirely on an attached-files turn. Without these two clauses the section sends
+  // the model searching for text already sitting in its context, and its opening paragraph asserts
+  // the documents are invisible - which on that path is simply false.
+  it('exempts content already placed in the conversation', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/from an attached document/i);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/unless its content has been placed in this conversation/i);
+  });
+
+  // On a forced turn that retrieved nothing, forcedRetrievalNoContextPrompt instructs the model to
+  // say the library does not cover the question. Without this clause the nudge invites a second
+  // identical search: a billed query embedding, and a chance to hedge out of a correct abstention.
+  it('forbids re-searching a library already searched this turn', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/already been searched on this turn/i);
+  });
+
+  // The abstention half. Without it a nudge to search converts a clean "I could not find that"
+  // into an ungrounded answer wearing the corpus's authority.
+  it('requires saying so when the corpus does not cover the question', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/does not turn up what was asked for/i);
+  });
+
+  // Naming retrieve_knowledge_content here would instruct the model to call a tool a session
+  // denylist can strip while search survives (ChatCompletionProcess warns on exactly that pair),
+  // and a model told to call a tool it was not given emits the call as leaked JSON text.
+  it('names no knowledge tool the gate does not guarantee', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/retrieve_knowledge_content/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/count_knowledge_base/);
+  });
+
+  it('ships as the KnowledgeBaseRetrievalPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.KnowledgeBaseRetrievalPrompt.defaultValue).toBe(KNOWLEDGE_BASE_RETRIEVAL_PROMPT);
   });
 });
 

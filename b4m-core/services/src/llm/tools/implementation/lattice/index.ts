@@ -399,7 +399,8 @@ export const latticeAddEntityTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          if (model) {
+          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          if (model && model.userId === context.userId) {
             // Check if entity already exists
             const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
             if (existingIndex >= 0) {
@@ -417,8 +418,23 @@ export const latticeAddEntityTool: ToolDefinition = {
               updatedAt: new Date(),
             });
             context.logger.info(`[Lattice] Added entity ${entityId} to model ${modelId}`);
+          } else if (model) {
+            // Model exists but is owned by another user: deny, do not report success
+            context.logger.warn(`[Lattice] Access denied: caller does not own model ${modelId}`);
+            return JSON.stringify({
+              success: false,
+              action: 'ADD_ENTITY',
+              modelId,
+              error: `Access denied: you do not have permission to modify model ${modelId}`,
+            });
           } else {
             context.logger.warn(`[Lattice] Model ${modelId} not found in database`);
+            return JSON.stringify({
+              success: false,
+              action: 'ADD_ENTITY',
+              modelId,
+              error: `Model ${modelId} not found`,
+            });
           }
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist entity to database:`, error);
@@ -536,7 +552,8 @@ export const latticeSetValueTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          if (model) {
+          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          if (model && model.userId === context.userId) {
             // Find the entity
             const entity = model.data.entities.find(e => e.id === entityId || e.name === entityName);
             if (entity) {
@@ -568,8 +585,23 @@ export const latticeSetValueTool: ToolDefinition = {
             } else {
               context.logger.warn(`[Lattice] Entity ${entityName} not found in model ${modelId}`);
             }
+          } else if (model) {
+            // Model exists but is owned by another user: deny, do not report success
+            context.logger.warn(`[Lattice] Access denied: caller does not own model ${modelId}`);
+            return JSON.stringify({
+              success: false,
+              action: 'SET_VALUE',
+              modelId,
+              error: `Access denied: you do not have permission to modify model ${modelId}`,
+            });
           } else {
             context.logger.warn(`[Lattice] Model ${modelId} not found in database`);
+            return JSON.stringify({
+              success: false,
+              action: 'SET_VALUE',
+              modelId,
+              error: `Model ${modelId} not found`,
+            });
           }
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist value to database:`, error);
@@ -675,7 +707,8 @@ export const latticeCreateRuleTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          if (model) {
+          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
+          if (model && model.userId === context.userId) {
             // Check if output entity exists, if not create it
             const outputEntityExists = model.data.entities.some(
               e => e.id === outputEntityId || e.name.toLowerCase() === parsedRule.outputEntity.toLowerCase()
@@ -728,8 +761,23 @@ export const latticeCreateRuleTool: ToolDefinition = {
               updatedAt: new Date(),
             });
             context.logger.info(`[Lattice] Created rule ${ruleId} in model ${modelId}`);
+          } else if (model) {
+            // Model exists but is owned by another user: deny, do not report success
+            context.logger.warn(`[Lattice] Access denied: caller does not own model ${modelId}`);
+            return JSON.stringify({
+              success: false,
+              action: 'CREATE_RULE',
+              modelId,
+              error: `Access denied: you do not have permission to modify model ${modelId}`,
+            });
           } else {
             context.logger.warn(`[Lattice] Model ${modelId} not found in database`);
+            return JSON.stringify({
+              success: false,
+              action: 'CREATE_RULE',
+              modelId,
+              error: `Model ${modelId} not found`,
+            });
           }
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist rule to database:`, error);

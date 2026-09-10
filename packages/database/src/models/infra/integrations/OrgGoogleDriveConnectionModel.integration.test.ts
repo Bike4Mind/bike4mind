@@ -91,6 +91,18 @@ describe('OrgGoogleDriveConnectionModel - credential handling', () => {
     // ...but the claim is left intact, so the second ingest defers instead of running concurrently.
     expect(updated?.status).toBe('syncing');
   });
+
+  it('updateCredential re-enables a disabled connection (the only repair for a lost re-enable)', async () => {
+    // A lifecycle transition disables the connection on archive/soft-delete and re-enables it on
+    // unarchive/restore, best-effort. findDueForPoll is the only reader of `enabled` and nothing else
+    // writes it back, so a lost re-enable would leave the scheduled poll dead forever; the reconnect
+    // door is the repair path, and it must heal `enabled` the same way it heals `status`.
+    const created = await OrgGoogleDriveConnection.create({ ...base, oauthRefreshToken: 'enc-old', enabled: false });
+
+    const updated = await orgGoogleDriveConnectionRepository.updateCredential(created.id, 'org-1', 'enc-new', 'user-2');
+
+    expect(updated?.enabled).toBe(true);
+  });
 });
 
 describe('OrgGoogleDriveConnectionModel - uniqueness invariants', () => {

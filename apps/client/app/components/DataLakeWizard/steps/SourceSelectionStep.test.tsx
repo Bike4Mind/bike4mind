@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useDataLakeWizardStore, type WizardTargetLake } from '@client/app/stores/useDataLakeWizardStore';
 import SourceSelectionStep from './SourceSelectionStep';
 
 const { lakes, selectedAccount, toastInfo } = vi.hoisted(() => ({
@@ -23,11 +23,13 @@ vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
 // Both Drive actions pull in React Query (useConfig / lake-connection hooks); stub them so these
 // step-order/name-validation tests need no QueryClientProvider. Their own behavior is covered by
 // DriveConnectAction.test.tsx and DrivePendingConnectAction.test.tsx.
+// Rendered as markers rather than null: these tests assert WHICH of the two appears, which is the
+// gate this step owns. Their own behaviour stays covered by their own test files.
 vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
-  default: () => null,
+  default: () => <div data-testid="drive-connect-action" />,
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
-  default: () => null,
+  default: () => <div data-testid="drive-pending-connect-action" />,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -141,7 +143,14 @@ describe('SourceSelectionStep - lake name', () => {
 
   it('offers no name field in append mode - the target lake owns its identity', () => {
     useDataLakeWizardStore.setState({
-      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:' },
+      targetLake: {
+        id: 'lake-1',
+        name: 'Niche',
+        slug: 'niche',
+        fileTagPrefix: 'niche:',
+        organizationId: 'org-1',
+        canManage: true,
+      },
     });
 
     renderStep();
@@ -220,12 +229,69 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
 
   it('offers no taxonomy opt-in in append mode, where the lake tags already exist', () => {
     useDataLakeWizardStore.setState({
-      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:' },
+      targetLake: {
+        id: 'lake-1',
+        name: 'Niche',
+        slug: 'niche',
+        fileTagPrefix: 'niche:',
+        organizationId: 'org-1',
+        canManage: true,
+      },
     });
     const { container } = renderStep();
     selectFiles(container, [file('a.txt')]);
 
     expect(screen.getByTestId('source-toggle-preview')).toBeInTheDocument();
     expect(screen.queryByTestId('source-toggle-taxonomy')).toBeNull();
+  });
+  describe('the Drive connect control is gated the way its sibling is', () => {
+    // Connecting Drive is an org-lake, owner/manager capability server-side: a personal lake has no
+    // org to hold a connection, and the status route 404s for a non-manager. This render site was
+    // ungated, so opening Add files on a personal lake fired a pointless GET /drive-connection and
+    // rendered a permanently disabled Connect button. SelectedLakeHeader already gates on this.
+    const appendTo = (over: Partial<WizardTargetLake> = {}) =>
+      useDataLakeWizardStore.setState({
+        targetLake: {
+          id: 'lake-1',
+          name: 'Niche',
+          slug: 'niche',
+          fileTagPrefix: 'niche:',
+          organizationId: 'org-1',
+          canManage: true,
+          ...over,
+        },
+      });
+
+    it('renders NO connect control on a personal lake', () => {
+      appendTo({ organizationId: null });
+      renderStep();
+
+      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      // And not the create-mode fallback either - there IS a target lake, it just cannot connect.
+      expect(screen.queryByTestId('drive-pending-connect-action')).toBeNull();
+    });
+
+    it('renders NO connect control for a non-manager on an org lake', () => {
+      // The non-manager half of the same gate. Without it the two render sites disagree, which let
+      // this one drift in the first place.
+      appendTo({ canManage: false });
+      renderStep();
+
+      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+    });
+
+    it('renders the connect control for a manager on an org lake', () => {
+      appendTo({});
+      renderStep();
+
+      expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+    });
+
+    it('still parks the selection in create mode, where there is no lake to gate on yet', () => {
+      renderStep();
+
+      expect(screen.getByTestId('drive-pending-connect-action')).toBeInTheDocument();
+      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+    });
   });
 });

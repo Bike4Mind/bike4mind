@@ -30,18 +30,19 @@ vi.mock('@bike4mind/database', () => ({
     updateHealth: vi.fn(),
   },
 }));
-vi.mock('googleapis', () => ({
-  google: {
-    auth: {
-      OAuth2: class {
-        revokeToken = h.revokeToken;
-        generateAuthUrl = () => 'https://auth';
-        getToken = vi.fn();
-        setCredentials = vi.fn();
-        refreshAccessToken = vi.fn();
-      },
+vi.mock('@googleapis/drive', () => ({
+  auth: {
+    OAuth2: class {
+      revokeToken = h.revokeToken;
+      generateAuthUrl = () => 'https://auth';
+      getToken = vi.fn();
+      setCredentials = vi.fn();
+      refreshAccessToken = vi.fn();
     },
   },
+  // driveClient.ts pulls `drive`/`drive_v3` from this same module, so a mock covering only `auth`
+  // breaks the import for any test whose graph reaches it.
+  drive: vi.fn(),
 }));
 
 import { releaseDriveConnection, releaseDriveConnectionForLake } from './common';

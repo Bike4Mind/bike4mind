@@ -1,5 +1,9 @@
 // @ts-check
 
+import { globSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+
 // Service Worker (Serwist):
 // - Using @serwist/turbopack with route handler at app/serwist/[path]/route.ts
 // - SerwistProvider wraps the app in layout.tsx
@@ -37,6 +41,43 @@ const cdnImageHostname = (() => {
 })();
 
 /** @type {import("next").NextConfig} */
+// isolated-vm is a native addon loaded through `createRequire(...)` inside
+// @bike4mind/agents, which keeps it out of every Lambda that never touches the
+// REPL - and also hides it from static file tracing. Routes that DO construct a
+// sandbox have to name the prebuild themselves. One constant so the three
+// entries below cannot drift apart.
+//
+// Resolved, not hardcoded. The literal this replaces spelled out pnpm's store
+// layout (`node_modules/.pnpm/isolated-vm@*/...`), so a change to `node-linker`
+// - or a self-host build on npm/yarn - silently stopped matching, and the
+// symptom is a feature that ships dead rather than a build error. `isolated-vm`
+// is also a direct dependency of this package now: the requiring module ends up
+// under `.next/server/`, so the bare specifier has to resolve from the app
+// itself rather than only from `b4m-core/agents`.
+//
+// Narrowed to the linux glibc prebuilds because that is every deploy target
+// (Lambda on AL2023; the self-host image on node:24-slim). `**/*.node` also
+// dragged darwin-arm64, win32-x64 and the musl variants along - ~12 MB of
+// binaries where ~4 MB is reachable - into the Next server function, the one
+// artifact whose cold-start parse cost `infra/web.ts` already raises memory for.
+const ISOLATED_VM_PREBUILDS = (() => {
+  const pkgDir = path.dirname(createRequire(import.meta.url).resolve('isolated-vm'));
+  const pattern = path.posix.join(
+    path.relative(import.meta.dirname, pkgDir).split(path.sep).join('/'),
+    'prebuilds/linux-*/isolated-vm.abi*.glibc.node'
+  );
+  // Fail the build rather than the request. Getting this wrong disables every
+  // code_execute surface at runtime (they fail closed), which is silent here.
+  if (globSync(pattern, { cwd: import.meta.dirname }).length === 0) {
+    throw new Error(
+      `next.config.mjs: no isolated-vm linux prebuild matched "${pattern}". The REPL sandbox would ship ` +
+        `without its native binary and every code_execute surface would refuse to run. Check that ` +
+        `isolated-vm is installed and still ships prebuilds/linux-*/isolated-vm.abi*.glibc.node.`
+    );
+  }
+  return pattern;
+})();
+
 const nextConfig = {
   // Self-host build only (open-core #9313): emit a standalone server bundle for
   // the Docker image. The normal SST/OpenNext build manages its own output, so
@@ -60,7 +101,19 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
-  // Both help content roots, declared rather than traced. The two server readers
+  // outputFileTracingIncludes carries two unrelated concerns and both fail silently when lost.
+  // Resolve any conflict here as a UNION of the two groups below; taking either side alone is a
+  // green build that is broken at runtime. Neither the route keys nor the two consts collide.
+  //
+  // Sandbox routes: every route that can construct a REPL sandbox. Missing one does not open a
+  // hole - the caller fails closed, rlm-answer with a 503 and a wake by dropping code_execute -
+  // but it does silently disable the feature there.
+  //
+  // The deep-agent wake ALSO runs off deepAgentWakeQueue, which SST bundles rather than Next;
+  // that one is handled in infra/queues.ts. A new sandbox caller needs an entry in whichever
+  // bundler owns it.
+  //
+  // Help content roots: declared rather than traced. The two server readers
   // (pages/api/help/content.ts and server/help/retrieval.ts) build their read paths with template
   // literals and keep the roots out of every path.* call, because @vercel/nft partially evaluates
   // a path.resolve() whose base it cannot determine statically - a root chosen from a runtime
@@ -70,6 +123,9 @@ const nextConfig = {
   // the two halves are a pair, and dropping either one silently 404s every admin help article or
   // silently re-adds the 47 MB. See server/help/contentPath.ts.
   outputFileTracingIncludes: {
+    '/api/data-lakes/rlm-answer': [ISOLATED_VM_PREBUILDS],
+    '/api/deep-agent/spin': [ISOLATED_VM_PREBUILDS],
+    '/api/agents/[id]/missions': [ISOLATED_VM_PREBUILDS],
     '/api/help/content': HELP_CONTENT_ROOTS,
     '/api/help/chat': HELP_CONTENT_ROOTS,
   },
@@ -129,6 +185,11 @@ const nextConfig = {
 
   serverExternalPackages: [
     '@aws-sdk/client-bedrock-runtime',
+    // Native addon (.node binary). Bundling it would emit a JS loader with no
+    // binary beside it, so the REPL sandbox would fail to construct at runtime
+    // and every code_execute surface would refuse to run (they fail closed).
+    // Left external so file tracing ships the prebuild next to the handler.
+    'isolated-vm',
     '@aws-sdk/client-s3',
     '@aws-sdk/client-transcribe',
     '@aws-sdk/credential-provider-node',

@@ -3,6 +3,8 @@ import type { DataLakeConfig, IDataLakeDocument } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 import { filterStillManagedLakes, type ManageRecheckAdapter } from './filterStillManagedLakes';
+import { grantedLakeReachFor } from './resolveLakeReadAccess';
+import { isDatalakeTagWellFormed } from './createDataLake';
 
 /**
  * The distinct `datalake:*` provenance tags among a bag of file tag names - i.e. which lakes a set
@@ -42,6 +44,13 @@ export interface DataLakePrompt {
  * rendered by renderDataLakePromptSection at each retrieval-scoped injection site (forced
  * retrieval + the model-driven knowledge tools).
  *
+ * A THIRD trust arm lives OUTSIDE this predicate, in getAccessibleDataLakePrompts' in-memory
+ * filter: an owner/curator GRANT on the lake. It cannot live here, because a grant has to bypass
+ * `lakeMatchesAccess` as well - that predicate is grant-blind, so a lake whose only claim is a
+ * grant row would be dropped as inaccessible before trust was ever consulted. See the grant-arm
+ * comments there; do NOT add it to this function without also relaxing that conjunct, or the arm
+ * is dead code.
+ *
  * UNCHANGED to also gate a STATIC (registry) lake's overlay `systemPrompt` (see
  * IFallbackLakeSetting) - deliberately not widened, on purpose, and not a separate function: a
  * registry lake's synthetic shape always carries `createdByUserId: ''`, so the owner arm above can
@@ -54,12 +63,9 @@ export interface DataLakePrompt {
  * editable regardless of scope (see updateFallbackLakeSettings) - this is the ONLY gate on whether
  * it is ever read into a turn.
  *
- * NOTE (#1668): the owner arm keys on `createdByUserId`, so a lake whose ownership was TRANSFERRED to
- * a new user (an owner grant supersedes the creator for management, but createdByUserId is immutable)
- * is not injection-trusted for that new owner unless the org arm covers it. Folding grants into this
- * READ-time trust decision is #1673's job (read-time grant resolution, with its report-only cutover);
- * wiring the grant repo through the ChatCompletion db here for that narrow edge is deliberately
- * deferred. Org-scoped lakes - the productization case - are covered by the org arm regardless.
+ * NOTE (#1668): the owner arm keys on `createdByUserId`, which never moves - so a TRANSFERRED lake
+ * is not trusted for its new owner by this predicate. That case, and the shared-across-orgs curator
+ * case with it, is now covered by the grant arm above rather than left to the org arm.
  *
  * The lake side is normalized through normalizeId (which yields undefined for an absent value, so
  * it never becomes the string "undefined"). The schema stores this as a String today, but an
@@ -81,9 +87,10 @@ function isTrustedForInjection(
  * Resolves the per-lake system prompts to inject for a turn: the caller's active,
  * accessible, TRUSTED lakes that carry a non-empty `systemPrompt`.
  *
- * Applies the same accessibility rule as retrieval - the identical DB pre-filter, then
- * `lakeMatchesAccess`, the ONE shared access predicate that `getAccessibleDataLakes` itself
- * applies - and narrows the result with the trust rule above. Calling the predicate directly
+ * Applies the same accessibility rule as retrieval - the identical DB pre-filter (including its
+ * owner/curator grant arm), then `lakeMatchesAccess`, the ONE shared access predicate that
+ * `getAccessibleDataLakes` itself applies - and narrows the result with the trust rule above,
+ * whose grant arm is applied here (see the GRANT ARM block below). Calling the predicate directly
  * rather than `getAccessibleDataLakes` avoids merging the static `DATA_LAKES` registry into the DB
  * candidate set - it is gathered as its OWN, separately-trusted set below instead, since a registry
  * lake has no document for `findActiveByUserTagsAndEntitlements` to return in the first place.
@@ -124,6 +131,28 @@ function isTrustedForInjection(
  * DB-lake-only: the registry/fallback-lake candidate gathering and its own trust check below are
  * retrieval-only and must never be pierced here - a fallback lake's prompt keeps requiring its ordinary
  * org-trust arm regardless of pre-authorization.
+ *
+ * GRANT ARM (#2495): a lake the caller holds an owner or curator grant on is BOTH accessible and
+ * injection-trusted by that grant alone - so its ids enter the DB query as its grant arm and then
+ * short-circuit `lakeMatchesAccess` + `isTrustedForInjection` in the in-memory filter, exactly as a
+ * pre-authorized id does. This is the arm the trust rule's own doc comment used to defer.
+ *
+ * ITS AUDIENCE IS NOW WIDER THAN WHEN THIS ARM LANDED, and a reader has to know it. The arm was
+ * written when the only producers of owner/curator grants were createDataLake (a self-grant) and
+ * transferLakeOwnership, whose out-of-org refusal meant both parties to a transfer were already
+ * org-trusted - so the only case it changed was the TRANSFERRED PERSONAL lake, where
+ * `createdByUserId` never moves and the new owner held the lake's prompt inert. `grantLakeAccess`
+ * is the sharing door that was missing then: a manager can now hand a CURATOR grant to an arbitrary
+ * cross-tenant user, and that grant carries injection trust through this arm the moment it lands.
+ * That is the intended delivery, not a leak - but it means a curator grant is a decision about whose
+ * turn this lake's prompt may steer, and the grant UI discloses it as one.
+ *
+ * Why curator-or-above is the right cap, and not merely a cautious one: `listDataLakes` serves
+ * `systemPrompt` back only when `manageable` holds, so this arm's audience is exactly the audience
+ * that can READ the text steering their own turn. A reader/tag/entitlement holder could not, which
+ * is the transparency argument the trust rule's doc comment makes at the top of this file.
+ * `restrictTags` remains an unconditional separate conjunct, so a granted lake still contributes
+ * only on a turn that actually retrieved from it.
  */
 export async function getAccessibleDataLakePrompts(
   // The re-check slice is intersected here rather than added to DataLakeAccessContext because only
@@ -159,6 +188,54 @@ export async function getAccessibleDataLakePrompts(
   // a stronger deny guarantee than returning [] outright would have given.
   const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
 
+  // The lake ids the caller reaches by an owner/curator grant (see GRANT ARM in the doc comment).
+  // Resolved BEFORE the lake read for the same reason as in getDynamicDataLakeAccess: a grant-held
+  // lake matches none of that query's tag/org/public arms, so its ids have to go IN as the query's
+  // grant arm rather than be filtered out of the result.
+  //
+  // Uses the same helper as the retrieval resolver, so the two sides resolve a grant row the same
+  // way - a lake retrieval grounds on but injection distrusts is exactly the gap #2495 closes.
+  // Sharing the helper is not by itself a lockstep guarantee: the two call sites already pass
+  // different arguments, and today's agreement rests on both pinning `includeReaders = false`.
+  // That agreement is MEANT to be broken by the cutover, in the deny direction only - see below.
+  //
+  // But `includeReaders: false` here is a PERMANENT security floor, NOT the cutover default it is
+  // at the other call sites. That cutover has HAPPENED: `getDynamicDataLakeAccess` and browse have
+  // widened to reader/org-principal grants, and THIS SITE MUST NOT FOLLOW - a READER's read
+  // access must not become authority to write instructions into another user's system prompt
+  // (injection lands in the system prompt, a higher-trust position than the retrieved content
+  // `renderRetrievedContentBlock` sanitizes precisely because it is untrusted). A test asserts this
+  // call's arguments literally, so the flip fails loudly here rather than widening quietly.
+  //
+  // The membership org ids are deliberately NOT passed: `grantedLakeReachFor` reads them only under
+  // `includeReaders`, so threading them would leave the org-principal arm pre-wired and let a
+  // one-word flip activate it silently. Passing [] makes that flip return nothing and break
+  // visibly. (Org-principal grants are not absent from injection altogether - they can still reach
+  // it through the pre-authorization short-circuit below, gated on org-ADMIN rights at session
+  // create - but they do not enter through THIS arm.)
+  //
+  // Gated on `dataLakes` too: the arm feeds only the DB query and the DB-lake filter (a registry
+  // lake has no grants by construction), so without a lake repo this read has no reader.
+  const INCLUDE_READER_GRANTS = false;
+  const grantedLakeIds = new Set<string>();
+  if (context.db.dataLakes && context.db.dataLakeAccessGrants && userId) {
+    try {
+      // Only the USER-principal reach is consumed. `orgGrantedLakes` is empty by construction
+      // here (no membership org ids, `includeReaders` false) and is deliberately not forwarded to
+      // the query, so the org-principal arm cannot activate on this path even if that changes.
+      const reach = await grantedLakeReachFor(userId, [], context.db.dataLakeAccessGrants, INCLUDE_READER_GRANTS);
+      for (const id of reach.grantedLakeIds) grantedLakeIds.add(id);
+    } catch (err) {
+      // Fail closed, loudly: the arm contributes nothing, which denies a legitimate curator their
+      // lake's prompt rather than granting anyone one. Warned rather than thrown so a transient
+      // grant-read failure degrades this one feature instead of the turn (see Fail-safe above).
+      context.logger?.warn(
+        '[dataLakes] prompt access-grant lookup failed; resolving lake prompts without the grant arm',
+        err
+      );
+    }
+  }
+
   // Absent `dataLakes` (an unwired host) means the DB half yields nothing - NOT a whole-function
   // bail: a caller who never wired dataLakes but did wire fallbackLakeSettings must still reach
   // the registry branch below.
@@ -173,7 +250,8 @@ export async function getAccessibleDataLakePrompts(
         userTags,
         entitlementKeys,
         organizationIds,
-        userId
+        userId,
+        { grantedLakeIds: [...grantedLakeIds] }
       );
       // Union in any pre-authorized lake not already returned above - a manage-but-not-member
       // lake fails the ordinary tag/entitlement/org predicate by construction, so it would
@@ -212,12 +290,23 @@ export async function getAccessibleDataLakePrompts(
   const dbPrompts = lakes
     .filter(
       lake =>
-        // A pre-authorized lake short-circuits the ordinary access+trust check (it is trusted BY
-        // the admission itself - re-derived above against the current manage rights, not taken on
-        // the session's word; see the function doc comment).
+        // Two short-circuits of the ordinary access+trust check, both standing on a MANAGE-level
+        // relationship to the lake rather than on read access to its files:
+        //   - a pre-authorized lake, trusted BY the admission itself - re-derived above against the
+        //     current manage rights, not taken on the session's word (see the doc comment);
+        //   - an owner/curator GRANT, which is simultaneously the read authorization (as at the
+        //     browse gate) and the injection trust, so it has to bypass the grant-blind
+        //     `lakeMatchesAccess` as well as `isTrustedForInjection` (see GRANT ARM).
         // `restrictTags` stays OUTSIDE this OR as an unconditional separate conjunct below, so
-        // pre-authorization alone never injects a prompt the turn did not actually retrieve.
+        // neither short-circuit ever injects a prompt the turn did not actually retrieve.
         (!!stillManagedPreauthorizedIds?.has(lake.id) ||
+          // Well-formedness mirrors the SAME screen retrieval puts on its grant restoration
+          // (getDynamicDataLakeAccess's grantedGatedLakes). Without it a granted row whose
+          // datalakeTag shadows a registry lake's could inject on a turn that retrieved the
+          // REGISTRY lake's files - retrieval drops such a row, and injection must not be a
+          // superset of retrieval. Needs a legacy shadowing row to reach, so this is
+          // defense-in-depth, not a live repro.
+          (grantedLakeIds.has(lake.id) && isDatalakeTagWellFormed(lake)) ||
           (lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
             isTrustedForInjection(lake, { userId, organizationIds }))) &&
         // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact
@@ -246,6 +335,9 @@ export async function getAccessibleDataLakePrompts(
       const overlayByLakeId = new Map(overlayRows.map(row => [row.lakeId, row]));
       registryPrompts = orgScopedRegistryCandidates
         .filter(
+          // No grant arm here, and not by omission: a registry lake has no backing document and
+          // therefore no grant rows (see loadActiveLakeGrants' fallback short-circuit), so the org
+          // arm below is the whole of registry-lake injection trust - the scope decided above.
           dl =>
             isTrustedForInjection(
               { createdByUserId: '', organizationId: dl.organizationId },

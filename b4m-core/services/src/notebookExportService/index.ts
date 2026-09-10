@@ -12,6 +12,7 @@ import {
   CURRENT_EXPORT_VERSION,
 } from './types';
 import { dayjs, isImageServeable } from '@bike4mind/common';
+import { v4 as uuidv4 } from 'uuid';
 import type { ILogger } from '@bike4mind/observability';
 import type {
   IAgentDocument,
@@ -740,7 +741,11 @@ export class NotebookExportService {
   }
 
   private async storeExportFile(fileName: string, content: string): Promise<string> {
-    const path = `exports/${fileName}`;
+    // A random path segment keeps the export object at an unguessable key. `generateFileName`
+    // alone is predictable (`notebook(s)-<first 8 of userId>-<date>.json`), so without this any
+    // caller who could guess it - and any endpoint that signs a caller-supplied key - could reach
+    // another user's export. The readable filename is preserved as the last segment for downloads.
+    const path = `exports/${uuidv4()}/${fileName}`;
     await this.adapters.fileStorageService.uploadFile(path, Buffer.from(content));
     const signed = await this.adapters.fileStorageService.getSignedUrl(path, 3600); // 1 hour expiry
     return signed ?? path;

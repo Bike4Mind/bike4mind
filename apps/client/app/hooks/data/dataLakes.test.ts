@@ -74,6 +74,11 @@ import {
   useRetryLakeLifecycle,
   useTransferLakeOwnership,
   usePurgeDataLakeDocument,
+  useCreateDataLake,
+  useReanalyzeTaxonomy,
+  useDismissTaxonomy,
+  useGrantLakeAccess,
+  useRevokeLakeAccess,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -1422,5 +1427,243 @@ describe('the needs-attention list and its retry', () => {
     });
 
     expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['data-lakes', 'transitional']));
+  });
+});
+
+/**
+ * Every data-lake mutation that refuses for a reason the user can act on must show that reason.
+ *
+ * The bug (#2466): these handlers toasted `error.message`, which on an axios rejection is the
+ * generic "Request failed with status code 400" - the server's sentence sits at
+ * `response.data.error` and was thrown away. So "Tag prefix X overlaps an existing data lake -
+ * choose a different prefix" and "try again" both reached the user as the same status line.
+ *
+ * Driven through the real hooks rather than by unit-testing `serverRefusalMessage` directly: the
+ * helper was already correct and already present in this file: the defect was in which handlers
+ * called it, which only a test that mounts the hook can observe.
+ */
+/**
+ * The SUCCESS paths of the two sharing doors. The refusal table below covers their error arm only,
+ * which left the whole of the rest untested: invert the revoke toast's ternary, or drop either
+ * hook's `configHistoryOf` invalidation so the History tab in the same modal serves stale rows,
+ * and the suite stays green.
+ *
+ * Keys are asserted as literal prefixes rather than through `dataLakeKeys`, for the reason spelled
+ * out above `lakeMemoryPollInterval`: building the expectation from the helper the hook calls would
+ * still pass if that helper drifted away from what the query is keyed under.
+ */
+describe('the sharing doors on success', () => {
+  const mountWith = <T>(hook: () => T) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { invalidate, ...renderHook(hook, { wrapper }) };
+  };
+
+  beforeEach(() => {
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiDelete.mockReset();
+  });
+
+  it('grant refreshes the access view, the history and the lake LIST', async () => {
+    apiPost.mockResolvedValueOnce({ data: { data: { principalId: 'u2', role: 'reader' } } });
+    const { result, invalidate } = mountWith(() => useGrantLakeAccess());
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        id: 'lake1',
+        principalType: 'user',
+        principalEmail: 'a@b.co',
+        role: 'reader',
+      });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/grants', {
+      principalType: 'user',
+      principalEmail: 'a@b.co',
+      role: 'reader',
+    });
+    const keys = invalidate.mock.calls.map(c => JSON.stringify(c[0]?.queryKey));
+    // The list goes too because the actor can target THEMSELVES: re-roling their own grant down
+    // drops their manage rung while a cached `canManage` still lights Settings and Access.
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(toast.success).toHaveBeenCalledWith('Access granted');
+  });
+
+  it('revoke sends the principal pair as QUERY params, and refreshes the same three', async () => {
+    apiDelete.mockResolvedValueOnce({ data: { data: { revoked: true } } });
+    const { result, invalidate } = mountWith(() => useRevokeLakeAccess());
+
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u2' });
+    });
+
+    // The pair is an identifier and DELETE bodies are unevenly supported by intermediaries, so the
+    // door reads them off the query string - the route parses nothing else.
+    expect(apiDelete).toHaveBeenCalledWith('/api/data-lakes/lake1/grants', {
+      params: { principalType: 'user', principalId: 'u2' },
+    });
+    const keys = invalidate.mock.calls.map(c => JSON.stringify(c[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(toast.success).toHaveBeenCalledWith('Access revoked');
+  });
+
+  // `revoked: false` is the outcome the caller asked for, so not an error - but saying "revoked"
+  // would claim this call did something it did not. The honest copy is the whole point of the flag.
+  it('revoke says the grant was already gone rather than claiming it removed one', async () => {
+    apiDelete.mockResolvedValueOnce({ data: { data: { revoked: false } } });
+    const { result } = mountWith(() => useRevokeLakeAccess());
+
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u2' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('That principal no longer had access');
+  });
+});
+
+describe('server refusal text reaches the toast', () => {
+  const mountHook = <T>(hook: () => T): { result: { current: T } } => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(hook, { wrapper });
+  };
+
+  // One entry per door, each with the kind of refusal that door actually sends. `invoke` carries
+  // the hook's own mutate signature - they differ (an id, an object, a tag array, nothing).
+  // `verb` names the axios method the door uses, because the mock to reject is not the same one.
+  const doors: {
+    name: string;
+    refusal: string;
+    status?: number;
+    verb?: 'post' | 'delete';
+    mount: () => { result: { current: { mutateAsync: (arg: never) => Promise<unknown> } } };
+    arg: unknown;
+  }[] = [
+    {
+      name: 'useApplyTaxonomySuggestions',
+      refusal: "Could not verify this lake's tag prefix does not overlap another lake right now - try again",
+      mount: () => mountHook(() => useApplyTaxonomySuggestions('b1')) as never,
+      arg: [],
+    },
+    {
+      name: 'useCreateDataLake',
+      refusal: 'Tag prefix "acme:" overlaps an existing data lake - choose a different prefix.',
+      mount: () => mountHook(() => useCreateDataLake()) as never,
+      arg: { name: 'Acme', fileTagPrefix: 'acme:' },
+    },
+    {
+      name: 'useSetLakeVisibility',
+      refusal: 'Only the lake\u2019s owner can change how it is shared.',
+      mount: () => mountHook(() => useSetLakeVisibility()) as never,
+      arg: { id: 'lake1', visibility: 'public' },
+    },
+    {
+      name: 'useArchiveDataLake',
+      refusal: "Cannot archive a data lake in 'deleting' status",
+      mount: () => mountHook(() => useArchiveDataLake()) as never,
+      arg: 'lake1',
+    },
+    {
+      name: 'useCleanupDataLake',
+      refusal: 'Data lake must be soft-deleted before cleanup',
+      mount: () => mountHook(() => useCleanupDataLake()) as never,
+      arg: 'lake1',
+    },
+    {
+      name: 'useRetryLakeLifecycle',
+      refusal: 'This data lake is already being permanently deleted',
+      mount: () => mountHook(() => useRetryLakeLifecycle()) as never,
+      arg: { id: 'lake1', action: 'delete' },
+    },
+    {
+      name: 'useReanalyzeTaxonomy',
+      refusal: 'This batch is not in a state that can be re-analyzed right now',
+      mount: () => mountHook(() => useReanalyzeTaxonomy('b1')) as never,
+      arg: undefined,
+    },
+    {
+      name: 'useDismissTaxonomy',
+      refusal: 'Tag suggestions are not in a dismissible state for this batch',
+      mount: () => mountHook(() => useDismissTaxonomy('b1')) as never,
+      arg: undefined,
+    },
+    {
+      name: 'useRechunkDataLake',
+      refusal: 'This data lake is built into the platform and is read-only',
+      mount: () => mountHook(() => useRechunkDataLake('lake1')) as never,
+      arg: undefined,
+    },
+    {
+      // Every refusal on the sharing door is the actionable kind, and "no account was found" is the
+      // one a manager most needs: the alternative reading of a 400 here is that they mistyped.
+      name: 'useGrantLakeAccess',
+      refusal: 'No account was found for that email address',
+      mount: () => mountHook(() => useGrantLakeAccess()) as never,
+      arg: { id: 'lake1', principalType: 'user', principalEmail: 'a@b.co', role: 'reader' },
+    },
+    {
+      name: 'useRevokeLakeAccess',
+      refusal: 'This is an ownership grant; use transfer ownership to change it',
+      verb: 'delete',
+      mount: () => mountHook(() => useRevokeLakeAccess()) as never,
+      arg: { id: 'lake1', principalType: 'user', principalId: 'u2' },
+    },
+  ];
+
+  it.each(doors)('$name toasts the server sentence, not the status line', async ({ refusal, verb, mount, arg }) => {
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiDelete.mockReset();
+    (verb === 'delete' ? apiDelete : apiPost).mockRejectedValueOnce(axiosRefusal(400, refusal));
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(arg as never).catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(refusal);
+  });
+
+  // The anti-cheat for the table above: `serverRefusalMessage` returns undefined when the body
+  // carries no `error` key, and the handler must then fall back rather than toast "undefined".
+  it('falls back to the generic copy when the server sent no reason', async () => {
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiPost.mockRejectedValueOnce(
+      Object.assign(new Error('Request failed with status code 500'), {
+        isAxiosError: true,
+        response: { status: 500, data: {} },
+      })
+    );
+
+    const { result } = mountHook(() => useApplyTaxonomySuggestions('b1'));
+    await act(async () => {
+      await result.current.mutateAsync([]).catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('Request failed with status code 500');
+  });
+
+  // A non-axios throw (a bug in the mutationFn itself) must not be swallowed into the fallback -
+  // its own message is the only diagnostic there is.
+  it('keeps a non-axios error message', async () => {
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiPost.mockRejectedValueOnce(new Error('boom'));
+
+    const { result } = mountHook(() => useApplyTaxonomySuggestions('b1'));
+    await act(async () => {
+      await result.current.mutateAsync([]).catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('boom');
   });
 });

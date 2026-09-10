@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
-  connFindByDataLakeId: vi.fn(),
+  connFindByDataLakeIdAny: vi.fn(),
   releaseDriveConnection: vi.fn(),
 }));
 
@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
-      findByDataLakeId: h.connFindByDataLakeId,
+      findByDataLakeIdAny: h.connFindByDataLakeIdAny,
     },
   };
 });
@@ -56,8 +56,9 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
   });
 
   it('GET returns a credential-free connection view', async () => {
-    h.connFindByDataLakeId.mockResolvedValue({
+    h.connFindByDataLakeIdAny.mockResolvedValue({
       id: 'conn1',
+      organizationId: 'orgA',
       driveFolderId: 'Folder123',
       folderName: 'Docs',
       status: 'connected',
@@ -78,14 +79,14 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
   });
 
   it('GET returns null when no connection feeds the lake', async () => {
-    h.connFindByDataLakeId.mockResolvedValue(null);
+    h.connFindByDataLakeIdAny.mockResolvedValue(null);
     const { res, json } = makeRes();
     await run(makeReq('GET'), res);
     expect(json).toHaveBeenCalledWith({ connection: null });
   });
 
   it('DELETE releases the connection through the revoking seam and 204s', async () => {
-    h.connFindByDataLakeId.mockResolvedValue({ id: 'conn1' });
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
     h.releaseDriveConnection.mockResolvedValue(true);
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
@@ -98,7 +99,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
   });
 
   it('DELETE 204s even when there is nothing to release', async () => {
-    h.connFindByDataLakeId.mockResolvedValue(null);
+    h.connFindByDataLakeIdAny.mockResolvedValue(null);
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
     expect(h.releaseDriveConnection).not.toHaveBeenCalled();
@@ -108,22 +109,89 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
   it('DELETE 409s (does NOT hard-delete) while a sync is in progress', async () => {
     // Hard-deleting under a live ingest would orphan the running handler's connection while the UI
     // reads "Disconnected"; make the caller wait until the sync finishes (or its claim goes stale).
-    h.connFindByDataLakeId.mockResolvedValue({ id: 'conn1', status: 'syncing' });
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', status: 'syncing' });
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
     expect(h.releaseDriveConnection).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(409);
   });
 
+  /**
+   * The disabled-connection cases. Archiving or soft-deleting a lake flips its connection to
+   * `enabled: false`, which is why this route resolves through the enabled-BLIND finder: an
+   * enabled-only lookup would report the connection gone while the Google grant stayed live and the
+   * globally-unique driveFolderId claim stayed held, so the folder could never be re-claimed by
+   * anyone and this endpoint would answer 204 having revoked nothing.
+   */
+  it('DELETE still revokes for an archived lake whose connection is disabled', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      enabled: false,
+      status: 'connected',
+    });
+    h.releaseDriveConnection.mockResolvedValue(true);
+    const { res, status } = makeRes();
+    await run(makeReq('DELETE'), res);
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(status).toHaveBeenCalledWith(204);
+  });
+
+  it('GET reports a disabled connection rather than pretending it is gone', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      driveFolderId: 'Folder123',
+      status: 'connected',
+      enabled: false,
+    });
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+    expect(json.mock.calls[0][0].connection).toMatchObject({ id: 'conn1', enabled: false });
+  });
+
+  // Both verbs, because that check is the ONLY thing scoping a deliberately-global finder: with one
+  // arm untested it could be dropped from the other for free.
+  it.each(['GET', 'DELETE'] as const)(
+    '%s 404s a connection whose org does not match the lake, since the finder is global',
+    async method => {
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgB' });
+      const { res } = makeRes();
+      await expect(run(makeReq(method), res)).rejects.toThrow(/not found/i);
+      expect(h.releaseDriveConnection).not.toHaveBeenCalled();
+    }
+  );
+
   it('denies a caller who is not an org owner/manager', async () => {
     h.verifyOrgAccess.mockRejectedValue(new Error('Organization not found'));
     const { res } = makeRes();
     await expect(run(makeReq('GET'), res)).rejects.toThrow(/organization not found/i);
-    expect(h.connFindByDataLakeId).not.toHaveBeenCalled();
+    expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
-  it('404s a personal (org-less) lake', async () => {
+  it('GET resolves a null connection for a personal (org-less) lake, rather than 404ing', async () => {
+    // A personal lake genuinely has no connection to report - that's "no connection", not a
+    // failure, so the client needs to be able to tell it apart from a denied/missing-lake read.
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+    expect(json).toHaveBeenCalledWith({ connection: null });
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+  });
+
+  it('DELETE 404s a personal (org-less) lake', async () => {
+    // DELETE goes through resolveOrgLake, the one path GET no longer exercises since it inlined
+    // its own org-less short-circuit - so this is the only remaining coverage of that guard.
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    const { res } = makeRes();
+    await expect(run(makeReq('DELETE'), res)).rejects.toThrow(/not found/i);
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+  });
+
+  it('GET 404s when the lake itself does not exist', async () => {
+    h.dlFindById.mockResolvedValue(null);
     const { res } = makeRes();
     await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();

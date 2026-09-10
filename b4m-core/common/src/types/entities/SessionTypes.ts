@@ -824,9 +824,10 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * Find all sessions by IDs
    *
    * @param ids - The session IDs
+   * @param options - `includeDeleted` opts into soft-deleted sessions (default: exclude)
    * @returns The sessions
    */
-  findAllByIds: (ids: string[]) => Promise<ISessionDocument[]>;
+  findAllByIds: (ids: string[], options?: { includeDeleted?: boolean }) => Promise<ISessionDocument[]>;
 
   /**
    * Find all session IDs by user ID
