@@ -298,9 +298,9 @@ const UploadImportHistoryModal: FC<IUploadImportHistoryModalProps> = ({
                 textAlign: 'center',
                 transition: 'border-color 0.3s, background-color 0.3s',
                 '&:hover': {
-                  bgcolor: 'action.hover',
+                  bgcolor: 'neutral.plainHoverBg',
                 },
-                bgcolor: isDragging ? 'action.hover' : 'background.surface',
+                bgcolor: isDragging ? 'neutral.softBg' : 'background.surface',
               }}
             >
               <Button

@@ -201,6 +201,55 @@ const noWindowOpenInClientUi = [
     message: WINDOW_OPEN_MESSAGE,
   },
 ];
+// Material UI palette tokens are inert under Joy, and fail silently. Joy's palette has no
+// `main`/`light`/`dark`/`contrastText` key on any colour family, and no `error`/`info`/`secondary`/
+// `action`/`grey` family at all, so `sx={{ color: 'primary.main' }}` resolves to nothing, the
+// browser rejects the leftover literal as a CSS value, and the entire declaration is dropped. No
+// error, no warning - the rule simply never applies, and it reads as working code in review.
+//
+// This rule exists because 52 of them had accumulated across 21 files before one was noticed:
+// `primary.main` is what every Material UI example on the internet shows, and nothing in the
+// toolchain distinguishes it from a token that works.
+//
+// Scoped to apps/client/app/** - the Joy SPA. apps/client/pages/** is the API backend, and the
+// `border.light` / `inbox.border.light` tokens this codebase really does define are excluded by
+// anchoring on the palette FAMILY name rather than on the `.light` suffix alone.
+//
+// Only plain string literals are matched, which is how these are written in practice
+// (`sx={{ color: 'primary.main' }}`). A computed `${family}.main` template would slip through;
+// that is accepted, since matching template parts would false-flag any string ending in `.dark`.
+//
+// `[.]` rather than `\.`: these selectors are ordinary JS strings, and `'\.'` collapses to `'.'`
+// there, which would silently widen the dot to "any character". Same hazard the fs selectors below
+// spell around.
+const JOY_PALETTE_FAMILIES = 'primary|neutral|danger|success|warning|common|text|background';
+const MUI_ONLY_FAMILIES = 'error|info|secondary|action|grey';
+const MUI_SHADE_KEYS = 'main|light|dark|contrastText';
+// Keys a Material palette family is actually addressed by. Deliberately enumerated rather than
+// `[a-zA-Z]+`, so a legitimate non-palette string such as 'error.message' stays unflagged.
+// The shade keys are omitted here on purpose: the first selector already covers them for these
+// families, and listing them twice makes a single 'error.main' report the same error twice.
+const MUI_ONLY_FAMILY_KEYS =
+  '[0-9]{2,3}|hover|selected|active|focus|disabled|plainColor|softColor|softBg|solidBg|solidColor|outlinedColor|outlinedBorder';
+const DEAD_PALETTE_MESSAGE =
+  'Material UI palette token: Joy has no main/light/dark/contrastText key, and no ' +
+  'error/info/secondary/action/grey family, so this value resolves to nothing and the whole CSS ' +
+  'declaration is silently dropped. Use the Joy token for the role - text/icon: ' +
+  '<family>.plainColor (<family>.softColor on a matching softBg); border: <family>.outlinedBorder; ' +
+  'fill: <family>.solidBg; hover fill: <family>.solidHoverBg. For the dead families: error -> ' +
+  'danger, info -> primary, secondary -> neutral, action.hover -> neutral.plainHoverBg.';
+const noDeadPaletteTokens = [
+  // A Joy family (or a Material-only one) carrying a Material shade key: 'primary.main', 'error.main'.
+  {
+    selector: `Literal[value=/^(${JOY_PALETTE_FAMILIES}|${MUI_ONLY_FAMILIES})[.](${MUI_SHADE_KEYS})$/]`,
+    message: DEAD_PALETTE_MESSAGE,
+  },
+  // A Material-only family, whatever the key: 'info.300', 'secondary.500', 'action.hover'.
+  {
+    selector: `Literal[value=/^(${MUI_ONLY_FAMILIES})[.](${MUI_ONLY_FAMILY_KEYS})$/]`,
+    message: DEAD_PALETTE_MESSAGE,
+  },
+];
 const noTreeWalkInPagesTests = [
   // bare call: `readdirSync(dir)` (named/destructured import)
   { selector: `CallExpression[callee.name=/${TREE_WALK_NAMES}/]`, message: WALK_MESSAGE },
@@ -551,13 +600,15 @@ export default defineConfig([
     },
   },
 
-  // Ban window.open in the SPA's UI code - see noWindowOpenInClientUi above for the Safari
-  // popup-window rationale. Glob is disjoint from the pages-tests block above, so flat-config
-  // last-rule-wins on no-restricted-syntax leaves that rule intact.
+  // Ban window.open and dead Material UI palette tokens in the SPA's UI code - see
+  // noWindowOpenInClientUi and noDeadPaletteTokens above for the rationale behind each. Both sets
+  // must be spread into this one rule: flat-config last-rule-wins means a second block declaring
+  // no-restricted-syntax for these files would replace them, not add to them. The glob is disjoint
+  // from the pages-tests block above, so that rule is left intact.
   {
     files: ['apps/client/app/**/*.{ts,tsx}'],
     rules: {
-      'no-restricted-syntax': ['error', ...noWindowOpenInClientUi],
+      'no-restricted-syntax': ['error', ...noWindowOpenInClientUi, ...noDeadPaletteTokens],
       // Catches the bare `open(url)` form the selectors above cannot safely match. Scope-aware,
       // so a local/parameter named `open` is untouched.
       'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],

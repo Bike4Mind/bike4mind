@@ -122,7 +122,7 @@ const AddKnowledgeModal: React.FC<AddKnowledgeModalProps> = ({ open, onClose }) 
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            bgcolor: isDragging ? 'action.hover' : theme.palette.background.panel,
+            bgcolor: isDragging ? 'neutral.softBg' : theme.palette.background.panel,
             transition: 'all 0.3s',
             minHeight: '100px',
           })}

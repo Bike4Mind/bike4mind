@@ -413,7 +413,7 @@ const ProjectFiles: FC<{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  bgcolor: 'action.hover',
+                  bgcolor: 'background.backdrop',
                   zIndex: 1000,
                   borderRadius: 'inherit',
                 }}

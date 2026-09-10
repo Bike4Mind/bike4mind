@@ -1139,14 +1139,14 @@ const ResearchTaskForm: FC<ResearchTaskFormProps> = ({ onSubmit, onCancel, taskI
                 sx={{
                   textTransform: 'uppercase',
                   letterSpacing: '0.1em',
-                  color: mode === 'dark' ? 'secondary.400' : 'secondary.700',
+                  color: mode === 'dark' ? 'neutral.400' : 'neutral.700',
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 0.5,
                 }}
               >
-                <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: 'secondary.500' }} />
+                <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: 'neutral.500' }} />
                 Step 4: Schedule Execution
               </Typography>
             </Box>

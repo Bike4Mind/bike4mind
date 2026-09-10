@@ -19,7 +19,7 @@ const JOY_COLOR_FAMILIES = ['primary', 'neutral', 'danger', 'success', 'warning'
 // one is introduced - a typo'd token fails here instead of silently rendering nothing.
 const TOKENS_IN_USE: Record<(typeof JOY_COLOR_FAMILIES)[number], string[]> = {
   primary: ['500', 'plainColor', 'softColor', 'softBg', 'softHoverBg', 'solidBg', 'solidHoverBg'],
-  neutral: ['plainColor', 'plainHoverBg', 'softBg', 'solidBg', 'outlinedBorder'],
+  neutral: ['400', '500', '700', 'plainColor', 'plainHoverBg', 'softBg', 'solidBg', 'outlinedBorder'],
   danger: ['plainColor', 'softColor', 'softBg', 'outlinedBorder'],
   success: ['plainColor', 'softColor', 'softBg', 'outlinedBorder'],
   warning: ['plainColor', 'softColor', 'softBg'],
@@ -40,6 +40,14 @@ describe('Joy palette shape', () => {
     for (const family of ['error', 'info', 'secondary', 'action']) {
       expect(`${family}=${palette[family]}`).toBe(`${family}=undefined`);
     }
+  });
+
+  // The project drag overlay covers content, so it needs the translucent scrim rather than one of
+  // the opaque surface tokens.
+  it.each(MODES)('%s: background.backdrop is translucent', mode => {
+    const backdrop = theme.colorSchemes[mode].palette.background.backdrop;
+    expect(typeof backdrop).toBe('string');
+    expect(backdrop).toContain('rgba');
   });
 
   it.each(MODES)('%s: resolves every token the app uses', mode => {
