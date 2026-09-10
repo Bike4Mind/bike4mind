@@ -108,6 +108,54 @@ if (isMonitoredStage) {
       },
     }
   );
+
+  // Out-of-band alarm for DlqAlarmHandlerDlq itself.
+  // Cannot route to dlqAlarmTopic -- that would loop into the same failing Lambda.
+  // Routes to a dedicated SNS topic with a direct email subscription instead.
+  // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
+  // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
+  const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
+  if (process.env.OPS_ALERT_EMAIL) {
+    new aws.sns.TopicSubscription('OobAlarmTopicEmailSub', {
+      topic: oobAlarmTopic.arn,
+      protocol: 'email',
+      endpoint: process.env.OPS_ALERT_EMAIL,
+    });
+  }
+
+  // Message-count alarm: any message in the DLQ means the Slack Lambda is failing.
+  new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqMessages', {
+    name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
+    alarmDescription:
+      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ApproximateNumberOfMessagesVisible',
+    namespace: 'AWS/SQS',
+    period: 60,
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+    alarmActions: [oobAlarmTopic.arn],
+  });
+
+  // Age alarm: parity with the standard DLQ fleet -- any message older than 1 hour.
+  new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqAge', {
+    name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-age`,
+    alarmDescription:
+      'DlqAlarmHandlerDlq oldest message exceeds 1 hour -- the alarm-to-Slack Lambda has been failing for an extended period.',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ApproximateAgeOfOldestMessage',
+    namespace: 'AWS/SQS',
+    period: 60,
+    statistic: 'Maximum',
+    threshold: 3600,
+    treatMissingData: 'notBreaching',
+    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+    alarmActions: [oobAlarmTopic.arn],
+  });
 }
 
 type InfraDlqDescriptor = DlqDescriptor & {
