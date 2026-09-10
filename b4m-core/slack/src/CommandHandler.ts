@@ -43,14 +43,21 @@ import { createLoadingBar } from './utils/loadingBar';
  * `error instanceof HTTPError` is unreliable across the @bike4mind/services ->
  * @bike4mind/slack package boundary if @bike4mind/common ever resolves as two distinct
  * module realms - the same reason `isZodError` and `isChunkClaimLostError`
- * (b4m-core/common/src/errors.ts) avoid a bare instanceof. Duck-type on `statusCode`,
- * which every HTTPError subclass sets, as a realm-safe fallback. The other error shapes
- * most likely to reach this call path don't false-positive: AWS SDK v3 keeps its status
- * under `$metadata.httpStatusCode` (not top-level `.statusCode`), axios under
- * `.response.status`, and the Mongoose/MongoDB driver under `.code`.
+ * (b4m-core/common/src/errors.ts) avoid a bare instanceof. Unlike those two, every
+ * `HTTPError` subclass sets its own `.name` (BadRequestError, ForbiddenError, ...), so a
+ * single fixed-name check does not generalize - fall back to the shape every subclass's
+ * constructor actually produces instead: a numeric `statusCode`, a `name` ending in
+ * `Error`, and an `additionalInfo` key (present, even if `undefined`, since it is a
+ * constructor parameter property on every subclass).
  */
 function isHttpError(err: unknown): err is HTTPError {
-  return err instanceof HTTPError || typeof (err as { statusCode?: unknown } | null)?.statusCode === 'number';
+  return (
+    err instanceof HTTPError ||
+    (err instanceof Error &&
+      typeof (err as { statusCode?: unknown }).statusCode === 'number' &&
+      err.name.endsWith('Error') &&
+      'additionalInfo' in err)
+  );
 }
 
 /**
@@ -457,8 +464,8 @@ export class CommandHandler {
         if (updatedQuest?.type === 'error') {
           this.logger.error('Quest failed:', updatedQuest.reply);
           // updatedQuest.reply is the curated message for ChatCompletionProcess's named
-          // categories (credits, timeout, tool-pairing, overload, context overflow) - but
-          // it sets quest.reply to the raw err.message BEFORE that categorization runs, so
+          // categories (aborted, timeout, tool-pairing, overload) - but it sets quest.reply
+          // to the raw err.message BEFORE that categorization runs, so
           // an uncategorized failure leaves the raw message in place, and nothing on the
           // quest distinguishes the two cases. Surface it (instead of always flattening to
           // the same string) but cap the length: a curated message is always short, so this
