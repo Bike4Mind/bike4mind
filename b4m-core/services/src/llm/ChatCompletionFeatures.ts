@@ -2582,7 +2582,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
         // No topScore: nothing was scored, so `topScore` is still its -1 sentinel and persisting
         // that would read as a real (very poor) similarity rather than as an absent one.
-        recordRetrieval('not_indexed', dataLakeTags, { chunks: 0, chars: 0 });
+        // Both counts are 0 here (scoredCount === 0 means nothing ever cleared into the pool, and
+        // a relative floor over an empty pool leaves it empty), but read off pool rather than
+        // hardcoded so this stays true if the guard above it ever moves. Written as a PAIR even
+        // though `scored` does not exist yet, because the two must be present on the same turns:
+        // a rollup over one has to cover the same population as a rollup over the other.
+        recordRetrieval('not_indexed', dataLakeTags, {
+          chunks: 0,
+          chars: 0,
+          preRelativeFloorCandidates: pool.length,
+          postRelativeFloorCandidates: pool.length,
+        });
         return this.noContextMessages('unavailable');
       }
       const ranked = pool.sort(compareForcedRetrievalCandidates);
@@ -2687,6 +2697,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           chunks: 0,
           chars: 0,
           ...(scoredCount > 0 ? { topScore } : {}),
+          // Necessarily 0, both of them - this is a recorded zero, NOT the trimmed-pool case the
+          // pair exists to expose. The exit is reached only when `sections` came out empty. The
+          // walk above skips a candidate only via its budget `break`, and `used` starts at 0
+          // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
+          // an empty `sections` means an empty `scored`. And the top candidate always survives its
+          // own relative cutoff (`>=` against `topScore * fraction`, fraction <= 1), so an empty
+          // `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE floor, which is exactly
+          // what the `chunks: 0` beside it says. If that budget ever admits 0, this breaks.
+          preRelativeFloorCandidates: ranked.length,
+          postRelativeFloorCandidates: scored.length,
         });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
@@ -2700,6 +2720,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         chunks: sections.length,
         chars: used,
         ...(scoredCount > 0 ? { topScore } : {}),
+        // `pre - post` is the relative floor's own effect and nothing else. Do NOT read
+        // `pre - chunks` as the floor: the char budget trims the same walk, so that gap is the two
+        // trimmers summed - and `chunks` sums across surfaces while this pair is forced-only.
+        preRelativeFloorCandidates: ranked.length,
+        postRelativeFloorCandidates: scored.length,
       });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".

@@ -57,10 +57,18 @@ const LakeMemorySchema = subSchema({
 // is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
 // `default: undefined` on the path below is inert for a single nested subdocument (nothing
 // vivifies it) and kept only for symmetry with the siblings, where it does work.
+//
+// pre/postRelativeFloorCandidates: optional like topScore, and for the same reason - only forced
+// retrieval's ranked pool has a relative floor to trim, so no other surface ever writes them. They
+// are written and absent together, so a rollup over one is a rollup over the same turns as the
+// other. See the pair's own comment in promptMeta.ts for why they are only ever compared to each
+// other and never to `chunks`.
 const InjectedVolumeSchema = subSchema({
   chunks: { type: Number, required: true },
   chars: { type: Number, required: true },
   topScore: { type: Number, required: false },
+  preRelativeFloorCandidates: { type: Number, required: false },
+  postRelativeFloorCandidates: { type: Number, required: false },
 });
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
