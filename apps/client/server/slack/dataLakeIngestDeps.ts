@@ -156,10 +156,17 @@ export function buildSlackLakeIngestDeps(args: {
           storage,
           tags: params.tags,
           provenance: params.provenance,
-          // Relayed to createFabFile's tag gate (createByUrl.ts:108) for the same reason as the
-          // file adapter above; FILE and LINK must not diverge on who is allowed to write.
+          // Relayed to createFabFile's tag gate for the same reason as the file adapter above;
+          // FILE and LINK must not diverge on who is allowed to write.
           administeredOrgIds: params.administeredOrgIds,
           deleteCreatedFile: (id: string) => FabFile.findByIdAndDelete(id),
+          // Per-LAKE dedup (mirrors the FILE path's own findByContentHashesInDataLake call in
+          // dataLakeFileIngest.ts), scoped to the tag this add targets - the same reason the file
+          // path's dedup is per lake, not per user: identical bytes may legitimately live elsewhere.
+          checkDuplicate: async hash => {
+            const [existing] = await fabFileRepository.findByContentHashesInDataLake([hash], params.datalakeTag);
+            return existing ?? null;
+          },
         }
       ),
   };

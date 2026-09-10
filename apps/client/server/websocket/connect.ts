@@ -1,4 +1,4 @@
-import { Connection, User } from '@bike4mind/database';
+import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
@@ -13,11 +13,15 @@ import { z } from 'zod';
 import type { ConnectionSource } from '@bike4mind/common';
 
 /**
- * Extract auth token from either query params (web client) or
+ * Extract auth token from either query params (legacy web client) or
  * Sec-WebSocket-Protocol header (CLI - avoids token in URL/proxy logs).
  *
  * CLI sends: `new WebSocket(url, ['access_token.<jwt>'])`
- * Web client sends: `?token=<jwt>` query param
+ * Legacy web client sends: `?token=<jwt>` query param
+ *
+ * The current web client sends `?ticket=<t>` instead (see resolveWebTicket) to
+ * keep the long-lived JWT out of the URL; `?token=` is accepted only so an
+ * old client keeps connecting mid-rollout, and is removed once clients roll.
  *
  * Returns both the token and the source of the connection.
  */
@@ -25,7 +29,7 @@ function extractToken(event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEv
   token: string;
   source: ConnectionSource;
 } {
-  // 1. Query param - used by web client
+  // 1. Query param - used by legacy web client
   const queryToken = event?.queryStringParameters?.token;
   if (queryToken) return { token: z.string().parse(queryToken), source: 'web' };
 
@@ -40,6 +44,25 @@ function extractToken(event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEv
   }
 
   throw new UnauthorizedError('No authentication token provided');
+}
+
+/**
+ * Web `$connect` identity via a single-use `?ticket=<t>`. Atomically burns the
+ * ticket (rejecting replay/expiry) and resolves the minting session's userId +
+ * tokenVersion so the caller re-runs the same tokenVersion kill-switch the JWT
+ * path enforces. Returns null when no ticket query param is present so the
+ * caller can fall through to the legacy token/header paths during rollout.
+ */
+async function resolveWebTicket(
+  event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEvent
+): Promise<{ userId: string; tokenVersion: number; source: ConnectionSource } | null> {
+  const queryTicket = event?.queryStringParameters?.ticket;
+  if (!queryTicket) return null;
+
+  const consumed = await wsConnectTicketRepository.consume(z.string().parse(queryTicket));
+  if (!consumed) throw new UnauthorizedError('Invalid or expired connect ticket');
+
+  return { userId: consumed.userId, tokenVersion: consumed.tokenVersion, source: 'web' };
 }
 
 /**
@@ -97,8 +120,20 @@ async function resolveIdentity(
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEvent>(
   async (event, context, logger) => {
-    const { token, source } = extractToken(event);
-    const { userId, scopes, tokenVersion } = await resolveIdentity(token, logger);
+    // Preferred web path: a single-use ticket keeps the JWT out of the URL.
+    // Falls through to the legacy token/header paths when no ticket is present.
+    const ticketIdentity = await resolveWebTicket(event);
+    let userId: string;
+    let source: ConnectionSource;
+    let scopes: ApiKeyScope[] | undefined = undefined;
+    let tokenVersion: number | undefined;
+    if (ticketIdentity) {
+      ({ userId, source, tokenVersion } = ticketIdentity);
+    } else {
+      const extracted = extractToken(event);
+      source = extracted.source;
+      ({ userId, scopes, tokenVersion } = await resolveIdentity(extracted.token, logger));
+    }
 
     const user = await User.findById(userId);
     if (!user) throw new UnauthorizedError('User not found');

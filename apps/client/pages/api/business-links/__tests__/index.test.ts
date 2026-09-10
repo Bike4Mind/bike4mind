@@ -122,3 +122,70 @@ describe('GET /api/business-links - categoryId validation', () => {
     expect(mockRefs.findQuery).toMatchObject({ categoryId });
   });
 });
+
+/**
+ * The shape the app actually sends. `apiClient` serializes the hook's nested
+ * `filters` through `qs` into bracket keys, and Next.js hands those to `req.query`
+ * unexpanded - so a route reading `req.query.categoryId` sees nothing and returns
+ * every link, unfiltered. These drive the handler with those literal bracket keys.
+ */
+describe('GET /api/business-links - nested filters from the client', () => {
+  beforeEach(() => {
+    mockRefs.findQuery = undefined;
+    mockRefs.countQuery = undefined;
+  });
+
+  it('applies filters[categoryId] to the query', async () => {
+    const categoryId = new Types.ObjectId().toString();
+    const { req, res } = invokeGet({ 'filters[categoryId]': categoryId });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.findQuery).toMatchObject({ categoryId });
+    expect(mockRefs.countQuery).toMatchObject({ categoryId });
+  });
+
+  it('escapes filters[search] before it reaches $regex', async () => {
+    const { req, res } = invokeGet({ 'filters[search]': REDOS_PAYLOAD });
+    await mockRefs.getHandler!(req, res);
+
+    const orConditions = (mockRefs.findQuery as { $or?: Array<Record<string, { $regex: string }>> })?.$or;
+    expect(orConditions, 'nested search should build a $or query').toBeInstanceOf(Array);
+
+    const escaped = escapeRegex(REDOS_PAYLOAD);
+    for (const condition of orConditions!) {
+      const [{ $regex }] = Object.values(condition);
+      expect($regex).toBe(escaped);
+      expect($regex).not.toBe(REDOS_PAYLOAD);
+    }
+  });
+
+  it('applies filters[categoryId] and filters[search] together', async () => {
+    const categoryId = new Types.ObjectId().toString();
+    const { req, res } = invokeGet({ 'filters[categoryId]': categoryId, 'filters[search]': 'acme' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.findQuery).toMatchObject({ categoryId });
+    expect((mockRefs.findQuery as { $or?: unknown[] })?.$or).toBeInstanceOf(Array);
+  });
+
+  it('rejects a malformed filters[categoryId] with 400', async () => {
+    const { req, res } = invokeGet({ 'filters[categoryId]': 'not-an-object-id' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({ error: 'Invalid category ID format' });
+    expect(mockRefs.findQuery).toBeUndefined();
+  });
+
+  it('ignores a filter value that bracket-nests into a non-string', async () => {
+    // `filters[search][x]=1` parses to an object; it must be treated as absent
+    // rather than reaching escapeRegex, which would throw on a non-string.
+    const { req, res } = invokeGet({ 'filters[search][x]': '1', 'filters[categoryId][y]': '2' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((mockRefs.findQuery as { $or?: unknown })?.$or).toBeUndefined();
+    expect((mockRefs.findQuery as { categoryId?: unknown })?.categoryId).toBeUndefined();
+  });
+});

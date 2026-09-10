@@ -49,13 +49,17 @@ export function useDisconnectGoogleDrive() {
   });
 }
 
-/** The current Drive connection feeding a lake (null when none). Org owner/manager only, server-side. */
+/**
+ * The current Drive connection feeding a lake (null when none, including a personal lake - the
+ * route resolves 200 with a null connection for those rather than 404). `isError` is therefore a
+ * genuine failure: the lake doesn't exist, or the caller lacks org owner/manager access.
+ */
 export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
   return useQuery({
     queryKey: lakeDriveConnectionKey(dataLakeId),
-    // `enabled` lets a caller skip a request that cannot succeed: the route resolves the lake's
-    // ORGANIZATION, so a personal lake always 404s. Passing false there keeps a guaranteed failure
-    // (and its console error) off every personal lake, instead of firing and discarding it.
+    // `enabled` lets a caller skip a request it already knows the answer to: a lake with no
+    // `organizationId` always resolves `connection: null`, so a caller that already has that field
+    // can skip the round trip entirely rather than firing it for a known answer.
     enabled: !!dataLakeId && enabled,
     queryFn: async () => {
       const response = await api.get<{ connection: LakeDriveConnection | null }>(

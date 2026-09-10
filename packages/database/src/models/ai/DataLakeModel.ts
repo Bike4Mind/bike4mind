@@ -14,6 +14,7 @@ import type {
   BatchCounterField,
   AccessContext,
   DataLakeStatus,
+  FindAccessibleArm,
   LakeSettleFields,
   TaxonomyStatus,
   IDataLakeBatch,
@@ -319,6 +320,119 @@ const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
 
+/**
+ * The pure filter build behind `findAccessible` - see that method's docblock for what the arms
+ * mean and why the unconstrained ones are unconstrained.
+ *
+ * Returns the Mongo `filter` plus `arms`: the names of the disjuncts in `filter.$or`, in the same
+ * order, drawn from `FIND_ACCESSIBLE_ARMS`. The labels exist so a new arm cannot be added here
+ * without being declared in that inventory and taken a position on by the service-layer fake -
+ * `DataLakeModel.accessArms.test.ts` asserts the two stay parallel. An `isAdmin` context emits no
+ * `$or` at all and therefore no arms.
+ */
+export const buildAccessibleQuery = (
+  ctx: AccessContext,
+  opts?: {
+    statuses?: DataLakeStatus[];
+    includePublic?: boolean;
+    grantedLakeIds?: string[];
+    orgGrantedLakes?: Record<string, string[]>;
+  }
+): { filter: Record<string, unknown>; arms: FindAccessibleArm[] } => {
+  const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
+
+  // The isAdmin bypass replaces the whole $or rather than adding a disjunct to it, so it labels
+  // no arm.
+  if (ctx.isAdmin) return { filter: { status: { $in: statuses } }, arms: [] };
+
+  // Public lakes belong in the browse/read list, NOT the archived/deleted MANAGEMENT views:
+  // restore/cleanup are owner/admin-only, so a stranger has no role on someone else's public
+  // lake there. Those views pass includePublic:false; the owner still sees their own via the
+  // owner arm, and org members keep org lakes via the org arm (pre-existing, intended).
+  const includePublic = opts?.includePublic ?? true;
+
+  // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
+  // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+  // type - a missing set must deny org-scoped lakes, not throw or vacuously allow them.
+  const memberOrgIds = ctx.organizationIds ?? [];
+  const orgConstraint =
+    memberOrgIds.length > 0
+      ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
+      : { organizationId: { $in: [null, ''] } };
+
+  const requirement = requirementConstraint(ctx.userTags, ctx.entitlementKeys);
+
+  // Not-private: exclude lakes with no org AND no gate at all. Such a lake grants a
+  // non-owner nothing, so it must stay owner-only rather than read-by-anyone. Uses the
+  // null/'' form + $nor (DocumentDB-safe) consistent with the rest of this model.
+  const notPrivate = {
+    $nor: [
+      {
+        $and: [
+          { $or: [{ organizationId: null }, { organizationId: '' }] },
+          { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
+          { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
+        ],
+      },
+    ],
+  };
+
+  // Public arm: an isPublic lake is accessible app-wide - it bypasses the org prerequisite
+  // AND the not-private exclusion (a public gateless lake IS meant to be world-readable). The
+  // requirement constraint is still ANDed as defense in depth, so a gate added after publishing
+  // keeps holding while a normal (gate-less) public lake passes via requirementConstraint's
+  // both-blank arm.
+  const publicArm = { $and: [{ isPublic: true }, requirement] };
+
+  // Non-owner arms: the org/gate arm always applies; the public arm only in browse/read views
+  // (dropped for management views via includePublic - see the note at the top of this method).
+  const nonOwnerArms: [FindAccessibleArm, Record<string, unknown>][] = [
+    ['orgGate', { $and: [orgConstraint, requirement, notPrivate] }],
+  ];
+  if (includePublic) nonOwnerArms.unshift(['public', publicArm]);
+
+  // Org-admin arm (#2005): a lake in an org the caller holds ADMIN rights in, reachable by those
+  // rights alone - the analog of the owner arm, for the same reason (the gate admits them via
+  // canManageLake before it ever reaches the org prerequisite). Keyed off `administeredOrgIds`
+  // (billing owner OR managerId OR adminUserIds), deliberately a DIFFERENT set from the
+  // `organizationIds` membership the org arm above uses: membership also decides what the account
+  // switcher offers as a write target (see `orgMembershipFilter`), so widening membership to fix
+  // this would have handed a team manager the org as somewhere to write as. The two sets are meant
+  // to differ; what was wrong was that only one of them reached this query. Applies to the
+  // management views too (includePublic:false): restore/cleanup are owner/admin-only and an org
+  // admin is in that class - `redactLakesForActor` agrees, keying off the same `canManageLake`.
+  // Served by the existing { organizationId: 1, status: 1 } index.
+  const administeredOrgIds = ctx.administeredOrgIds ?? [];
+  if (administeredOrgIds.length > 0) nonOwnerArms.push(['orgAdmin', { organizationId: { $in: administeredOrgIds } }]);
+
+  // Explicit-grant arm (#1668): a lake the caller holds an active access grant on is reachable by
+  // that grant alone - the grant IS the authorization, so it needs none of the org/gate constraints
+  // (it is the analog of the createdByUserId owner bypass, extended to a transferred/delegated
+  // owner-curator-reader). The ids are pre-resolved by the caller from listByPrincipal (an empty
+  // list adds no arm). This covers ONLY persisted grant rows; the ephemeral tag/entitlement view is
+  // #1673's separate concern.
+  const grantedLakeIds = opts?.grantedLakeIds ?? [];
+  if (grantedLakeIds.length > 0) nonOwnerArms.push(['grant', { _id: { $in: grantedLakeIds } }]);
+
+  // ORG-principal grant arms, one per granting org (see `orgGrantArms`), so this is the one arm
+  // name that can label MORE than one disjunct. Suppressed alongside the public arm in the
+  // archived/deleted MANAGEMENT views: an org grant carries no role here, so a reader-level one
+  // must not surface someone else's lake in a restore/cleanup list.
+  if (includePublic) {
+    for (const arm of orgGrantArms(opts?.orgGrantedLakes)) nonOwnerArms.push(['orgGrant', arm]);
+  }
+
+  const labelled: [FindAccessibleArm, Record<string, unknown>][] = [
+    ['owner', { createdByUserId: ctx.userId }],
+    ...nonOwnerArms,
+  ];
+
+  return {
+    filter: { status: { $in: statuses }, $or: labelled.map(([, arm]) => arm) },
+    arms: labelled.map(([name]) => name),
+  };
+};
+
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
@@ -391,7 +505,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (datalakeTags.length === 0) return [];
     // Same globally-unique index as findByDatalakeTag, so the result carries at most one lake
     // per tag and a caller can key it by `datalakeTag` without losing a match.
-    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } }).select(LIST_PROJECTION);
+    // Sorted so a caller picking `[0]` on a multi-match (e.g. notifySlackIndexingComplete.ts) gets
+    // a stable result across reads, rather than whatever order Mongo happens to return.
+    const docs = await this.dataLakeModel
+      .find({ datalakeTag: { $in: datalakeTags } })
+      .select(LIST_PROJECTION)
+      .sort({ _id: 1 });
     return docs.map(doc => doc.toJSON() as IDataLakeDocument);
   }
 
@@ -526,86 +645,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       orgGrantedLakes?: Record<string, string[]>;
     }
   ): Promise<IDataLakeDocument[]> {
-    const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
-    // Public lakes belong in the browse/read list, NOT the archived/deleted MANAGEMENT views:
-    // restore/cleanup are owner/admin-only, so a stranger has no role on someone else's public
-    // lake there. Those views pass includePublic:false; the owner still sees their own via the
-    // owner arm, and org members keep org lakes via the org arm (pre-existing, intended).
-    const includePublic = opts?.includePublic ?? true;
-
-    // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
-    // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
-    // type - a missing set must deny org-scoped lakes, not throw or vacuously allow them.
-    const memberOrgIds = ctx.organizationIds ?? [];
-    const orgConstraint =
-      memberOrgIds.length > 0
-        ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
-        : { organizationId: { $in: [null, ''] } };
-
-    const requirement = requirementConstraint(ctx.userTags, ctx.entitlementKeys);
-
-    // Not-private: exclude lakes with no org AND no gate at all. Such a lake grants a
-    // non-owner nothing, so it must stay owner-only rather than read-by-anyone. Uses the
-    // null/'' form + $nor (DocumentDB-safe) consistent with the rest of this model.
-    const notPrivate = {
-      $nor: [
-        {
-          $and: [
-            { $or: [{ organizationId: null }, { organizationId: '' }] },
-            { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
-            { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-          ],
-        },
-      ],
-    };
-
-    // Public arm: an isPublic lake is accessible app-wide - it bypasses the org prerequisite
-    // AND the not-private exclusion (a public gateless lake IS meant to be world-readable). The
-    // requirement constraint is still ANDed as defense in depth, so a gate added after publishing
-    // keeps holding while a normal (gate-less) public lake passes via requirementConstraint's
-    // both-blank arm.
-    const publicArm = { $and: [{ isPublic: true }, requirement] };
-
-    // Non-owner arms: the org/gate arm always applies; the public arm only in browse/read views
-    // (dropped for management views via includePublic - see the note at the top of this method).
-    const nonOwnerArms: Record<string, unknown>[] = [{ $and: [orgConstraint, requirement, notPrivate] }];
-    if (includePublic) nonOwnerArms.unshift(publicArm);
-
-    // Org-admin arm (#2005): a lake in an org the caller holds ADMIN rights in, reachable by those
-    // rights alone - the analog of the owner arm, for the same reason (the gate admits them via
-    // canManageLake before it ever reaches the org prerequisite). Keyed off `administeredOrgIds`
-    // (billing owner OR managerId OR adminUserIds), deliberately a DIFFERENT set from the
-    // `organizationIds` membership the org arm above uses: membership also decides what the account
-    // switcher offers as a write target (see `orgMembershipFilter`), so widening membership to fix
-    // this would have handed a team manager the org as somewhere to write as. The two sets are meant
-    // to differ; what was wrong was that only one of them reached this query. Applies to the
-    // management views too (includePublic:false): restore/cleanup are owner/admin-only and an org
-    // admin is in that class - `redactLakesForActor` agrees, keying off the same `canManageLake`.
-    // Served by the existing { organizationId: 1, status: 1 } index.
-    const administeredOrgIds = ctx.administeredOrgIds ?? [];
-    if (administeredOrgIds.length > 0) nonOwnerArms.push({ organizationId: { $in: administeredOrgIds } });
-
-    // Explicit USER-grant arm (#1668): a lake the caller holds an active user-principal grant on is
-    // reachable by that grant alone - the grant IS the authorization, so it needs none of the
-    // org/gate constraints (it is the analog of the createdByUserId owner bypass, extended to a
-    // transferred/delegated owner-curator-reader, and it is MEANT to cross orgs). The ids are
-    // pre-resolved by the caller from listByPrincipal (an empty list adds no arm). This covers ONLY
-    // persisted grant rows; the ephemeral tag/entitlement view is #1673's separate concern.
-    const grantedLakeIds = opts?.grantedLakeIds ?? [];
-    if (grantedLakeIds.length > 0) nonOwnerArms.push({ _id: { $in: grantedLakeIds } });
-
-    // ORG-principal grant arms, one per granting org (see `orgGrantArms`). Suppressed alongside the
-    // public arm in the archived/deleted MANAGEMENT views: an org grant carries no role here, so a
-    // reader-level one must not surface someone else's lake in a restore/cleanup list.
-    if (includePublic) nonOwnerArms.push(...orgGrantArms(opts?.orgGrantedLakes));
-
-    const filter: Record<string, unknown> = ctx.isAdmin
-      ? { status: { $in: statuses } }
-      : {
-          status: { $in: statuses },
-          $or: [{ createdByUserId: ctx.userId }, ...nonOwnerArms],
-        };
-
+    const { filter } = buildAccessibleQuery(ctx, opts);
     const results = await this.dataLakeModel.find(filter).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
@@ -1053,7 +1093,10 @@ DataLakeBatchSchema.index({ userId: 1, taxonomyStatus: 1, updatedAt: -1 });
 // updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
 DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 
-const DataLakeBatchModel =
+// Exported like its sibling `DataLakeModel` above: app code goes through
+// `dataLakeBatchRepository`, but the operator scripts under packages/scripts/migrate read models
+// directly (see check-datalake-prefix-whitespace.ts, which reads stored taxonomy suffixes).
+export const DataLakeBatchModel =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
   mongoose.model<IDataLakeBatchDocument>('DataLakeBatch', DataLakeBatchSchema);
 

@@ -166,7 +166,7 @@ export interface WizardTargetLake {
    * error instead.
    */
   organizationId: string | null;
-  /** Whether the caller may manage this lake. Same gate as above - the status route 403s otherwise. */
+  /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
   canManage: boolean;
 }
 

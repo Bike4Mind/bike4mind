@@ -102,6 +102,39 @@ describe('PUT /api/files/tags/[id]', () => {
     expect(params).toEqual({ id: 'from-url', name: 'receipts' });
   });
 
+  // Sibling of #1964: a prefix-arm rename can flip a draft lake to active, and this route accepts
+  // a `b4m_live_` key, so without the principal that row named the human it acts for. The service
+  // treats `auditPrincipal` as optional, so dropping the route's line would still compile and
+  // silently misattribute, with no other assertion here going red.
+  it('resolves the caller as the auditPrincipal for a key-authenticated rename', async () => {
+    const { res } = makeRes();
+
+    await call(
+      {
+        method: 'PUT',
+        query: { id: 't1' },
+        body: { id: 't1', name: 'receipts' },
+        user: { id: 'u1' },
+        apiKeyInfo: { keyId: 'key-abc' },
+      },
+      res
+    );
+
+    expect(h.update.mock.calls[0][2].auditPrincipal).toEqual({
+      principalKind: 'apiKey',
+      principalId: 'key-abc',
+      onBehalfOfUserId: 'u1',
+    });
+  });
+
+  it('passes no auditPrincipal for an ordinary session rename', async () => {
+    const { res } = makeRes();
+
+    await call({ method: 'PUT', query: { id: 't1' }, body: { id: 't1', name: 'receipts' }, user: { id: 'u1' } }, res);
+
+    expect(h.update.mock.calls[0][2].auditPrincipal).toBeUndefined();
+  });
+
   it('rejects an unauthenticated request before reaching the service', async () => {
     const { res } = makeRes();
 
@@ -174,5 +207,25 @@ describe('DELETE /api/files/tags/[id]', () => {
 
     const [, params] = h.remove.mock.calls[0];
     expect(params).toEqual({ id: 't1' });
+  });
+
+  it('resolves the caller as the auditPrincipal for a key-authenticated delete', async () => {
+    const { res } = makeRes();
+
+    await call({ method: 'DELETE', query: { id: 't1' }, user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }, res);
+
+    expect(h.remove.mock.calls[0][2].auditPrincipal).toEqual({
+      principalKind: 'apiKey',
+      principalId: 'key-abc',
+      onBehalfOfUserId: 'u1',
+    });
+  });
+
+  it('passes no auditPrincipal for an ordinary session delete', async () => {
+    const { res } = makeRes();
+
+    await call({ method: 'DELETE', query: { id: 't1' }, user: { id: 'u1' } }, res);
+
+    expect(h.remove.mock.calls[0][2].auditPrincipal).toBeUndefined();
   });
 });

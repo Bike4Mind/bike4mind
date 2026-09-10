@@ -25,10 +25,10 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const openManager = useDataLakeWizardStore(s => s.openManager);
 
-  // Drive connect is an org-lake, owner/manager capability server-side (the status route 404s on a
-  // personal lake and 403s for a non-manager). Gating on the same condition keeps a permanently
-  // disabled button off every personal lake's header, rather than offering an action that can only
-  // ever fail.
+  // Drive connect is an org-lake, owner/manager capability server-side (the status route resolves
+  // `connection: null` for a personal lake and 404s for a non-manager). Gating on the same
+  // condition keeps a permanently disabled button off every personal lake's header, rather than
+  // offering an action that can only ever fail.
   const canConnectDrive = canConnectLakeDrive(lake);
 
   return (

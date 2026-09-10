@@ -1,4 +1,4 @@
-import { SupportedEmbeddingModelSchema } from '@bike4mind/common';
+import { FabFileSourceType, SupportedEmbeddingModelSchema } from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -40,6 +40,7 @@ import {
   completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
+import { notifySlackIndexingComplete } from '@server/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
@@ -514,6 +515,37 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFileId,
         vectorizeStatus: 'complete',
       }).catch(err => logger.error(`Error notifying vectorize-complete for ${fabFileId}: ${err}`));
+
+      // #2027: same non-fatal shape as the websocket push above - a failed or skipped Slack post
+      // must never fail or retry vectorization, which already persisted vectorized:true. Claimed
+      // BEFORE sending, unlike the websocket push above: a redelivered or concurrent completion
+      // message for this file must post the "finished indexing" reply at most once, not every time.
+      // Gated on sourceType up front: notifySlackIndexingComplete no-ops for non-Slack files anyway,
+      // and sourceType/sourceMetadata/tags never change during vectorization, so existingFabFile
+      // (fetched once, above) is used instead of the fabFile re-fetched for the chunkCount rollup.
+      //
+      // TRADEOFF, deliberate: claiming before sending makes this AT-MOST-ONCE, not
+      // at-least-once - a successful claim followed by a failed send (network error, Slack
+      // outage, the WebClient timeout above) is indistinguishable from a delivered notification
+      // in `dispatchedNotifications`: no retry, no queryable owed-state, no repair short of
+      // hand-editing that field. Chosen deliberately: a duplicate "now searchable" reply is a
+      // worse user-facing failure than a silent miss, and the miss is logged (the inner catch
+      // below) so it is at least observable. Claiming AFTER a successful send instead would trade
+      // this for a WORSE failure mode: it would reopen the exact concurrent-redelivery double-post
+      // this claim exists to prevent, since two concurrent invocations would both reach `sendMessage`
+      // before either claims. Not applied for that reason.
+      if (existingFabFile.sourceType === FabFileSourceType.SLACK) {
+        try {
+          const claimedSlackNotification = await fabFileRepository.claimIndexNotification(fabFileId, 'slack');
+          if (claimedSlackNotification) {
+            await notifySlackIndexingComplete(existingFabFile, logger).catch(err =>
+              logger.error(`Error sending the Slack indexing-complete notification for ${fabFileId}: ${err}`)
+            );
+          }
+        } catch (err) {
+          logger.error(`Error claiming the Slack indexing-complete notification for ${fabFileId}: ${err}`);
+        }
+      }
 
       // Track batch progress if file belongs to a data lake batch.
       // Atomic claim gates the increment so a redelivered "complete" message is a no-op.
