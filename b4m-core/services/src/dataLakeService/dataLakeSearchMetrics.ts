@@ -1,5 +1,6 @@
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { type ILogger, Logger } from '@bike4mind/observability';
+import { DATA_LAKE_RETRIEVAL_NAMESPACE } from './scanTruncationMetrics';
 
 /**
  * Telemetry for the ANN cutover's success signal.
@@ -14,10 +15,13 @@ import { type ILogger, Logger } from '@bike4mind/observability';
  * outside. ChunksScanned trending back up is the regression detector;
  * AnnUnrankedFilesLeftOffScan going to zero is the same event seen from the other side.
  *
+ * Shares scanTruncationMetrics' namespace: same retrieval path, and an operator chasing a
+ * ChunksScanned spike needs ScanTruncated on the same graph to tell "bigger corpus" from
+ * "budgeted prefix" apart.
+ *
  * Keep the names below in sync with infra/dataLakeSearchDashboard.ts; the tests pin the literals
  * because infra/ cannot import them.
  */
-export const DATA_LAKE_SEARCH_NAMESPACE = 'Lumina5/DataLakeSearch';
 
 /**
  * Ready files a saturated ANN result kept off the brute-force scan. Rank-bounded: it is not a
@@ -72,7 +76,7 @@ export async function recordDataLakeSearchMetrics(metrics: DataLakeSearchMetrics
 
     await client.send(
       new PutMetricDataCommand({
-        Namespace: DATA_LAKE_SEARCH_NAMESPACE,
+        Namespace: DATA_LAKE_RETRIEVAL_NAMESPACE,
         MetricData: (
           [
             [ANN_UNRANKED_FILES_LEFT_OFF_SCAN_METRIC, metrics.annUnrankedFilesLeftOffScan],

@@ -1117,6 +1117,10 @@ async function rankChunksForFiles(args: {
   // Published here rather than at the individual counters' call sites: this is the one point
   // that sees both the ANN and scan halves of the same search, and it covers both entrypoints
   // (semanticDataLakeSearch and fileScopedSemanticSearch). No-ops outside a deployed stage.
+  //
+  // Deliberately NOT hoisted to withTruncationReport, which exists to catch the return paths this
+  // point cannot see. Those paths ranked nothing, so they would publish an all-zero datapoint -
+  // and a zero on annUnrankedFilesLeftOffScan is precisely the regression this metric watches for.
   await recordDataLakeSearchMetrics(
     {
       backend: canUseAtlas ? 'atlas' : 'opensearch',

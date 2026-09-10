@@ -19,7 +19,9 @@ import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
-const NAMESPACE = 'Lumina5/DataLakeSearch';
+// Shared with the ScanTruncated alarm in alarms.ts. Distinct MetricNames and dimension schemas,
+// so the SEARCH() expression below cannot pick up truncation datapoints.
+const NAMESPACE = 'Lumina5/DataLakeRetrieval';
 
 let dataLakeSearchDashboard: aws.cloudwatch.Dashboard | undefined;
 

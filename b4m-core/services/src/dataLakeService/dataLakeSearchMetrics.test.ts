@@ -15,7 +15,6 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
 
 import {
   recordDataLakeSearchMetrics,
-  DATA_LAKE_SEARCH_NAMESPACE,
   ANN_UNRANKED_FILES_LEFT_OFF_SCAN_METRIC,
   CHUNKS_SCANNED_METRIC,
   ANN_HITS_METRIC,
@@ -55,8 +54,7 @@ describe('recordDataLakeSearchMetrics', () => {
     await recordDataLakeSearchMetrics(metrics);
 
     const { Namespace, MetricData } = send.mock.calls[0][0].input;
-    expect(Namespace).toBe('Lumina5/DataLakeSearch');
-    expect(DATA_LAKE_SEARCH_NAMESPACE).toBe('Lumina5/DataLakeSearch');
+    expect(Namespace).toBe('Lumina5/DataLakeRetrieval');
     expect(ANN_UNRANKED_FILES_LEFT_OFF_SCAN_METRIC).toBe('AnnUnrankedFilesLeftOffScan');
     expect(CHUNKS_SCANNED_METRIC).toBe('ChunksScanned');
     expect(ANN_HITS_METRIC).toBe('AnnHits');
