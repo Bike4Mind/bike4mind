@@ -1,5 +1,5 @@
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
-import { IDataLakeRepository, IFabFileRepository, ITagRepository } from '@bike4mind/common';
+import { IDataLakeRepository, IFabFileRepository, ITagRepository, LakeAuditPrincipal } from '@bike4mind/common';
 import { z } from 'zod';
 import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
@@ -31,6 +31,13 @@ interface TagRemoveAdapters {
    * many callers, and an absent logger degrades to the console fallback rather than failing.
    */
   logger?: LakeConfigAuditAdapters['logger'];
+  /**
+   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
+   * `lakeConfigAuditPrincipal`. Rides on the actor handed to recomputeLakeStats, so a key-driven
+   * delete that flips a draft lake to active names the key rather than the human it acts for,
+   * matching every other audited config-write door (#1917).
+   */
+  auditPrincipal?: LakeAuditPrincipal;
 }
 
 /**
@@ -51,7 +58,7 @@ interface TagRemoveAdapters {
  * the bulk strip below does NOT do on its own is recompute the affected lakes' stats.
  */
 export const remove = async (userId: string, params: TagRemoveParams, adapters: TagRemoveAdapters) => {
-  const { db, logger } = adapters;
+  const { db, logger, auditPrincipal } = adapters;
   const { id } = secureParameters(params, tagRemoveSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -84,7 +91,9 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
     // causes should not read as `system`. `isAdmin` is immaterial on this path - recomputeLakeStats
     // forces the rung to `system` because activateIfDraft authorizes nothing.
     await Promise.all(
-      affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false } }))
+      affectedLakes.map(lake =>
+        recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false, auditPrincipal } })
+      )
     );
   }
 

@@ -61,6 +61,9 @@ RUN set -eu; \
     before=$(du -sb apps/client/.next/standalone | cut -f1); \
     find apps/client/.next/standalone -name '*.nft.json' -type f -delete; \
     echo "stripped traces: ${before} -> $(du -sb apps/client/.next/standalone | cut -f1) bytes"
+# Then assert what actually ships: anything beyond the five entries a healthy standalone build
+# emits means file tracing swept the app source tree in behind us.
+RUN node apps/client/scripts/check-standalone-tree.mjs apps/client/.next/standalone/apps/client
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner
