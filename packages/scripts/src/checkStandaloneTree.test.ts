@@ -34,6 +34,10 @@ function makeHealthyTree(): void {
     if (entry.includes('.json') || entry.endsWith('.js')) fs.writeFileSync(full, '{}');
     else fs.mkdirSync(full);
   }
+  // The only thing under app/ that a healthy build emits: the help artifacts retrieval.ts
+  // resolves against cwd on each request.
+  fs.mkdirSync(path.join(appDir, 'app', 'generated'));
+  fs.writeFileSync(path.join(appDir, 'app', 'generated', 'help-index.json'), '{}');
 }
 
 /** Run the guard, returning its exit status and combined output. */
@@ -82,6 +86,20 @@ describe('check-standalone-tree', () => {
       expect(output).toContain(swept);
     }
     expect(output).toContain('file tracing swept the app source tree');
+  });
+
+  it('rejects a sweep that lands inside app/, which a top-level allowlist would miss', () => {
+    makeHealthyTree();
+    // app/ is the SPA source root, so this is where a sweep is likeliest to land and the one
+    // place a top-level-only allowlist reports clean while shipping the source tree.
+    fs.mkdirSync(path.join(appDir, 'app', 'components'));
+    fs.writeFileSync(path.join(appDir, 'app', 'router.tsx'), '');
+
+    const { status, output } = runGuard(appDir);
+    expect(status).toBe(1);
+    expect(output).toContain('2 unexpected entries');
+    expect(output).toContain('app/components');
+    expect(output).toContain('app/router.tsx');
   });
 
   it('is an allowlist, so it rejects an entry nobody thought to name', () => {
