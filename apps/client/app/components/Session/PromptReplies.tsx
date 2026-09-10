@@ -790,7 +790,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
   if (isExpired) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'warning.softBg' }}>
-        <Typography level="body-sm" sx={{ color: 'warning.softColor' }}>
+        <Typography level="body-sm" sx={{ color: 'warning.plainColor' }}>
           This confirmation has expired. Please request the action again.
         </Typography>
       </Box>

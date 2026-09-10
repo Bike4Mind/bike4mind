@@ -82,7 +82,7 @@ const ResearchTaskDetailInfo: FC<ResearchTaskDetailInfoProps> = ({ task }) => {
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
-                  <Avatar variant="soft" sx={{ bgcolor: 'primary.softBg', color: 'primary.softColor' }}>
+                  <Avatar variant="soft" sx={{ color: 'primary.plainColor' }}>
                     <Description sx={{ fontSize: 20 }} />
                   </Avatar>
                   <Box sx={{ flex: 1, minWidth: 0 }}>

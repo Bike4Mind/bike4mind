@@ -1,5 +1,6 @@
 import { FC, useCallback, useMemo, useState, useRef } from 'react';
 import { debounce } from 'lodash';
+import { alpha } from '@mui/system';
 import SearchIcon from '@mui/icons-material/Search';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { brand, brandAlpha } from '@client/app/utils/themes/colors';
@@ -413,7 +414,7 @@ const ProjectFiles: FC<{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  bgcolor: 'background.backdrop',
+                  bgcolor: theme => alpha(theme.palette.background.surface, 0.85),
                   zIndex: 1000,
                   borderRadius: 'inherit',
                 }}

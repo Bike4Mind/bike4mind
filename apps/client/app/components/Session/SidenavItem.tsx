@@ -761,7 +761,6 @@ const SessionSidenavItem: FC<{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              borderRadius: '50%',
               fontSize: '12px',
             }}
           >
