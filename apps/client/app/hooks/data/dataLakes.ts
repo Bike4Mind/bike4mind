@@ -263,7 +263,9 @@ export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = 
  *
  * Invalidates the lake list as well as the access view: ownership decides `canManage`, so the panel's
  * own controls (Access included) may legitimately disappear for the actor once they are no longer the
- * owner - refetching is what keeps the UI honest about what the actor can still do.
+ * owner - refetching is what keeps the UI honest about what the actor can still do. The config
+ * history goes too: this door records a `transfer-ownership` event, and the History tab that renders
+ * it sits in the same modal that submitted the transfer.
  */
 export function useTransferLakeOwnership() {
   const queryClient = useQueryClient();
@@ -279,6 +281,7 @@ export function useTransferLakeOwnership() {
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       toast.success('Data lake ownership transferred');
     },

@@ -874,17 +874,6 @@ describe('nextRebuildPoll', () => {
 });
 
 /**
- * A config write adds a history row, and the History tab renders in the same modal that submitted
- * it. `useUpdateDataLake` invalidated that key from the start; these two did not, and only got away
- * with it because the history query pairs `staleTime: 0` with an `enabled` toggle that flips on tab
- * switch. That is an incidental refetch, not a guarantee - raising staleTime or dropping the toggle
- * would strand the row the owner just created. These pin the invalidation itself.
- *
- * The key is asserted as the literal `['dataLakeConfigHistory', 'lake1']` prefix rather than through
- * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
- * still pass if that helper's shape drifted away from what the query is actually keyed under.
- */
-/**
  * The build door's poll predicate. Same reason nextRebuildPoll is tested here: an inline
  * `refetchInterval` lambda is executed by no test, so a wrong predicate ships green - and the wrong
  * one here is a 5s poll that never terminates.
@@ -906,6 +895,18 @@ describe('lakeMemoryPollInterval', () => {
   });
 });
 
+/**
+ * A config write adds a history row, and the History tab renders in the same modal that submitted
+ * it. `useUpdateDataLake` invalidated that key from the start; the rest of the config-writing doors
+ * did not, and only got away with it because the history query pairs `staleTime: 0` with an
+ * `enabled` toggle that flips on tab switch. That is an incidental refetch, not a guarantee -
+ * raising staleTime or dropping the toggle would strand the row the owner just created. These pin
+ * the invalidation itself.
+ *
+ * The key is asserted as the literal `['dataLakeConfigHistory', 'lake1']` prefix rather than through
+ * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
+ * still pass if that helper's shape drifted away from what the query is actually keyed under.
+ */
 describe('config-history invalidation on the non-update config writes', () => {
   const mountWith = () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -952,6 +953,45 @@ describe('config-history invalidation on the non-update config writes', () => {
     const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
     await act(async () => {
       await result.current.mutateAsync('f1');
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it("useGrantLakeAccess invalidates the shared lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { data: { principalId: 'u1', role: 'reader' } } });
+
+    const { result } = renderHook(() => useGrantLakeAccess(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1', role: 'reader' });
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it("useRevokeLakeAccess invalidates the lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiDelete.mockResolvedValueOnce({ data: { data: { revoked: true } } });
+
+    const { result } = renderHook(() => useRevokeLakeAccess(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1' });
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  // The transfer door moves no document field, so its history row is the ONLY record that the
+  // handover happened - and the manager who just confirmed the transfer is the reader most likely
+  // to open History next.
+  it("useTransferLakeOwnership invalidates the transferred lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u2', demotedUserIds: ['u1'] } });
+
+    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u2' });
     });
 
     expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
