@@ -34,10 +34,11 @@ export const DATA_LAKE_SHARE_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_SHARE
 
 /**
  * Gate for a route that spends LLM/search budget against a lake (semantic-search, rlm-answer).
- * Deliberately its own scope, not a member of DATA_LAKE_READ_SCOPES - `datalake:read` ends in
- * `:read` and auto-joins the New-Key modal's "Read-only" preset, which must stay non-spending.
- * This stays query-ONLY (not read+query): the direction that matters is read implying nothing
- * about query, so a `datalake:read` key still cannot call these spend routes directly.
+ * This array is query-ONLY - a `datalake:read` key still cannot call these spend routes
+ * directly, even though `DATA_LAKE_READ_SCOPES` above admits `DATALAKE_QUERY` (query implies
+ * read for the READ gate's own routes, not the other way around). `datalake:query` is its own
+ * scope for a UI reason too: `datalake:read` ends in `:read` and auto-joins the New-Key modal's
+ * "Read-only" preset, which must stay non-spending.
  */
 export const DATA_LAKE_QUERY_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_QUERY];
 
@@ -87,7 +88,7 @@ export function assertDataLakeShareScope(req: ScopedRequest): void {
  * caller must hold `datalake:write` too - otherwise a key minted for file tagging alone
  * could add/remove a file from a lake it cannot otherwise write into.
  *
- * `dataLakeApiKeyTagWriteScopeCoverage.test.ts` asserts every caller of
+ * `dataLakeTagWriteScopeCoverage.test.ts` asserts every caller of
  * `assertCanWriteDataLakeTags` also calls this, so a new door cannot land without it.
  */
 export function assertDataLakeTagWriteScope(req: ScopedRequest, tagNames: readonly unknown[]): void {

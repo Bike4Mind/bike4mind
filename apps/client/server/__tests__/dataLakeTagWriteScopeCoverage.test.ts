@@ -44,3 +44,33 @@ describe('doors writing a lake meta-tag also gate the API-key scope', () => {
     ).toContain('assertDataLakeTagWriteScope(');
   });
 });
+
+/**
+ * `assertCanWriteDataLakeTags` only sees `datalake:*` meta-tags, so it is blind to the OTHER
+ * membership signal: a `fileTagPrefix` content tag with no meta-tag involved (see
+ * `toggleTags.ts`/`reconcileLakeTags.ts`'s own `assertWriteScope` doc comments). Neither service
+ * function calls the authorization gate the guard above scans for, so a door reaching them is
+ * invisible to that guard - this one closes the same class of blind spot for those two callers
+ * specifically, rather than trying to generalize the scan to every indirect path (createFabFile's
+ * internal call among them), which would need a call-graph walk, not a text scan.
+ */
+const PREFIX_ARM_JOIN_CALLERS = ['toggleTags(', 'updateFabFile('];
+
+const filesCallingPrefixArmJoinPath = tsFiles(PAGES_API_DIR).filter(file => {
+  const source = readFileSync(file, 'utf8');
+  return PREFIX_ARM_JOIN_CALLERS.some(call => source.includes(call));
+});
+
+describe('doors that can join a lake via its prefix arm also thread assertWriteScope', () => {
+  it('finds at least one such door', () => {
+    expect(filesCallingPrefixArmJoinPath.length).toBeGreaterThan(0);
+  });
+
+  it.each(filesCallingPrefixArmJoinPath.map(f => [path.relative(PAGES_API_DIR, f), f]))('%s', (_rel, file) => {
+    const source = readFileSync(file, 'utf8');
+    expect(
+      source,
+      'a door calling toggleTags/updateFabFile must forward assertWriteScope so a prefix-arm-only join is not left ungated'
+    ).toContain('assertWriteScope');
+  });
+});

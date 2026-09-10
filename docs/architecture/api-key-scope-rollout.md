@@ -177,6 +177,14 @@ to a question it cannot see.
    prefix with every scope in the family reports a key as `allow` the moment it holds any ONE of
    them, hiding the keys that would 403 at a route requiring a scope that key does not hold.
 
+   A scope can also be enforced on a route that sits OUTSIDE the family's own prefix (a sibling
+   door that writes the same resource through a different surface - e.g. `datalake:write` also
+   gates several `/api/files/*` routes that write a lake's membership through a caller-supplied
+   tag). Since the preflight matches a prefix as a plain string, such a route is invisible to a
+   run scoped to the family's prefix and needs its own preflight call, folded into the same
+   re-mint list - enumerate every `requiredScopes`/in-handler assert site for the scope, not just
+   the ones under its "home" prefix.
+
 
 3. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
 4. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.

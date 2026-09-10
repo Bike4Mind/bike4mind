@@ -109,16 +109,18 @@ const makeRes = () => {
   return { res, json };
 };
 
-const req = (body: unknown) =>
+const req = (body: unknown, overrides: Record<string, unknown> = {}) =>
   ({
     method: 'POST',
     user: { id: 'u1', isAdmin: false, tags: [], groups: [] },
     ability: {},
     body,
     logger: { error: vi.fn(), warn: vi.fn() },
+    ...overrides,
   }) as never;
 
-const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
+const run = (body: unknown, res: unknown, overrides?: Record<string, unknown>) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, overrides), res);
 
 const file = (overrides: Record<string, unknown> = {}) => ({
   fileName: 'report.txt',
@@ -157,6 +159,23 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     // separator, so the wizard derives no content tag and the file was invisible to tag-counts.
     const { res } = makeRes();
     await run({ files: [file()], dataLakeSlug: 'acme-2026' }, res);
+
+    expect(tagNamesOf()).toEqual(['acme:uncategorized', 'datalake:orga:acme-2026']);
+  });
+
+  // Regression test: `datalakeTag` is resolved server-side from `dataLakeSlug` and never appears
+  // in the client payload, so a scope check keyed only on client-supplied tags previously let a
+  // files:write-only key join a lake this way with no data-lake scope at all.
+  it('refuses a files:write-only key that joins a lake purely via dataLakeSlug (no client tags)', async () => {
+    const { res } = makeRes();
+    await expect(
+      run({ files: [file()], dataLakeSlug: 'acme-2026' }, res, { apiKeyInfo: { scopes: ['files:write'] } })
+    ).rejects.toThrow(/datalake:write is required/);
+  });
+
+  it('allows a key holding datalake:write to join a lake via dataLakeSlug alone', async () => {
+    const { res } = makeRes();
+    await run({ files: [file()], dataLakeSlug: 'acme-2026' }, res, { apiKeyInfo: { scopes: ['datalake:write'] } });
 
     expect(tagNamesOf()).toEqual(['acme:uncategorized', 'datalake:orga:acme-2026']);
   });

@@ -30,7 +30,7 @@ import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -181,6 +181,10 @@ const handler = baseApi()
             // Same reason the DELETE handler below attaches one: a tag write here can flip a draft
             // lake to active, and this route accepts a `b4m_live_` key.
             auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+            // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
+            // resolved file owner) - called only when reconcileLakeTags actually finds a prefix-arm
+            // join. Mirrors the toggle route's identical gate.
+            assertWriteScope: () => assertDataLakeWriteScope(req),
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {

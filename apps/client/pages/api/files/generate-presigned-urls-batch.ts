@@ -77,9 +77,12 @@ const handler = baseApi().post(async (req: Request, res) => {
   }
 
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
-  // through per-file tags. Gate every such tag with the same write check.
+  // through per-file tags. Gate every such tag with the same write check. `datalakeTag` itself is
+  // resolved server-side from `dataLakeSlug` and never appears in the client payload, so it must
+  // be added to the asserted set explicitly - checking `clientMetaTags` alone would let a
+  // files:write-only key join a lake via `dataLakeSlug` with no data-lake scope at all.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
-  assertDataLakeTagWriteScope(req, clientMetaTags);
+  assertDataLakeTagWriteScope(req, datalakeTag ? [...clientMetaTags, datalakeTag] : clientMetaTags);
   await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
     db: {
       dataLakes: dataLakeRepository,

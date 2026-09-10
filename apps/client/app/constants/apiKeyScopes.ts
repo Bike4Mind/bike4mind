@@ -129,7 +129,8 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.DATALAKE_QUERY,
     label: 'Data Lakes: Query',
-    description: 'Run a retrieval query against a lake. Spends credits - not part of the Read-only preset',
+    description:
+      'Run a retrieval query against a lake, and read lakes to support it. Spends credits - not part of the Read-only preset',
     endpoints: ['POST /api/data-lakes/semantic-search', 'POST /api/data-lakes/rlm-answer'],
   },
   {
