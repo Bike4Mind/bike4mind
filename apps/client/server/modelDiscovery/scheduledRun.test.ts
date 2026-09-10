@@ -58,6 +58,7 @@ vi.mock('@bike4mind/services', () => ({
   modelDiscoveryService: {
     runModelDiscovery,
     getDiscoveryCredentials: vi.fn(),
+    probeOpenAiDispatch: vi.fn(),
     DEFAULT_BUDGET_MS: 600_000,
     ...sourceFactories,
   },
@@ -120,8 +121,10 @@ describe('runScheduledDiscovery', () => {
       cache: repos.cacheRepository,
       adminSettings: repos.adminSettingsRepository,
     });
-    // Without a resolver every discovered model stays metadata-only.
+    // Without a resolver every discovered model stays metadata-only; without a
+    // probe every new OpenAI model keeps its tools withheld.
     expect(typeof adapters.resolveDispatch).toBe('function');
+    expect(typeof adapters.probeDispatch).toBe('function');
     expect(typeof adapters.resolveCredentials).toBe('function');
     // A run with no sources is a no-op that still writes a clean report, so an
     // empty registry has to fail here rather than in production.

@@ -57,6 +57,15 @@ describe('ModelDiscoveryStateRepository', () => {
     expect(await modelDiscoveryStateRepository.findByModelId('nope')).toBeNull();
   });
 
+  it('counts probe attempts on a model with no row yet', async () => {
+    const first = await modelDiscoveryStateRepository.recordProbeAttempt('gpt-x');
+    // The absence counter has to arrive with its default: the read schema
+    // requires it, and a row inserted without it would fail to parse.
+    expect(first).toMatchObject({ probeAttempts: 1, missCount: 0 });
+
+    expect(await modelDiscoveryStateRepository.recordProbeAttempt('gpt-x')).toMatchObject({ probeAttempts: 2 });
+  });
+
   it('reads a whole run of models in one query and skips the ids with no row', async () => {
     await modelDiscoveryStateRepository.recordMiss('gpt-x', firstMiss);
     await modelDiscoveryStateRepository.recordMiss('gpt-y', secondMiss);

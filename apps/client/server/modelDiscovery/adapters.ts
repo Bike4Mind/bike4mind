@@ -25,9 +25,11 @@ interface CatalogView {
   targets: JoinTarget[];
   /** Ids already 'active', so Bedrock skips their per-model availability call. */
   activeModelIds: Set<string>;
+  /** The read failed, so an empty view means "unknown", never "the catalog is empty". */
+  degraded?: true;
 }
 
-const EMPTY_VIEW: CatalogView = { targets: [], activeModelIds: new Set() };
+const EMPTY_VIEW: CatalogView = { targets: [], activeModelIds: new Set(), degraded: true };
 
 interface CatalogViewReader {
   read: () => Promise<CatalogView>;
@@ -44,7 +46,9 @@ interface CatalogViewReader {
  * availability check" set because a discovery row underneath still says active.
  *
  * A failed read degrades to an empty view, which costs coverage (every id
- * unmatched, every Bedrock model probed) rather than correctness.
+ * unmatched, every Bedrock model probed) rather than correctness. For the OpenAI
+ * new-model docs leg an empty view is NOT safe - it would make every listed id
+ * look new - so that one reads `degraded` and stays off.
  */
 function readCatalogView(logger: Logger): CatalogViewReader {
   // Memoized per convergence pass: three sources ask for this and none of them
@@ -92,7 +96,12 @@ function buildSources(catalogView: CatalogViewReader): ModelDiscoveryAdapters['s
   const targets = async () => (await catalogView.read()).targets;
 
   return [
-    modelDiscoveryService.createOpenAiSource(),
+    modelDiscoveryService.createOpenAiSource({
+      knownModelIds: async () => {
+        const view = await catalogView.read();
+        return view.degraded ? undefined : new Set(view.targets.map(target => target.modelId));
+      },
+    }),
     modelDiscoveryService.createAnthropicSource(),
     modelDiscoveryService.createXaiSource(),
     modelDiscoveryService.createKimiSource(),
@@ -179,6 +188,9 @@ export function buildModelDiscoveryAdapters(logger: Logger): ModelDiscoveryAdapt
     // Seed-side derivation of the dispatch group: without it a newly discovered
     // model has no adapterFamily and stays metadata-only forever.
     resolveDispatch: resolveDispatchForRecord,
+    // What turns tools on for a new OpenAI model without a human: the resolver
+    // cannot tell which tool transport an id takes, so the probe asks it.
+    probeDispatch: modelDiscoveryService.probeOpenAiDispatch,
     logger,
     env,
   };

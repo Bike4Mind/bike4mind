@@ -3,6 +3,7 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   FIELD_GROUPS,
   FIELD_GROUP_OF,
+  ModelBackend,
   ModelRecordWrite,
   groupsTouchedByPatch,
   type FieldGroup,
@@ -20,6 +21,7 @@ import type {
   DiscoveryAutoEnablePolicy,
   DiscoveryCredentials,
   DiscoverySourceKind,
+  DispatchAnswer,
   DispatchResolver,
   DroppedSourceRecord,
   SourceContribution,
@@ -46,6 +48,26 @@ const SUNSET_STATUSES: ReadonlySet<string> = new Set(['deprecated', 'legacy', 'r
 /** Two aggregators inside this band agree; beyond it neither is trusted (sec 8). */
 export const PRICE_AGREEMENT_TOLERANCE = 0.1;
 
+/**
+ * "gpt-5.4-2026-03-05". Only the DASH-separated form: Anthropic's canonical ids
+ * end in the compact one ("claude-sonnet-4-5-20250929"), and matching that would
+ * refuse every Anthropic introduction there is.
+ */
+const DATED_SNAPSHOT_ID = /-\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * May this id become a NEW catalog model? A dated snapshot is a pin of a model
+ * that already has a row, and a fine-tune is nobody's product.
+ *
+ * The SIGHTING is still recorded first (planCatalogWrites): absence bookkeeping
+ * counts a miss streak per id, so an id refused here but forgotten would read as
+ * one the provider had stopped listing.
+ */
+export function isIntroducibleModelId(modelId: string): boolean {
+  if (modelId.startsWith('ft:')) return false;
+  return !DATED_SNAPSHOT_ID.test(modelId);
+}
+
 /** Provenance for a dispatch field the resolver derived rather than a feed reporting it. */
 export const DISPATCH_SEED_CONTRIBUTOR = 'seed';
 
@@ -58,6 +80,12 @@ export interface CatalogWriteInput {
    */
   contributions: readonly SourceContribution[];
   resolveDispatch?: DispatchResolver;
+  /**
+   * Dispatch groups this run VERIFIED by calling the model (see dispatchProbe.ts).
+   * Beats resolveDispatch for the models it covers, and is what releases the
+   * OpenAI tools pin below.
+   */
+  probedProfiles?: ReadonlyMap<string, DispatchAnswer>;
   /** Belief per model from the NON-operator rows in force. */
   base: ReadonlyMap<string, ResolvedCatalogRecord>;
   /**
@@ -135,6 +163,16 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
         source: candidate.sourceNames.join('+'),
         modelId: candidate.modelId,
         reason: 'aggregator-only model with no catalog row',
+      });
+      continue;
+    }
+
+    // Sighted above, and deliberately not introduced here (see isIntroducibleModelId).
+    if (!existing && !isIntroducibleModelId(candidate.modelId)) {
+      dropped.push({
+        source: candidate.sourceNames.join('+'),
+        modelId: candidate.modelId,
+        reason: 'id is a dated snapshot or a fine-tune, not a model to introduce',
       });
       continue;
     }
@@ -351,7 +389,57 @@ function planOne(
     }
   }
 
-  const ownedGroups = new Set<FieldGroup>();
+  // The completions an INTRODUCTION needs to satisfy the append schema. After the
+  // starved-output check on purpose: a defaulted zero window standing next to a
+  // real output cap reads as a starving claim, which would drop the record.
+  const introducing = !existing && candidate.sawProvider;
+  const pinnedGroups = new Set<FieldGroup>();
+
+  if (introducing && !(typeof draft.name === 'string' && draft.name.length > 0)) {
+    // OpenAI lists every dated snapshot, legacy pin and non-product id it has
+    // ever served and publishes a docs page only for what it sells, so a parsed
+    // name is what decides which of those ids may become a model here (see
+    // readNewModelFacts in sources/openai.ts). The other backends list product
+    // ids, where the listed id IS the label.
+    if (draft.backend === ModelBackend.OpenAI) {
+      return { reason: 'OpenAI introduction refused: no docs page supplied a name for this id' };
+    }
+    draft.name = candidate.modelId;
+    pinnedGroups.add('identity');
+  }
+
+  if (typeof draft.contextWindow !== 'number') {
+    if (claimsMaxOutput) {
+      // Both fields are the whole `limits` group and a row wins a group as a
+      // unit, so keeping the cap claim would carry the zero below onto the read
+      // path with it (see starvedByOutputClaim).
+      delete draft.maxOutputTokens;
+      claimsMaxOutput = false;
+      dropped.push({
+        source: candidate.sourceOfField.get('maxOutputTokens') ?? candidate.sourceNames.join('+'),
+        modelId: candidate.modelId,
+        reason: 'maxOutputTokens dropped: no context window to claim the limits group alongside it',
+      });
+    }
+    // Satisfies the append schema WITHOUT claiming `limits`, so mergeRows never
+    // copies it and the real window stays the aggregator join's to claim.
+    draft.contextWindow = 0;
+  }
+
+  const probed = input.probedProfiles?.get(candidate.modelId);
+  if (withholdsOpenAiTools(draft, base, introducing, probed !== undefined)) {
+    if (contributed.get('supportsTools') === true) {
+      dropped.push({
+        source: candidate.sourceOfField.get('supportsTools') ?? candidate.sourceNames.join('+'),
+        modelId: candidate.modelId,
+        reason: 'supportsTools claim refused: tools stay withheld until the toolTransport is verified',
+      });
+    }
+    draft.supportsTools = false;
+    pinnedGroups.add('modalities');
+  }
+
+  const ownedGroups = new Set<FieldGroup>(pinnedGroups);
   for (const key of contributed.keys()) {
     // A refused lifecycle block is not a claim: an ownedGroups entry no field
     // backs is overclaiming, which the row schema rejects at append time.
@@ -375,14 +463,27 @@ function planOne(
   let decision: PromotionDecision | null = null;
 
   if (decides && (!record.adapterFamily || !record.dispatchProfile)) {
-    const derived = input.resolveDispatch?.(record);
-    if (derived?.adapterFamily && !record.adapterFamily) {
+    const derived = probed ?? input.resolveDispatch?.(record);
+    // A probed answer OVERWRITES the family: the resolver names 'openai-chat'
+    // for every OpenAI id on the introducing run, so a verified responses model
+    // would otherwise keep a family that contradicts its own transport. A
+    // derived family is a guess and may only fill a gap.
+    if (derived?.adapterFamily && (probed || !record.adapterFamily)) {
       record = { ...record, adapterFamily: derived.adapterFamily };
       ownedGroups.add('dispatch');
     }
     if (derived?.dispatchProfile && !record.dispatchProfile) {
       record = { ...record, dispatchProfile: derived.dispatchProfile };
       ownedGroups.add('dispatch');
+    }
+    if (probed) {
+      // Has to land in the same row as the profile: the pin below reads
+      // base.supportsTools on every later run, and the probe runs only once.
+      record = { ...record, supportsTools: true };
+      ownedGroups.add('modalities');
+      // Not DISPATCH_SEED_CONTRIBUTOR: this profile was verified against the
+      // provider, and the row is where an operator reads which of the two it is.
+      derivedGroups.add('dispatch');
     }
   }
 
@@ -499,6 +600,35 @@ function mergeLifecycle(
     return undefined;
   }
   return merged;
+}
+
+/**
+ * Whether an OpenAI record's tools stay off, whatever a feed says about them.
+ *
+ * OpenAI runs two incompatible tool conventions on one endpoint and nothing in
+ * the id says which a model takes - resolveDispatchForRecord
+ * (llm-adapters/src/dispatchResolver.ts) guesses 'chat' - and a wrong
+ * toolTransport fails SILENTLY, with the model narrating "Calling the tool
+ * now..." as prose. A feed's "it has tools" is not the claim needed, so tools
+ * wait for the transport itself to be answered (dispatchProbe.ts). It holds past
+ * the introducing run because promotion can flip the record to 'active' in the
+ * same run an aggregator first joins it.
+ *
+ * This writes the DISCOVERY row only. An operator row that owns `modalities`
+ * outranks it on the read path; one that pins only a rank or a name does not,
+ * which is why an operator row is not consulted here.
+ */
+function withholdsOpenAiTools(
+  draft: Record<string, unknown>,
+  base: Record<string, unknown>,
+  introducing: boolean,
+  probed: boolean
+): boolean {
+  if (draft.backend !== ModelBackend.OpenAI) return false;
+  // Before the base check, or the pin the probe just answered would re-engage
+  // off the supportsTools: false it wrote on an earlier run.
+  if (probed) return false;
+  return introducing || base.supportsTools === false;
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
