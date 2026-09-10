@@ -39,8 +39,10 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
     if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_IMAGE_BYTES) {
       throw new BadRequestError(`fileSize must be between 1 and ${MAX_IMAGE_BYTES} bytes`);
     }
-    // Client-supplied and case-varying: normalize before the allowlist check.
-    if (!ALLOWED_IMAGE_TYPES.includes(mimeType.trim().toLowerCase())) {
+    // Client-supplied and case-varying: normalize once, then both gate AND forward the
+    // normalized value - forwarding the raw string would let " IMAGE/PNG " reach the host.
+    const normalizedMimeType = mimeType.trim().toLowerCase();
+    if (!ALLOWED_IMAGE_TYPES.includes(normalizedMimeType)) {
       throw new BadRequestError('Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.');
     }
     if (!user.blogIntegration?.apiKey || !user.blogIntegration?.baseUrl) {
@@ -65,7 +67,7 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
           'Content-Type': 'application/json',
           'X-API-Key': apiKey,
         },
-        body: JSON.stringify({ fileName, fileSize, mimeType, postId }),
+        body: JSON.stringify({ fileName, fileSize, mimeType: normalizedMimeType, postId }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

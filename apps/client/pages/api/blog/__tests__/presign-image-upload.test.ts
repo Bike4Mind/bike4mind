@@ -80,6 +80,20 @@ describe('POST /api/blog/presign-image-upload', () => {
     expect(res._getJSONData()).toEqual({ uploadUrl: 'https://s3/u', imageUrl: 'https://blog/i.jpg', key: 'k' });
   });
 
+  it('forwards the normalized mime type, not the raw client string', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ uploadUrl: 'https://s3/u', imageUrl: 'https://blog/i.jpg' }),
+    });
+    global.fetch = fetchMock as never;
+
+    const { req, res } = request({ ...validBody, mimeType: '  IMAGE/JPEG  ' }, configured);
+    await mockRefs.handler!(req, res);
+
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(sent.mimeType).toBe('image/jpeg');
+  });
+
   it('maps the blog alternative field names (presignedUrl / publicUrl)', async () => {
     global.fetch = vi.fn().mockResolvedValueOnce({
       ok: true,
