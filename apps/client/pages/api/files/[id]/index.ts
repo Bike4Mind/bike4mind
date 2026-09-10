@@ -125,7 +125,7 @@ const handler = baseApi()
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
-    assertDataLakeTagWriteScope(req, candidateTagNames);
+    await assertDataLakeTagWriteScope(req, candidateTagNames);
     // No `members` here: this is a whole-array write, so the payload cannot distinguish a join
     // from a resend, and `reconcileLakeTags` (inside `updateFabFile` below) runs the admission
     // contract over every lake this write actually JOINS - meta-tag and prefix-arm alike - with the

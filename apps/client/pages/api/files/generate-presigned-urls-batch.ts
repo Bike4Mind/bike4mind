@@ -82,7 +82,14 @@ const handler = baseApi().post(async (req: Request, res) => {
   // be added to the asserted set explicitly - checking `clientMetaTags` alone would let a
   // files:write-only key join a lake via `dataLakeSlug` with no data-lake scope at all.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
-  assertDataLakeTagWriteScope(req, datalakeTag ? [...clientMetaTags, datalakeTag] : clientMetaTags);
+  // Covers both membership signals for these new files: a `datalake:*` meta-tag, and a plain
+  // content tag matching one of the caller's OWN lakes' `fileTagPrefix` (the prefix arm - see
+  // assertDataLakeTagWriteScope's own doc comment). Only the latter needs `userId` - none of
+  // these files exist yet, so it can only ever be a JOIN.
+  await assertDataLakeTagWriteScope(req, datalakeTag ? [...clientMetaTags, datalakeTag] : clientMetaTags, {
+    userId,
+    db: { dataLakes: dataLakeRepository },
+  });
   await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
     db: {
       dataLakes: dataLakeRepository,

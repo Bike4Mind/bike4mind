@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type IDataLakeRepository } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { ForbiddenError } from '@server/utils/errors';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
@@ -94,9 +94,35 @@ export function assertDataLakeShareScope(req: ScopedRequest): void {
  *
  * `dataLakeTagWriteScopeCoverage.test.ts` asserts every caller of
  * `assertCanWriteDataLakeTags` also calls this, so a new door cannot land without it.
+ *
+ * `newFile`, when passed, additionally covers the OTHER membership signal for a file being
+ * CREATED: a plain content tag matching one of the caller's own lakes' `fileTagPrefix` joins
+ * that lake with no `datalake:*` meta-tag involved at all (the prefix arm - see
+ * `prefixArmMembership.ts`). `currentTagNames` is always `[]` here because the file does not
+ * exist yet, so anything matching a prefix arm is necessarily a JOIN, never a leave. Omitted by
+ * `toggle.ts`/`[id]/index.ts`: those doors mutate an EXISTING file and already gate this signal
+ * themselves, in the service layer, via `assertWriteScope` (they have the stored tag list
+ * `findPrefixArmChanges` needs to diff against; this function does not).
  */
-export function assertDataLakeTagWriteScope(req: ScopedRequest, tagNames: readonly unknown[]): void {
+export async function assertDataLakeTagWriteScope(
+  req: ScopedRequest,
+  tagNames: readonly unknown[],
+  newFile?: { userId: string; db: { dataLakes: Pick<IDataLakeRepository, 'find'> } }
+): Promise<void> {
   if (dataLakeService.extractDataLakeMetaTags(tagNames).length > 0) {
     assertDataLakeWriteScope(req);
+    return;
   }
+  if (!newFile) return;
+  const stringTagNames = tagNames.filter((name): name is string => typeof name === 'string');
+  // Every usable fileTagPrefix ends in ':' (normalizeTagPrefix), so a colon-free tag set cannot
+  // satisfy any prefix arm - skip the candidate-lake query for the common case.
+  if (!stringTagNames.some(name => name.includes(':'))) return;
+  const candidateLakes = await dataLakeService.loadPrefixArmCandidateLakes([newFile.userId], { db: newFile.db });
+  if (candidateLakes.length === 0) return;
+  const { joins } = await dataLakeService.findPrefixArmChanges(
+    { fileOwnerUserId: newFile.userId, currentTagNames: [], resultingTagNames: stringTagNames },
+    { db: newFile.db, candidateLakes }
+  );
+  if (joins.length > 0) assertDataLakeWriteScope(req);
 }

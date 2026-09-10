@@ -38,7 +38,7 @@ const handler = baseApi().post(
     // files:write-only key keeps working. But when the payload actually reaches into a lake (a
     // datalake:* meta-tag), an API-key caller must hold datalake:write - otherwise a key minted for
     // file tagging alone could add/remove a file from a lake it cannot otherwise write into.
-    assertDataLakeTagWriteScope(req, toggledTags);
+    await assertDataLakeTagWriteScope(req, toggledTags);
     const settingsStores = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
     // No `members` here on purpose: a toggle is direction-neutral, so this route cannot tell a join
     // from a leave and would refuse removals. The admission contract (#1680) runs inside

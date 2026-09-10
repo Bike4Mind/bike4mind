@@ -79,7 +79,11 @@ const handler = baseApi().post(
       // (ctx) + the grant repo so a transferred owner / curator / org admin can upload here too,
       // matching the batch presign door (generate-presigned-urls-batch.ts).
       const requestedTagNames = (data.tags ?? []).map(t => t.name);
-      assertDataLakeTagWriteScope(req, requestedTagNames);
+      // Covers both membership signals for this new file: a `datalake:*` meta-tag, and a plain
+      // content tag matching one of the caller's OWN lakes' `fileTagPrefix` (the prefix arm - see
+      // assertDataLakeTagWriteScope's own doc comment). Only the latter needs `userId` - this
+      // file does not exist yet, so it can only ever be a JOIN.
+      await assertDataLakeTagWriteScope(req, requestedTagNames, { userId, db: { dataLakes: dataLakeRepository } });
       const ctx = await toAccessContext(req);
       await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
         db: {

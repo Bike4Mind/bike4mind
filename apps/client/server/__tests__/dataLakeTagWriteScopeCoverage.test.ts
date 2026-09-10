@@ -75,3 +75,29 @@ describe('doors that can join a lake via its prefix arm also thread assertWriteS
     ).toContain('assertWriteScope');
   });
 });
+
+/**
+ * The doors above mutate an EXISTING file, so they can diff its stored tags against the
+ * request. A door that CREATES a file instead has no stored tags to diff against - for those,
+ * `assertDataLakeTagWriteScope` itself resolves the caller's own lakes and checks the prefix arm,
+ * via its optional `newFile` argument (see that function's doc comment). Listed by name rather
+ * than scanned for a shared call, since these three doors call two different underlying creators
+ * (`fabFilesService.createFabFile` vs the file manager's `createFabFile`) with no common substring
+ * to key a scan on.
+ */
+const NEW_FILE_TAG_WRITE_DOORS = [
+  path.join(PAGES_API_DIR, 'files', 'createFabFile.ts'),
+  path.join(PAGES_API_DIR, 'files', 'generate-presigned-url.ts'),
+  path.join(PAGES_API_DIR, 'files', 'generate-presigned-urls-batch.ts'),
+];
+
+describe('doors that create a new file also gate its prefix-arm tag signal', () => {
+  it.each(NEW_FILE_TAG_WRITE_DOORS.map(f => [path.relative(PAGES_API_DIR, f), f]))('%s', (_rel, file) => {
+    const source = readFileSync(file, 'utf8');
+    expect(
+      source,
+      'a door creating a new file with caller-supplied tags must pass a { userId, db } third argument to ' +
+        'assertDataLakeTagWriteScope, or a fileTagPrefix content tag can join a lake with no datalake:write scope'
+    ).toMatch(/assertDataLakeTagWriteScope\(\s*req,\s*[\s\S]*?\{\s*userId/);
+  });
+});

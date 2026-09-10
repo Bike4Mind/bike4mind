@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type IDataLakeDocument } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import {
   DATA_LAKE_READ_SCOPES,
@@ -52,12 +52,57 @@ describe('data-lake API-key scopes', () => {
     expect(DATA_LAKE_QUERY_SCOPES).not.toContain(ApiKeyScope.DATALAKE_WRITE);
   });
 
-  it('gates a lake-membership tag write only when the tag list actually reaches into a lake', () => {
-    expect(() => assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['datalake:some-lake'])).toThrow(
+  it('gates a lake-membership tag write only when the tag list actually reaches into a lake', async () => {
+    await expect(assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['datalake:some-lake'])).rejects.toThrow(
       /datalake:write/
     );
-    expect(() => assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_WRITE), ['datalake:some-lake'])).not.toThrow();
-    expect(() => assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['plain-tag'])).not.toThrow();
+    await expect(
+      assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_WRITE), ['datalake:some-lake'])
+    ).resolves.not.toThrow();
+    await expect(assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['plain-tag'])).resolves.not.toThrow();
+  });
+
+  describe('the prefix-arm signal for a new file', () => {
+    const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+      ({
+        id: 'lake1',
+        name: 'Lake',
+        slug: 'lake',
+        datalakeTag: 'datalake:lake',
+        fileTagPrefix: 'proj:',
+        createdByUserId: 'user1',
+        status: 'active',
+        ...overrides,
+      }) as IDataLakeDocument;
+
+    const dbWith = (lakes: IDataLakeDocument[]) => ({ dataLakes: { find: async () => lakes } });
+
+    it("requires datalake:write when a plain tag matches the caller's own lake prefix", async () => {
+      const newFile = { userId: 'user1', db: dbWith([lake()]) };
+      await expect(
+        assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['proj:invoice'], newFile)
+      ).rejects.toThrow(/datalake:write/);
+      await expect(
+        assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_WRITE), ['proj:invoice'], newFile)
+      ).resolves.not.toThrow();
+    });
+
+    it('leaves a tag alone when it matches no lake the caller owns', async () => {
+      const newFile = { userId: 'user1', db: dbWith([lake({ createdByUserId: 'someone-else' })]) };
+      await expect(
+        assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['proj:invoice'], newFile)
+      ).resolves.not.toThrow();
+    });
+
+    it('skips the candidate-lake query entirely when no tag could carry a prefix arm', async () => {
+      const find = async () => {
+        throw new Error('should not query candidate lakes for a colon-free tag set');
+      };
+      const newFile = { userId: 'user1', db: { dataLakes: { find } } };
+      await expect(
+        assertDataLakeTagWriteScope(key(ApiKeyScope.DATALAKE_READ), ['plain-tag'], newFile)
+      ).resolves.not.toThrow();
+    });
   });
 
   it('does not let a write key re-share a lake', () => {
