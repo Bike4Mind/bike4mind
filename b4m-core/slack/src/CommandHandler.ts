@@ -17,6 +17,7 @@ import { getSlackDeps, getSlackDb } from './di/registry';
 import { notebookNew } from './tools/notebookNew';
 import { notebookStatus } from './tools/notebookStatus';
 import {
+  HTTPError,
   IUserDocument,
   BadRequestError,
   type IAdminSettingsRepository,
@@ -25,10 +26,39 @@ import {
 import type { SlackMessage } from './thread-intelligence/types';
 
 const HISTORY_COUNT = 20;
+// A curated failure reply from ChatCompletionProcess is always short; an unclassified
+// internal error message (the raw err.message fallback - see isHttpError below) is the
+// one case worth bounding before it reaches a whole Slack channel.
+const MAX_ERROR_REPLY_LENGTH = 300;
+
+function capErrorReply(reply: string): string {
+  return reply.length > MAX_ERROR_REPLY_LENGTH ? `${reply.slice(0, MAX_ERROR_REPLY_LENGTH)}...` : reply;
+}
 
 import { SlackClient } from './SlackClient';
 import { ChatCompletionInvoke } from '@bike4mind/services';
 import { createLoadingBar } from './utils/loadingBar';
+
+/**
+ * `error instanceof HTTPError` is unreliable across the @bike4mind/services ->
+ * @bike4mind/slack package boundary if @bike4mind/common ever resolves as two distinct
+ * module realms - the same reason `isZodError` and `isChunkClaimLostError`
+ * (b4m-core/common/src/errors.ts) avoid a bare instanceof. Unlike those two, every
+ * `HTTPError` subclass sets its own `.name` (BadRequestError, ForbiddenError, ...), so a
+ * single fixed-name check does not generalize - fall back to the shape every subclass's
+ * constructor actually produces instead: a numeric `statusCode`, a `name` ending in
+ * `Error`, and an `additionalInfo` key (present, even if `undefined`, since it is a
+ * constructor parameter property on every subclass).
+ */
+function isHttpError(err: unknown): err is HTTPError {
+  return (
+    err instanceof HTTPError ||
+    (err instanceof Error &&
+      typeof (err as { statusCode?: unknown }).statusCode === 'number' &&
+      err.name.endsWith('Error') &&
+      'additionalInfo' in err)
+  );
+}
 
 /**
  * CommandHandler class for processing Slack commands
@@ -433,7 +463,16 @@ export class CommandHandler {
 
         if (updatedQuest?.type === 'error') {
           this.logger.error('Quest failed:', updatedQuest.reply);
-          return 'Sorry, I encountered an error processing your request.';
+          // updatedQuest.reply is the curated message for ChatCompletionProcess's named
+          // categories (aborted, timeout, tool-pairing, overload) - but it sets quest.reply
+          // to the raw err.message BEFORE that categorization runs, so
+          // an uncategorized failure leaves the raw message in place, and nothing on the
+          // quest distinguishes the two cases. Surface it (instead of always flattening to
+          // the same string) but cap the length: a curated message is always short, so this
+          // only bites the unclassified case, keeping a large/unexpected internal error from
+          // dumping wholesale into a Slack channel that may not be private.
+          if (!updatedQuest.reply?.trim()) return 'Sorry, I encountered an error processing your request.';
+          return capErrorReply(updatedQuest.reply);
         }
 
         // Wait before polling again
@@ -445,6 +484,15 @@ export class CommandHandler {
       return 'Sorry, I took too long to respond. Please try again.';
     } catch (error) {
       this.logger.error('Error triggering AI response:', error);
+      // HTTPError subclasses (BadRequestError, ForbiddenError, InternalServerError, ...)
+      // are thrown with a message already written to be shown to the caller - surface it
+      // so a future failure names what broke. Anything else stays generic rather than
+      // leaking an unreviewed internal error message to a public Slack channel. Capped
+      // like the poll-error branch above: isHttpError's duck-type fallback matches any
+      // error with a numeric statusCode, not just the intended HTTPError hierarchy.
+      if (isHttpError(error) && error.message) {
+        return capErrorReply(error.message);
+      }
       return 'Sorry, I encountered an error processing your request.';
     }
   }
