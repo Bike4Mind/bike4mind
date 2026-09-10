@@ -153,7 +153,15 @@ export const process = async (
     researchTask.statusFailedMessage = (e as Error).message;
     researchTask.statusFailedAt = new Date();
 
-    await db.researchTasks.update(researchTask);
+    // Targeted write, not the whole stale researchTask: the success-path update above (and
+    // processScrape/DeepResearch) already bumped __v, so a guarded whole-doc write here would throw
+    // and mask the real failure.
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusFailedMessage: researchTask.statusFailedMessage,
+      statusFailedAt: researchTask.statusFailedAt,
+    });
 
     try {
       await adapters.jobs.researchTasks.sendToClient(researchTask, {

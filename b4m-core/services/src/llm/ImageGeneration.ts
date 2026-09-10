@@ -390,7 +390,9 @@ export class ImageGenerationService {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      await this.db.quests.update(quest);
+      // Targeted write, not the whole stale quest: this catch can run after the success-path update
+      // above already bumped __v, so a guarded whole-doc write here would throw and mask the real error.
+      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
     }
 
     Logger.globalInstance.log(`[DEBUG INVOKE] Returning quest:`, {

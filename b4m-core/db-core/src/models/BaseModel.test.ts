@@ -103,6 +103,79 @@ describe('BaseRepository', () => {
     });
   });
 
+  describe('update (version guard)', () => {
+    const ID = '507f1f77bcf86cd799439011';
+    let mockFindOneAndUpdate: ReturnType<typeof vi.fn>;
+    let mockExists: ReturnType<typeof vi.fn>;
+    let repo: TestRepository;
+
+    const setup = (found: unknown, exists: unknown = null) => {
+      mockFindOneAndUpdate = vi.fn().mockReturnValue(makeQuery(found === null ? null : { toJSON: () => found }));
+      mockExists = vi.fn().mockReturnValue(makeQuery(exists));
+      const mockModel = {
+        findOneAndUpdate: mockFindOneAndUpdate,
+        exists: mockExists,
+        modelName: 'TestDoc',
+      } as unknown as mongoose.Model<TestDoc>;
+      repo = new TestRepository(mockModel);
+    };
+
+    it('conditions the write on __v and bumps it, stripping __v from $set', async () => {
+      setup({ id: ID, name: 'updated', __v: 4 });
+      await repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
+
+      const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(filter._id).toBeDefined();
+      expect(filter.__v).toBe(3);
+      expect(update.$inc).toEqual({ __v: 1 });
+      expect(update.$set).toEqual({ name: 'updated' }); // no id, no __v
+    });
+
+    it('degrades to a plain $set when the doc carries no numeric __v', async () => {
+      setup({ id: ID, name: 'updated' });
+      await repo.update({ id: ID, name: 'updated' } as Partial<TestDoc>);
+
+      const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(filter.__v).toBeUndefined();
+      expect(update.$inc).toBeUndefined();
+      expect(update.$set).toEqual({ name: 'updated' });
+    });
+
+    it('throws ConcurrencyConflictError when a versioned write misses but the row still exists', async () => {
+      setup(null, { _id: ID }); // findOneAndUpdate matched nothing, but the doc is present -> lost race
+      await expect(repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>)).rejects.toThrow(
+        /Concurrent modification/
+      );
+    });
+
+    it('returns null (not a conflict) when a versioned write misses and the row is gone', async () => {
+      setup(null, null);
+      const result = await repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
+      expect(result).toBeNull();
+    });
+
+    it('does not probe existence on an unversioned miss', async () => {
+      setup(null, null);
+      const result = await repo.update({ id: ID, name: 'updated' } as Partial<TestDoc>);
+      expect(result).toBeNull();
+      expect(mockExists).not.toHaveBeenCalled();
+    });
+
+    it('throws if id is missing', async () => {
+      setup({ id: ID });
+      await expect(repo.update({ name: 'no-id' } as Partial<TestDoc>)).rejects.toThrow('id is required');
+    });
+
+    it('attaches the explicit session when a transaction is set', async () => {
+      setup({ id: ID, name: 'updated', __v: 4 });
+      const session = { id: 'session' } as unknown as mongoose.mongo.ClientSession;
+      repo.txn = session;
+      await repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
+      const query = mockFindOneAndUpdate.mock.results[0].value as ThenableQuery;
+      expect(query.session).toHaveBeenCalledWith(session);
+    });
+  });
+
   // updateMany had the same `.session(this._txn)` bug as update.
   describe('updateMany', () => {
     let updateManyQuery: ThenableQuery<{ modifiedCount: number }>;

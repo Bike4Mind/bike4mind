@@ -345,7 +345,14 @@ export const processDiscoveredLinks = async (
       researchTask.status = ResearchTaskStatus.FAILED;
       researchTask.statusFailedMessage = e.message;
       researchTask.statusFailedAt = new Date();
-      db.researchTasks.update(researchTask);
+      // Targeted write, not the whole stale researchTask (see process.ts): avoids a guarded conflict
+      // masking the real failure on this error path.
+      db.researchTasks.update({
+        id: researchTask.id,
+        status: researchTask.status,
+        statusFailedMessage: researchTask.statusFailedMessage,
+        statusFailedAt: researchTask.statusFailedAt,
+      });
     } else {
       throw e;
     }

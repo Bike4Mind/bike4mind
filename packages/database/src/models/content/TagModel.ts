@@ -70,16 +70,10 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     return this.fileTagModel.create(data);
   }
 
+  // Strips the `type` discriminator key. Version-guarded by default (see BaseRepository.update):
+  // _versionedUpdate applies the __v CAS when the doc carries one.
   async update({ type: _, ...data }: Partial<IFileTag>, options?: Record<string, unknown>) {
-    const query = this.fileTagModel.findOneAndUpdate({ _id: data.id }, { $set: data }, options);
-    // only attach an explicit session when one is set; .session(null) overrides
-    // transactionAsyncLocalStorage propagation and silently breaks atomicity.
-    if (this._txn) {
-      query.session(this._txn);
-    }
-    const result = await query;
-
-    return result?.toJSON() || null;
+    return this._versionedUpdate<IFileTag>({ _id: data.id }, data as Record<string, unknown>, options);
   }
 
   async updateMany(

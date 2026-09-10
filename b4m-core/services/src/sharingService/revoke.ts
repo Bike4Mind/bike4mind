@@ -72,6 +72,10 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
   }
 
+  // This filters `document.users` in memory and writes the whole doc back. Because the doc carries
+  // `__v`, the version-guarded `update` (see BaseRepository.update) conditions the write on it, so a
+  // concurrent grant to the same doc racing this revoke throws ConcurrencyConflictError (409) instead
+  // of being silently clobbered (last-writer-wins) - the revoke fails loud rather than resurrecting access.
   await dbModel.update(document);
 
   return document;

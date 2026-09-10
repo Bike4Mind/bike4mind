@@ -98,7 +98,9 @@ export const addSystemPrompts = async (
     project.systemPrompts = project.systemPrompts.filter(prompt => !newFileIds.includes(prompt.fileId));
 
     try {
-      await db.projects.update(project);
+      // Targeted write, not the whole stale project: the success path above already bumped __v, so a
+      // guarded whole-doc write on this cleanup path would throw and mask the original error.
+      await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts });
     } catch (cleanupError) {
       Logger.globalInstance.error('Failed to cleanup after error:', cleanupError);
     }
