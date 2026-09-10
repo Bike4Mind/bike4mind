@@ -26,10 +26,18 @@ export const DataSubscribeRequestAction = z.object({
   // QuerySubscription is written. See subscriptionQueryFilter.ts for what it refuses and why.
   query: z.looseObject({}).superRefine((filter, ctx) => {
     for (const key of findDisallowedSubscriptionFilterKeys(filter)) {
-      ctx.addIssue({ code: 'custom', message: `Disallowed subscription filter operator: ${key}` });
+      // `key` also carries non-operator violations (a RegExp operand, excess nesting depth) with
+      // their own "(... )" suffix, so this prefix stays neutral rather than calling all three an
+      // "operator" - see findDisallowedSubscriptionFilterKeys' own doc comment for the three shapes.
+      ctx.addIssue({ code: 'custom', message: `Disallowed subscription filter: ${key}` });
     }
   }),
-  fields: z.looseObject({}),
+  // Same two sinks (Model.find projection, persisted QuerySubscription) as `query`. A Mongo
+  // projection can't run server-side JavaScript the way `$where` can, but it is still
+  // client-chosen, so this is constrained to the boolean/number projection flags the handler
+  // already assumes it is (see the cast in dataSubscribeRequest.ts) rather than left as
+  // z.looseObject({}).
+  fields: z.record(z.string(), z.union([z.boolean(), z.number()])),
   fetchInitialData: z.boolean().prefault(true).optional(),
   clientId: z.string().optional(),
 });
@@ -144,6 +152,19 @@ export const DataSubscriptionUpdateAction = z.object({
   }),
 });
 export type IDataSubscriptionUpdateAction = z.infer<typeof DataSubscriptionUpdateAction>;
+
+/**
+ * Server -> Client: a `subscribe_query` frame was refused (the operator allow-list, `fields`
+ * validation) or its initial fetch was aborted (`maxTimeMS`). Neither failure throws an
+ * UnauthorizedError/JsonWebTokenError, so withWebSocketContext's status code never reaches the
+ * client as a frame - this is the only signal the caller gets that the subscription never took.
+ */
+export const DataSubscribeErrorAction = z.object({
+  action: z.literal('data_subscribe_error'),
+  subscriptionId: z.string(),
+  error: z.string(),
+});
+export type IDataSubscribeErrorAction = z.infer<typeof DataSubscribeErrorAction>;
 
 export const LLMStatusUpdateAction = z.object({
   action: z.literal('llm_status_update'),
@@ -1501,6 +1522,7 @@ export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedActio
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
   DataSubscriptionUpdateAction,
+  DataSubscribeErrorAction,
   InboxRefetchAction,
   LLMStatusUpdateAction,
   InvitesRefetchAction,

@@ -1,5 +1,6 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
+import { z } from 'zod';
 import {
   AdminSettings,
   ApiKey,
@@ -40,12 +41,57 @@ const HARD_LIMIT = 200;
 // whole Lambda timeout.
 const INITIAL_FETCH_MAX_TIME_MS = 5_000;
 
+/** Best-effort extraction, for the notifySubscribeError call on a frame that failed to parse. */
+function extractRawSubscriptionId(rawBody: unknown): string | undefined {
+  if (typeof rawBody !== 'object' || rawBody === null) return undefined;
+  const subscriptionId = (rawBody as Record<string, unknown>).subscriptionId;
+  return typeof subscriptionId === 'string' ? subscriptionId : undefined;
+}
+
+/**
+ * Notifies the client that its `subscribe_query` frame was refused or its initial fetch was
+ * aborted - the two failure modes on this path that are content-dependent rather than auth- or
+ * infra-dependent, so they can fire for a caller whose frame is otherwise well-formed. Neither
+ * throws an UnauthorizedError/JsonWebTokenError, so withWebSocketContext's status code never
+ * reaches the client as a frame; without this, the caller sees silence and the surface just
+ * never updates. Deliberately not used for auth failures - those keep their existing behavior.
+ * Best-effort: a failure here must not mask the original error from withWebSocketContext's log.
+ */
+async function notifySubscribeError(
+  connectionId: string,
+  endpoint: string,
+  subscriptionId: string | undefined,
+  error: unknown
+): Promise<void> {
+  if (!subscriptionId) return;
+  const message =
+    error instanceof z.ZodError
+      ? error.issues.map(issue => issue.message).join('; ')
+      : error instanceof Error
+        ? error.message
+        : 'Internal server error';
+  try {
+    await sendToConnection(connectionId, endpoint, { action: 'data_subscribe_error', subscriptionId, error: message });
+  } catch {
+    // Best-effort notification only.
+  }
+}
+
 // Adds a subscription for the given collection/query; the subscriber-fanout package
 // handles the actual change-stream delivery. Query is scoped to the user's ability here
 // so subscriber-fanout doesn't need to re-check access.
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const endpoint = Resource.websocket.managementEndpoint;
   const connectionId = event.requestContext.connectionId;
+  const rawBody: unknown = JSON.parse(event.body ?? '');
+
+  let parsedRequest;
+  try {
+    parsedRequest = DataSubscribeRequestAction.parse(rawBody);
+  } catch (error) {
+    await notifySubscribeError(connectionId, endpoint, extractRawSubscriptionId(rawBody), error);
+    throw error;
+  }
 
   const {
     accessToken,
@@ -54,7 +100,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     query,
     fields,
     fetchInitialData,
-  } = DataSubscribeRequestAction.parse(JSON.parse(event.body ?? ''));
+  } = parsedRequest;
 
   const user = await verifyWsAccessToken(accessToken);
   const userAbility = ability(user);
@@ -181,7 +227,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const subscriber = { endpoint, connectionId, clientId: clientSubscriberId, attempts: 0 };
 
   if (fetchInitialData) {
-    const results = await findPromise;
+    let results;
+    try {
+      results = await findPromise;
+    } catch (error) {
+      await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
+      throw error;
+    }
     const limit = pLimit(50);
     const sendingOutcomes = await Promise.allSettled(
       results.map(r =>

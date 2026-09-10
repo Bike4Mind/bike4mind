@@ -22,13 +22,13 @@ describe('DataSubscribeRequestAction query filter gate', () => {
 
   it('refuses a filter that asks the database to run JavaScript', () => {
     expect(() => DataSubscribeRequestAction.parse(frame({ $where: 'while(true){}' }))).toThrow(
-      /Disallowed subscription filter operator/
+      /Disallowed subscription filter/
     );
   });
 
   it('refuses a disallowed operator nested inside an allowed combinator', () => {
     expect(() =>
       DataSubscribeRequestAction.parse(frame({ $and: [{ userId: 'u1' }, { $expr: { $function: { body: 'x' } } }] }))
-    ).toThrow(/Disallowed subscription filter operator/);
+    ).toThrow(/Disallowed subscription filter/);
   });
 });

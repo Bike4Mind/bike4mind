@@ -38,8 +38,10 @@ export function questMasterPlanSubscriptionScope(
  * emailless account can have no invites addressed to it - and passing `undefined` through to
  * `$in: [undefined]` makes Mongo read the arm as "field missing or null", which over-matches
  * every invite that has no pending array at all, i.e. other tenants' invites. A blank email
- * therefore drops the arm entirely rather than widening it. Mirrors InviteModel's own
- * pendingEmailMatch guard.
+ * therefore drops the arm entirely rather than widening it - this mirrors the emailless guard in
+ * InviteModel's own pendingEmailMatch, but NOT its matching semantics: pendingEmailMatch also ORs
+ * in a case-insensitive `$regex` arm that this exact-`$in` match does not, a pre-existing
+ * divergence this function doesn't change.
  */
 export function inviteSubscriptionScope(
   pendingEmail: string | null | undefined,
