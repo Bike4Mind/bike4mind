@@ -80,742 +80,748 @@ type Props = {
    * @default true
    */
   enableFileAttachments?: boolean;
+  /** When true, drop the 950 px max-width cap so the prompt fills the available space. */
+  isFullWidth?: boolean;
 };
 
-const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments = true }, ref) => {
-  const { t } = useTranslation();
-  const { currentSession, currentSessionId, setCurrentSession, workBenchAgents } = useSessions();
-  // While a new session is being confirmed by the server (optimistic pre-navigation),
-  // pass null to all hooks that make real API calls so they don't fire against the
-  // fake client-generated tmpId that doesn't exist in the database yet.
-  const pendingFirstMessage = useSessionLayout(s => s.pendingFirstMessage);
-  const effectiveSessionId = pendingFirstMessage ? null : currentSessionId;
+const SessionBottom = forwardRef<HTMLDivElement, Props>(
+  ({ enableFileAttachments = true, isFullWidth = false }, ref) => {
+    const { t } = useTranslation();
+    const { currentSession, currentSessionId, setCurrentSession, workBenchAgents } = useSessions();
+    // While a new session is being confirmed by the server (optimistic pre-navigation),
+    // pass null to all hooks that make real API calls so they don't fire against the
+    // fake client-generated tmpId that doesn't exist in the database yet.
+    const pendingFirstMessage = useSessionLayout(s => s.pendingFirstMessage);
+    const effectiveSessionId = pendingFirstMessage ? null : currentSessionId;
 
-  const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
-  const { setWorkBenchFiles } = useWorkBenchActions();
-  const { addToNotebookContext, removeFromNotebookContext } = useNotebookContextFiles();
-  const { systemFiles } = useSystemPromptFiles();
-  const hasEmbeddingMismatches = useEmbeddingMismatchStatus(currentSessionId);
+    const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
+    const { setWorkBenchFiles } = useWorkBenchActions();
+    const { addToNotebookContext, removeFromNotebookContext } = useNotebookContextFiles();
+    const { systemFiles } = useSystemPromptFiles();
+    const hasEmbeddingMismatches = useEmbeddingMismatchStatus(currentSessionId);
 
-  // Use custom hook to fetch message files (files attached to individual messages)
-  const messageFiles = useMessageFiles(effectiveSessionId);
+    // Use custom hook to fetch message files (files attached to individual messages)
+    const messageFiles = useMessageFiles(effectiveSessionId);
 
-  // Includes messageFiles: a notebook whose only files are message-scoped would
-  // otherwise render no Files button and no panel - which is exactly the case the
-  // promote action in that panel exists to rescue.
-  const totalFilesCount = workBenchFiles.length + systemFiles.length + messageFiles.length;
-  const queryClient = useQueryClient();
-  const theme = useTheme();
-  const mode = theme.palette.mode;
-  // Gating (exhausted/low-credit warnings) reads the live balance, not the
-  // frozen display value - a genuine mid-turn exhaustion must still surface.
-  const effectiveCredits = useEffectiveCredits({ live: true });
+    // Includes messageFiles: a notebook whose only files are message-scoped would
+    // otherwise render no Files button and no panel - which is exactly the case the
+    // promote action in that panel exists to rescue.
+    const totalFilesCount = workBenchFiles.length + systemFiles.length + messageFiles.length;
+    const queryClient = useQueryClient();
+    const theme = useTheme();
+    const mode = theme.palette.mode;
+    // Gating (exhausted/low-credit warnings) reads the live balance, not the
+    // frozen display value - a genuine mid-turn exhaustion must still surface.
+    const effectiveCredits = useEffectiveCredits({ live: true });
 
-  const { chatCompletion, setChatCompletion } = useChatCompletionContext();
+    const { chatCompletion, setChatCompletion } = useChatCompletionContext();
 
-  const { readyState, subscribeToAction } = useWebsocket();
+    const { readyState, subscribeToAction } = useWebsocket();
 
-  const chatInputRef = useRef<HTMLTextAreaElement>(null);
-  const lexicalInputRef = useRef<LexicalChatInputRef>(null);
-  const [, setAgentBenchCollapsed] = useState<boolean>(false);
-  const [filesDropdownOpen, setFilesDropdownOpen] = useState<boolean>(false);
+    const chatInputRef = useRef<HTMLTextAreaElement>(null);
+    const lexicalInputRef = useRef<LexicalChatInputRef>(null);
+    const [, setAgentBenchCollapsed] = useState<boolean>(false);
+    const [filesDropdownOpen, setFilesDropdownOpen] = useState<boolean>(false);
 
-  const [chatInputValue, setChatInputValue, setDraft, getDraft, clearDraft, focusRequestId] = useChatInput(
-    useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft, s.clearDraft, s.focusRequestId])
-  );
-  const [rephraseGlow, setRephraseGlow] = useState(false);
-  const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
-  const [lowCreditsWarningDismissed, setLowCreditsWarningDismissed] = useState(false);
-  // Band at which the user dismissed the context warning; re-shows on escalation.
-  const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
+    const [chatInputValue, setChatInputValue, setDraft, getDraft, clearDraft, focusRequestId] = useChatInput(
+      useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft, s.clearDraft, s.focusRequestId])
+    );
+    const [rephraseGlow, setRephraseGlow] = useState(false);
+    const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
+    const [lowCreditsWarningDismissed, setLowCreditsWarningDismissed] = useState(false);
+    // Band at which the user dismissed the context warning; re-shows on escalation.
+    const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
 
-  // Modal state: triggered modal, admin preview, format dialog, modal list
-  const {
-    triggeredModal,
-    triggeredModalOpen,
-    setTriggeredModalOpen,
-    showAdminPreview,
-    setShowAdminPreview,
-    adminPreviewData,
-    setAdminPreviewData,
-    formatDialogOpen,
-    setFormatDialogOpen,
-    pasteContentForFormat,
-    pasteSmartFileName,
-    modalListPopupOpen,
-    setModalListPopupOpen,
-    modalListData,
-  } = useModalState(currentSessionId);
+    // Modal state: triggered modal, admin preview, format dialog, modal list
+    const {
+      triggeredModal,
+      triggeredModalOpen,
+      setTriggeredModalOpen,
+      showAdminPreview,
+      setShowAdminPreview,
+      adminPreviewData,
+      setAdminPreviewData,
+      formatDialogOpen,
+      setFormatDialogOpen,
+      pasteContentForFormat,
+      pasteSmartFileName,
+      modalListPopupOpen,
+      setModalListPopupOpen,
+      modalListData,
+    } = useModalState(currentSessionId);
 
-  // Voice state: spoken words, voice session, debug drawer, credits, voice engine
-  const {
-    spokenWords,
-    setSpokenWords,
-    isVoiceSessionEnabled,
-    debugDrawerOpen,
-    setDebugDrawerOpen,
-    creditsExhaustedByVoice,
-    voiceEngine,
-  } = useVoiceState({ currentSessionId });
+    // Voice state: spoken words, voice session, debug drawer, credits, voice engine
+    const {
+      spokenWords,
+      setSpokenWords,
+      isVoiceSessionEnabled,
+      debugDrawerOpen,
+      setDebugDrawerOpen,
+      creditsExhaustedByVoice,
+      voiceEngine,
+    } = useVoiceState({ currentSessionId });
 
-  // Content Publishing Studio - Content Transform Detector
-  const { transformedContent, shouldShowPreview, clearPreview } = useContentTransformDetector(currentSessionId);
+    // Content Publishing Studio - Content Transform Detector
+    const { transformedContent, shouldShowPreview, clearPreview } = useContentTransformDetector(currentSessionId);
 
-  // LLM state needed for rendering (send logic reads its own slice internally)
-  const model = useLLM(s => s.model);
-  const max_tokens = useLLM(s => s.max_tokens);
-  const sessionFilesOpen = useAdvancedAISettings(state => state.sessionFilesOpen);
-  const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
-  const [stream, setStream] = useState<boolean>(true);
-  const { data: modelInfo } = useModelInfo();
-  const { accessibleModels, isLoading: isModelsLoading } = useAccessibleModels();
-  const hasModels = !!accessibleModels && accessibleModels.length > 0;
+    // LLM state needed for rendering (send logic reads its own slice internally)
+    const model = useLLM(s => s.model);
+    const max_tokens = useLLM(s => s.max_tokens);
+    const sessionFilesOpen = useAdvancedAISettings(state => state.sessionFilesOpen);
+    const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
+    const [stream, setStream] = useState<boolean>(true);
+    const { data: modelInfo } = useModelInfo();
+    const { accessibleModels, isLoading: isModelsLoading } = useAccessibleModels();
+    const hasModels = !!accessibleModels && accessibleModels.length > 0;
 
-  // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
-  useMcpServerSync();
+    // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
+    useMcpServerSync();
 
-  const { contextWindowLimit, effectiveMaxOutputTokens, maxInputTokens, isOverContextWindow } = useTokenLimits({
-    model,
-    modelInfo,
-    max_tokens,
-    chatInputLength: chatInputValue.length,
-  });
-
-  // Effective (assembled) context usage from the last completed turn - the real
-  // number the user is paying for, vs. isOverContextWindow which only measures
-  // the current input box against the budget.
-  const contextUsage = useSessionContextUsage(currentSessionId);
-  const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
-  const attachmentFit = useAttachmentFitWarning(
-    model,
-    // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
-    useMemo(() => workBenchFiles.map(f => String(f.id)).filter(Boolean), [workBenchFiles])
-  );
-  // Dismissal is per attachment set: changing the files or the model asks a new question, so the
-  // previous dismissal should not silence the new answer.
-  const [attachmentWarningDismissed, setAttachmentWarningDismissed] = useState(false);
-  const attachmentFitKey = attachmentFit ? `${attachmentFit.fileName}:${attachmentFit.deliveredPercent}` : '';
-  useEffect(() => {
-    setAttachmentWarningDismissed(false);
-  }, [attachmentFitKey]);
-  // Show the warning once usage is elevated, until dismissed at that band; a
-  // jump from warning -> danger re-surfaces it.
-  const showContextWarning =
-    !!contextUsage && contextUsage.band !== 'normal' && contextUsage.band !== contextWarningDismissedBand;
-
-  // Compaction note: show when the latest turn folded older history into working
-  // memory, until dismissed. Re-surfaces when a later turn compacts again.
-  const compactedTurns = contextUsage?.compactedTurns ?? 0;
-  const [compactionNoteDismissed, setCompactionNoteDismissed] = useState(false);
-  const showCompactionNote = compactedTurns > 0 && !compactionNoteDismissed;
-  useEffect(() => {
-    setCompactionNoteDismissed(false);
-  }, [compactedTurns]);
-
-  // Reset both dismissals when switching notebooks so a heavy session doesn't
-  // inherit a prior notebook's dismissed state.
-  useEffect(() => {
-    setContextWarningDismissedBand(null);
-    setCompactionNoteDismissed(false);
-  }, [currentSessionId]);
-
-  // Corner readout for the composer. Prefer the real assembled-context size from
-  // the last turn; before any turn completes, fall back to the current-input
-  // guard (which measures the input box against the budget, not the history).
-  const contextMeter = contextUsage
-    ? {
-        show: contextUsage.band !== 'normal',
-        danger: contextUsage.band === 'danger',
-        primary: `${formatTokenCount(contextUsage.actualInputTokens)}/${formatTokenCount(contextUsage.safeMaxInputTokens)}`,
-        secondary: `${Math.round(contextUsage.utilizationPercentage)}% of ${modelName} context`,
-      }
-    : {
-        show: isOverContextWindow,
-        danger: isOverContextWindow,
-        primary: `${chatInputValue.length}/${maxInputTokens}`,
-        secondary: `Context: ${contextWindowLimit} - Output: ${effectiveMaxOutputTokens}`,
-      };
-
-  const pond = useNotebookFilepond();
-  const maxFileSize = useGetSettingsValue('MaxFileSize') || 100;
-  const enforceCredits = !!useGetSettingsValue('enforceCredits');
-
-  // Credit warning conditions - extracted for readability
-  const creditsExhausted = effectiveCredits <= 0 || creditsExhaustedByVoice;
-  const isLowCredits = effectiveCredits > 0 && effectiveCredits < LOW_CREDITS_THRESHOLD && !creditsExhaustedByVoice;
-  const showCreditOverlay = enforceCredits && (creditsExhausted || (isLowCredits && !lowCreditsWarningDismissed));
-
-  // FilePond expects the max file size as an MB string, e.g. '100MB'
-  const maxFileSizeForFilePond = `${maxFileSize}MB`;
-  const { files, setFiles, clearFiles } = useSessionFiles(currentSessionId);
-  const isMobile = useIsMobile();
-  const isPWA = useIsPWA();
-
-  // Toggle state for file upload mode (false = message files, true = session files)
-  const [attachScopeMode, setAttachScopeMode] = useState<AttachScopeMode>('auto');
-
-  // Track message-specific files pending send - now stored in session layout store
-  const pendingMessageFilesRaw = useSessionLayout(s => s.pendingMessageFiles);
-  const pendingMessageFiles = useMemo(() => pendingMessageFilesRaw || [], [pendingMessageFilesRaw]);
-  const recentArtifacts = useSessionLayout(s => s.recentArtifacts);
-
-  // Memoize sorted knowledge items for consistent ordering
-  const sortedKnowledgeItems = useMemo(
-    () => buildSortedKnowledgeItems(workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, recentArtifacts),
-    [workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, recentArtifacts]
-  );
-
-  const isCompactLayout = useSessionLayout(s => s.layout === 'vertical' || s.layout === 'pip');
-  // Docked panels (dockRight/dockBottom) own their bottom edge; the outer pb
-  // would just add dead space under the input.
-  const isDockedLayout = useSessionLayout(s => s.layout === 'dockRight' || s.layout === 'dockBottom');
-  // The floating chat window frames the input itself, so like docked it drops the
-  // outer spacing and rounded card look; unlike docked it keeps a top separator.
-  const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
-  // The Data Lake chat is embedded edge-to-edge in the Explorer (#836), so it drops
-  // the outer bottom gutter like the docked/floating layouts do.
-  const isDataLakeSurface = currentSession?.surface === 'datalake';
-
-  // Determine if the stop button should be shown
-  const shouldShowStopButton = useMemo(() => {
-    // Show stop button if chat completion is in progress
-    const isChatCompletionActive =
-      !chatCompletion.completed && (chatCompletion.statusMessage || chatCompletion.quest?.status === 'running');
-    return isChatCompletionActive;
-  }, [chatCompletion.completed, chatCompletion.statusMessage, chatCompletion.quest?.status]);
-
-  // Check if there are active file uploads or images still pending a content-moderation
-  // scan - the Send button must stay disabled until the scan clears, otherwise
-  // a still-scanning (or already-blocked) image can ship silently with the message.
-  const hasActiveUploads = useMemo(() => {
-    return hasBlockingPendingFiles(pendingMessageFiles);
-  }, [pendingMessageFiles]);
-
-  const { data: sessionAgents = [] } = useGetSessionAgents(effectiveSessionId);
-  // Deliberately not defaulted to []: a literal default mints a fresh array on
-  // every render until the query resolves, defeating the memo below during
-  // exactly the window that matters (first typing on a cold page).
-  const { data: availableAgents } = useGetAgents();
-
-  // Get chat history for the current session
-  const { data: questsData } = useGetSessionQuests(effectiveSessionId);
-  const chatHistory = useMemo(() => (questsData?.pages || []).map(page => page.data).flat(), [questsData?.pages]);
-
-  // Combine session agents and workBench agents for display
-  const displayAgents = currentSessionId ? sessionAgents : workBenchAgents;
-
-  // Prepare data for LexicalChatInput. Memoised because the identity becomes the
-  // mention plugin's `items`, where a new array per render drives an un-bailable
-  // update storm - see the note at `mentionItems` in LexicalChatInput.tsx.
-  const lexicalAgents = useMemo(
-    () =>
-      (availableAgents ?? []).map(agent => ({
-        id: agent.id,
-        name: agent.name,
-        triggerWords: agent.triggerWords,
-      })),
-    [availableAgents]
-  );
-
-  // Both handlers are memoised: LexicalChatInput hands them to OnChangePlugin and
-  // SubmitOnEnterPlugin, which key their lexical registrations on the identity, so
-  // inline arrows re-register an editor listener and a command on every render.
-  const handleInputChange = useCallback(
-    (newValue: string) => {
-      setChatInputValue(newValue);
-
-      // Save draft as user types. A new notebook has no id yet, so
-      // draft under the stable new-notebook key - it survives a
-      // full-page reload and is restored by useMessageDraft.
-      setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
-
-      const shouldShowSlashSuggestions =
-        typeof newValue === 'string' &&
-        newValue.startsWith('/') &&
-        !newValue.startsWith('/admin') &&
-        !newValue.includes(' '); // Hide when user has completed the command and added a space
-
-      setShowSlashSuggestions(shouldShowSlashSuggestions);
-    },
-    [setChatInputValue, setDraft, currentSessionId]
-  );
-
-  const { rollRandomDice } = useRollDice();
-
-  const { submitting, stoppingMessage, pendingAutoSubmitGoal, handleSendClick, handleStopMessage } = useSendMessage({
-    lexicalInputRef,
-    chatInputRef,
-    clearFiles,
-    stream,
-    setChatCompletion,
-    onAgentsAttached: () => setAgentBenchCollapsed(false),
-  });
-
-  const handleEditorSubmit = useCallback(async () => {
-    // Block Enter-to-send while a response is still streaming
-    // or while files are still uploading/scanning.
-    if (shouldShowStopButton || submitting || hasActiveUploads) return;
-    await handleSendClick();
-  }, [shouldShowStopButton, submitting, hasActiveUploads, handleSendClick]);
-
-  // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
-  const sendPromptCallback = useCallback(
-    async (prompt: string) => {
-      await handleSendClick(prompt);
-    },
-
-    [handleSendClick]
-  );
-  useEffect(() => {
-    registerSendPrompt(sendPromptCallback);
-    return () => registerSendPrompt(null);
-  }, [sendPromptCallback]);
-
-  const toggleFileUpload = () => {
-    if (pond.current) {
-      pond.current.browse();
-    }
-  };
-
-  // Auto-focus the chat input on mount, and again whenever an external prefill (via
-  // useChatInput.requestFocus()) asks for focus without a session change. SessionBottom
-  // itself is never remounted on a session switch, so a session-change refocus is not
-  // this hook's doing -- if one is observed, it comes from elsewhere.
-  useAutoFocus(lexicalInputRef as any, { enabled: true, focusTrigger: focusRequestId });
-
-  // Persists draft per session and restores it on session switch
-  useMessageDraft(currentSessionId, setChatInputValue, setDraft, getDraft, clearDraft);
-
-  const canAttachFiles = enableFileAttachments;
-
-  const handlePaste = useChatPaste({
-    currentSession,
-    currentSessionId,
-    chatHistory,
-    chatInputValue,
-    setChatInputValue,
-    setWorkBenchFiles,
-    setCurrentSession,
-    queryClient,
-    lexicalInputRef,
-  });
-
-  // Watch for changes to sessionAgents to show the AgentBench when agents are added/removed
-  useEffect(() => {
-    if (displayAgents.length > 0) {
-      setAgentBenchCollapsed(false); // Show the AgentBench whenever agents are added/removed
-    }
-  }, [displayAgents]); // Watch both sessionAgents and workBenchAgents
-
-  // Refresh files data when dropdown opens
-  useEffect(() => {
-    const invalidateQueries = async () => {
-      // Invalidate system prompt files
-      await queryClient.invalidateQueries({
-        queryKey: ['system-prompt-files'],
-        exact: false,
-      });
-
-      // Also invalidate fab files if needed
-      await queryClient.invalidateQueries({
-        queryKey: ['fabFiles'],
-        exact: false,
-      });
-    };
-
-    if (filesDropdownOpen) {
-      invalidateQueries();
-    }
-  }, [filesDropdownOpen, currentSessionId, queryClient]);
-
-  // Subscribe to the async upload content-moderation scan result and patch the
-  // matching composer thumbnail in place via recordModerationStatus: 'blocked' flips it to
-  // 'blocked' (GetFileIcon renders the blocked placeholder). On 'clean' the held fabFile
-  // still only has a PUT-signed presignedUrl (fileUrl was nulled by the serve-gate while
-  // scanning), so we re-fetch the fabFile here to get a fresh GET-signed fileUrl (now
-  // regenerated server-side since moderationStatus passes isImageServeable) and merge it in
-  // before flipping the item to 'complete' - otherwise GetFileIcon has nothing valid to
-  // render. recordModerationStatus buffers the event by fabFileId when the composer hasn't
-  // swapped in the real FabFile id yet (upload still resolving) - see SessionFilePond's
-  // consumeBufferedModerationStatus reconciliation on that swap - so a ws event that beats
-  // the id-swap doesn't strand the item on the 'scanning' placeholder forever.
-  useEffect(() => {
-    const unsubscribe = subscribeToAction('image_moderation_status', async msg => {
-      if (msg.action !== 'image_moderation_status') return;
-
-      if (msg.moderationStatus === 'clean') {
-        let fileUrl: string | undefined;
-        try {
-          const [fresh] = await getFabFilesFromServerByIds([msg.fabFileId]);
-          fileUrl = fresh?.fileUrl ?? undefined;
-        } catch {
-          // Fall through - the reducer still flips status to 'complete'; a page refresh
-          // (File Manager / message stream) self-heals by refetching a valid fileUrl.
-        }
-        recordModerationStatus(msg.fabFileId, 'clean', fileUrl);
-
-        // An image the user explicitly scoped to the notebook is held back at upload
-        // time and promoted only here, once the scan clears. A knowledgeIds entry
-        // survives into clones, exports and (when propagation is on) projects, so a
-        // blocked image must never acquire one. Read from the store rather than a
-        // closure: this effect is subscribed once and would capture a stale list.
-        const promoted = useSessionLayout
-          .getState()
-          .pendingMessageFiles.find(item => item.fabFile.id === msg.fabFileId);
-        if (promoted?.scope === 'notebook') {
-          void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
-            () => {
-              // Already rolled back and surfaced by the hook.
-            }
-          );
-        }
-      } else {
-        recordModerationStatus(msg.fabFileId, msg.moderationStatus);
-      }
+    const { contextWindowLimit, effectiveMaxOutputTokens, maxInputTokens, isOverContextWindow } = useTokenLimits({
+      model,
+      modelInfo,
+      max_tokens,
+      chatInputLength: chatInputValue.length,
     });
 
-    return () => {
-      unsubscribe();
+    // Effective (assembled) context usage from the last completed turn - the real
+    // number the user is paying for, vs. isOverContextWindow which only measures
+    // the current input box against the budget.
+    const contextUsage = useSessionContextUsage(currentSessionId);
+    const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
+    const attachmentFit = useAttachmentFitWarning(
+      model,
+      // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
+      useMemo(() => workBenchFiles.map(f => String(f.id)).filter(Boolean), [workBenchFiles])
+    );
+    // Dismissal is per attachment set: changing the files or the model asks a new question, so the
+    // previous dismissal should not silence the new answer.
+    const [attachmentWarningDismissed, setAttachmentWarningDismissed] = useState(false);
+    const attachmentFitKey = attachmentFit ? `${attachmentFit.fileName}:${attachmentFit.deliveredPercent}` : '';
+    useEffect(() => {
+      setAttachmentWarningDismissed(false);
+    }, [attachmentFitKey]);
+    // Show the warning once usage is elevated, until dismissed at that band; a
+    // jump from warning -> danger re-surfaces it.
+    const showContextWarning =
+      !!contextUsage && contextUsage.band !== 'normal' && contextUsage.band !== contextWarningDismissedBand;
+
+    // Compaction note: show when the latest turn folded older history into working
+    // memory, until dismissed. Re-surfaces when a later turn compacts again.
+    const compactedTurns = contextUsage?.compactedTurns ?? 0;
+    const [compactionNoteDismissed, setCompactionNoteDismissed] = useState(false);
+    const showCompactionNote = compactedTurns > 0 && !compactionNoteDismissed;
+    useEffect(() => {
+      setCompactionNoteDismissed(false);
+    }, [compactedTurns]);
+
+    // Reset both dismissals when switching notebooks so a heavy session doesn't
+    // inherit a prior notebook's dismissed state.
+    useEffect(() => {
+      setContextWarningDismissedBand(null);
+      setCompactionNoteDismissed(false);
+    }, [currentSessionId]);
+
+    // Corner readout for the composer. Prefer the real assembled-context size from
+    // the last turn; before any turn completes, fall back to the current-input
+    // guard (which measures the input box against the budget, not the history).
+    const contextMeter = contextUsage
+      ? {
+          show: contextUsage.band !== 'normal',
+          danger: contextUsage.band === 'danger',
+          primary: `${formatTokenCount(contextUsage.actualInputTokens)}/${formatTokenCount(contextUsage.safeMaxInputTokens)}`,
+          secondary: `${Math.round(contextUsage.utilizationPercentage)}% of ${modelName} context`,
+        }
+      : {
+          show: isOverContextWindow,
+          danger: isOverContextWindow,
+          primary: `${chatInputValue.length}/${maxInputTokens}`,
+          secondary: `Context: ${contextWindowLimit} - Output: ${effectiveMaxOutputTokens}`,
+        };
+
+    const pond = useNotebookFilepond();
+    const maxFileSize = useGetSettingsValue('MaxFileSize') || 100;
+    const enforceCredits = !!useGetSettingsValue('enforceCredits');
+
+    // Credit warning conditions - extracted for readability
+    const creditsExhausted = effectiveCredits <= 0 || creditsExhaustedByVoice;
+    const isLowCredits = effectiveCredits > 0 && effectiveCredits < LOW_CREDITS_THRESHOLD && !creditsExhaustedByVoice;
+    const showCreditOverlay = enforceCredits && (creditsExhausted || (isLowCredits && !lowCreditsWarningDismissed));
+
+    // FilePond expects the max file size as an MB string, e.g. '100MB'
+    const maxFileSizeForFilePond = `${maxFileSize}MB`;
+    const { files, setFiles, clearFiles } = useSessionFiles(currentSessionId);
+    const isMobile = useIsMobile();
+    const isPWA = useIsPWA();
+
+    // Toggle state for file upload mode (false = message files, true = session files)
+    const [attachScopeMode, setAttachScopeMode] = useState<AttachScopeMode>('auto');
+
+    // Track message-specific files pending send - now stored in session layout store
+    const pendingMessageFilesRaw = useSessionLayout(s => s.pendingMessageFiles);
+    const pendingMessageFiles = useMemo(() => pendingMessageFilesRaw || [], [pendingMessageFilesRaw]);
+    const recentArtifacts = useSessionLayout(s => s.recentArtifacts);
+
+    // Memoize sorted knowledge items for consistent ordering
+    const sortedKnowledgeItems = useMemo(
+      () => buildSortedKnowledgeItems(workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, recentArtifacts),
+      [workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, recentArtifacts]
+    );
+
+    const isCompactLayout = useSessionLayout(s => s.layout === 'vertical' || s.layout === 'pip');
+    // Docked panels (dockRight/dockBottom) own their bottom edge; the outer pb
+    // would just add dead space under the input.
+    const isDockedLayout = useSessionLayout(s => s.layout === 'dockRight' || s.layout === 'dockBottom');
+    // The floating chat window frames the input itself, so like docked it drops the
+    // outer spacing and rounded card look; unlike docked it keeps a top separator.
+    const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
+    // The Data Lake chat is embedded edge-to-edge in the Explorer (#836), so it drops
+    // the outer bottom gutter like the docked/floating layouts do.
+    const isDataLakeSurface = currentSession?.surface === 'datalake';
+
+    // Determine if the stop button should be shown
+    const shouldShowStopButton = useMemo(() => {
+      // Show stop button if chat completion is in progress
+      const isChatCompletionActive =
+        !chatCompletion.completed && (chatCompletion.statusMessage || chatCompletion.quest?.status === 'running');
+      return isChatCompletionActive;
+    }, [chatCompletion.completed, chatCompletion.statusMessage, chatCompletion.quest?.status]);
+
+    // Check if there are active file uploads or images still pending a content-moderation
+    // scan - the Send button must stay disabled until the scan clears, otherwise
+    // a still-scanning (or already-blocked) image can ship silently with the message.
+    const hasActiveUploads = useMemo(() => {
+      return hasBlockingPendingFiles(pendingMessageFiles);
+    }, [pendingMessageFiles]);
+
+    const { data: sessionAgents = [] } = useGetSessionAgents(effectiveSessionId);
+    // Deliberately not defaulted to []: a literal default mints a fresh array on
+    // every render until the query resolves, defeating the memo below during
+    // exactly the window that matters (first typing on a cold page).
+    const { data: availableAgents } = useGetAgents();
+
+    // Get chat history for the current session
+    const { data: questsData } = useGetSessionQuests(effectiveSessionId);
+    const chatHistory = useMemo(() => (questsData?.pages || []).map(page => page.data).flat(), [questsData?.pages]);
+
+    // Combine session agents and workBench agents for display
+    const displayAgents = currentSessionId ? sessionAgents : workBenchAgents;
+
+    // Prepare data for LexicalChatInput. Memoised because the identity becomes the
+    // mention plugin's `items`, where a new array per render drives an un-bailable
+    // update storm - see the note at `mentionItems` in LexicalChatInput.tsx.
+    const lexicalAgents = useMemo(
+      () =>
+        (availableAgents ?? []).map(agent => ({
+          id: agent.id,
+          name: agent.name,
+          triggerWords: agent.triggerWords,
+        })),
+      [availableAgents]
+    );
+
+    // Both handlers are memoised: LexicalChatInput hands them to OnChangePlugin and
+    // SubmitOnEnterPlugin, which key their lexical registrations on the identity, so
+    // inline arrows re-register an editor listener and a command on every render.
+    const handleInputChange = useCallback(
+      (newValue: string) => {
+        setChatInputValue(newValue);
+
+        // Save draft as user types. A new notebook has no id yet, so
+        // draft under the stable new-notebook key - it survives a
+        // full-page reload and is restored by useMessageDraft.
+        setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
+
+        const shouldShowSlashSuggestions =
+          typeof newValue === 'string' &&
+          newValue.startsWith('/') &&
+          !newValue.startsWith('/admin') &&
+          !newValue.includes(' '); // Hide when user has completed the command and added a space
+
+        setShowSlashSuggestions(shouldShowSlashSuggestions);
+      },
+      [setChatInputValue, setDraft, currentSessionId]
+    );
+
+    const { rollRandomDice } = useRollDice();
+
+    const { submitting, stoppingMessage, pendingAutoSubmitGoal, handleSendClick, handleStopMessage } = useSendMessage({
+      lexicalInputRef,
+      chatInputRef,
+      clearFiles,
+      stream,
+      setChatCompletion,
+      onAgentsAttached: () => setAgentBenchCollapsed(false),
+    });
+
+    const handleEditorSubmit = useCallback(async () => {
+      // Block Enter-to-send while a response is still streaming
+      // or while files are still uploading/scanning.
+      if (shouldShowStopButton || submitting || hasActiveUploads) return;
+      await handleSendClick();
+    }, [shouldShowStopButton, submitting, hasActiveUploads, handleSendClick]);
+
+    // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
+    const sendPromptCallback = useCallback(
+      async (prompt: string) => {
+        await handleSendClick(prompt);
+      },
+
+      [handleSendClick]
+    );
+    useEffect(() => {
+      registerSendPrompt(sendPromptCallback);
+      return () => registerSendPrompt(null);
+    }, [sendPromptCallback]);
+
+    const toggleFileUpload = () => {
+      if (pond.current) {
+        pond.current.browse();
+      }
     };
-  }, [subscribeToAction, addToNotebookContext]);
 
-  const { setOpen: setFileBrowserOpen } = useFileBrowser();
+    // Auto-focus the chat input on mount, and again whenever an external prefill (via
+    // useChatInput.requestFocus()) asks for focus without a session change. SessionBottom
+    // itself is never remounted on a session switch, so a session-change refocus is not
+    // this hook's doing -- if one is observed, it comes from elsewhere.
+    useAutoFocus(lexicalInputRef as any, { enabled: true, focusTrigger: focusRequestId });
 
-  return (
-    <Box
-      ref={ref}
-      className="session-bottom"
-      sx={{
-        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '1.25rem',
-        paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
-        position: 'relative',
-      }}
-      display={'flex'}
-      justifyContent={'center'}
-    >
-      <HighlanderFocus targetId="chatInput" />
-      <Stack
-        className="session-bottom-container"
-        data-testid="session-bottom-container"
-        sx={theme => ({
-          width: isMobile ? '100vw' : '100%',
-          // Docked/floating panels are already width-constrained; capping the input
-          // at 950px would leave visible panel-background gutters beside it.
-          maxWidth: isDockedLayout || isFloatingLayout ? 'none' : '950px',
-          marginLeft: isCompactLayout ? '0px' : 'auto',
-          marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isDockedLayout
-            ? { border: 'none' }
-            : isCompactLayout || isMobile || isFloatingLayout
-              ? {
-                  borderTop: '1px solid',
-                  borderTopColor: 'border.solid',
-                  borderLeft: 'none',
-                  borderRight: 'none',
-                  borderBottom: 'none',
-                }
-              : {
-                  border: '1px solid',
-                  borderColor: 'border.solid',
-                }),
-          backgroundColor: theme.palette.background.panel,
-          boxShadow: theme.palette.session.boxShadow,
-          paddingX: isPWA ? '24px' : '16px',
-          pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
-          // Bottom corners at 8px to sit inside the chat pane's own 8px frame; the top pair
-          // is free-standing and keeps its looser .625rem.
-          borderRadius:
-            isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem .625rem 8px 8px',
-        })}
-      >
-        <Box>
-          <Grid container spacing={0} mt={'0vh'} sx={{ width: '100%', height: '100%' }} alignContent="center">
-            <Grid xs={12}>
-              {/* Remove settings icon and attachment button code from here since they're now inline */}
+    // Persists draft per session and restores it on session switch
+    useMessageDraft(currentSessionId, setChatInputValue, setDraft, getDraft, clearDraft);
 
-              <Box
-                className="session-bottom-input-container"
-                sx={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  width: '100%',
-                  paddingX: '0',
-                  borderRadius: '6px',
-                  marginTop: '-10px',
-                  position: 'relative',
-                }}
-              >
-                <NoModelsWarning show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)} />
-                {contextUsage && (
-                  <ContextUsageWarning
-                    show={showContextWarning}
-                    usage={contextUsage}
-                    modelName={modelName}
-                    onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
-                  />
-                )}
-                {/* Answers a different question than the meter above: not how full the session is, but
-                    whether the file attached to THIS turn survives the budget. Null whenever it fits. */}
-                {attachmentFit && !attachmentWarningDismissed && (
-                  <ContextUsageWarning
-                    show
-                    attachment={attachmentFit}
-                    modelName={modelName}
-                    onDismiss={() => setAttachmentWarningDismissed(true)}
-                  />
-                )}
-                <ContextCompactionNote
-                  show={showCompactionNote}
-                  turns={compactedTurns}
-                  onDismiss={() => setCompactionNoteDismissed(true)}
-                />
-                <Stack
-                  className="session-bottom-input-row"
-                  direction="row"
-                  spacing={2}
-                  alignItems="center"
-                  sx={{ position: 'relative', paddingTop: '10px' }}
-                >
-                  <Box
-                    className="session-bottom-editor-wrapper"
-                    sx={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      width: '100%',
-                      padding: '8px 0px',
-                      flex: 1,
-                      overflow: 'visible',
-                      position: 'relative',
-                      minHeight: showCreditOverlay ? '60px' : undefined,
-                      transition: 'box-shadow 300ms, outline 300ms',
-                      boxShadow: rephraseGlow
-                        ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
-                        : undefined,
-                      outline: rephraseGlow ? '2px solid rgba(59,130,246,0.35)' : undefined,
-                      borderRadius: '8px',
-                    }}
-                  >
-                    <CreditsWarning show={creditsExhausted && enforceCredits && hasModels} />
-                    <LowCreditsWarning
-                      show={isLowCredits && !lowCreditsWarningDismissed && enforceCredits && hasModels}
-                      currentCredits={effectiveCredits}
-                      onDismiss={() => setLowCreditsWarningDismissed(true)}
-                    />
-                    {/* Slash command suggestions */}
-                    {showSlashSuggestions && (
-                      <SlashCommandSuggestions
-                        input={chatInputValue}
-                        onSelectSuggestion={(suggestion: string, selectionRange?: { start: number; end: number }) => {
-                          setChatInputValue(suggestion);
-                          setShowSlashSuggestions(false);
+    const canAttachFiles = enableFileAttachments;
 
-                          // If there's a selection range (placeholder), select it after React and Lexical update
-                          if (selectionRange && lexicalInputRef.current) {
-                            // Use longer timeout to ensure Lexical has fully synced the new value
-                            setTimeout(() => {
-                              lexicalInputRef.current?.focus();
-                              lexicalInputRef.current?.setSelection(selectionRange.start, selectionRange.end);
-                            }, 50);
-                          } else {
-                            // No selection range, just focus at the end
-                            setTimeout(() => {
-                              lexicalInputRef.current?.focus();
-                            }, 50);
-                          }
-                        }}
-                        onVisibilityChange={() => {}}
-                      />
-                    )}
+    const handlePaste = useChatPaste({
+      currentSession,
+      currentSessionId,
+      chatHistory,
+      chatInputValue,
+      setChatInputValue,
+      setWorkBenchFiles,
+      setCurrentSession,
+      queryClient,
+      lexicalInputRef,
+    });
 
-                    <LexicalChatInput
-                      ref={lexicalInputRef}
-                      value={chatInputValue}
-                      onChange={handleInputChange}
-                      onSubmit={handleEditorSubmit}
-                      onPaste={handlePaste}
-                      placeholder={`${t('session.typeYourMessage')}...`}
-                      agents={lexicalAgents}
-                    />
+    // Watch for changes to sessionAgents to show the AgentBench when agents are added/removed
+    useEffect(() => {
+      if (displayAgents.length > 0) {
+        setAgentBenchCollapsed(false); // Show the AgentBench whenever agents are added/removed
+      }
+    }, [displayAgents]); // Watch both sessionAgents and workBenchAgents
 
-                    {contextMeter.show ? (
-                      <Box
-                        sx={{
-                          position: 'absolute',
-                          mr: 20,
-                          // Passive readout: must stay below composer popovers (attach
-                          // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
-                          // suggestions), or it intercepts their clicks.
-                          zIndex: 1,
-                          backgroundColor: 'background.surface',
-                          borderRadius: '6px',
-                          padding: '4px 8px',
-                        }}
-                      >
-                        <Tooltip title="Assembled context size for this notebook (last turn)">
-                          <Typography
-                            sx={theme => ({
-                              color: contextMeter.danger ? 'red' : theme.palette.text.primary,
-                              textAlign: 'right',
-                              leadingTrim: 'both',
-                              textEdge: 'cap',
-                              fontSize: '14px',
-                              fontStyle: 'normal',
-                              fontWeight: '400',
-                              lineHeight: '100%',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'flex-end',
-                            })}
-                            variant="plain"
-                            level="body-xs"
-                          >
-                            <Box component="span" sx={{ fontWeight: '500' }}>
-                              {contextMeter.primary}
-                            </Box>
-                            <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
-                              {contextMeter.secondary}
-                            </Box>
-                          </Typography>
-                        </Tooltip>
-                      </Box>
-                    ) : null}
-                  </Box>
-                </Stack>
-              </Box>
-            </Grid>
-          </Grid>
-        </Box>
+    // Refresh files data when dropdown opens
+    useEffect(() => {
+      const invalidateQueries = async () => {
+        // Invalidate system prompt files
+        await queryClient.invalidateQueries({
+          queryKey: ['system-prompt-files'],
+          exact: false,
+        });
 
-        {canAttachFiles && (
-          <SessionFilePond
-            pond={pond}
-            files={files}
-            setFiles={setFiles}
-            maxFileSizeForFilePond={maxFileSizeForFilePond}
-            attachScopeMode={attachScopeMode}
-            currentSessionId={currentSessionId}
-            addToNotebookContext={addToNotebookContext}
-          />
-        )}
+        // Also invalidate fab files if needed
+        await queryClient.invalidateQueries({
+          queryKey: ['fabFiles'],
+          exact: false,
+        });
+      };
 
-        {/* File Thumbnails */}
-        {pendingMessageFiles.length > 0 && (
-          <MessageFileThumbnails
-            files={pendingMessageFiles}
-            onRemove={fileId => {
-              setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
-              setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
+      if (filesDropdownOpen) {
+        invalidateQueries();
+      }
+    }, [filesDropdownOpen, currentSessionId, queryClient]);
 
-              // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
-              // this failed, knowledgeIds would keep a dead id that every later hydration
-              // tries and fails to resolve. Keyed off the item's own frozen scope rather
-              // than the current control value, which the user may have changed since.
-              const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
-              const stripped =
-                removed?.scope === 'notebook'
-                  ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
-                  : Promise.resolve();
+    // Subscribe to the async upload content-moderation scan result and patch the
+    // matching composer thumbnail in place via recordModerationStatus: 'blocked' flips it to
+    // 'blocked' (GetFileIcon renders the blocked placeholder). On 'clean' the held fabFile
+    // still only has a PUT-signed presignedUrl (fileUrl was nulled by the serve-gate while
+    // scanning), so we re-fetch the fabFile here to get a fresh GET-signed fileUrl (now
+    // regenerated server-side since moderationStatus passes isImageServeable) and merge it in
+    // before flipping the item to 'complete' - otherwise GetFileIcon has nothing valid to
+    // render. recordModerationStatus buffers the event by fabFileId when the composer hasn't
+    // swapped in the real FabFile id yet (upload still resolving) - see SessionFilePond's
+    // consumeBufferedModerationStatus reconciliation on that swap - so a ws event that beats
+    // the id-swap doesn't strand the item on the 'scanning' placeholder forever.
+    useEffect(() => {
+      const unsubscribe = subscribeToAction('image_moderation_status', async msg => {
+        if (msg.action !== 'image_moderation_status') return;
 
-              void stripped.then(() =>
-                deleteFileUtility(fileId).catch(err => {
-                  console.error('Failed to delete file:', err);
-                })
-              );
-            }}
-            onClick={file => {
-              // First ensure the KnowledgeViewer is open by setting layout to vertical
-              setSessionLayout({
-                layout: 'vertical',
-                selectedArtifactId: undefined,
-                artifactData: undefined,
-              });
+        if (msg.moderationStatus === 'clean') {
+          let fileUrl: string | undefined;
+          try {
+            const [fresh] = await getFabFilesFromServerByIds([msg.fabFileId]);
+            fileUrl = fresh?.fileUrl ?? undefined;
+          } catch {
+            // Fall through - the reducer still flips status to 'complete'; a page refresh
+            // (File Manager / message stream) self-heals by refetching a valid fileUrl.
+          }
+          recordModerationStatus(msg.fabFileId, 'clean', fileUrl);
 
-              // Find the message file in the sorted knowledge items list
-              const messageFileIndex = sortedKnowledgeItems.findIndex(item => item.id === file.id);
-
-              // Set the knowledge viewer to show the message file
-              // setTimeout ensures the layout change completes before setting the tab index
-              if (messageFileIndex !== -1) {
-                setTimeout(() => {
-                  setKnowledgeViewer({ selectedTabIndex: messageFileIndex });
-                }, 0);
+          // An image the user explicitly scoped to the notebook is held back at upload
+          // time and promoted only here, once the scan clears. A knowledgeIds entry
+          // survives into clones, exports and (when propagation is on) projects, so a
+          // blocked image must never acquire one. Read from the store rather than a
+          // closure: this effect is subscribed once and would capture a stale list.
+          const promoted = useSessionLayout
+            .getState()
+            .pendingMessageFiles.find(item => item.fabFile.id === msg.fabFileId);
+          if (promoted?.scope === 'notebook') {
+            void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
+              () => {
+                // Already rolled back and surfaced by the hook.
               }
-            }}
+            );
+          }
+        } else {
+          recordModerationStatus(msg.fabFileId, msg.moderationStatus);
+        }
+      });
+
+      return () => {
+        unsubscribe();
+      };
+    }, [subscribeToAction, addToNotebookContext]);
+
+    const { setOpen: setFileBrowserOpen } = useFileBrowser();
+
+    return (
+      <Box
+        ref={ref}
+        className="session-bottom"
+        sx={{
+          pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '1.25rem',
+          paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
+          position: 'relative',
+        }}
+        display={'flex'}
+        justifyContent={'center'}
+      >
+        <HighlanderFocus targetId="chatInput" />
+        <Stack
+          className="session-bottom-container"
+          data-testid="session-bottom-container"
+          sx={theme => ({
+            width: isMobile ? '100vw' : '100%',
+            // Docked/floating panels are already width-constrained; capping the input
+            // at 950px would leave visible panel-background gutters beside it.
+            // isFullWidth: both side panels (sidenav + KnowledgeViewer) are collapsed,
+            // so the prompt should fill the available space.
+            maxWidth: isDockedLayout || isFloatingLayout || isFullWidth ? 'none' : '950px',
+            marginLeft: isCompactLayout ? '0px' : 'auto',
+            marginRight: isCompactLayout ? '0px' : 'auto',
+            ...(isDockedLayout
+              ? { border: 'none' }
+              : isCompactLayout || isMobile || isFloatingLayout
+                ? {
+                    borderTop: '1px solid',
+                    borderTopColor: 'border.solid',
+                    borderLeft: 'none',
+                    borderRight: 'none',
+                    borderBottom: 'none',
+                  }
+                : {
+                    border: '1px solid',
+                    borderColor: 'border.solid',
+                  }),
+            backgroundColor: theme.palette.background.panel,
+            boxShadow: theme.palette.session.boxShadow,
+            paddingX: isPWA ? '24px' : '16px',
+            pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
+            // Bottom corners at 8px to sit inside the chat pane's own 8px frame; the top pair
+            // is free-standing and keeps its looser .625rem.
+            borderRadius:
+              isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem .625rem 8px 8px',
+          })}
+        >
+          <Box>
+            <Grid container spacing={0} mt={'0vh'} sx={{ width: '100%', height: '100%' }} alignContent="center">
+              <Grid xs={12}>
+                {/* Remove settings icon and attachment button code from here since they're now inline */}
+
+                <Box
+                  className="session-bottom-input-container"
+                  sx={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    width: '100%',
+                    paddingX: '0',
+                    borderRadius: '6px',
+                    marginTop: '-10px',
+                    position: 'relative',
+                  }}
+                >
+                  <NoModelsWarning show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)} />
+                  {contextUsage && (
+                    <ContextUsageWarning
+                      show={showContextWarning}
+                      usage={contextUsage}
+                      modelName={modelName}
+                      onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
+                    />
+                  )}
+                  {/* Answers a different question than the meter above: not how full the session is, but
+                    whether the file attached to THIS turn survives the budget. Null whenever it fits. */}
+                  {attachmentFit && !attachmentWarningDismissed && (
+                    <ContextUsageWarning
+                      show
+                      attachment={attachmentFit}
+                      modelName={modelName}
+                      onDismiss={() => setAttachmentWarningDismissed(true)}
+                    />
+                  )}
+                  <ContextCompactionNote
+                    show={showCompactionNote}
+                    turns={compactedTurns}
+                    onDismiss={() => setCompactionNoteDismissed(true)}
+                  />
+                  <Stack
+                    className="session-bottom-input-row"
+                    direction="row"
+                    spacing={2}
+                    alignItems="center"
+                    sx={{ position: 'relative', paddingTop: '10px' }}
+                  >
+                    <Box
+                      className="session-bottom-editor-wrapper"
+                      sx={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        width: '100%',
+                        padding: '8px 0px',
+                        flex: 1,
+                        overflow: 'visible',
+                        position: 'relative',
+                        minHeight: showCreditOverlay ? '60px' : undefined,
+                        transition: 'box-shadow 300ms, outline 300ms',
+                        boxShadow: rephraseGlow
+                          ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
+                          : undefined,
+                        outline: rephraseGlow ? '2px solid rgba(59,130,246,0.35)' : undefined,
+                        borderRadius: '8px',
+                      }}
+                    >
+                      <CreditsWarning show={creditsExhausted && enforceCredits && hasModels} />
+                      <LowCreditsWarning
+                        show={isLowCredits && !lowCreditsWarningDismissed && enforceCredits && hasModels}
+                        currentCredits={effectiveCredits}
+                        onDismiss={() => setLowCreditsWarningDismissed(true)}
+                      />
+                      {/* Slash command suggestions */}
+                      {showSlashSuggestions && (
+                        <SlashCommandSuggestions
+                          input={chatInputValue}
+                          onSelectSuggestion={(suggestion: string, selectionRange?: { start: number; end: number }) => {
+                            setChatInputValue(suggestion);
+                            setShowSlashSuggestions(false);
+
+                            // If there's a selection range (placeholder), select it after React and Lexical update
+                            if (selectionRange && lexicalInputRef.current) {
+                              // Use longer timeout to ensure Lexical has fully synced the new value
+                              setTimeout(() => {
+                                lexicalInputRef.current?.focus();
+                                lexicalInputRef.current?.setSelection(selectionRange.start, selectionRange.end);
+                              }, 50);
+                            } else {
+                              // No selection range, just focus at the end
+                              setTimeout(() => {
+                                lexicalInputRef.current?.focus();
+                              }, 50);
+                            }
+                          }}
+                          onVisibilityChange={() => {}}
+                        />
+                      )}
+
+                      <LexicalChatInput
+                        ref={lexicalInputRef}
+                        value={chatInputValue}
+                        onChange={handleInputChange}
+                        onSubmit={handleEditorSubmit}
+                        onPaste={handlePaste}
+                        placeholder={`${t('session.typeYourMessage')}...`}
+                        agents={lexicalAgents}
+                      />
+
+                      {contextMeter.show ? (
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            mr: 20,
+                            // Passive readout: must stay below composer popovers (attach
+                            // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
+                            // suggestions), or it intercepts their clicks.
+                            zIndex: 1,
+                            backgroundColor: 'background.surface',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                          }}
+                        >
+                          <Tooltip title="Assembled context size for this notebook (last turn)">
+                            <Typography
+                              sx={theme => ({
+                                color: contextMeter.danger ? 'red' : theme.palette.text.primary,
+                                textAlign: 'right',
+                                leadingTrim: 'both',
+                                textEdge: 'cap',
+                                fontSize: '14px',
+                                fontStyle: 'normal',
+                                fontWeight: '400',
+                                lineHeight: '100%',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'flex-end',
+                              })}
+                              variant="plain"
+                              level="body-xs"
+                            >
+                              <Box component="span" sx={{ fontWeight: '500' }}>
+                                {contextMeter.primary}
+                              </Box>
+                              <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
+                                {contextMeter.secondary}
+                              </Box>
+                            </Typography>
+                          </Tooltip>
+                        </Box>
+                      ) : null}
+                    </Box>
+                  </Stack>
+                </Box>
+              </Grid>
+            </Grid>
+          </Box>
+
+          {canAttachFiles && (
+            <SessionFilePond
+              pond={pond}
+              files={files}
+              setFiles={setFiles}
+              maxFileSizeForFilePond={maxFileSizeForFilePond}
+              attachScopeMode={attachScopeMode}
+              currentSessionId={currentSessionId}
+              addToNotebookContext={addToNotebookContext}
+            />
+          )}
+
+          {/* File Thumbnails */}
+          {pendingMessageFiles.length > 0 && (
+            <MessageFileThumbnails
+              files={pendingMessageFiles}
+              onRemove={fileId => {
+                setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
+                setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
+
+                // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
+                // this failed, knowledgeIds would keep a dead id that every later hydration
+                // tries and fails to resolve. Keyed off the item's own frozen scope rather
+                // than the current control value, which the user may have changed since.
+                const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
+                const stripped =
+                  removed?.scope === 'notebook'
+                    ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
+                    : Promise.resolve();
+
+                void stripped.then(() =>
+                  deleteFileUtility(fileId).catch(err => {
+                    console.error('Failed to delete file:', err);
+                  })
+                );
+              }}
+              onClick={file => {
+                // First ensure the KnowledgeViewer is open by setting layout to vertical
+                setSessionLayout({
+                  layout: 'vertical',
+                  selectedArtifactId: undefined,
+                  artifactData: undefined,
+                });
+
+                // Find the message file in the sorted knowledge items list
+                const messageFileIndex = sortedKnowledgeItems.findIndex(item => item.id === file.id);
+
+                // Set the knowledge viewer to show the message file
+                // setTimeout ensures the layout change completes before setting the tab index
+                if (messageFileIndex !== -1) {
+                  setTimeout(() => {
+                    setKnowledgeViewer({ selectedTabIndex: messageFileIndex });
+                  }, 0);
+                }
+              }}
+            />
+          )}
+
+          <SessionToolbar
+            isMobile={isMobile}
+            mode={mode}
+            canAttachFiles={canAttachFiles}
+            workBenchFiles={workBenchFiles}
+            currentSessionId={currentSessionId}
+            currentSession={currentSession}
+            setWorkBenchFiles={setWorkBenchFiles}
+            setCurrentSession={setCurrentSession}
+            toggleFileUpload={toggleFileUpload}
+            setFileBrowserOpen={setFileBrowserOpen}
+            rollRandomDice={rollRandomDice}
+            attachScopeMode={attachScopeMode}
+            setAttachScopeMode={setAttachScopeMode}
+            totalFilesCount={totalFilesCount}
+            hasEmbeddingMismatches={hasEmbeddingMismatches}
+            model={model}
+            filesDropdownOpen={filesDropdownOpen}
+            setFilesDropdownOpen={setFilesDropdownOpen}
+            chatInputValue={chatInputValue}
+            setChatInputValue={setChatInputValue}
+            setRephraseGlow={setRephraseGlow}
+            stream={stream}
+            setStream={setStream}
+            spokenWords={spokenWords}
+            setSpokenWords={setSpokenWords}
+            submitting={submitting}
+            stoppingMessage={stoppingMessage}
+            shouldShowStopButton={shouldShowStopButton}
+            handleSendClick={handleSendClick}
+            handleStopMessage={handleStopMessage}
+            pendingAutoSubmitGoal={pendingAutoSubmitGoal}
+            readyState={readyState}
+            hasActiveUploads={hasActiveUploads}
+            accessibleModels={accessibleModels}
+            isModelsLoading={isModelsLoading}
+            isVoiceSessionEnabled={isVoiceSessionEnabled}
+            voiceEngine={voiceEngine}
+            creditsBlocked={creditsExhausted && enforceCredits}
+            setDebugDrawerOpen={setDebugDrawerOpen}
           />
+        </Stack>
+
+        {isVoiceSessionEnabled && (
+          <VoiceDebugDrawer open={debugDrawerOpen} onClose={() => setDebugDrawerOpen(false)} engine={voiceEngine} />
         )}
 
-        <SessionToolbar
-          isMobile={isMobile}
-          mode={mode}
-          canAttachFiles={canAttachFiles}
-          workBenchFiles={workBenchFiles}
-          currentSessionId={currentSessionId}
-          currentSession={currentSession}
-          setWorkBenchFiles={setWorkBenchFiles}
-          setCurrentSession={setCurrentSession}
-          toggleFileUpload={toggleFileUpload}
-          setFileBrowserOpen={setFileBrowserOpen}
-          rollRandomDice={rollRandomDice}
-          attachScopeMode={attachScopeMode}
-          setAttachScopeMode={setAttachScopeMode}
-          totalFilesCount={totalFilesCount}
-          hasEmbeddingMismatches={hasEmbeddingMismatches}
+        <SessionBottomModals
+          adminPreviewData={adminPreviewData}
+          showAdminPreview={showAdminPreview}
+          setShowAdminPreview={setShowAdminPreview}
+          setAdminPreviewData={setAdminPreviewData}
+          modalListPopupOpen={modalListPopupOpen}
+          setModalListPopupOpen={setModalListPopupOpen}
+          modalListData={modalListData}
+          triggeredModal={triggeredModal}
+          triggeredModalOpen={triggeredModalOpen}
+          setTriggeredModalOpen={setTriggeredModalOpen}
+          formatDialogOpen={formatDialogOpen}
+          setFormatDialogOpen={setFormatDialogOpen}
+          pasteContentForFormat={pasteContentForFormat}
+          pasteSmartFileName={pasteSmartFileName}
+          transformedContent={transformedContent}
+          shouldShowPreview={shouldShowPreview}
+          clearPreview={clearPreview}
+          sessionFilesOpen={sessionFilesOpen}
+          setSessionFilesOpen={setSessionFilesOpen}
           model={model}
-          filesDropdownOpen={filesDropdownOpen}
-          setFilesDropdownOpen={setFilesDropdownOpen}
-          chatInputValue={chatInputValue}
-          setChatInputValue={setChatInputValue}
-          setRephraseGlow={setRephraseGlow}
-          stream={stream}
-          setStream={setStream}
-          spokenWords={spokenWords}
-          setSpokenWords={setSpokenWords}
-          submitting={submitting}
-          stoppingMessage={stoppingMessage}
-          shouldShowStopButton={shouldShowStopButton}
-          handleSendClick={handleSendClick}
-          handleStopMessage={handleStopMessage}
-          pendingAutoSubmitGoal={pendingAutoSubmitGoal}
-          readyState={readyState}
-          hasActiveUploads={hasActiveUploads}
-          accessibleModels={accessibleModels}
-          isModelsLoading={isModelsLoading}
-          isVoiceSessionEnabled={isVoiceSessionEnabled}
-          voiceEngine={voiceEngine}
-          creditsBlocked={creditsExhausted && enforceCredits}
-          setDebugDrawerOpen={setDebugDrawerOpen}
         />
-      </Stack>
-
-      {isVoiceSessionEnabled && (
-        <VoiceDebugDrawer open={debugDrawerOpen} onClose={() => setDebugDrawerOpen(false)} engine={voiceEngine} />
-      )}
-
-      <SessionBottomModals
-        adminPreviewData={adminPreviewData}
-        showAdminPreview={showAdminPreview}
-        setShowAdminPreview={setShowAdminPreview}
-        setAdminPreviewData={setAdminPreviewData}
-        modalListPopupOpen={modalListPopupOpen}
-        setModalListPopupOpen={setModalListPopupOpen}
-        modalListData={modalListData}
-        triggeredModal={triggeredModal}
-        triggeredModalOpen={triggeredModalOpen}
-        setTriggeredModalOpen={setTriggeredModalOpen}
-        formatDialogOpen={formatDialogOpen}
-        setFormatDialogOpen={setFormatDialogOpen}
-        pasteContentForFormat={pasteContentForFormat}
-        pasteSmartFileName={pasteSmartFileName}
-        transformedContent={transformedContent}
-        shouldShowPreview={shouldShowPreview}
-        clearPreview={clearPreview}
-        sessionFilesOpen={sessionFilesOpen}
-        setSessionFilesOpen={setSessionFilesOpen}
-        model={model}
-      />
-    </Box>
-  );
-});
+      </Box>
+    );
+  }
+);
 
 SessionBottom.displayName = 'SessionBottom';
 

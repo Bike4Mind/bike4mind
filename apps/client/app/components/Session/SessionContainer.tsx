@@ -16,6 +16,7 @@ import DockedChatPanel from './DockedChatPanel';
 import { useGetProject } from '@client/app/hooks/data/projects';
 import { useNotebookSearch } from '@client/app/contexts/NotebookSearchContext';
 import ResizableSplitter from './ResizableSplitter';
+import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useSearch, useLocation, useNavigate } from '@tanstack/react-router';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -227,6 +228,11 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   const { data: project } = useGetProject(searchProjectId as string);
   const { setShowPinnedOnly } = useNotebookSearch();
   const [isFullWidth, setIsFullWidth] = useState(false);
+  // When the user has collapsed both side panels (no sidenav, no KnowledgeViewer in a
+  // vertical split), let the prompt and chat history fill the available space instead of
+  // staying pinned to the 950 px reading-column cap.
+  const openSideNav = useNotebookLayout(s => s.openSideNav);
+  const effectiveIsFullWidth = isFullWidth || (!openSideNav && layout !== 'vertical');
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const location = useLocation();
@@ -561,7 +567,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   ) : (
                     <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                       <SessionMiddle
-                        isFullWidth={isFullWidth}
+                        isFullWidth={effectiveIsFullWidth}
                         sessionId={currentSessionId}
                         emptySessionSplash={emptySessionSplash}
                       />
@@ -598,7 +604,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                       zIndex: 10,
                     }}
                   >
-                    <SessionBottom ref={sessionBottomRef} />
+                    <SessionBottom ref={sessionBottomRef} isFullWidth={effectiveIsFullWidth} />
                   </Box>
                 </>
               )}

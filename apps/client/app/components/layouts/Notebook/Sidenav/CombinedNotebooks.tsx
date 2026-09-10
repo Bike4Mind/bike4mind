@@ -35,6 +35,7 @@ import ShareDocumentModal from '@client/app/components/common/ShareModal';
 import { InviteType } from '@bike4mind/common';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { useAdvancedSearch } from '@client/app/hooks/useAdvancedSearch';
+import { useScrollDebug } from '@client/app/hooks/useScrollDebug';
 import AdvancedSearchDrawer from '@client/app/components/Notebook/Search/AdvancedSearchDrawer';
 import ContentPasteSearchOutlinedIcon from '@mui/icons-material/ContentPasteSearchOutlined';
 
@@ -109,6 +110,7 @@ const CombinedNotebooks = () => {
 
   // Advanced search state
   const { openDrawer, hasActiveFilters, getActiveFilterCount } = useAdvancedSearch();
+  const scrollDebugActive = useScrollDebug(s => s.active);
 
   // Check if user is new (created within the last 3 days)
   const isNewUser = useMemo(() => {
@@ -818,6 +820,27 @@ const CombinedNotebooks = () => {
               <CircularProgress size="sm" />
             )}
           </Stack>
+
+          {/* Debug-only: dummy entries to force the sidenav scrollbar visible for UX testing */}
+          {scrollDebugActive &&
+            Array.from({ length: 40 }, (_, i) => (
+              <Box
+                key={`debug-nb-${i}`}
+                data-testid={`debug-sidenav-item-${i}`}
+                sx={{
+                  borderRadius: '8px',
+                  px: '12px',
+                  py: '8px',
+                  opacity: 0.4,
+                  border: '1px dashed',
+                  borderColor: 'warning.300',
+                }}
+              >
+                <Typography level="body-xs" noWrap sx={{ color: 'warning.500' }}>
+                  [debug] notebook {i + 1}
+                </Typography>
+              </Box>
+            ))}
         </Stack>
       </Stack>
 

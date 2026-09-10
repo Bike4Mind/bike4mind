@@ -29,6 +29,7 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
 import KeyboardDoubleArrowDownTwoToneIcon from '@mui/icons-material/KeyboardDoubleArrowDownTwoTone';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
+import { useScrollDebug } from '@client/app/hooks/useScrollDebug';
 import { useStableCallback } from '@client/app/hooks/useStableCallback';
 import ChatHistory from '@client/app/components/Session/ChatHistory';
 import ActiveAgentExecutions from '@client/app/components/Session/AgentExecution/ActiveAgentExecutions';
@@ -357,6 +358,26 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     [flattenQuests, search, showPinnedOnly, activeStreamingQuestId, streamingMessageData]
   );
 
+  // Dev-only: prepend fake chat items (they appear at the bottom, newest position) so the
+  // chat scrollbar is visible for UX testing without requiring a long real conversation.
+  const debugScrollActive = useScrollDebug(s => s.active);
+  const debugChatItems = useMemo<IChatHistoryItem[]>(() => {
+    if (!debugScrollActive) return [];
+    return Array.from({ length: 20 }, (_, i) => ({
+      id: `__debug__${i}`,
+      sessionId,
+      type: 'message' as const,
+      timestamp: new Date((i + 1) * 1000),
+      prompt: `[debug] message ${i + 1} of 20 -- scroll fill test`,
+      reply: `[debug] reply ${i + 1} -- dummy item to trigger the chat scrollbar for UX testing.`,
+    }));
+  }, [debugScrollActive, sessionId]);
+
+  const effectiveChatHistory = useMemo(
+    () => (debugScrollActive ? [...debugChatItems, ...filteredChatHistory] : filteredChatHistory),
+    [debugScrollActive, debugChatItems, filteredChatHistory]
+  );
+
   // Clear the pending-first-message overlay once real data is available.
   // SessionMiddle is mounted underneath PendingFirstMessage immediately so it can
   // pre-fetch data. When flattenQuests has content or streaming has started, the
@@ -394,7 +415,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     handleStartReached,
   } = useVirtuosoPagination({
     sessionId,
-    filteredChatHistory,
+    filteredChatHistory: effectiveChatHistory,
     hasNextPage: !!hasNextPage,
     fetchNextPage,
     isActive: hasActiveQuest,
@@ -438,7 +459,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
               questCount: flattenQuests.length,
               isFetching,
               hasActiveQuest,
-            }) ? (
+            }) && !debugScrollActive ? (
             <Box
               data-testid="session-middle-empty-splash"
               sx={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}
@@ -447,7 +468,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
             </Box>
           ) : (
             <ChatHistory
-              filteredChatHistory={filteredChatHistory}
+              filteredChatHistory={effectiveChatHistory}
               sessionId={sessionId}
               mode={mode}
               activeStreamingQuestId={activeStreamingQuestId}
