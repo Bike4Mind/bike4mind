@@ -1961,7 +1961,11 @@ export default function UserApiKeysTab() {
                           </Tooltip>
                           {/* span wrapper: a disabled button emits no pointer events, and the
                               disabled-state tooltip is the one carrying the instruction. */}
-                          <Tooltip title={isRevoked(key) ? 'Delete permanently' : 'Revoke this key before deleting it'}>
+                          {/* Must stay identical to the ConflictError in userApiKeyService/delete.ts,
+                              which is what surfaces if this guard is ever bypassed. */}
+                          <Tooltip
+                            title={isRevoked(key) ? 'Delete permanently' : 'Revoke this API key before deleting it'}
+                          >
                             <span>
                               <IconButton
                                 size="sm"
