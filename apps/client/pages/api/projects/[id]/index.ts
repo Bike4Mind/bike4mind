@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ProjectEvents } from '@bike4mind/common';
 import { projectRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-import { UnprocessableEntityError } from '@bike4mind/utils';
+import { BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -23,15 +23,17 @@ const handler = baseApi()
     return res.json(project);
   })
   .put(async (req, res) => {
+    const { id } = req.query as { id?: string | string[] };
+    if (typeof id !== 'string' || !id) {
+      throw new BadRequestError('Invalid project id');
+    }
     let project;
     const body = updateProjectBodySchema.parse(req.body);
     try {
       project = await projectService.update(
         req.user.id,
-        {
-          ...(req.query as any),
-          ...body,
-        },
+        // id comes after the body spread so the URL param wins over any body field.
+        { ...body, id },
         {
           db: {
             projects: projectRepository,

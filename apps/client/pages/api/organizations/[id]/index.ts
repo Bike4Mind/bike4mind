@@ -47,7 +47,7 @@ const handler = baseApi()
       const body = updateOrgBodySchema.parse(req.body);
       const updatedOrganization = await organizationService.update(
         req.user!,
-        { id: orgId, ...body },
+        { ...body, id: orgId },
         {
           db: {
             organizations: organizationRepository,

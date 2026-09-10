@@ -88,6 +88,19 @@ describe('GET /api/organizations/[id] - safe serialization', () => {
   });
 });
 
+describe('PUT /api/organizations/[id] - URL id wins', () => {
+  beforeEach(() => update.mockClear());
+
+  it('takes the org id from the URL, not from any id field in the body', async () => {
+    const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+    (req as any).body = { id: 'from-body', name: 'renamed' };
+    await mockRefs.putHandler!(req, res);
+    const [, params] = update.mock.calls[0];
+    expect(params.id).toBe('org1');
+    expect(params.name).toBe('renamed');
+  });
+});
+
 describe('PUT /api/organizations/[id] - safe serialization', () => {
   beforeEach(() => update.mockClear());
 
