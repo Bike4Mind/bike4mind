@@ -237,7 +237,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       };
 
   const pond = useNotebookFilepond();
-  const maxFileSize = useGetSettingsValue('MaxFileSize') || 100;
+  // Fallback matches the server default of 30MB (`MaxFileSize`'s schema default), not the old
+  // unrelated 100MB.
+  const maxFileSize = useGetSettingsValue('MaxFileSize') || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
 
   // Credit warning conditions - extracted for readability
