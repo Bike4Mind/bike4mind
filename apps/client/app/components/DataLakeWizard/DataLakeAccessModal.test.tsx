@@ -19,13 +19,15 @@ const transferMutate = vi.fn();
 const grantMutate = vi.fn();
 const revokeMutate = vi.fn();
 let revokePending = false;
+/** The in-flight DELETE's own input, which is what scopes the pending state to one row. */
+let revokeVariables: { principalType: string; principalId: string } | undefined;
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeAccessView: () => viewState,
   useLakeOwnershipCandidates: () => candidatesState,
   useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
   useGrantLakeAccess: () => ({ mutateAsync: grantMutate, isPending: false }),
-  useRevokeLakeAccess: () => ({ mutate: revokeMutate, isPending: revokePending }),
+  useRevokeLakeAccess: () => ({ mutate: revokeMutate, isPending: revokePending, variables: revokeVariables }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
 }));
 
@@ -92,6 +94,7 @@ const loaded = (view: LakeAccessView, canTransferOwnership = false, readerGrants
 beforeEach(() => {
   vi.clearAllMocks();
   revokePending = false;
+  revokeVariables = undefined;
   viewState = loaded(fullView);
   candidatesState = { data: { scope: 'organization', candidates: [], organizationName: 'Acme' }, isLoading: false };
 });
@@ -518,11 +521,21 @@ describe('DataLakeAccessModal grant writes', () => {
     );
   });
 
-  it('disables Revoke while one is in flight, so a double click cannot send a second DELETE', () => {
+  it('disables Revoke on the row being revoked, so a double click cannot send a second DELETE', () => {
     revokePending = true;
-    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    revokeVariables = { principalType: 'user', principalId: 'cur1' };
+    viewState = loaded({
+      ...fullView,
+      grants: [
+        { ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' },
+        { ...fullView.grants[0]!, principalId: 'rdr1', role: 'reader' },
+      ],
+    });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-revoke-user-cur1')).toBeDisabled();
+    // The other rows stay live: one shared flag greyed out the whole table, and Joy's `loading`
+    // forces `disabled`, so a slow request read as a frozen panel rather than one busy row.
+    expect(screen.getByTestId('datalake-access-revoke-user-rdr1')).not.toBeDisabled();
   });
 
   it('discloses that reader grants are recorded but not yet in force, and drops the note once they are', () => {

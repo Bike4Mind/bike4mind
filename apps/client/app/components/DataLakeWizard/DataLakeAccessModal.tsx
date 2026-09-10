@@ -131,9 +131,11 @@ function GrantRow({
             variant="plain"
             color="danger"
             onClick={onRevoke}
-            // Disabled for the whole table while a revoke is in flight: a second click sends a
-            // second DELETE, and the row it names is already gone by then, so the reply reports
-            // "no longer had access" for an action that in fact worked.
+            // Guards the double-click - a second DELETE names a row that is already gone, so the
+            // reply reports "no longer had access" for an action that in fact worked - but only on
+            // the row being revoked: one shared flag greyed out every row, and Joy's `loading`
+            // forces `disabled`, so a slow request read as a frozen panel.
+            loading={revoking}
             disabled={revoking}
             data-testid={`datalake-access-revoke-${grant.principalType}-${grant.principalId}`}
           >
@@ -620,15 +622,22 @@ function AccessViewBody({
                               principalId: g.principalId,
                             })
                     }
-                    revoking={revoke.isPending}
+                    // `variables` is the in-flight request's own input, so the pending state lands
+                    // on the row that was clicked rather than on all of them.
+                    revoking={
+                      revoke.isPending &&
+                      revoke.variables?.principalType === g.principalType &&
+                      revoke.variables?.principalId === g.principalId
+                    }
                   />
                 ))}
               </tbody>
             </Table>
           </Sheet>
         )}
-        {/* The honest disclosure while the read arm is still code-gated off: a reader grant is
-            RECORDED and admits nobody, which without this note would look identical to a live one. */}
+        {/* The honest disclosure when the platform has grant-based reading switched off: a reader
+            grant is RECORDED and admits nobody, which without this note looks identical to a live
+            one. Conditional, because that setting defaults to ON - see `meta.readerGrantsEnforced`. */}
         {!readerGrantsEnforced && (
           <Typography
             level="body-xs"
