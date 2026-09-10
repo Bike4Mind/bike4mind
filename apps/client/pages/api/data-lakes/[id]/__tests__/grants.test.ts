@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessWithGrants: vi.fn(),
   grantLakeAccess: vi.fn(),
   revokeLakeAccess: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
     grantLakeAccess: h.grantLakeAccess,
     revokeLakeAccess: h.revokeLakeAccess,
   },
@@ -49,17 +49,23 @@ const makeRes = () => {
 };
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
+// The gate's own return value, forwarded WHOLE to the service: the resolved document (not the raw
+// id-or-slug from the query) and the active grants the gate read to make its own decision.
+const LAKE = { id: 'lake-oid-1', slug: 'my-lake' };
+const GRANTS = [{ principalType: 'user', principalId: 'u9', role: 'curator' }];
+
 describe('/api/data-lakes/[id]/grants', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     h.grantLakeAccess.mockResolvedValue({ principalType: 'user', principalId: 'u2', role: 'reader' });
     h.revokeLakeAccess.mockResolvedValue({ revoked: true });
   });
 
   it('grants against the RESOLVED lake, trimming the principal, and wires the audit repos', async () => {
-    // assertLakeAccess resolves id-or-slug, so the service must get lake.id, not the raw query value.
+    // The gate resolves id-or-slug, so the service must get the resolved lake, not the raw query
+    // value - and the grants the gate already read, so its manage gate does not re-read them.
     const { res, json } = makeRes();
     await call(
       {
@@ -74,7 +80,8 @@ describe('/api/data-lakes/[id]/grants', () => {
 
     expect(h.grantLakeAccess).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', isAdmin: false }),
-      'lake-oid-1',
+      LAKE,
+      GRANTS,
       expect.objectContaining({ principalType: 'organization', principalId: 'org1', role: 'reader' }),
       // Not expect.anything(): the audit repos ride one shared helper, and a route that dropped
       // `adminSettings` would still compile while quietly pinning every event to the floor default.
@@ -97,7 +104,8 @@ describe('/api/data-lakes/[id]/grants', () => {
     );
     expect(h.grantLakeAccess).toHaveBeenCalledWith(
       expect.anything(),
-      'lake-oid-1',
+      LAKE,
+      GRANTS,
       expect.objectContaining({ principalEmail: 'a@b.co', expiresAt: new Date('2027-01-01T00:00:00Z') }),
       expect.anything()
     );
@@ -117,7 +125,8 @@ describe('/api/data-lakes/[id]/grants', () => {
 
     expect(h.revokeLakeAccess).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1' }),
-      'lake-oid-1',
+      LAKE,
+      GRANTS,
       { principalType: 'user', principalId: 'u2' },
       // Pinned on THIS door too, not just the grant one: revoking is the single most audit-relevant
       // write on a lake, and dropping the shared helper here compiles and leaves every other suite
@@ -137,7 +146,8 @@ describe('/api/data-lakes/[id]/grants', () => {
     );
     expect(h.revokeLakeAccess).toHaveBeenCalledWith(
       expect.anything(),
-      'lake-oid-1',
+      LAKE,
+      GRANTS,
       { principalType: 'user', principalId: 'u2' },
       expect.anything()
     );
@@ -173,7 +183,8 @@ describe('/api/data-lakes/[id]/grants', () => {
       expect.objectContaining({
         auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'u1' },
       }),
-      'lake-oid-1',
+      LAKE,
+      GRANTS,
       expect.anything(),
       expect.anything()
     );
@@ -196,8 +207,8 @@ describe('/api/data-lakes/[id]/grants', () => {
   });
 
   it('does not reach the service when the caller cannot see the lake', async () => {
-    // assertLakeAccess denies with a not-found-style error, so existence is never disclosed.
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    // The gate denies with a not-found-style error, so existence is never disclosed.
+    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
     await expect(
       call(
