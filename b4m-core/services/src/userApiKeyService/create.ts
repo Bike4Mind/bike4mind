@@ -74,11 +74,13 @@ interface CreateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     /**
-     * Required so an `embed:chat` mint can verify the agent it binds. Not optional:
-     * an absent adapter would silently skip the ownership check on the one key class
-     * that ships in public HTML.
+     * Needed so an `embed:chat` mint can verify the agent it binds. Optional on the
+     * TYPE so this published adapter contract (@bike4mind/services) stays additive for
+     * out-of-repo callers, but REQUIRED at runtime for an embed mint - the guard below
+     * throws rather than silently skipping the ownership check on the one key class that
+     * ships in public HTML.
      */
-    agents: Pick<IAgentRepository, 'findById'>;
+    agents?: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
 }
@@ -172,6 +174,11 @@ export const createUserApiKey = async (
   // Enforced here so an incoherent key is never persisted; the runtime checks stay,
   // since a bound agent can change hands after the mint.
   if (isEmbedKey && params.agentId) {
+    // Fail closed: an absent agents adapter must never let the ownership check be skipped
+    // on the one key class shipped in public HTML (the type is optional only for semver).
+    if (!db.agents) {
+      throw new BadRequestError('agents adapter is required to mint an embed:chat key');
+    }
     const agent = await db.agents.findById(params.agentId);
     if (!agent || !isAgentOwnedByEmbedKey(agent, { organizationId: params.organizationId, userId })) {
       throw new BadRequestError('agentId must reference an agent owned by the billing organization or the minter');

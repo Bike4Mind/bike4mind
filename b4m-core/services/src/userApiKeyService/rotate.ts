@@ -1,4 +1,10 @@
-import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  IAgentRepository,
+  IOrganizationRepository,
+  isAgentOwnedByEmbedKey,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
@@ -16,6 +22,13 @@ interface RotateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
+    /**
+     * Needed only to re-validate an embed key's agent binding when a rotation would
+     * re-own it (see the guard below). Optional on the TYPE so this published adapter
+     * contract stays additive, but REQUIRED at runtime for that one case, where its
+     * absence throws rather than skipping the check.
+     */
+    agents?: Pick<IAgentRepository, 'findById'>;
   };
   /**
    * Scopes of the API key making the request, when the caller authenticated with one.
@@ -94,10 +107,30 @@ export const rotateUserApiKey = async (
     }
   }
 
-  const { key, keyPrefix, keyHash } = generateNewApiKey();
-
   const previousOwnerUserId = apiKey.userId?.toString();
   const reOwned = !!previousOwnerUserId && previousOwnerUserId !== userId;
+
+  // An embed key's userId is not just an owner label: the embed runtime resolves the
+  // bound agent's ownership, the owner's BYOK LLM keys, tool availability and KB access
+  // all from it (embedRoute.ts, embed/serve.ts). Re-owning it to the rotator would 403
+  // the public widget ('Agent is not owned by the embed key') when the agent is the
+  // original owner's personal agent, or silently repoint it to the rotator's BYOK/tools
+  // otherwise. So re-validate the binding against the NEW owner and refuse rather than
+  // corrupt - the operator must share the agent to the org (or rebind) first. Same
+  // predicate as the other consumers of key.agentId (isAgentOwnedByEmbedKey).
+  if (reOwned && apiKey.agentId && (apiKey.scopes ?? []).includes(ApiKeyScope.EMBED_CHAT)) {
+    if (!db.agents) {
+      throw new ForbiddenError('agents adapter is required to rotate an embed:chat key to a new owner');
+    }
+    const agent = await db.agents.findById(apiKey.agentId);
+    if (!agent || !isAgentOwnedByEmbedKey(agent, { organizationId: apiKey.organizationId, userId })) {
+      throw new ForbiddenError(
+        'Cannot rotate this embed key: its bound agent is not owned by you. Share the agent to the organization first.'
+      );
+    }
+  }
+
+  const { key, keyPrefix, keyHash } = generateNewApiKey();
 
   apiKey.keyHash = keyHash;
   apiKey.keyPrefix = keyPrefix;
