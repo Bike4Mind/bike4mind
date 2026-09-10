@@ -11,6 +11,8 @@ import {
   type DataLakeStatus,
   type IDataLakeDocument,
   type IDataLakeBatchDocument,
+  FIND_ACCESSIBLE_ARMS,
+  type FindAccessibleArm,
 } from '@bike4mind/common';
 import {
   canAccessLake,
@@ -1426,11 +1428,41 @@ describe('management views - the grant reach is manage-scoped, not read-scoped',
  * fields and keep the row, so every lake the reach admits is a lake whose name and slug leave the
  * service, however little the caller may then do with it.
  *
- * findAccessible is faked rather than stubbed here - the four arms these cases turn on (creator,
- * member org, administered org, granted ids), mirroring DataLakeModel.findAccessible. It must stay
- * in sync with that method's arms to keep meaning what it claims.
+ * findAccessible is faked rather than stubbed here, so the fake has to take a position on each arm
+ * of the real DataLakeModel.findAccessible. It deliberately models a SUBSET of them - see
+ * ARM_COVERAGE below, whose keys are pinned to the shared FIND_ACCESSIBLE_ARMS inventory by a test
+ * in this file. What is enforced is arm AWARENESS, not output equality: matching the real query
+ * arm-for-arm would mean re-implementing the requirement gate, the not-private exclusion and the
+ * isAdmin bypass in JS, a second copy that can drift on its own with nothing proving the two agree.
+ * The database side of the same inventory is pinned in DataLakeModel.accessArms.test.ts.
  */
 describe("management views - an org grant on another org's lake discloses nothing", () => {
+  // One line per arm of the real findAccessible, saying how this fake models it or why these
+  // scenarios do not need it. Adding an arm to that method therefore fails HERE, next to the fake
+  // that would otherwise have silently stopped covering it.
+  const ARM_COVERAGE: Record<FindAccessibleArm, string> = {
+    owner: 'modeled: createdByUserId === actor.userId',
+    public:
+      'not modeled - no scenario here uses a public lake, and the management views these ' +
+      'cases exercise pass includePublic:false, which drops the arm from the real query too',
+    orgGate:
+      'modeled as membership only (actor.organizationIds contains the lake org); the real arm is ' +
+      'wider - it also admits an ORG-LESS lake, and ANDs the requirement gate and the not-private ' +
+      'exclusion, none of which these lakes exercise (every lake here is org-scoped and gate-less)',
+    orgAdmin: 'modeled: actor.administeredOrgIds contains the lake org - the arm these cases turn on',
+    grant: 'modeled: opts.grantedLakeIds contains the lake id, which is what the reach under test feeds it',
+    orgGrant:
+      'not modeled, deliberately - the management views under test pass includePublic:false and no ' +
+      'orgGrantedLakes, so the real query drops this arm too. That suppression is the property these ' +
+      'cases assert: an org grant on another org\'s lake must not name it in a restore/cleanup list',
+  };
+
+  it('accounts for every arm of the real findAccessible', () => {
+    // Fails when FIND_ACCESSIBLE_ARMS grows, which is the point: the new arm needs a decision here
+    // before the disclosure cases below can go on claiming what they claim.
+    expect(Object.keys(ARM_COVERAGE).sort()).toEqual([...FIND_ACCESSIBLE_ARMS].sort());
+  });
+
   const findAccessibleFake = (all: IDataLakeDocument[]) =>
     vi
       .fn()
