@@ -174,7 +174,7 @@ const SubQuestCard: React.FC<SubQuestCardProps> = React.memo(
                 ? 'warning.softHoverBg'
                 : isInProgress
                   ? 'warning.softHoverBg'
-                  : 'background.level4',
+                  : 'background.level2',
             transform: 'translateY(-2px)',
           },
         }}

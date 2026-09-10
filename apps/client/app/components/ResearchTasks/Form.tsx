@@ -623,7 +623,7 @@ const ResearchTaskForm: FC<ResearchTaskFormProps> = ({ onSubmit, onCancel, taskI
                                 transition: 'all 0.2s ease',
                                 '&:hover': {
                                   borderColor: field.value === option.value ? 'primary.600' : 'primary.400',
-                                  bgcolor: field.value === option.value ? 'primary.100' : 'primary.25',
+                                  bgcolor: field.value === option.value ? 'primary.100' : 'primary.50',
                                   transform: 'translateY(-2px)',
                                   boxShadow: `0 4px 12px ${blackAlpha[0][10]}`,
                                 },
@@ -1239,7 +1239,7 @@ const ResearchTaskForm: FC<ResearchTaskFormProps> = ({ onSubmit, onCancel, taskI
                                   transition: 'all 0.2s ease',
                                   '&:hover': {
                                     borderColor: field.value === option.value ? 'primary.600' : 'primary.400',
-                                    bgcolor: field.value === option.value ? 'primary.100' : 'primary.25',
+                                    bgcolor: field.value === option.value ? 'primary.100' : 'primary.50',
                                     transform: 'translateY(-2px)',
                                     boxShadow: `0 4px 12px ${blackAlpha[0][10]}`,
                                   },

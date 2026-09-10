@@ -151,7 +151,7 @@ const SpeechTabContent = () => {
                           minHeight: '28px !important',
                           '&:hover': {
                             backgroundColor: 'neutral.outlinedHoverBg',
-                            borderColor: 'neutral.outlinedHoverBorder',
+                            borderColor: 'neutral.outlinedBorder',
                           },
                         }}
                         slots={{ root: IconButton }}
@@ -437,7 +437,7 @@ const ProviderContainer = ({
                               minHeight: '28px !important',
                               '&:hover': {
                                 backgroundColor: 'neutral.outlinedHoverBg',
-                                borderColor: 'neutral.outlinedHoverBorder',
+                                borderColor: 'neutral.outlinedBorder',
                               },
                             }}
                             slots={{ root: IconButton }}

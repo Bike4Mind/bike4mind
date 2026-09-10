@@ -67,7 +67,7 @@ const ImportModal: React.FC<ImportModalProps> = ({
               bgcolor: 'danger.softBg',
               color: 'danger.softColor',
               border: '1px solid',
-              borderColor: 'danger.softBorder',
+              borderColor: 'danger.outlinedBorder',
               mb: 2,
             }}
           >

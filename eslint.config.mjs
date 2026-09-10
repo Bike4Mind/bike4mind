@@ -225,12 +225,19 @@ const noWindowOpenInClientUi = [
 const JOY_PALETTE_FAMILIES = 'primary|neutral|danger|success|warning|common|text|background';
 const MUI_ONLY_FAMILIES = 'error|info|secondary|action|grey';
 const MUI_SHADE_KEYS = 'main|light|dark|contrastText';
+// Material keys that exist on no Joy family, so they are dead even on a family Joy does have.
+const MUI_ONLY_JOY_FAMILY_KEYS = 'background[.](default|paper)|text[.]disabled';
 // Keys a Material palette family is actually addressed by. Deliberately enumerated rather than
 // `[a-zA-Z]+`, so a legitimate non-palette string such as 'error.message' stays unflagged.
 // The shade keys are omitted here on purpose: the first selector already covers them for these
 // families, and listing them twice makes a single 'error.main' report the same error twice.
+// Caveat worth knowing before extending: `[0-9]{2,3}` would also match a dotted i18n or
+// HTTP-status key shaped 'error.404'. None exist in this tree today; if one appears, drop the
+// numeric alternative and enumerate the shades instead of loosening the family list.
 const MUI_ONLY_FAMILY_KEYS =
-  '[0-9]{2,3}|hover|selected|active|focus|disabled|plainColor|softColor|softBg|solidBg|solidColor|outlinedColor|outlinedBorder';
+  '[0-9]{2,3}|A[0-9]{3}|hover|selected|active|focus|disabled|disabledBackground|' +
+  '(?:hover|selected|disabled|focus|activated)Opacity|(?:main|light|dark)Channel|' +
+  'plainColor|softColor|softBg|solidBg|solidColor|outlinedColor|outlinedBorder';
 const DEAD_PALETTE_MESSAGE =
   'Material UI palette token: Joy has no main/light/dark/contrastText key, and no ' +
   'error/info/secondary/action/grey family, so this value resolves to nothing and the whole CSS ' +
@@ -249,7 +256,18 @@ const noDeadPaletteTokens = [
     selector: `Literal[value=/^(${MUI_ONLY_FAMILIES})[.](${MUI_ONLY_FAMILY_KEYS})$/]`,
     message: DEAD_PALETTE_MESSAGE,
   },
+  // A Material-only key on a family Joy does have: 'background.paper', 'text.disabled'.
+  {
+    selector: `Literal[value=/^(${MUI_ONLY_JOY_FAMILY_KEYS})$/]`,
+    message: DEAD_PALETTE_MESSAGE,
+  },
 ];
+
+// A regex can only recognise a token shape. It cannot know that `primary.25` or `warning.550` name
+// a shade this palette does not have, or that `neutral.outlinedHoverBorder` was a Joy key that a
+// version bump removed - those are just as dead, and only the built theme can tell. That half is
+// apps/client/app/utils/themes/palette.test.ts, which resolves every palette string in the SPA
+// against the theme. Keep the two together: neither is sufficient alone.
 const noTreeWalkInPagesTests = [
   // bare call: `readdirSync(dir)` (named/destructured import)
   { selector: `CallExpression[callee.name=/${TREE_WALK_NAMES}/]`, message: WALK_MESSAGE },

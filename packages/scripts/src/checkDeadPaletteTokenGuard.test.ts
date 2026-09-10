@@ -1,40 +1,37 @@
 import { describe, it, expect } from 'vitest';
+import { Linter } from 'eslint';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 /**
  * Guards the `no-restricted-syntax` rule that bans Material UI palette tokens in the Joy SPA.
  *
- * The rule is a pair of regexes embedded in esquery selector strings, and both halves of it are
- * easy to break in a way nothing else notices: widen it and it starts flagging `border.light` /
- * `inbox.border.light`, which this theme really does define; narrow it and `primary.main` sails
- * through again. Neither shows up as a test failure anywhere else, because a dead token throws
- * nothing at runtime - it just silently renders no CSS.
+ * Both halves of the rule are easy to break unnoticed: widen it and it starts flagging
+ * `border.light` / `inbox.border.light`, which this theme really does define; narrow it and
+ * `primary.main` sails through again. Neither shows up anywhere else, because a dead token throws
+ * nothing at runtime - it just renders no CSS.
  *
- * So this pulls the selectors out of the real config and exercises the real regexes, rather than
- * restating them. It also pins that they live in the SAME rule entry as the window.open selectors:
- * flat config is last-rule-wins per rule id, so a well-meaning "separate concerns" block declaring
- * its own no-restricted-syntax for apps/client/app/** would silently delete the other guard.
+ * So this runs the real config through eslint's Linter over fixture sources, rather than
+ * re-implementing the selectors. That also covers the two things a regex check could not: that the
+ * strings are valid *esquery* selectors at all, and that the rule still reaches every file under
+ * apps/client/app - including its test files, which a later config block with a narrower glob
+ * would silently exempt, flat config being last-rule-wins per rule id.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const config = (await import(path.join(REPO_ROOT, 'eslint.config.mjs'))).default;
+// cwd matters: flat-config `files` globs resolve against it, and this package's vitest runs from
+// packages/scripts, where `apps/client/app/**` would match nothing and every fixture would come
+// back clean.
+const linter = new Linter({ configType: 'flat', cwd: REPO_ROOT });
 
-const clientUiBlock = config.find(
-  (block: { files?: string[] }) => block.files?.length === 1 && block.files[0] === 'apps/client/app/**/*.{ts,tsx}'
-);
+/** Rule ids reported for `source` when linted as `filename`. */
+const lint = (source: string, filename = 'apps/client/app/components/Fixture.tsx') =>
+  linter.verify(source, config, path.join(REPO_ROOT, filename)).map(message => message.ruleId);
 
-type Entry = { selector: string; message: string };
-const selectors: Entry[] = (clientUiBlock?.rules?.['no-restricted-syntax'] ?? []).slice(1);
-const paletteSelectors = selectors.filter(entry => entry.message.startsWith('Material UI palette token'));
+const flags = (token: string, filename?: string) =>
+  lint(`export const sx = { color: '${token}' };\n`, filename).includes('no-restricted-syntax');
 
-/** The union of the palette selectors: what the rule flags, as a single testable predicate. */
-const flags = (value: string) =>
-  paletteSelectors.some(entry => {
-    const pattern = entry.selector.match(/^Literal\[value=\/(.+)\/\]$/)?.[1];
-    if (!pattern) throw new Error(`selector is not a Literal value regex: ${entry.selector}`);
-    return new RegExp(pattern).test(value);
-  });
-
+// Dead: resolves to nothing, so the whole declaration is dropped.
 const DEAD = [
   'primary.main',
   'danger.main',
@@ -50,7 +47,14 @@ const DEAD = [
   'info.300',
   'secondary.500',
   'action.hover',
+  'action.disabledBackground',
+  'action.hoverOpacity',
   'grey.700',
+  'grey.A400',
+  'error.mainChannel',
+  'background.paper',
+  'background.default',
+  'text.disabled',
 ];
 
 // Tokens this theme really defines, plus the near-misses that make a lazier regex wrong.
@@ -58,30 +62,29 @@ const LIVE = [
   'primary.plainColor',
   'primary.500',
   'primary.solidHoverBg',
-  'success.softColor',
+  'primary.softHoverBg',
+  'success.plainColor',
   'danger.outlinedBorder',
-  'neutral.plainHoverBg',
+  'neutral.outlinedBorder',
+  'neutral.softBg',
   'success.mainChannel',
   'common.white',
   'text.primary',
+  'text.tertiary',
   'background.surface',
-  'background.backdrop',
+  'background.level2',
   'border.light',
   'border.solid',
   'inbox.border.light',
-  // Not a palette lookup at all - a shape a future non-style string could plausibly take.
+  // Not palette lookups at all - shapes a future non-style string could plausibly take.
   'error.message',
   'logo.dark',
 ];
 
 describe('dead Material UI palette token guard', () => {
-  it('is wired into the apps/client/app block', () => {
-    expect(clientUiBlock, 'expected an eslint block scoped to apps/client/app/**/*.{ts,tsx}').toBeDefined();
-    expect(paletteSelectors.length).toBeGreaterThan(0);
-  });
-
-  it('shares the rule entry with the window.open guard, which last-rule-wins would otherwise drop', () => {
-    expect(selectors.some(entry => entry.message.includes('openInNewTab()'))).toBe(true);
+  it('lints the fixture at all, so a misconfigured Linter cannot pass vacuously', () => {
+    expect(lint(`export const a = 'primary.main';\n`)).toContain('no-restricted-syntax');
+    expect(lint(`export const a = 'primary.plainColor';\n`)).toEqual([]);
   });
 
   it.each(DEAD)('flags %s', token => {
@@ -92,12 +95,19 @@ describe('dead Material UI palette token guard', () => {
     expect(flags(token)).toBe(false);
   });
 
-  it('reports each dead token exactly once', () => {
+  it('reports a dead token once, not once per selector', () => {
     for (const token of DEAD) {
-      const hits = paletteSelectors.filter(entry =>
-        new RegExp(entry.selector.match(/^Literal\[value=\/(.+)\/\]$/)![1]).test(token)
-      );
-      expect(`${token} matched by ${hits.length} selector(s)`).toBe(`${token} matched by 1 selector(s)`);
+      const hits = lint(`export const sx = { color: '${token}' };\n`).filter(id => id === 'no-restricted-syntax');
+      expect(`${token} reported ${hits.length}x`).toBe(`${token} reported 1x`);
     }
+  });
+
+  it('still covers test files under apps/client/app', () => {
+    expect(flags('primary.main', 'apps/client/app/components/Fixture.test.tsx')).toBe(true);
+  });
+
+  it('still bans window.open in the same block, which last-rule-wins would otherwise drop', () => {
+    expect(lint(`window.open('https://example.com');\n`)).toContain('no-restricted-syntax');
+    expect(lint(`open('https://example.com');\n`)).toContain('no-restricted-globals');
   });
 });
