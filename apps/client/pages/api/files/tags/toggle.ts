@@ -66,7 +66,7 @@ const handler = baseApi().post(
       // Matches every other audited config-write door (#1917): undefined for a session caller,
       // the key's principal for a `b4m_live_` caller - so a toggle that auto-activates a draft
       // lake attributes the History row to the key, not the human.
-      auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
+      auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
       logger: req.logger,
     });
 
