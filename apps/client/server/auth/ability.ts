@@ -90,16 +90,15 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
         allow(permission, resource, ownDocumentPermission);
 
+        // $elemMatch on both arms so the id and the permission must hold on the SAME
+        // entry. Dotted `{ 'users.userId': ..., 'users.permissions': ... }` lets the two
+        // conditions be satisfied by different array elements: a doc shared with alice
+        // (share only) and bob (read) would grant alice read. The group arm has the same
+        // shape of cross-entry over-grant. Mirrors the $elemMatch the fabFile search
+        // query already uses (packages/database fabFileSearchQuery.ts).
         const userWithPermissions: MongoQuery = {
-          'users.userId': user.id,
-          'users.permissions': permission,
+          users: { $elemMatch: { userId: user.id, permissions: permission } },
         };
-        // $elemMatch so groupId and permission must hold on the SAME group entry.
-        // A dotted `{ 'groups.groupId': ..., 'groups.permissions': ... }` lets the two
-        // conditions be satisfied by different array elements - a doc shared with
-        // group A (some other permission) and group B (this permission) would grant
-        // access to an A-member, a cross-group over-grant. Mirrors the $elemMatch the
-        // fabFile search query already uses (packages/database fabFileSearchQuery.ts).
         const groupWithPermissions: MongoQuery = {
           groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
         };

@@ -81,16 +81,15 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
         // Add permission for user to manage their own documents:
         allow(permission, resource, ownDocumentPermission);
 
-        const userWithPermissions: MongoQuery = {
-          'users.userId': user.id,
-          'users.permissions': permission,
-        };
-        // $elemMatch so groupId and permission must hold on the SAME group entry.
-        // A dotted `{ 'groups.groupId': ..., 'groups.permissions': ... }` lets the two
-        // conditions be satisfied by different array elements - a doc shared with group A
-        // (some other permission) and group B (this permission) would grant access to an
-        // A-member, a cross-group over-grant. Must stay in sync with the HTTP ability
+        // $elemMatch on both arms so the id and the permission must hold on the SAME
+        // entry. Dotted `{ 'users.userId': ..., 'users.permissions': ... }` lets the two
+        // conditions be satisfied by different array elements: a doc shared with alice
+        // (share only) and bob (read) would grant alice read. The group arm has the same
+        // shape of cross-entry over-grant. Must stay in sync with the HTTP ability
         // (apps/client/server/auth/ability.ts) and the fabFile search query's $elemMatch.
+        const userWithPermissions: MongoQuery = {
+          users: { $elemMatch: { userId: user.id, permissions: permission } },
+        };
         const groupWithPermissions: MongoQuery = {
           groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
         };

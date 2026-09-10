@@ -147,3 +147,55 @@ describe('defineAbilitiesFor - group-shared document access', () => {
     expect(ability.can('update', doc)).toBe(true);
   });
 });
+
+// The user arm of the same gate as the group block above: `users[]` pairs a userId with
+// the permissions that user is granted, and both must hold on the SAME entry. Must stay
+// in sync with the db-core copy (packages/database/src/utils/ability.test.ts).
+describe('defineAbilitiesFor - user-shared document access', () => {
+  type UserShare = { userId: string; permissions: string[] };
+  const sharedWithUsers = (users: UserShare[]) => Object.assign(new FabFile(), { userId: 'owner', users, groups: [] });
+
+  it('grants read to a user the doc shares read with', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([{ userId: 'u1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(true);
+  });
+
+  it('denies a user the doc is not shared with', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([{ userId: 'someone-else', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+  });
+
+  it('denies when the matched entry lacks the requested permission', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([{ userId: 'u1', permissions: ['share'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+    expect(ability.can('share', doc)).toBe(true);
+  });
+
+  // The over-broad-grant guard, and unlike the group arm this one is live rather than
+  // dormant: there is no empty-collection gate in front of it, so the dotted filter
+  // reached production through accessibleBy. The caller holds only `share` on their own
+  // entry and `read` belongs to a co-collaborator's; dotted satisfied the two halves
+  // across the two entries and leaked read. The `share` assertion is the positive
+  // control that the entry still matches at all.
+  it('does not leak a permission granted to a different user (no cross-element match)', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([
+      { userId: 'u1', permissions: ['share'] },
+      { userId: 'collaborator', permissions: ['read'] },
+    ]);
+    expect(ability.can('read', doc)).toBe(false);
+    expect(ability.can('share', doc)).toBe(true);
+  });
+
+  it('resolves the right entry when a doc is shared with several users', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([
+      { userId: 'collaborator', permissions: ['read'] },
+      { userId: 'u1', permissions: ['read', 'update'] },
+    ]);
+    expect(ability.can('update', doc)).toBe(true);
+  });
+});
