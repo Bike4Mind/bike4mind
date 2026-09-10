@@ -5,8 +5,10 @@ import { createMocks } from 'node-mocks-http';
  * PATCH /api/user-api-keys/[id] (embed-key configure, Phase E): the "nothing to
  * update" guard, the host-aware origin screen (validateEmbedKeyOrigins, run for
  * real here), and the analytics `updatedFields` that reflects only the fields
- * actually sent. The service is mocked - these assertions are about what the
- * route screens, forwards, and logs, not the service's own invariants.
+ * actually sent. Plus DELETE on the same route: the id guard, the adapters it
+ * threads, and the DELETED event. The services are mocked - these assertions are
+ * about what the route screens, forwards, and logs, not the services' own
+ * invariants (the revoked-only rule is covered in delete.test.ts).
  */
 
 // PUBLISH_HOST is read from SERVER_DOMAIN at module load, so set it before imports.
@@ -14,7 +16,10 @@ vi.hoisted(() => {
   process.env.SERVER_DOMAIN = 'bike4mind.com';
 });
 
-const mockRefs = vi.hoisted(() => ({ patchHandler: null as null | ((req: any, res: any) => unknown) }));
+const mockRefs = vi.hoisted(() => ({
+  patchHandler: null as null | ((req: any, res: any) => unknown),
+  deleteHandler: null as null | ((req: any, res: any) => unknown),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
@@ -22,6 +27,10 @@ vi.mock('@server/middlewares/baseApi', () => {
     post: () => chain,
     patch: (fn: any) => {
       mockRefs.patchHandler = fn;
+      return chain;
+    },
+    delete: (fn: any) => {
+      mockRefs.deleteHandler = fn;
       return chain;
     },
   };
@@ -41,11 +50,13 @@ const updateEmbedKey = vi.hoisted(() =>
 // forwards), but resolveOwnedApiKey is the REAL one: the branding-owner read is
 // the site that must not drift from the service's resolution, so stubbing it
 // here would make the org-admin assertions below vacuous.
+const deleteUserApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ name: 'widget' }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {
     userApiKeyService: {
       updateEmbedKey,
+      deleteUserApiKey,
       resolveOwnedApiKey: actual.userApiKeyService.resolveOwnedApiKey,
     },
   };
@@ -77,7 +88,7 @@ const organizationRepository = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }));
 
-import { CreditHolderType } from '@bike4mind/common';
+import { ConflictError, CreditHolderType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import '@pages/api/user-api-keys/[id]/index';
 
@@ -86,6 +97,51 @@ function patch(id: string | undefined, body: unknown) {
   (req as any).user = { id: 'u1', isAdmin: false };
   return { req, res };
 }
+
+function del(id: string | undefined) {
+  const { req, res } = createMocks({ method: 'DELETE', query: id === undefined ? {} : { id } });
+  (req as any).user = { id: 'u1', isAdmin: false };
+  return { req, res };
+}
+
+describe('DELETE /api/user-api-keys/[id] - remove a revoked key', () => {
+  beforeEach(() => {
+    deleteUserApiKey.mockClear();
+    logEvent.mockClear();
+  });
+
+  it('forwards the key id with both adapters and logs the DELETED event', async () => {
+    const { req, res } = del('key-1');
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(deleteUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      { keyId: 'key-1' },
+      // The org adapter must be threaded or the service's org-admin fallback
+      // would have no dependency to resolve with.
+      { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { keyId: 'key-1', name: 'widget' } }),
+      expect.anything()
+    );
+  });
+
+  it('rejects a missing key id with 400 and never calls the service', async () => {
+    const { req, res } = del(undefined);
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/Invalid key ID/i);
+    expect(deleteUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('propagates a service refusal without logging a deletion', async () => {
+    deleteUserApiKey.mockRejectedValueOnce(new ConflictError('Revoke this API key before deleting it'));
+    const { req, res } = del('key-1');
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/Revoke this API key/i);
+    expect(logEvent).not.toHaveBeenCalled();
+  });
+});
 
 describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
   beforeEach(() => {
