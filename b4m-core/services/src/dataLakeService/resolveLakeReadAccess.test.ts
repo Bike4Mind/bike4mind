@@ -343,4 +343,34 @@ describe('grantedLakeReachFor - the two reach sets earn different bypasses', () 
   it('an unwired grant repo reaches nothing', async () => {
     expect(await grantedLakeReachFor('u1', ['orgA'])).toEqual({ grantedLakeIds: [], orgGrantedLakes: {} });
   });
+
+  /**
+   * The expiry REQUEST, asserted at the call boundary rather than through its consequences. The
+   * repo drops lapsed rows only when handed an `activeAsOf` - `buildActiveGrantFilter` is a no-op
+   * without one - so degrading this argument to `{}` would honor expired grants forever: for read
+   * access here, and through `getAccessibleDataLakePrompts` for system-prompt injection too.
+   *
+   * No consequence test can catch that regression. Every grant-repo double in the tree returns its
+   * fixture rows unfiltered (none reimplements `buildActiveGrantFilter`), so an expired row is
+   * indistinguishable from a live one on this side of the boundary; the DB-layer tests that DO
+   * cover expiry (`DataLakeAccessGrantModel.test.ts`) never see whether their caller asks for it.
+   * This assertion is the only place the two halves are joined. Matched as `any(Date)` because the
+   * value is `new Date()` at call time.
+   *
+   * Both arms are asserted: the org arm carries the same obligation and is reached only under
+   * `includeReaders`, so a fix applied to one arm alone still leaves the other silent.
+   */
+  it('asks the repo for active-only rows on both principal arms', async () => {
+    const grants = repo(
+      rows({ dataLakeId: 'owned', role: 'owner', principalType: 'user', principalId: 'u1' }),
+      rows({ dataLakeId: 'shared', role: 'reader', principalType: 'organization', principalId: 'orgA' })
+    );
+
+    await grantedLakeReachFor('u1', ['orgA'], grants, true);
+
+    expect(grants.listByPrincipal).toHaveBeenCalledWith('user', 'u1', { activeAsOf: expect.any(Date) });
+    expect(grants.listByPrincipal).toHaveBeenCalledWith('organization', 'orgA', {
+      activeAsOf: expect.any(Date),
+    });
+  });
 });
