@@ -2639,6 +2639,9 @@ export const settingsMap = {
     defaultValue: 10000,
     description: 'Credits to give to the referred user.',
     category: 'Referrals',
+    // ReferralModal renders this for every non-admin sender - no secret, just the number
+    // displayed in the "invited person gets N credits" line.
+    userReadable: true,
   }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',
@@ -3074,6 +3077,10 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.OPENAI.id,
     order: 8,
+    // useSystemPromptFiles() reads this by name with no admin guard - it lists file names,
+    // not a secret. The server independently resolves it when composing the prompt, so this
+    // read only affects what the non-admin UI displays.
+    userReadable: true,
   }),
   OpenWeatherKey: makeStringSetting({
     key: 'OpenWeatherKey',

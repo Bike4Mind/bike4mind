@@ -16,7 +16,7 @@ import { escape } from 'html-escaper';
 
 const CreateReferralRequestSchema = z.object({
   userName: z.string(),
-  friendEmail: z.array(z.string()),
+  friendEmail: z.array(z.string().email()),
   emailTitle: z.string(),
   emailBody: z.string(),
   tags: z.array(z.string()).optional(),
@@ -26,7 +26,10 @@ const handler = baseApi().post(
   async (req: Request<unknown, unknown, z.infer<typeof CreateReferralRequestSchema>>, res) => {
     const newReferralData = CreateReferralRequestSchema.parse(req.body);
     const user = req.user;
-    const { userName, friendEmail, emailTitle, emailBody } = newReferralData;
+    const { userName, emailTitle, emailBody } = newReferralData;
+    // Dedup before the quota guard below, not after - otherwise a duplicated address counts
+    // once against numReferralsAvailable but is still charged once per copy further down.
+    const friendEmail = Array.from(new Set(newReferralData.friendEmail));
     const userId = user.id;
 
     // Minting credit-bearing invite codes requires proof the sender's own email

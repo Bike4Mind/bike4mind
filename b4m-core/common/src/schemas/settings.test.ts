@@ -221,7 +221,16 @@ describe('public settings projection (M2.5 security boundary)', () => {
 
     it('includes the explicitly tagged non-experimental keys the app needs', () => {
       const keys = new Set(userReadableSettingKeys());
-      for (const k of ['enforceCredits', 'pricePerCredit', 'MaxFileSize', 'defaultEmbeddingModel']) {
+      for (const k of [
+        'enforceCredits',
+        'pricePerCredit',
+        'MaxFileSize',
+        'defaultEmbeddingModel',
+        // ReferralModal and useSystemPromptFiles() both read these by name with no
+        // admin guard - carry no secret, but were missed by the initial opt-in pass.
+        'ReferralCreditsAmount',
+        'SystemFiles',
+      ]) {
         expect(keys.has(k)).toBe(true);
       }
     });

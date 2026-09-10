@@ -167,6 +167,17 @@ describe('GET /api/users - publicView projection coupling', () => {
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(sortStage()).not.toHaveProperty('isAdmin');
+    // Falls back to the public default field, username - ascending by default so a bare
+    // fallback reads A-Z rather than reverse-alphabetical.
+    expect(sortStage()).toEqual({ username: 1 });
+  });
+
+  it('honours an explicit sortOrder even on the fallback field', async () => {
+    const { req, res } = mocks(
+      { id: 'u1', isAdmin: false },
+      { publicView: 'true', search: 'abc', sortField: 'isAdmin', sortOrder: 'desc' }
+    );
+    await mockRefs.getHandler!(req, res);
     expect(sortStage()).toEqual({ username: -1 });
   });
 

@@ -30,7 +30,9 @@ const querySchema = z.object({
     .optional()
     .transform(val => val?.trim()),
   sortField: z.string().default('createdAt'),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  // No default here - the effective order depends on which sort field is actually applied,
+  // resolved below once effectiveSortField is known.
+  sortOrder: z.enum(['asc', 'desc']).optional(),
   orgSearch: z.array(z.string()).default(['all']),
   tags: z.array(z.string()).optional(),
   projectId: z
@@ -81,6 +83,10 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     const allowedSortFields = publicView ? PUBLIC_USER_SORT_FIELDS : ADMIN_USER_SORT_FIELDS;
     const defaultSortField = publicView ? PUBLIC_DEFAULT_SORT_FIELD : ADMIN_DEFAULT_SORT_FIELD;
     const effectiveSortField = allowedSortFields.has(sortField) ? sortField : defaultSortField;
+    // username reads better ascending (A-Z); createdAt keeps the historical newest-first
+    // default. Only kicks in when the caller did not explicitly ask for an order, so an
+    // explicit sortOrder=desc on the public picker still reverses it.
+    const effectiveSortOrder = sortOrder ?? (effectiveSortField === PUBLIC_DEFAULT_SORT_FIELD ? 'asc' : 'desc');
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let query: mongoose.FilterQuery<any> = publicView
@@ -229,7 +235,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         {
           $sort: {
             score: -1,
-            [effectiveSortField]: sortOrder === 'asc' ? 1 : -1,
+            [effectiveSortField]: effectiveSortOrder === 'asc' ? 1 : -1,
           },
         },
         {
@@ -261,7 +267,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
             $and: [query, organizationFilter],
           },
         },
-        { $sort: { [effectiveSortField]: sortOrder === 'asc' ? 1 : -1 } },
+        { $sort: { [effectiveSortField]: effectiveSortOrder === 'asc' ? 1 : -1 } },
         { $project: publicView ? PUBLIC_USER_LIST_PROJECTION : ADMIN_USER_PROJECTION },
       ];
     }
