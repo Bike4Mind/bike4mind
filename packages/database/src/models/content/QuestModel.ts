@@ -904,6 +904,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return !!(await this.model.exists({ sessionId }));
   }
 
+  // Session ids of every quest whose `images` array references this generated-file key. Generated
+  // images are stored under owner-less keys, so this is the only server-side link from a key back
+  // to the chat (and thus the owner) that produced it - see userCanAccessGeneratedImage. Includes
+  // soft-deleted quests: a key from a deleted turn still belongs to that session's owner.
+  async findSessionIdsByImage(image: string): Promise<string[]> {
+    if (!image) return [];
+    const docs = await this.model.find({ images: image }, { sessionId: 1 }).setOptions({ includeDeleted: true });
+    return [...new Set(docs.map(d => d.sessionId))];
+  }
+
   /**
    * Quests stuck at `status: 'running'` whose `updatedAt` has gone stale, oldest first.
    * Shape is `StaleRunningQuestView`, declared below the class.
@@ -986,6 +996,11 @@ function initializeQuestModel() {
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
+
+    // Multikey index backing findSessionIdsByImage: the generated-image authz lookup runs on every
+    // serve/copy of a generated image, so this key -> session resolution must not be a collection
+    // scan. Sparse: most quests carry no images.
+    ChatHistoryItemSchema.index({ images: 1 }, { name: 'images', sparse: true });
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });

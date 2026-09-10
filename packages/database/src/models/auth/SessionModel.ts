@@ -385,8 +385,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
   }
   /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
-  async findAllByIds(ids: string[]) {
-    return this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
+  async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
+    const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
+    return options?.includeDeleted ? query.setOptions({ includeDeleted: true }) : query;
   }
 
   async attachAgent(sessionId: string, agentId: string) {
