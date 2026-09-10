@@ -296,6 +296,8 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
   }
 
   // Message-count alarm: any message in the DLQ means WAF alert delivery to Slack is failing.
+  // evaluationPeriods: 1 is intentional -- any DLQ message here is an immediate failure
+  // signal, not transient noise, so a single breaching period is the right sensitivity.
   new aws.cloudwatch.MetricAlarm(
     'WafAlarmSlackHandlerDlqMessages',
     {
@@ -312,11 +314,13 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       treatMissingData: 'notBreaching',
       dimensions: { QueueName: wafAlarmDlq.name },
       alarmActions: [wafOobAlarmTopic.arn],
+      tags: { Application: 'WafAiRateLimit', Severity: 'Critical', MonitoringType: 'DLQ' },
     },
     { provider: wafProviderUsEast1 }
   );
 
-  // Age alarm: parity with the standard DLQ fleet -- any message older than 1 hour.
+  // Age alarm: same 1-hour threshold as the standard DLQ fleet. period is 60s (vs fleet
+  // 300s) to match the message-count alarm above and keep both alarms on the same cadence.
   new aws.cloudwatch.MetricAlarm(
     'WafAlarmSlackHandlerDlqAge',
     {
@@ -333,6 +337,7 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       treatMissingData: 'notBreaching',
       dimensions: { QueueName: wafAlarmDlq.name },
       alarmActions: [wafOobAlarmTopic.arn],
+      tags: { Application: 'WafAiRateLimit', Severity: 'High', MonitoringType: 'DLQ' },
     },
     { provider: wafProviderUsEast1 }
   );
