@@ -301,19 +301,25 @@ export async function loadHelpContent(slug: string, isAdmin: boolean, logger: He
   if (helpContentCache.has(cacheKey)) return helpContentCache.get(cacheKey)!;
 
   try {
-    const candidates = [`${slug}.md`, `${slug}/index.md`];
+    // The guard is root-independent - safeHelpContentPath validates the caller-derived relative
+    // path and never sees a root - so it runs once here rather than per root. Appending with a
+    // template literal afterwards is what keeps the roots out of every path.* call; see
+    // safeHelpContentPath for why that is load-bearing for bundle size.
+    const relatives: string[] = [];
+    for (const candidate of [`${slug}.md`, `${slug}/index.md`]) {
+      const relative = safeHelpContentPath(candidate);
+      if (!relative) {
+        logger.warn(`[HelpRetrieval] Path traversal attempt blocked for slug: ${slug}`);
+        return null;
+      }
+      relatives.push(relative);
+    }
+
+    // The loop only chooses which root's filesystem to try.
     for (const helpContentRoot of helpContentRoots(isAdmin)) {
-      for (const candidate of candidates) {
-        // Guard the relative half, then append with a template literal - the root must never reach
-        // a path.* call. See safeHelpContentPath for why that is load-bearing for bundle size.
-        const relative = safeHelpContentPath(candidate);
-        if (!relative) {
-          logger.warn(`[HelpRetrieval] Path traversal attempt blocked for slug: ${slug}`);
-          return null;
-        }
-        const contentPath = `${helpContentRoot}/${relative}`;
+      for (const relative of relatives) {
         try {
-          const content = await fs.promises.readFile(contentPath, 'utf-8');
+          const content = await fs.promises.readFile(`${helpContentRoot}/${relative}`, 'utf-8');
           helpContentCache.set(cacheKey, content);
           return content;
         } catch {
@@ -369,8 +375,18 @@ async function keywordFallback(
 
     // If the user is viewing a specific help article, prioritize it.
     if (currentHelpSlug) {
+      // currentHelpSlug is caller-supplied (pages/api/help/chat.ts), and this lookup is against
+      // the UNFILTERED index, so it needs the same access check findRelevantHelpEntries applies.
+      // Without it a non-admin naming an admin slug gets that article's title and description
+      // echoed back - buildKeywordContext emits the title always and falls back to the
+      // description when the body is null, which for a non-admin it always is.
+      const allowedLevels = getAllowedAccessLevels(isAdmin);
       const currentEntry = helpIndex.entries.find(e => e.slug === currentHelpSlug);
-      if (currentEntry && !relevantEntries.some(e => e.slug === currentHelpSlug)) {
+      if (
+        currentEntry &&
+        allowedLevels.has(currentEntry.accessLevel) &&
+        !relevantEntries.some(e => e.slug === currentHelpSlug)
+      ) {
         relevantEntries.unshift(currentEntry);
         relevantEntries = relevantEntries.slice(0, MAX_RELEVANT_ENTRIES);
       }

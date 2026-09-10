@@ -148,3 +148,30 @@ describe('searchHelpContext keyword fallback', () => {
     expect(result.relevantArticles.map(a => a.slug)).not.toContain('admin/runbook');
   });
 });
+
+describe('searchHelpContext currentHelpSlug', () => {
+  // currentHelpSlug is caller-supplied (pages/api/help/chat.ts) and was looked up against the
+  // UNFILTERED index, so a non-admin could name an admin slug and get its metadata back even
+  // though findRelevantHelpEntries had correctly excluded it. No body or media leaks - the admin
+  // root is not in helpContentRoots(false) - but that is exactly why the metadata did: with a
+  // null body, buildKeywordContext emits the title and falls back to the description.
+  const viewing = (question: string, isAdmin: boolean) =>
+    searchHelpContext({ question, currentHelpSlug: 'admin/runbook', isAdmin, apiKeys: null, logger });
+
+  it('withholds an admin title and description from a non-admin naming the slug', async () => {
+    // A question that matches the PUBLIC article, so the keyword path demonstrably ran and the
+    // absence below is exclusion rather than an empty context.
+    const result = await viewing('how do I configure the widget', false);
+    expect(result.context).toContain('PUBLIC_BODY_MARKER');
+    expect(result.context).not.toContain('Widget Runbook');
+    expect(result.context).not.toContain('Admin widget runbook');
+    expect(result.relevantArticles.map(a => a.slug)).not.toContain('admin/runbook');
+  });
+
+  it('still prioritises the viewed article for an admin', async () => {
+    // A question matching NOTHING, so currentHelpSlug is the only thing that can surface the
+    // entry - which is what keeps the access check from being a silent feature removal.
+    const result = await viewing('zzz nonmatching interrogative zzz', true);
+    expect(result.relevantArticles.map(a => a.slug)).toContain('admin/runbook');
+  });
+});

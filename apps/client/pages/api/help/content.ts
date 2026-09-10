@@ -76,20 +76,6 @@ function isEscapingPath(requested: string): boolean {
 }
 
 /**
- * Resolve a caller-supplied docs-root-relative path inside `root`, or null if it lands outside.
- *
- * Shares its guard with `server/help/retrieval.ts` via `safeHelpContentPath`, so the two readers
- * cannot drift apart. Note that the root is appended with a template literal and never handed to
- * `path.resolve`: that is what keeps @vercel/nft from globbing all of `apps/client` into the
- * Lambda bundle, and it is why both roots are declared in `outputFileTracingIncludes`. See
- * `server/help/contentPath.ts` for the full reasoning and the measured cost of getting it wrong.
- */
-function resolveWithinRoot(root: string, requested: string): string | null {
-  const relative = safeHelpContentPath(requested);
-  return relative ? `${root}/${relative}` : null;
-}
-
-/**
  * Roots to search, in order, for a request with this extension.
  *
  * Assets fall back to the public root because the bundler writes an asset referenced by at least
@@ -129,14 +115,20 @@ const handler = baseApi(API_OPTIONS).get(async (req, res) => {
   const contentType = extension === MARKDOWN_EXTENSION ? MARKDOWN_CONTENT_TYPE : ASSET_CONTENT_TYPES[extension];
   if (!contentType) return notFound();
 
+  // The guard is root-independent: safeHelpContentPath validates the caller-supplied relative path
+  // and never sees a root, so it runs once here rather than per root. It is shared with
+  // `server/help/retrieval.ts` so the two readers of these roots cannot drift apart. Appending the
+  // root with a template literal afterwards - never handing it to `path.resolve` - is what keeps
+  // @vercel/nft from globbing all of `apps/client` into the Lambda bundle, and is why both roots
+  // are declared in `outputFileTracingIncludes`. See `server/help/contentPath.ts`.
+  const relative = safeHelpContentPath(requested);
+  if (!relative) return notFound();
+
+  // The loop only chooses which root's filesystem to try.
   let data: Buffer | null = null;
   for (const root of rootsForExtension(extension)) {
-    // Resolve-then-verify per root: the guard is against whichever root is about to be read,
-    // never once against a root the read does not use.
-    const resolved = resolveWithinRoot(root, requested);
-    if (!resolved) continue;
     try {
-      data = await fs.promises.readFile(resolved);
+      data = await fs.promises.readFile(`${root}/${relative}`);
       break;
     } catch {
       // Missing file, directory-as-path, or no content bundled under this root at all - none of
