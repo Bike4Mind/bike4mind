@@ -41,6 +41,18 @@ interface AssertLakeAccessAdapters {
 }
 
 /**
+ * The manage-door variant of the adapters: `dataLakeAccessGrants` is REQUIRED. The read shape above
+ * makes it optional for the ~57 callers that only need the lake, and that optionality must not be
+ * spent here: a manage caller that omitted the repo would receive `grants: []`, indistinguishable
+ * from "this lake has no grants", and every grant-carried rung (a curator, a transferred owner)
+ * would silently vanish from the decision the door then makes. Required turns that into a compile
+ * error, the same reason `TransferLakeOwnershipAdapters` narrows its own audit repo.
+ */
+type AssertLakeAccessWithGrantsAdapters = AssertLakeAccessAdapters & {
+  db: { dataLakeAccessGrants: NonNullable<AssertLakeAccessAdapters['db']['dataLakeAccessGrants']> };
+};
+
+/**
  * Pure access decision for a lake the caller already holds. Bypass-then-constraints:
  * owner or admin is granted immediately; otherwise a non-owner must satisfy the org
  * constraint (if the lake is org-scoped) AND the requirement constraint - the requirement
@@ -196,7 +208,14 @@ const resolveGrantHeldLakeBySlug = async (
  * real lake that shadows a fallback slug resolves to the DB lake, and its denial is
  * final (no fallback retry). Denies with a NOT-FOUND-style error so a user who can't
  * see a lake can't confirm it exists. Every single-lake read and every batch/file
- * operation calls this first. Returns the lake on grant.
+ * operation calls this first (most through the `assertLakeAccess` wrapper below).
+ *
+ * Returns the lake AND the grants the gate itself read, so a caller that goes on to make a manage
+ * decision does not re-query them - the identical set `loadActiveLakeGrants` would return, active
+ * as of this call. `grants` is `[]` for a fallback lake (there is no document to hang a grant row
+ * on) and also `[]` when no `dataLakeAccessGrants` repo is wired, which is why the manage entry
+ * point `assertLakeAccessWithGrants` requires that repo - only the lake-only `assertLakeAccess`
+ * wrapper may reach this with it absent.
  *
  * Slug resolution (#2425): findBySlug's own-org/org-less arms miss a lake in an org the
  * caller isn't a member of, even when they hold a real owner/curator grant on it (e.g. a
@@ -207,11 +226,11 @@ const resolveGrantHeldLakeBySlug = async (
  * extra grants query only ever runs on a miss, matching the prior lazy-thunk design, but the
  * decision now lives here rather than inside the repository method.
  */
-export const assertLakeAccess = async (
+const resolveLakeAccessWithGrants = async (
   lakeIdOrSlug: string,
   ctx: AccessContext,
   { db, logger }: AssertLakeAccessAdapters
-): Promise<IDataLakeDocument> => {
+): Promise<{ lake: IDataLakeDocument; grants: LakeGrant[] }> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
     (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds)) ??
@@ -248,9 +267,33 @@ export const assertLakeAccess = async (
       });
     }
     if (!decision.allowed) throw new NotFoundError('Data lake not found');
-    return lake;
+    return { lake, grants };
   }
   const fallback = await resolveFallbackLake(lakeIdOrSlug, ctx, db.fallbackLakeSettings, logger);
   if (!fallback) throw new NotFoundError('Data lake not found');
-  return fallback;
+  return { lake: fallback, grants: [] };
 };
+
+/**
+ * The access gate for a caller that goes on to make a MANAGE decision: same gate, and it hands back
+ * the grants it read so the door does not re-query them. See `resolveLakeAccessWithGrants` above for
+ * the contract. This entry point exists only to REQUIRE the grants repo (see
+ * `AssertLakeAccessWithGrantsAdapters`), which the lake-only wrapper below cannot.
+ */
+export const assertLakeAccessWithGrants = (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  adapters: AssertLakeAccessWithGrantsAdapters
+): Promise<{ lake: IDataLakeDocument; grants: LakeGrant[] }> =>
+  resolveLakeAccessWithGrants(lakeIdOrSlug, ctx, adapters);
+
+/**
+ * The access gate, for the callers that need only the lake. See `resolveLakeAccessWithGrants` for
+ * the contract; a caller that goes on to make a MANAGE decision should use
+ * `assertLakeAccessWithGrants` instead of re-reading the same grants.
+ */
+export const assertLakeAccess = async (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  adapters: AssertLakeAccessAdapters
+): Promise<IDataLakeDocument> => (await resolveLakeAccessWithGrants(lakeIdOrSlug, ctx, adapters)).lake;
