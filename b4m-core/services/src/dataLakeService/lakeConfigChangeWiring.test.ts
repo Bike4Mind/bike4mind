@@ -464,13 +464,11 @@ describe('transferLakeOwnership', () => {
     dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]), upsertGrant: vi.fn().mockResolvedValue({}) },
     users: { findById: vi.fn().mockResolvedValue({ id: 'newOwner' }) },
     organizations: {
-      findById: vi
-        .fn()
-        .mockResolvedValue({
-          userId: 'billing',
-          adminUserIds: [],
-          users: [{ userId: 'newOwner' }, { userId: 'owner' }],
-        }),
+      findById: vi.fn().mockResolvedValue({
+        userId: 'billing',
+        adminUserIds: [],
+        users: [{ userId: 'newOwner' }, { userId: 'owner' }],
+      }),
     },
   });
 

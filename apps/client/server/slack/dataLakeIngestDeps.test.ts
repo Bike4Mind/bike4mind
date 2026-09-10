@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { findByContentHashesInDataLake: vi.fn() },
   organizationRepository: { findMembershipOrgIds: vi.fn(), findIdsWithAdminRights: vi.fn() },
   // Must actually run the callback: the FILE adapter wraps the create in it, so a stub that
   // returned without invoking would make the assertions below vacuously pass.
@@ -48,7 +48,7 @@ vi.mock('@server/utils/storage', () => ({
 }));
 
 const { buildSlackLakeIngestDeps } = await import('./dataLakeIngestDeps');
-const { dataLakeAccessGrantRepository } = await import('@bike4mind/database');
+const { dataLakeAccessGrantRepository, fabFileRepository } = await import('@bike4mind/database');
 
 describe('buildSlackLakeIngestDeps forwards administeredOrgIds to the file create', () => {
   const deps = () =>
@@ -157,5 +157,73 @@ describe('buildSlackLakeIngestDeps wires dataLakeAccessGrants into the shared db
 
     const { db } = createFabFileByUrl.mock.calls[0][2];
     expect(db.dataLakeAccessGrants).toBe(dataLakeAccessGrantRepository);
+  });
+});
+
+/**
+ * #2027: the LINK path's dedup check (`checkDuplicate`, consumed by `createFabFileByUrl` before it
+ * creates anything) is bound HERE, scoped to the specific lake this `add` targets - not asserted by
+ * `dataLakeLinkIngest.test.ts`, which fakes `createLakeFileFromUrl` entirely and so never reaches
+ * this closure.
+ */
+describe('buildSlackLakeIngestDeps wires per-lake dedup into the LINK create', () => {
+  const deps = () =>
+    buildSlackLakeIngestDeps({
+      downloadFile: vi.fn(),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+  beforeEach(() => {
+    createFabFileByUrl.mockClear();
+    (fabFileRepository.findByContentHashesInDataLake as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  const checkDuplicateFor = async (datalakeTag: string) => {
+    await deps().createLakeFileFromUrl('user-1', {
+      url: 'https://example.com/article',
+      tags: [],
+      provenance: { sourceType: FabFileSourceType.SLACK, sourceMetadata: {} },
+      administeredOrgIds: [],
+      datalakeTag,
+    });
+    return createFabFileByUrl.mock.calls[0][2].checkDuplicate as (hash: string) => Promise<unknown>;
+  };
+
+  it('scopes the dedup query to the targeted lake, not every lake', async () => {
+    (fabFileRepository.findByContentHashesInDataLake as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const checkDuplicate = await checkDuplicateFor('datalake:sales');
+    await checkDuplicate('hash-1');
+
+    expect(fabFileRepository.findByContentHashesInDataLake).toHaveBeenCalledWith(['hash-1'], 'datalake:sales');
+  });
+
+  it('resolves the first match so createByUrl.ts can skip the create', async () => {
+    const existing = { id: 'fab-existing', fileName: 'An Article' };
+    (fabFileRepository.findByContentHashesInDataLake as ReturnType<typeof vi.fn>).mockResolvedValue([existing]);
+
+    const checkDuplicate = await checkDuplicateFor('datalake:sales');
+
+    await expect(checkDuplicate('hash-1')).resolves.toBe(existing);
+  });
+
+  it('resolves the FIRST of multiple matches, not the whole array, when more than one comes back', async () => {
+    // The single-element case above (one match in, one match out) can't distinguish destructuring
+    // the first element from just returning the array unchanged. Two matches can.
+    const first = { id: 'fab-first', fileName: 'An Article' };
+    const second = { id: 'fab-second', fileName: 'An Article (older upload)' };
+    (fabFileRepository.findByContentHashesInDataLake as ReturnType<typeof vi.fn>).mockResolvedValue([first, second]);
+
+    const checkDuplicate = await checkDuplicateFor('datalake:sales');
+
+    await expect(checkDuplicate('hash-1')).resolves.toBe(first);
+  });
+
+  it('resolves null (not undefined) when nothing matches, so createByUrl.ts proceeds to create', async () => {
+    (fabFileRepository.findByContentHashesInDataLake as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const checkDuplicate = await checkDuplicateFor('datalake:sales');
+
+    await expect(checkDuplicate('hash-1')).resolves.toBeNull();
   });
 });

@@ -73,10 +73,7 @@ interface ResearchTaskProcessAdapters {
     // three readers: retrieval's grant arm (`listByPrincipal`), `createFabFile`'s admission
     // contract (`listByLake`) and the per-turn manage re-check ToolContext.db requires
     // (`listActiveByLakes`).
-    dataLakeAccessGrants?: Pick<
-      IDataLakeAccessGrantRepository,
-      'listByPrincipal' | 'listByLake' | 'listActiveByLakes'
-    >;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listByLake' | 'listActiveByLakes'>;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];

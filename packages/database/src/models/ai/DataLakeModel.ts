@@ -391,7 +391,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (datalakeTags.length === 0) return [];
     // Same globally-unique index as findByDatalakeTag, so the result carries at most one lake
     // per tag and a caller can key it by `datalakeTag` without losing a match.
-    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } }).select(LIST_PROJECTION);
+    // Sorted so a caller picking `[0]` on a multi-match (e.g. notifySlackIndexingComplete.ts) gets
+    // a stable result across reads, rather than whatever order Mongo happens to return.
+    const docs = await this.dataLakeModel
+      .find({ datalakeTag: { $in: datalakeTags } })
+      .select(LIST_PROJECTION)
+      .sort({ _id: 1 });
     return docs.map(doc => doc.toJSON() as IDataLakeDocument);
   }
 

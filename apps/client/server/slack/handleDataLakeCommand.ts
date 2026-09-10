@@ -1,4 +1,9 @@
-import { parseDataLakeCommand, type ParsedDataLakeCommand, type SlackAttachment } from '@bike4mind/slack';
+import {
+  parseDataLakeCommand,
+  escapeSlackMrkdwn,
+  type ParsedDataLakeCommand,
+  type SlackAttachment,
+} from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
 import { STATIC_LAKE_IDS } from '@bike4mind/common';
 import type { AccessContext, IDataLakeRepository, ManageableDataLakeConfig } from '@bike4mind/common';
@@ -40,6 +45,20 @@ export interface HandleDataLakeCommandParams {
   files: SlackAttachment[];
   channel: string;
   messageTs: string;
+  /**
+   * The Slack workspace this message arrived on, stamped into the created FabFile's
+   * `sourceMetadata` so `notifySlackIndexingComplete.ts` can later resolve the SAME workspace's
+   * bot token to post the indexing-done reply, rather than guessing via the lake's org.
+   */
+  teamId: string;
+  /**
+   * The Slack app this message arrived on, stamped alongside `teamId` for the same reason: a
+   * dev-OAuth workspace is looked up by the (apiAppId, teamId) PAIR
+   * (`slackDevWorkspaceRepository.findBySlackAppIdAndTeamId`, mirroring `events.ts`'s own inbound
+   * resolution) because `slackTeamId` alone is not unique - more than one app can be installed to
+   * the same team. `teamId` alone would let the notifier resolve an arbitrary one of them.
+   */
+  apiAppId: string;
   deps: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   /**
    * Whether the `enableAutoChunk` admin setting is on. Only affects the wording of the success
@@ -58,6 +77,21 @@ const HELP_TEXT = [
 ].join('\n');
 
 const USAGE_HINT = 'Try `@datalake help`.';
+
+/**
+ * Reply for a message that names "datalake" without the leading `@` (e.g. bare `datalake list`).
+ * Kept separate from the `default:` case's "Unrecognized `@datalake` command" wording below - that
+ * one is for a real `@datalake` mention with an unknown subcommand, this one is for a message that
+ * never reached the deterministic handler at all, so the phrasing (and the caller's routing
+ * decision) must not conflate the two.
+ */
+// Hardcoded English, consistent with every other reply string in this file (HELP_TEXT,
+// USAGE_HINT, formatIngestOutcome, etc.) - noted as a known i18n gap rather than fixed in
+// isolation here, since localizing one string while the rest of the file stays English would
+// be inconsistent, not fixed.
+export function formatBareDataLakeMentionHint(): string {
+  return `Did you mean \`@datalake\`? ${USAGE_HINT}`;
+}
 
 /** Rows shown by `list` before a "+N more" tail. Keeps the reply well inside Slack's 40k limit. */
 const LIST_LIMIT = 50;
@@ -269,6 +303,8 @@ async function handleAdd(
         files: params.files,
         channel: params.channel,
         messageTs: params.messageTs,
+        teamId: params.teamId,
+        apiAppId: params.apiAppId,
       },
       params.deps
     );
@@ -286,6 +322,8 @@ async function handleAdd(
         link: parsed.link,
         channel: params.channel,
         messageTs: params.messageTs,
+        teamId: params.teamId,
+        apiAppId: params.apiAppId,
       },
       params.deps
     );
@@ -326,15 +364,21 @@ export function formatLinkOutcome(outcome: SlackLinkIngestOutcome, opts: { autoC
   if (!outcome.ok) return outcome.message;
 
   return formatIngestOutcome(
-    { ok: true, lakeName: outcome.lakeName, added: [outcome.fileName], duplicates: [], rejected: [] },
+    {
+      ok: true,
+      lakeName: outcome.lakeName,
+      added: outcome.duplicate ? [] : [outcome.fileName],
+      duplicates: outcome.duplicate ? [outcome.fileName] : [],
+      rejected: [],
+    },
     opts
   );
 }
 
 /**
- * Compose the in-thread reply. Confirms "added, processing" and STOPS - there is no
- * post-vectorization "now live" update in this rollout, because nothing in the pipeline emits a
- * signal this handler could await (fabFileVectorize only reaches the browser).
+ * Compose the immediate in-thread reply: "added, processing". A separate, later "now searchable"
+ * reply is posted asynchronously once indexing finishes - see `notifySlackIndexingComplete.ts`,
+ * invoked from `fabFileVectorize.ts` on completion, not from this synchronous request/response path.
  */
 export function formatIngestOutcome(
   outcome: SlackLakeIngestOutcome,
@@ -349,7 +393,10 @@ export function formatIngestOutcome(
   const lines: string[] = [];
 
   if (added.length > 0) {
-    const names = added.map(name => `"${name}"`).join(', ');
+    // A file's name can come from an attacker-controlled webpage <title> (the link-add path via
+    // createByUrl.ts) - escaped so a value like "<!channel> URGENT" cannot post as a real
+    // broadcast/mention.
+    const names = added.map(name => `"${escapeSlackMrkdwn(name)}"`).join(', ');
     // With enableAutoChunk off, objectCreated.ts never enqueues the chunk job, so the file is
     // stored but never indexed - promising searchability would be a lie the user cannot act on.
     const tail = autoChunkEnabled
@@ -359,13 +406,15 @@ export function formatIngestOutcome(
   }
 
   if (duplicates.length > 0) {
-    const names = duplicates.map(name => `"${name}"`).join(', ');
+    const names = duplicates.map(name => `"${escapeSlackMrkdwn(name)}"`).join(', ');
     lines.push(`Already in *${lakeName}*, skipped: ${names}.`);
   }
 
   if (rejected.length > 0) {
     // Warning sign, escaped so this source file stays ASCII.
-    lines.push(...rejected.map(reason => `\u26a0\ufe0f ${reason}`));
+    // Escaped like the `added`/`duplicates` arms above: rejection reasons embed the attempted file
+    // name (dataLakeFileIngest.ts), which any channel member controls by naming a file `<!channel>`.
+    lines.push(...rejected.map(reason => `\u26a0\ufe0f ${escapeSlackMrkdwn(reason)}`));
   }
 
   if (lines.length === 0) {
@@ -384,6 +433,10 @@ export interface RunDataLakeSlackCommandDeps {
   channel: string;
   messageTs: string;
   threadTs?: string;
+  /** Forwarded to `handleDataLakeCommand` - see its own field doc. */
+  teamId: string;
+  /** Forwarded to `handleDataLakeCommand` - see its own field doc. */
+  apiAppId: string;
   adminSettings: {
     getSettingsValue(
       key: 'EnableDataLakes' | 'EnableDataLakeSlackAdd' | 'enableAutoChunk'
@@ -431,6 +484,8 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
       files: deps.files,
       channel: deps.channel,
       messageTs: deps.messageTs,
+      teamId: deps.teamId,
+      apiAppId: deps.apiAppId,
       deps: deps.ingest,
       autoChunkEnabled,
     });
