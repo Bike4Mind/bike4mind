@@ -6,8 +6,8 @@ import { partnerSignupRuleRepository, userRepository, withTransaction } from '@b
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { organizationService } from '@bike4mind/services';
-import { BadRequestError } from '@bike4mind/utils';
 import { toSafeOrganization } from '@bike4mind/common';
+import { BadRequestError } from '@server/utils/errors';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
