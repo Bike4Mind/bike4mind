@@ -35,6 +35,15 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 
+// The metrics emit is the only consumer of the ANN counters in a deployed stage, and it no-ops
+// without SEED_STAGE_NAME - so with no mock here, deleting the call site from rankChunksForFiles
+// leaves this whole suite green. That is precisely the silent-success failure the metric exists
+// to detect, reproduced in its own test coverage.
+const mockRecordDataLakeSearchMetrics = vi.hoisted(() => vi.fn());
+vi.mock('./dataLakeSearchMetrics', () => ({
+  recordDataLakeSearchMetrics: mockRecordDataLakeSearchMetrics,
+}));
+
 import {
   comparedNoPassages,
   fileScopedSemanticSearch,
@@ -49,6 +58,7 @@ beforeEach(() => {
   mockCreateEmbeddingService.mockClear();
   mockGenerateEmbedding.mockReset();
   mockGenerateEmbedding.mockImplementation((model: string) => [model.length, 0]);
+  mockRecordDataLakeSearchMetrics.mockClear();
 });
 
 const baseParams = (): SemanticDataLakeSearchParams => ({
@@ -1601,6 +1611,21 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       expect.stringContaining('saturated its limit'),
       expect.objectContaining({ fileCount: 1, hitsReturned: 2 })
     );
+    // Same count, surfaced to the caller instead of only to a debug line the deployed log level
+    // filters out. This is what the CloudWatch metric publishes.
+    expect(result.scan.annUnrankedFilesLeftOffScan).toBe(1);
+    // ...and what actually leaves the process. The counters above are read back off the return
+    // value, which the emit call site does not participate in, so this is the only assertion that
+    // fails if that call is dropped.
+    expect(mockRecordDataLakeSearchMetrics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: 'atlas',
+        annUnrankedFilesLeftOffScan: 1,
+        chunksScanned: 0,
+        annHits: 2,
+      }),
+      expect.anything()
+    );
   });
 
   it('still rescans an unranked ready file when ANN came back short of its limit', async () => {
@@ -1704,6 +1729,7 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     // The debug line reports scanning the index AVOIDED, so a saturated query that left nothing
     // off must not emit it - otherwise a healthy lake logs a zero on every request.
     expect(logger.debug).not.toHaveBeenCalledWith(expect.stringContaining('saturated its limit'), expect.anything());
+    expect(result.scan.annUnrankedFilesLeftOffScan).toBe(0);
   });
 
   describe('mixed-embeddingModel lake (alternate-model ANN cutover)', () => {
