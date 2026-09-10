@@ -21,5 +21,4 @@ export interface ISecretRotationRepository extends IBaseRepository<ISecretRotati
   /** `findByKeyName` with `previousKey` included; grace-window verifiers only. */
   findByKeyNameWithSecret(keyName: string): Promise<ISecretRotationDocument | null>;
   findActiveKeys(): Promise<ISecretRotationDocument[]>;
-  rotateKey(keyName: string, previousKey: string, rotatedBy: string): Promise<ISecretRotationDocument | null>;
 }

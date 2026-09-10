@@ -56,33 +56,6 @@ export class SecretRotationRepository
   async findActiveKeys() {
     return this.secretRotationModel.find({ isActive: true });
   }
-
-  async rotateKey(keyName: string, previousKey: string, rotatedBy: string) {
-    const existing = await this.findByKeyName(keyName);
-    if (!existing) {
-      throw new Error(`SecretRotation not found for ${keyName}`);
-    }
-
-    const rotationIntervalDays = existing.rotationIntervalDays;
-    const now = new Date();
-    const nextRotation = new Date();
-    nextRotation.setDate(now.getDate() + rotationIntervalDays);
-
-    const secretRotation = await this.secretRotationModel.findOneAndUpdate(
-      { keyName },
-      {
-        $set: {
-          previousKey,
-          rotatedAt: now,
-          lastRotatedById: rotatedBy,
-          nextRotation,
-        },
-      },
-      { new: true }
-    );
-
-    return secretRotation;
-  }
 }
 
 SecretRotationSchema.plugin(softDeletePlugin);
