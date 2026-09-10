@@ -2977,6 +2977,19 @@ describe('DataLakeRepository.findByDatalakeTags', () => {
 
     await expect(dataLakeRepository.findByDatalakeTags([])).resolves.toEqual([]);
   });
+
+  it('orders a multi-lake match deterministically by _id, regardless of $in array order', async () => {
+    // A caller that picks lakes[0] on ambiguity (notifySlackIndexingComplete.ts) needs a stable
+    // result across reads - without a .sort(), Mongo's natural order for an $in query is
+    // unspecified. Creation order gives ascending ObjectId order, so querying with the tags in the
+    // REVERSE of creation order still must come back first-created-first.
+    const first = await dataLakeRepository.create(baseLake({ slug: 'first-created' }));
+    const second = await dataLakeRepository.create(baseLake({ slug: 'second-created' }));
+
+    const found = await dataLakeRepository.findByDatalakeTags([second.datalakeTag, first.datalakeTag]);
+
+    expect(found.map(l => l.id)).toEqual([first.id, second.id]);
+  });
 });
 
 describe('DataLakeRepository - LIST_PROJECTION excludes inconsistencyReport', () => {

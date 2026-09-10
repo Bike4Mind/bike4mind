@@ -13,7 +13,13 @@ const { listDataLakes, grantedLakeReachFor } = vi.hoisted(() => ({
   grantedLakeReachFor: vi.fn(),
 }));
 
-vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
+vi.mock('@bike4mind/slack', async importOriginal => {
+  // escapeSlackMrkdwn imported from the REAL module, not reimplemented: some tests assert on exact
+  // reply text pinned to what it neutralizes (e.g. "<!channel>"), and a hand-copy would silently
+  // stop matching if the real implementation ever gains a new escaped character.
+  const actual = await importOriginal<typeof import('@bike4mind/slack')>();
+  return { parseDataLakeCommand, escapeSlackMrkdwn: actual.escapeSlackMrkdwn };
+});
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeReachFor } }));
 // Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
 // dispatch and reply composition only. Each path's own behavior has its own test file.
@@ -25,6 +31,7 @@ import {
   handleDataLakeCommand,
   runDataLakeSlackCommand,
   formatIngestOutcome,
+  formatBareDataLakeMentionHint,
   slugTier,
   type ListScope,
 } from './handleDataLakeCommand';
@@ -463,6 +470,24 @@ describe('handleDataLakeCommand', () => {
       expect(reply).toContain('Added 1 file to *Sales*: "An Article"');
     });
 
+    it('reports a re-added link as skipped, matching the FILE path wording', async () => {
+      // Acceptance criterion: re-adding the same URL answers "Already in <lake>, skipped", not a
+      // second "Added 1 file" - the bug #2027 was filed for.
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'An Article',
+        sourceUrl: 'https://x',
+        duplicate: true,
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toContain('Already in *Sales*, skipped: "An Article"');
+      expect(reply).not.toContain('Added 1 file');
+    });
+
     it('surfaces a link refusal verbatim', async () => {
       parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
       ingestSlackLinkIntoLake.mockResolvedValue({
@@ -685,6 +710,21 @@ describe('formatIngestOutcome', () => {
     expect(text).toContain('x.exe');
   });
 
+  it('escapes a rejection reason embedding an attempted file name, so it cannot post as a broadcast', () => {
+    // Rejection reasons embed the attempted file name (dataLakeFileIngest.ts), which any channel
+    // member can set by naming an oversized or unsupported-type file "<!channel>" and attaching it.
+    const text = formatIngestOutcome({
+      ok: true,
+      lakeName: 'S',
+      added: [],
+      duplicates: [],
+      rejected: ['Could not add "<!channel>": some error.'],
+    });
+
+    expect(text).toContain('&lt;!channel&gt;');
+    expect(text).not.toContain('<!channel>');
+  });
+
   it('does not claim success when nothing happened at all', () => {
     const text = formatIngestOutcome({ ok: true, lakeName: 'S', added: [], duplicates: [], rejected: [] });
     expect(text).toMatch(/nothing to add/i);
@@ -710,6 +750,16 @@ describe('formatIngestOutcome', () => {
     );
 
     expect(text).toMatch(/searchable once indexing finishes/i);
+  });
+});
+
+describe('formatBareDataLakeMentionHint (#2027)', () => {
+  it('points at @datalake and the help subcommand, distinct from the unrecognized-subcommand reply', () => {
+    const text = formatBareDataLakeMentionHint();
+
+    expect(text).toContain('@datalake');
+    expect(text).toContain('@datalake help');
+    expect(text).not.toMatch(/unrecognized/i);
   });
 });
 

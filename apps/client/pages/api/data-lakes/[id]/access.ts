@@ -3,6 +3,7 @@ import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
+  adminSettingsRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   lakeAccessEventRepository,
@@ -36,6 +37,11 @@ import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
  * which is narrower than managing it (see `resolveLakeTransferAuthority`). It rides in `meta`, not in
  * the view, because the view is the exported compliance artifact: a per-viewer capability is not a
  * fact about the lake's access and must not appear in the CSV.
+ *
+ * `meta.readerGrantsEnforced` is there for the same reason and a sharper one: while the
+ * `EnforceLakeReadGrants` platform setting is off, a `reader` grant is RECORDED but admits nobody, so
+ * a table that rendered it like any other row would repeat the half-works trap this surface exists to
+ * expose. It is platform state, not lake state, so it stays out of the CSV artifact too.
  */
 /** `format` is `string[]` for a repeated query param - see firstQueryValue. */
 interface AccessQuery {
@@ -84,7 +90,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     return res.json({
       data: view,
-      meta: { canTransferOwnership: dataLakeService.resolveLakeTransferAuthority(lake, ctx, grants).allowed },
+      meta: {
+        canTransferOwnership: dataLakeService.resolveLakeTransferAuthority(lake, ctx, grants).allowed,
+        readerGrantsEnforced: await dataLakeService.resolveEnforceReadGrants(adminSettingsRepository, req.logger),
+      },
     });
   });
 

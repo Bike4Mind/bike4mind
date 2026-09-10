@@ -13,8 +13,11 @@ import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   LAKE_RECALL_K_DEFAULT,
+  SettingScopeLevel,
 } from '@bike4mind/common';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -2147,6 +2150,255 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       ([key]) => key === 'forcedRetrievalCharBudget'
     );
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  /**
+   * A unit vector whose cosine against the query [1, 0] IS `score`, so each fixture states the
+   * score it wants directly instead of leaving it to be derived from coordinates.
+   */
+  const vectorScoring = (score: number) => [score, Math.sqrt(1 - score * score)];
+
+  /** Unique per chunk and long enough to be visible, short enough that the char budget never binds. */
+  const passageText = (index: number) => `PASSAGE_${index}_ ${'detail '.repeat(10)}`;
+
+  const makeCtx = (opts: {
+    scores: number[];
+    platform?: Record<string, string>;
+    orgOverride?: string;
+    /** Omit the scoped overlay to exercise the platform-only read path instead. */
+    withScopedOverlay?: boolean;
+  }) => {
+    const platform = opts.platform ?? {};
+    const rows = opts.scores.map((score, index) => ({
+      id: `ch${index}`,
+      fabFileId: 'fileA',
+      text: passageText(index),
+      vector: vectorScoring(score),
+    }));
+    return {
+      // `debug` is part of the Logger contract and the scoped resolver uses it - a mock without it
+      // makes the resolver throw into its own never-throw guard and silently serve coded defaults,
+      // which looks exactly like a floor that ignores its configuration.
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: {
+          search: vi
+            .fn()
+            .mockResolvedValue({ data: [{ id: 'fileA', fileName: 'Floors.pdf', tags: [] }], hasMore: false, total: 1 }),
+        },
+        fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn(() => Promise.resolve(rows)) },
+        adminSettings: {
+          // Serves the platform-only read path (and the char budget, which is absent from every
+          // fixture here and so stays at its default).
+          getSettingsValue: vi.fn(async (key: string) => platform[key]),
+          findBySettingNames: vi.fn(async (names: string[]) =>
+            names
+              .filter(name => platform[name] != null)
+              .map(name => ({ settingName: name, settingValue: platform[name] }))
+          ),
+          findAll: vi.fn(async () =>
+            Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+          ),
+        },
+        ...(opts.withScopedOverlay === false ? {} : { scopedSettings: makeScopedSettings(opts.orgOverride) }),
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const makeScopedSettings = (orgOverride?: string) => ({
+    findOverrides: vi.fn(async () =>
+      orgOverride == null
+        ? []
+        : [
+            {
+              scopeLevel: SettingScopeLevel.Organization,
+              scopeId: 'org1',
+              settingName: 'forcedRetrievalRelativeFloorPct',
+              settingValue: orgOverride,
+            },
+          ]
+    ),
+  });
+
+  /** Which fixture passages actually reached the model, by index. */
+  const injectedIndices = (content: string) => {
+    const found: number[] = [];
+    for (let i = 0; i < 12; i++) if (content.includes(`PASSAGE_${i}_`)) found.push(i);
+    return found;
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+    const content = messages.map(m => m.content).join('\n');
+    return { quest, content, injected: injectedIndices(content) };
+  };
+
+  beforeEach(() => {
+    // Both resolvers memoize per scope; without this a value set by one test leaks into the next.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
+
+  it('rejects candidates that clear the absolute floor but fall outside the top score band', async () => {
+    // THE point of the issue. All four scores clear the 0.75 absolute floor, so the old code
+    // injected all four and the floor made no ranking decision at all. The relative floor cuts at
+    // 85% of 1.0, so the 0.80 and 0.76 tail is dropped while the head is kept.
+    const { injected } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
+    expect(injected).toEqual([0, 1]);
+  });
+
+  it('changes nothing at its shipped default on the band this issue was measured against', async () => {
+    // The safety claim the whole default rests on, pinned end to end rather than as arithmetic in
+    // settings.test.ts. Over 166 injected chunks on a production lake the scores spanned 0.8025 to
+    // 0.9140 and the absolute floor rejected NOTHING, so a behavior-preserving default has to admit
+    // that entire band untouched: 85% of 0.9140 is 0.7769, which 0.8025 clears.
+    //
+    // This is the test that fails if someone tunes the default upward without meaning to - the exact
+    // change that would silently cut production recall on the corpus the issue was filed about.
+    const { injected } = await run(makeCtx({ scores: [0.914, 0.85, 0.8025] }));
+    expect(injected).toEqual([0, 1, 2]);
+  });
+
+  it('a relative floor of 0 disables ranking, leaving the absolute floor as the only gate', async () => {
+    // The pre-#2497 behavior, still expressible - this is what makes the change reversible by
+    // configuration rather than by deploy.
+    const { injected } = await run(
+      makeCtx({ scores: [1.0, 0.9, 0.8, 0.76], platform: { forcedRetrievalRelativeFloorPct: '0' } })
+    );
+    expect(injected).toEqual([0, 1, 2, 3]);
+  });
+
+  it('grades a corpus whose whole band sits below the absolute default, instead of taking none of it', async () => {
+    // The failure the absolute floor cannot express: a corpus scoring 0.30-0.50 is uniformly
+    // rejected by a 0.75 line no matter how well-ranked it is internally. Lowering the absolute
+    // floor to a sanity value and letting the relative rule govern keeps the ranking.
+    const lowBand = [0.5, 0.45, 0.3];
+    const collapsed = await run(makeCtx({ scores: lowBand }));
+    expect(collapsed.injected).toEqual([]);
+
+    // The settings cache is process-wide, so the first run above primed it with an EMPTY platform
+    // map. Without clearing it here the second run silently resolves the coded defaults instead of
+    // its own fixture - which reads as "the relative floor did nothing", the exact false negative
+    // this test exists to rule out. beforeEach only covers the gap BETWEEN tests, not within one.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+
+    const graded = await run(
+      makeCtx({
+        scores: lowBand,
+        platform: { forcedRetrievalMinSimilarityPct: '20', forcedRetrievalRelativeFloorPct: '85' },
+      })
+    );
+    // 85% of the 0.5 top score is 0.425, so the 0.45 near-miss is kept and the 0.30 tail is not.
+    expect(graded.injected).toEqual([0, 1]);
+  });
+
+  it('never starves a turn: the best candidate always clears its own cutoff', async () => {
+    // The invariant that lets the relative floor be applied without adding a new empty-handed exit.
+    // At 100% only the top score itself survives, but something always does.
+    const { injected } = await run(
+      makeCtx({ scores: [0.9, 0.88, 0.8], platform: { forcedRetrievalRelativeFloorPct: '100' } })
+    );
+    expect(injected).toEqual([0]);
+  });
+
+  it('honors an organization override, so the floor is tunable without a deploy', async () => {
+    // Proves the scoped read path is wired, not just the schema metadata: the platform row says 85
+    // and the org row says 95, and the narrower rung is what the turn resolves to.
+    const { injected } = await run(
+      makeCtx({ scores: [1.0, 0.9, 0.8], platform: { forcedRetrievalRelativeFloorPct: '85' }, orgOverride: '95' })
+    );
+    expect(injected).toEqual([0]);
+  });
+
+  it('records the post-floor volume in promptMeta so the change is measurable', async () => {
+    // The issue's sequencing requirement: without this the floor cannot be shown to have done
+    // anything, because a turn that injected two passages and one that injected four were
+    // byte-identical in promptMeta.
+    const { quest } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
+    expect(quest.promptMeta?.retrieval?.injected?.chunks).toBe(2);
+    expect(quest.promptMeta?.retrieval?.injected?.topScore).toBeCloseTo(1.0, 5);
+  });
+
+  it('treats an out-of-range floor percent as unusable and keeps the shipped default', async () => {
+    // Defense-in-depth, NOT a production-reachable path - the same standing as positiveIntOr's own
+    // branches in the #1831 suite above. Both read paths run the setting's schema (`max: 100`)
+    // before this code sees a value, so a stored 2000 is sanitized upstream; this mock injects the
+    // raw shape directly to pin the guard's OWN contract, which is what protects the call if that
+    // sanitization is ever bypassed (a new read path, a relaxed bound).
+    //
+    // Worth guarding because the failure is silent and total: both floors are divided by 100 and
+    // compared against a cosine, so 2000 becomes a floor of 20.0 that no similarity can ever clear,
+    // starving every Data-Lake turn. Falling back to the known-good default preserves behavior;
+    // clamping to 100 would admit only a perfect match - the same starvation by another route.
+    //
+    // withScopedOverlay: false to reach the direct getSettingsValue read, whose mock here returns
+    // the stored string unparsed. The scoped resolver would apply the schema and hand back the
+    // default, so the guard would never be exercised.
+    const ctx = makeCtx({
+      scores: [1.0, 0.9, 0.8, 0.76],
+      platform: { forcedRetrievalMinSimilarityPct: '2000' },
+      withScopedOverlay: false,
+    });
+    const { injected } = await run(ctx);
+    // Absolute floor back at its 75 default, so the relative floor still does the ranking.
+    expect(injected).toEqual([0, 1]);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('forcedRetrievalMinSimilarityPct')
+    );
+  });
+
+  it('applies platform values on a host with no scoped overlay wired', async () => {
+    // The overlay is optional on the db contract, so the floors must still be levers without it -
+    // there is simply no override to find. Without this the no-overlay branch is only ever
+    // exercised incidentally by other suites, where a silent fallback to coded defaults would look
+    // like a pass.
+    // 100 rather than 0 deliberately. A configured 0 yields the same injected set as a build with
+    // no relative floor at all, so it cannot tell "the platform row was read" from "the mechanism
+    // is gone" - and it would also match the coded default's set on some bands. 100 is distinct
+    // from both: the shipped 85 default would keep [0, 1] here, and no floor at all would keep all
+    // four.
+    const { injected } = await run(
+      makeCtx({
+        scores: [1.0, 0.9, 0.8, 0.76],
+        platform: { forcedRetrievalRelativeFloorPct: '100' },
+        withScopedOverlay: false,
+      })
+    );
+    expect(injected).toEqual([0]);
+  });
+
+  it('falls back to the shipped defaults, without throwing, when the settings read fails', async () => {
+    const ctx = makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] });
+    ctx.db.adminSettings.findBySettingNames = vi.fn(async () => {
+      throw new Error('settings store unavailable');
+    });
+    ctx.db.adminSettings.findAll = vi.fn(async () => {
+      throw new Error('settings store unavailable');
+    });
+    const { injected } = await run(ctx);
+    // Degrades to FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT rather than to "no floor" or a throw.
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
+    expect(injected).toEqual([0, 1]);
   });
 });
 

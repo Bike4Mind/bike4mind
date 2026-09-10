@@ -7,6 +7,7 @@ import {
   resolveReadGrant,
   resolveLakeReadAccess,
   resolveEnforceReadGrants,
+  manageGrantedLakeIdsFor,
   ENFORCE_LAKE_READ_GRANTS_KEY,
   READ_GRANT_ENFORCEMENT_READY,
 } from './resolveLakeReadAccess';
@@ -342,5 +343,60 @@ describe('grantedLakeReachFor - the two reach sets earn different bypasses', () 
 
   it('an unwired grant repo reaches nothing', async () => {
     expect(await grantedLakeReachFor('u1', ['orgA'])).toEqual({ grantedLakeIds: [], orgGrantedLakes: {} });
+  });
+});
+
+/**
+ * The two reaches, side by side on the SAME grant rows. The management views (archived/deleted/
+ * transitional) offer only restore/cleanup/retry, so they must ask the manage reach; the browse and
+ * read views ask the wide one. Compared directly rather than only through a list view because a
+ * view also depends on which arms `findAccessible` keeps - this is where the reaches themselves
+ * provably differ.
+ */
+describe('grant reach - read vs manage', () => {
+  const repo = (rows: Record<string, { dataLakeId: string; role: string }[]>) => ({
+    listByPrincipal: vi
+      .fn()
+      .mockImplementation(
+        async (principalType: string, principalId: string) => rows[`${principalType}:${principalId}`] ?? []
+      ),
+  });
+
+  it('the read reach admits a reader row under enforce; the manage reach never does', async () => {
+    const rows = { 'user:me': [{ dataLakeId: 'lake1', role: 'reader' }] };
+
+    // Called with includeReaders=true directly rather than through the setting, so this asserts the
+    // reach's own contract rather than the cutover's current position.
+    expect((await grantedLakeReachFor('me', [], repo(rows) as never, true)).grantedLakeIds).toEqual(['lake1']);
+    expect(await manageGrantedLakeIdsFor('me', repo(rows) as never)).toEqual([]);
+  });
+
+  it('both reaches admit owner and curator rows', async () => {
+    for (const role of ['owner', 'curator']) {
+      const rows = { 'user:me': [{ dataLakeId: 'lake1', role }] };
+      expect((await grantedLakeReachFor('me', [], repo(rows) as never, true)).grantedLakeIds).toEqual(['lake1']);
+      expect(await manageGrantedLakeIdsFor('me', repo(rows) as never)).toEqual(['lake1']);
+    }
+  });
+
+  it('the read reach resolves ORG-principal rows; the manage reach does not ask for them at all', async () => {
+    const rows = { 'organization:orgA': [{ dataLakeId: 'lake1', role: 'owner' }] };
+    const manageRepo = repo(rows);
+
+    // Read reach: membership in the granting org resolves the row, keyed by that org so the repo
+    // can AND it with the lake's own org.
+    expect(await grantedLakeReachFor('me', ['orgA'], repo(rows) as never, true)).toEqual({
+      grantedLakeIds: [],
+      orgGrantedLakes: { orgA: ['lake1'] },
+    });
+    // Manage reach: a bare id list, so it carries no granting org and asks for no org rows. The
+    // management views drop `orgGrantArms` anyway under includePublic:false.
+    expect(await manageGrantedLakeIdsFor('me', manageRepo as never)).toEqual([]);
+    expect(manageRepo.listByPrincipal).not.toHaveBeenCalledWith('organization', expect.anything(), expect.anything());
+  });
+
+  it('both degrade to an empty reach with no repo wired', async () => {
+    expect(await grantedLakeReachFor('me', ['orgA'])).toEqual({ grantedLakeIds: [], orgGrantedLakes: {} });
+    expect(await manageGrantedLakeIdsFor('me', undefined)).toEqual([]);
   });
 });

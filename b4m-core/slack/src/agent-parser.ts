@@ -165,6 +165,41 @@ export function isDataLakeCommand(parsed: ParsedAgentCommand): boolean {
 }
 
 /**
+ * Matches "datalake" or one of the small, enumerable set of misspellings #2028 named
+ * ("datakale", "data lake", "data-lake") at the start of the message (after optional Slack user
+ * mentions), with no `@` - e.g. "datalake list" or "datakale list" - AND only when the phrase is
+ * followed by nothing else (a bare mention, like `@datalake` with no args) or by one of the known
+ * subcommand words. Anchoring on POSITION alone (matching anything after the phrase, per a word
+ * boundary) originally let this fire on ordinary prose that merely starts with the phrase - e.g. a
+ * DM reading "data lake costs are rising this quarter", which `shouldProcess` always admits and
+ * which previously reached the assistant on `main`. Requiring a command-shaped tail closes that
+ * without needing fuzzy matching: declarative sentences starting with the phrase fall through as
+ * before, while "datalake list", "datakale help" and a bare "datalake" still hint.
+ *
+ * Anchored the same way as `DATA_LAKE_MENTION_PATTERN` so a leading `@datalake` can never match
+ * this pattern too (a literal `@` immediately before it fails the no-`@` requirement here).
+ * Deliberately just this enumerable list, and just these three subcommand words - not general
+ * fuzzy/edit-distance matching, which would risk false positives on unrelated words.
+ *
+ * Exported so `events.ts` can widen its pre-filter (`SlackEvent.shouldProcess`'s
+ * `agentCommandPattern`) to let a bare-mention channel message reach `looksLikeBareDataLakeMention`
+ * at all - that filter only admits `@`-prefixed agent commands, DMs, and app-mentions by default, so
+ * without this a bare "datalake list" typed in a channel is dropped before this file ever sees it.
+ */
+export const BARE_DATA_LAKE_MENTION_PATTERN =
+  /^(?:<@[^>]+>\s*)*(?:datalake|datakale|data[\s-]lake)\b(?:\s*$|\s+(?:list|add|help)\b)/i;
+
+/**
+ * True when a message names "datalake" without the `@` that would route it to the deterministic
+ * handler - e.g. `datalake list` - so the caller can reply with a usage hint instead of letting it
+ * fall through to the general LLM assistant path. Never true for a real `@datalake` command: the
+ * anchoring means a leading `@datalake` can only ever match `DATA_LAKE_MENTION_PATTERN`, not this.
+ */
+export function looksLikeBareDataLakeMention(parsed: ParsedAgentCommand): boolean {
+  return BARE_DATA_LAKE_MENTION_PATTERN.test(parsed.rawText.trim());
+}
+
+/**
  * Parse the `@datalake` subcommand grammar (v1):
  *   @datalake add [to <lake>] <link>
  *   @datalake add <link> [to <lake>]

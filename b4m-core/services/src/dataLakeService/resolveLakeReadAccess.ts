@@ -15,16 +15,13 @@ export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
  * `EnforceLakeReadGrants` before the feature was code-complete could not activate a half-wired gate;
  * enforcement requires BOTH the setting ON and this constant true.
  *
- * Its stated exit criteria were two: the retrieval/grounding read arm, and the member-management
- * WRITE path. The retrieval arm is now in place (`getDynamicDataLakeAccess` resolves grants on the
- * same terms browse does), so a reader who can open a lake can also ground on it. The WRITE path is
- * DELIBERATELY still outstanding - stated plainly rather than quietly dropped. Enforcing without it
- * is safe by construction: the resolution is additive (`resolvedAllowed = legacy || readGrant`), so
- * nobody loses access, and the only grant producers today are createDataLake (owner) and
- * transferLakeOwnership (owner/curator), both user-principal. The live delta at the flip is
- * therefore that transferred owners and curators regain grounding. The containment duty that
- * docblock delegated to the missing writer is taken over at read time by `containedGrants` and the
- * org-constrained repo arm; the writer must still refuse a cross-org row when it lands.
+ * Both of its stated exit criteria are now met: the retrieval/grounding read arm
+ * (`getDynamicDataLakeAccess` resolves grants on the same terms browse does, so a reader who can
+ * open a lake can also ground on it), and the member-management WRITE path (`manageLakeGrant`, the
+ * first producer of reader/org grants). The resolution stays additive
+ * (`resolvedAllowed = legacy || readGrant`), so nobody loses access at the flip. Cross-org
+ * containment is held at both ends - `refuseGrantWrite` on the way in, `containedGrants` plus the
+ * org-constrained repo arm on the way out.
  *
  * Now vestigial - `resolveEnforceReadGrants` reduces to the setting alone - but retained as the
  * auditable seam the cutover tests branch on, and as the kill switch if enforcement has to be
@@ -46,11 +43,16 @@ export interface LakeAccessLogger {
  * reader/curator/owner and to org-shared lakes) and it bypasses Private-by-default. `grants` is
  * pre-filtered to ACTIVE (expiry) by the caller, so a lapsed grant never reaches here.
  *
- * Role is intentionally not inspected here: any grant a principal holds admits a READ. Owner/curator
- * (and org owner/curator for an org ADMIN) already pass the legacy `owner-admin` arm via
- * canManageLake, so the outcomes this newly flips are (a) a user `reader` grant and (b) an org grant
- * of any role reaching a plain member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP
- * (`ctx.organizationIds`), distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
+ * Role is intentionally not inspected here: any grant a principal holds admits a READ. A user
+ * owner/curator grant already passes the legacy `owner-admin` arm via canManageLake, so the outcomes
+ * this newly flips are (a) a user `reader` grant and (b) an org grant of any role reaching a plain
+ * member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP (`ctx.organizationIds`),
+ * distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
+ *
+ * An org owner/curator grant held by an org ADMIN pre-passes that legacy arm only when the grant is
+ * contained to the lake's own org (or the lake has none) - canManageLake's org-grant rung compares
+ * the two. A CROSS-org org grant is denied there, so it arrives un-allowed and this arm would be
+ * what decides it; `containedGrants` strips the row before it gets here, so the two gates agree.
  *
  * THIS ARM never lets an org grant reach a lake outside the granting org. Scoped deliberately: the
  * claim is about the read-grant arm, not about the whole decision - the legacy `canManageLake` org
@@ -59,24 +61,24 @@ export interface LakeAccessLogger {
  * and the per-granting-org repo arms on the id-resolution path (see `grantedLakeReachFor`). A caller
  * that hands over raw rows gets no containment, which is why both live in this file.
  *
- * STILL MUST STAY IN SYNC WITH THE WRITE PATH: the read side now asserts that rule as defense in
- * depth, but whoever builds the member-management write path (grant a reader / grant an org - no
- * such producer exists yet; only createDataLake seeds an owner and transferLakeOwnership demotes to
- * curator) MUST still reject an org-principal grant whose org is not the lake's own org, so a bad
- * row is never persisted in the first place.
+ * MUST STAY IN SYNC WITH THE WRITE PATH, which now exists: `refuseGrantWrite`
+ * (`lakeGrantWriteRule.ts`) rejects an org-principal grant whose org is not the lake's own, so a bad
+ * row is never persisted in the first place, and that refusal is pinned by its own unit test. The
+ * read-time containment above is defense in depth for rows written before it, or by any FUTURE
+ * producer - which must apply the same rule.
  *
  * SECOND OBLIGATION ON THAT WRITE PATH (#2495): an owner/curator grant is no longer read-only in its
  * effect. `getAccessibleDataLakePrompts` treats one as injection trust, so granting someone curator
  * also grants them "my lake's systemPrompt may enter your system prompt on turns you retrieve from
  * it".
  *
- * Neither producer can currently name an arbitrary user, but that is a property of the transfer
- * gate, not of the grant model: `resolveLakeTransferAuthority` refuses a non-admin transfer of an
- * ORG-LESS lake outright and constrains an org one to the owning org's own roster, so a recipient is
- * always either a platform admin's choice or a teammate. Do not weaken that gate without answering
- * the consent question here, and note that the first UI letting an owner curate an ARBITRARY user
- * raises it directly - it is a consent question, not just an access one. Surface it at that grant
- * UI; do not let it ship as an invisible side effect of a role picker.
+ * `manageLakeGrant` is the producer that raises that question directly: unlike `createDataLake` (which
+ * only seeds the creator) and `transferLakeOwnership` (whose `resolveLakeTransferAuthority` refuses a
+ * non-admin transfer of an ORG-LESS lake outright and constrains an org one to the owning org's own
+ * roster), it can name an ARBITRARY user, by email, on any lake the actor manages. That is a consent
+ * question, not just an access one, so the grant UI's curator option says what the role carries
+ * rather than letting it ship as an invisible side effect of a role picker. Keep that disclosure in
+ * step with the trust rule - a role that gains injection trust has to say so at the point of grant.
  */
 export function resolveReadGrant(
   ctx: Pick<AccessContext, 'userId' | 'organizationIds'>,
@@ -101,9 +103,9 @@ export function resolveReadGrant(
  * USER-principal grants are untouched: they are meant to cross orgs (a transferred owner who has
  * since moved).
  *
- * Defense in depth, not the primary guard - the write path is still expected to refuse such a row
- * (see resolveReadGrant). It exists because enforcement ships before that writer does, so without it
- * the containment property would rest on nothing.
+ * Defense in depth, not the primary guard - `refuseGrantWrite` refuses such a row on the way in
+ * (see resolveReadGrant). This arm covers rows written before that rule existed, and any producer
+ * that forgets it.
  *
  * MUST STAY EQUIVALENT to the per-granting-org repo arms built from `LakeGrantReach.orgGrantedLakes`
  * (DataLakeModel `orgGrantArms`): that is the same rule on the id-resolution path, which has no
@@ -172,10 +174,17 @@ export function resolveLakeReadAccess(
  * admin toggle stays report-only until the feature is code-complete. Platform altitude on purpose:
  * the setting is a one-time install-wide migration cutover, not a per-lake lever.
  *
- * NEVER throws - an unwired repo OR a failed read degrades to `false` (report-only / legacy), because
+ * NEVER throws - an unwired repo OR a THROWN read degrades to `false` (report-only / legacy), because
  * a failed read is not a "yes": collapsing it into enforce would silently widen access on a transient
  * glitch. The warns are the diagnostics that tell "flag off" apart from "read failed" apart from
  * "operator enabled it but the interlock is still holding" - all three must be visible to a smoke test.
+ *
+ * THAT FAIL-SAFE DOES NOT REACH A NON-THROWING FAILURE, and the reason is in `getSettingsValue`: it
+ * `safeParse`s the stored value and returns the setting's `defaultValue` on failure rather than
+ * raising. `EnforceLakeReadGrants` ships `defaultValue: true`, so a missing row and an unparseable
+ * one both resolve to ENFORCE, not to `false`. For the missing row that is the intended cutover
+ * default; for a malformed row it is indistinguishable from it here, and the settings layer is where
+ * that would have to be told apart.
  */
 export async function resolveEnforceReadGrants(
   settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
@@ -190,11 +199,11 @@ export async function resolveEnforceReadGrants(
     return false;
   }
   // Interlock: the operator asked to enforce, but the feature is not code-ready. Stay report-only and
-  // make the premature toggle loud rather than half-enabling it before the member-write path exists.
+  // make the premature toggle loud rather than half-enabling a gate whose arms are not all wired.
   if (intent && !READ_GRANT_ENFORCEMENT_READY) {
     logger?.warn?.(
       '[lakeReadGrantCutover] EnforceLakeReadGrants is ON but enforcement is code-gated off ' +
-        '(member-write path not wired); staying report-only'
+        '(the interlock constant is off); staying report-only'
     );
     return false;
   }
@@ -280,4 +289,33 @@ export const grantedLakeReachFor = async (
     grantedLakeIds: Array.from(ids),
     orgGrantedLakes: Object.fromEntries(Array.from(byOrg, ([orgId, lakeIds]) => [orgId, Array.from(lakeIds)])),
   };
+};
+
+/**
+ * Lake ids the caller can reach via a MANAGE-conferring active grant - the narrower sibling of
+ * `grantedLakeReachFor`, for the management views (archived / deleted / transitional) whose only
+ * offered action is a restore, cleanup or retry.
+ *
+ * Narrower two ways. By ROLE: owner/curator only, allow-listed rather than excluding `reader`, so a
+ * role added to DATA_LAKE_ACCESS_ROLES (called out there as an additive change) fails closed here
+ * until someone decides it manages. A reader grant is read access and confers no restore - the same
+ * ground these views already pass includePublic:false on.
+ *
+ * By PRINCIPAL: user grants only, so the return type is a bare id list rather than a
+ * `LakeGrantReach`. An org grant carries no role through `orgGrantArms`, so DataLakeModel already
+ * suppresses those arms alongside the public one whenever `includePublic:false` - which is exactly
+ * the three views this feeds. Resolving an org reach here would therefore be dead weight. Given up
+ * with it either way: an org-LESS lake carrying an org grant, which `orgGrantArms` also never
+ * matches. A SAME-org lake is unaffected - it arrives via findAccessible's own administeredOrgIds
+ * arm, which carries the lake-org containment an id list cannot.
+ *
+ * Reads no cutover flag, unlike `grantedLakeReachFor`'s `includeReaders`: owner/curator grants have
+ * live, unflagged producers (createDataLake, transferLakeOwnership) and the rungs that honor them
+ * are live too, so gating this on the read-grant cutover would withhold ids the manage gate accepts.
+ */
+export const manageGrantedLakeIdsFor = async (userId: string, grants?: PrincipalGrantLookup): Promise<string[]> => {
+  if (!grants) return [];
+  const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
+  const manageable = rows.filter(row => row.role === 'owner' || row.role === 'curator');
+  return Array.from(new Set(manageable.map(row => row.dataLakeId)));
 };

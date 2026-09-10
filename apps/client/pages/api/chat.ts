@@ -388,6 +388,7 @@ function transformToInternalFormat(
     },
     enableArtifacts: false,
     ...(request.promptMode ? { promptMode: request.promptMode } : {}),
+    ...(request.skip_auto_offers ? { skipAutoOffers: true } : {}),
     includeSystemPrompt: request.includeSystemPrompt,
     ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     ...(isToolsEnabled

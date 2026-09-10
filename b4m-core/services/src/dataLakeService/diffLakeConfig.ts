@@ -1,4 +1,6 @@
 import type {
+  DataLakeAccessRole,
+  DataLakePrincipalType,
   IDataLake,
   ILakeConfigFieldChange,
   ILakeConfigLiteralChange,
@@ -140,4 +142,42 @@ export function ownershipChange(
   const before = priorOwnerUserIds.filter(Boolean).join(',');
   if (before === newOwnerUserId) return null;
   return literalChange('effectiveOwnerUserId', before === '' ? undefined : before, newOwnerUserId);
+}
+
+/**
+ * One grant write, as a change entry. Grants live in `DataLakeAccessGrant` rows, so - exactly like
+ * `ownershipChange` above - `diffLakeConfig` can never see this and it is synthesized onto the
+ * derived `accessGrant` field.
+ *
+ * The PRINCIPAL is encoded into both sides (`"user:<id>=reader"`) rather than carried separately,
+ * because the field's before/after pair is the only shape the history renders and "who" is the
+ * entire content of an access change - a bare `reader -> undefined` names no one. A revoke leaves
+ * the after side unset, which is how the differ already spells "cleared".
+ *
+ * THE EXPIRY IS PART OF THE VALUE, not a separate field, because it is part of what the grant
+ * confers: shortening a reader grant to lapse tomorrow, or lifting the expiry off one so it never
+ * does, changes a principal's access exactly as much as a re-role does. Encoded only when set, so an
+ * ordinary open-ended grant still reads as the bare `user:<id>=reader` it always did.
+ *
+ * Returns `null` when neither the role NOR the expiry moved: re-granting a principal the role they
+ * already hold on the terms they already hold it is an accepted, idempotent request that changed
+ * nothing - the same rule `ownershipChange` applies to a transfer to the current owner.
+ */
+export function grantChange(
+  principalType: DataLakePrincipalType,
+  principalId: string,
+  before: DataLakeAccessRole | undefined,
+  after: DataLakeAccessRole | undefined,
+  beforeExpiresAt?: Date | null,
+  afterExpiresAt?: Date | null
+): ILakeConfigLiteralChange | null {
+  const encode = (role: DataLakeAccessRole | undefined, expiresAt: Date | null | undefined) => {
+    if (role === undefined) return undefined;
+    const grant = `${principalType}:${principalId}=${role}`;
+    return expiresAt ? `${grant} until ${expiresAt.toISOString()}` : grant;
+  };
+  const beforeValue = encode(before, beforeExpiresAt);
+  const afterValue = encode(after, afterExpiresAt);
+  if (beforeValue === afterValue) return null;
+  return literalChange('accessGrant', beforeValue, afterValue);
 }

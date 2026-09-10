@@ -1,4 +1,5 @@
 import {
+  DuplicateFabFileError,
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
@@ -8,7 +9,7 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, computeContentHash, secureParameters } from '@bike4mind/utils';
 import { fetchAndParseURL } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createFabFile, CreateFabFileAdapters } from './create';
@@ -73,12 +74,19 @@ type CreateFabFileByUrlAdapters = {
   deleteCreatedFile?: (id: string) => Promise<unknown>;
   /** Forwarded verbatim to `createFabFile` - see its adapter doc for when this must be supplied. */
   administeredOrgIds?: string[];
+  /**
+   * Per-lake content-hash dedup, run AFTER the fetch (so the hash reflects what was actually
+   * retrieved) and BEFORE `createFabFile` (so a match never creates a row). Optional: the web URL
+   * door and the proposal-admission door supply nothing here and are unaffected - only the Slack
+   * link path opts in. Return the existing match to skip, or null to proceed.
+   */
+  checkDuplicate?: (contentHash: string) => Promise<IFabFileDocument | null>;
 };
 
 export const createFabFileByUrl = async (
   userId: string,
   parameters: CreateFabFileByUrlParameters,
-  { db, storage, tags, provenance, deleteCreatedFile, administeredOrgIds }: CreateFabFileByUrlAdapters
+  { db, storage, tags, provenance, deleteCreatedFile, administeredOrgIds, checkDuplicate }: CreateFabFileByUrlAdapters
 ) => {
   const logger = new Logger();
   const params = secureParameters(parameters, createFabFileByUrlSchema);
@@ -88,6 +96,31 @@ export const createFabFileByUrl = async (
   const { textContent, mimeType, title } = await fetchAndParseURL(params.url, { logger });
 
   const fileSize = typeof textContent === 'string' ? Buffer.byteLength(textContent) : textContent.length;
+  // Hashes whatever `fetchAndParseURL` returned - extracted text for most content, raw bytes for a
+  // PDF (see `ingest.ts`'s `urlContent = body` arm). Either way, identical input deterministically
+  // produces identical `textContent`, so this still satisfies "byte-identical fetched bodies are
+  // duplicates" without widening `fetchAndParseURL`'s own contract.
+  //
+  // Only computed/checked when there is content: an empty fetch (a JS-only or paywalled page)
+  // would otherwise share one `computeContentHash('')` key across every such page, making
+  // unrelated empty fetches collide with each other as false "duplicates".
+  const contentHash = fileSize > 0 ? computeContentHash(textContent) : undefined;
+
+  if (contentHash && checkDuplicate) {
+    const existing = await checkDuplicate(contentHash);
+    if (existing) throw new DuplicateFabFileError(existing, title);
+  }
+
+  // Stamped on the row ONLY when a caller opted into ingest-time dedup (`checkDuplicate` supplied),
+  // deliberately keeping the stamp coupled to the dedup behavior rather than stamping it on every
+  // door. `unarchiveDataLake.ts`'s hard-delete dedup pass (the family's only HARD delete) reads this
+  // same field across every FabFile, regardless of which door created it - stamping it unconditionally
+  // would enroll doors that never asked for content-hash dedup (the web-upload and proposal-admission
+  // doors) in that pass too. Since this door hashes extracted TEXT rather than the URL, two
+  // provenance-distinct rows (a canonical page vs. its tracking-parameter/print/AMP variant) can share
+  // a hash - fine as an ingest-time dedup signal for the door that asked for it, but not safe to feed
+  // into an irreversible delete on doors that never opted in.
+  const stampedContentHash = checkDuplicate ? contentHash : undefined;
 
   const fabFile = await createFabFile(
     userId,
@@ -98,6 +131,7 @@ export const createFabFileByUrl = async (
       type: KnowledgeType.URL,
       public: false,
       prefix: 'url',
+      contentHash: stampedContentHash,
       // Forwarded from the adapters, not from `params` - see the `tags` note above.
       ...(tags && { tags }),
     },
