@@ -13,27 +13,20 @@ import { z } from 'zod';
 import type { ConnectionSource } from '@bike4mind/common';
 
 /**
- * Extract auth token from either query params (legacy web client) or
- * Sec-WebSocket-Protocol header (CLI - avoids token in URL/proxy logs).
+ * Extract the auth token from the Sec-WebSocket-Protocol header (CLI). The web
+ * client authenticates with a single-use `?ticket=` (see resolveWebTicket), so a
+ * long-lived session JWT never travels in the URL, where proxy/CDN/gateway access
+ * logs, browser history, or a Referer header could leak it (RFC 6750 5.3, RFC 9700
+ * 4.3.2).
  *
- * CLI sends: `new WebSocket(url, ['access_token.<jwt>'])`
- * Legacy web client sends: `?token=<jwt>` query param
- *
- * The current web client sends `?ticket=<t>` instead (see resolveWebTicket) to
- * keep the long-lived JWT out of the URL; `?token=` is accepted only so an
- * old client keeps connecting mid-rollout, and is removed once clients roll.
- *
+ * CLI sends: `new WebSocket(url, ['access_token.<jwt>'])`.
  * Returns both the token and the source of the connection.
  */
 function extractToken(event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEvent): {
   token: string;
   source: ConnectionSource;
 } {
-  // 1. Query param - used by legacy web client
-  const queryToken = event?.queryStringParameters?.token;
-  if (queryToken) return { token: z.string().parse(queryToken), source: 'web' };
-
-  // 2. Sec-WebSocket-Protocol header - used by CLI
+  // Sec-WebSocket-Protocol header - used by CLI
   const protocols = event.headers?.['sec-websocket-protocol'] || event.headers?.['Sec-WebSocket-Protocol'];
   if (protocols) {
     const tokenProtocol = protocols
@@ -120,8 +113,8 @@ async function resolveIdentity(
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEvent>(
   async (event, context, logger) => {
-    // Preferred web path: a single-use ticket keeps the JWT out of the URL.
-    // Falls through to the legacy token/header paths when no ticket is present.
+    // Web path: a single-use ticket keeps the JWT out of the URL.
+    // Falls through to the CLI header path when no ticket is present.
     const ticketIdentity = await resolveWebTicket(event);
     let userId: string;
     let source: ConnectionSource;

@@ -37,17 +37,24 @@ const handler = baseApi({ auth: false })
 
       const { code, redirect_uri, client_id, code_verifier, client_secret } = parsed.data;
 
-      let client;
-      if (client_secret) {
-        client = await validateClientSecret(client_id, client_secret, redirect_uri);
-      } else {
-        client = await validateClient(client_id, redirect_uri);
-      }
-
+      // Load the client and validate the redirect_uri (RFC 6749 3.1.2.3).
+      const client = await validateClient(client_id, redirect_uri);
       if (!client) {
         return res
           .status(401)
-          .json({ error: 'unauthorized_client', error_description: 'Invalid client credentials or redirect_uri' });
+          .json({ error: 'unauthorized_client', error_description: 'Invalid client_id or redirect_uri' });
+      }
+
+      // Confidential clients MUST authenticate at the token endpoint (RFC 6749
+      // 3.2.1 / 4.1.3). Classification decides, not the mere presence of a
+      // secret - so a confidential client that omits or fails secret auth is
+      // rejected, never allowed to fall through to redirect_uri-only checking.
+      const isConfidential = client.tokenEndpointAuthMethod === 'client_secret_post';
+      if (isConfidential) {
+        const authed = client_secret ? await validateClientSecret(client_id, client_secret, redirect_uri) : null;
+        if (!authed) {
+          return res.status(401).json({ error: 'invalid_client', error_description: 'Client authentication required' });
+        }
       }
 
       // Atomically claim the code so a leaked code can't be redeemed twice by
@@ -66,7 +73,17 @@ const handler = baseApi({ auth: false })
           .json({ error: 'invalid_grant', error_description: 'client_id or redirect_uri mismatch' });
       }
 
-      // Verify PKCE (only when a code_challenge was stored during authorization)
+      // PKCE enforcement (RFC 7636; RFC 9700 4.8.2 downgrade countermeasure).
+      // Public clients MUST use PKCE: a code minted with no challenge cannot be
+      // redeemed, which blocks replaying a challenge-less code without a secret.
+      // Whenever a challenge was recorded the verifier must match - confidential
+      // clients included.
+      if (!isConfidential && !authCode.codeChallenge) {
+        return res.status(400).json({
+          error: 'invalid_grant',
+          error_description: 'PKCE required: no code_challenge was provided at authorization',
+        });
+      }
       if (authCode.codeChallenge) {
         if (!code_verifier || !verifyPkce(code_verifier, authCode.codeChallenge)) {
           return res
