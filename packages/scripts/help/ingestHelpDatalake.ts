@@ -369,8 +369,16 @@ export async function ingestHelpDatalake(
       // No self-host OpenSearch mirror needed here: both drivers run against an SST-deployed
       // stage, which never sets B4M_SELF_HOST - so selfHostOpenSearchEnabled() can never be
       // true on a path that reaches this line.
-      for (const id of removeIds) await deps.db.fabFileChunks.deleteManyByFabFileId(id);
+      //
+      // Files go first, chunks after (#2583). This cron has no redelivery on a mid-run failure -
+      // it runs directly in a Lambda, not behind a queue - so it is the least protected of the
+      // sites this ordering matters for. Chunks-then-files used to leave an interruption between
+      // the two steps stranding a FILE with a stale vectorizedChunkCount over zero real chunks -
+      // unretrievable, but every counter-based health surface reported it vectorized. This order
+      // fails the other, harmless way: an interruption here only orphans chunk rows, unreachable
+      // without their file and already a tracked, separately cleanable class (#2539).
       await deps.db.fabFiles.deleteManyInIds(removeIds);
+      for (const id of removeIds) await deps.db.fabFileChunks.deleteManyByFabFileId(id);
     }
   }
 

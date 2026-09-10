@@ -145,16 +145,21 @@ export const cleanupDeletedDataLake = async (
     await releaseDriveConnection({ dataLakeId });
   }
 
-  // 2. Delete chunks for every member file (covers soft-deleted files too). Chunked so a large
-  // lake doesn't fan out unbounded (Lambda timeout/memory); each delete is a no-op on
-  // already-purged data, so a DLQ retry resumes safely.
-  await inChunks(fileIds, chunkSize, id => db.fabFileChunks.deleteManyByFabFileId(id));
-
-  // 3. Hard-delete exactly the ids resolved above, NOT by re-running the membership predicate.
+  // 2. Hard-delete exactly the ids resolved above, NOT by re-running the membership predicate.
   // Re-resolving would also destroy anything that became a member since - a file the creator
   // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
   // this run instead, which is the recoverable direction.
   await db.fabFiles.hardDeleteByIds(fileIds);
+
+  // 3. Delete chunks for every member file (covers soft-deleted files too). Chunked so a large
+  // lake doesn't fan out unbounded (Lambda timeout/memory); each delete is a no-op on
+  // already-purged data, so a DLQ retry resumes safely. Runs AFTER the rows are gone (#2583):
+  // chunks-then-rows used to leave an interruption between the two steps stranding a ROW with a
+  // stale vectorizedChunkCount over zero real chunks - unretrievable, but every counter-based
+  // health surface reported it vectorized. This order fails the other, harmless way: an
+  // interruption here only orphans chunk rows, unreachable without their file and already a
+  // tracked, separately cleanable class (#2539).
+  await inChunks(fileIds, chunkSize, id => db.fabFileChunks.deleteManyByFabFileId(id));
 
   // 3b. Whatever the predicate STILL names is exactly that spared mid-sweep joiner, and sparing it
   // is only half a decision: step 5 deletes the lake, so its prefix tag would outlive the lake it

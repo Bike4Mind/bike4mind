@@ -263,20 +263,40 @@ export const purgeDataLakeDocument = async (
   // chunks and its rollups stay consistent and a retry converges.
   let deletedByThisCall = false;
   if (storageObjectDeleted) {
-    await db.fabFileChunks.deleteManyByFabFileId(file.id);
-
+    // The row goes FIRST, its chunks after (#2583). Chunks-then-row used to leave an interruption
+    // between the two stranding the ROW: a stale vectorizedChunkCount over zero real chunk rows -
+    // unretrievable by either read path, while every counter-based health surface reported it
+    // vectorized. This order fails the other, harmless way instead: an interruption here orphans
+    // chunk rows, which are unreachable without their file and already a tracked, separately
+    // cleanable class (#2539).
+    //
     // Atomic, and it answers whether THIS call removed the row. Two concurrent purges both find the
     // gates open and both see the object-store delete succeed (deleting an absent key is a no-op),
     // so without this claim both would refund the owner's quota for the same bytes.
     deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
 
-    // Same unlink `deleteFabFile` performs: a chat holding the id in `knowledgeIds` would otherwise
-    // keep pointing at a row that no longer exists, and the confirmation copy promises otherwise.
-    const linkedSessions = await db.sessions.findAllWithKnowledgeId(file.id);
-    for (const session of linkedSessions) {
-      await db.sessions.update({
-        id: session.id,
-        knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
+    // Once the row is gone there is no retry door left (the file has already vanished from the
+    // owner's Files list), so this must not throw: an uncaught failure here would skip `onPurged`
+    // below and silently cost the owner their quota refund with no symptom to chase. Log and fall
+    // through to the read-back instead, same as the storage-delete failure above - chunksRemaining
+    // and verified report the gap truthfully, and onPurged still runs off `deletedByThisCall`.
+    try {
+      await db.fabFileChunks.deleteManyByFabFileId(file.id);
+
+      // Same unlink `deleteFabFile` performs: a chat holding the id in `knowledgeIds` would
+      // otherwise keep pointing at a row that no longer exists, and the confirmation copy promises
+      // otherwise.
+      const linkedSessions = await db.sessions.findAllWithKnowledgeId(file.id);
+      for (const session of linkedSessions) {
+        await db.sessions.update({
+          id: session.id,
+          knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
+        });
+      }
+    } catch (error) {
+      logger?.error('[dataLake] permanent deletion removed the row but could not finish chunk/session cleanup', {
+        fabFileId: file.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }

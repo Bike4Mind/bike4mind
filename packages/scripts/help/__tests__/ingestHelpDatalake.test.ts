@@ -188,6 +188,55 @@ describe('ingestHelpDatalake', () => {
     expect(h.chunks.every(c => h.files.some(f => f.id === c.fabFileId))).toBe(true);
   });
 
+  it('deletes the file row before its chunks, so an interruption orphans chunks rather than stranding a file (#2583)', async () => {
+    writeCorpus([makeEntry('features/opti'), makeEntry('features/optihashi')], {
+      'features/opti': '## Old\n\nconsolidated away\n',
+      'features/optihashi': '## New\n\nthe survivor\n',
+    });
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+
+    const order: string[] = [];
+    h.deps.db.fabFiles.deleteManyInIds = vi.fn(async (ids: string[]) => {
+      order.push('files');
+      for (const id of ids) {
+        const i = h.files.findIndex(f => f.id === id);
+        if (i >= 0) h.files.splice(i, 1);
+      }
+    });
+    h.deps.db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
+      order.push('chunks');
+    });
+
+    writeCorpus([makeEntry('features/optihashi')], {});
+    await ingestHelpDatalake(h.deps, opts());
+
+    // The file goes first (#2583): an interruption between the two steps must strand only
+    // orphaned chunks - unreachable without their file, and already a tracked, separately
+    // cleanable class (#2539) - never a file reporting a stale vectorizedChunkCount over chunks
+    // that no longer exist.
+    expect(order).toEqual(['files', 'chunks']);
+  });
+
+  it('leaves the withdrawn member already gone, not stranded with a stale chunk count, when the chunk delete is interrupted (#2583)', async () => {
+    writeCorpus([makeEntry('features/opti'), makeEntry('features/optihashi')], {
+      'features/opti': '## Old\n\nconsolidated away\n',
+      'features/optihashi': '## New\n\nthe survivor\n',
+    });
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+    const removedId = h.files.find(f => f.tags.some(t => t.name === 'help:features/opti'))?.id;
+
+    h.deps.db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
+      throw new Error('simulated crash');
+    });
+
+    writeCorpus([makeEntry('features/optihashi')], {});
+    await expect(ingestHelpDatalake(h.deps, opts())).rejects.toThrow('simulated crash');
+
+    expect(h.files.some(f => f.id === removedId)).toBe(false);
+  });
+
   it('re-creates every member when the deployment embedding model changed', async () => {
     writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
     const h = makeHarness();

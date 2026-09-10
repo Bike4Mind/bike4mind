@@ -55,10 +55,27 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
 describe('purgeDataLakeDocument', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('destroys chunks then the document and verifies both by reading them back', async () => {
+  it('destroys the document then its chunks, and verifies both by reading them back', async () => {
+    const order: string[] = [];
     const db = makeDb();
+    // Wrap rather than replace: the underlying mocks still mutate makeDb()'s `files`/`chunkCount`
+    // state, which the receipt's read-back (chunksRemaining/documentDeleted/verified) depends on.
+    const originalHardDelete = db.fabFiles.hardDeleteOneById;
+    db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+      order.push('document');
+      return originalHardDelete(id);
+    });
+    const originalDeleteChunks = db.fabFileChunks.deleteManyByFabFileId;
+    db.fabFileChunks.deleteManyByFabFileId = vi.fn(async (id: string) => {
+      order.push('chunks');
+      return originalDeleteChunks(id);
+    });
+
     const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
 
+    // The document goes first (#2583): an interruption between the two must strand orphaned
+    // chunks, never a document reporting a stale vectorizedChunkCount over chunks already gone.
+    expect(order).toEqual(['document', 'chunks']);
     expect(db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledWith('file-1');
     expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('file-1');
     expect(receipt).toMatchObject({
@@ -72,6 +89,41 @@ describe('purgeDataLakeDocument', () => {
       fileCount: 4,
       totalSizeBytes: 900,
     });
+  });
+
+  it('leaves the document already gone, not stranded with a stale chunk count, when the chunk delete is interrupted (#2583)', async () => {
+    // Simulates a crash/timeout between the two deletes. Because the document goes first, the
+    // interruption strands only orphaned chunks - unreachable without their file, and already a
+    // tracked, separately cleanable class (#2539) - never a document reporting itself vectorized
+    // over chunks that no longer exist.
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
+      throw new Error('simulated crash');
+    });
+    const onPurged = vi.fn(async () => {});
+    const logger = { info: vi.fn(), error: vi.fn() };
+
+    // Once the row is gone there is no retry door left, so this must not throw and skip the
+    // refund below with it - it reports the gap instead, same as any other partial sweep.
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage: makeStorage(),
+      onPurged,
+      logger,
+    });
+
+    expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('file-1');
+    expect(await db.fabFiles.findById('file-1')).toBeUndefined();
+    expect(receipt.documentDeleted).toBe(true);
+    expect(receipt.chunksRemaining).toBe(3);
+    expect(receipt.verified).toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not finish chunk/session cleanup'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+    // The refund must still fire: the row really is gone, and there is no retry door to recover it
+    // through otherwise.
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 27707 }));
   });
 
   it('reports verified:false rather than throwing when the sweep leaves chunks behind', async () => {
