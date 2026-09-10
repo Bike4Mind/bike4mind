@@ -24,6 +24,7 @@ export const groundedNoInventionEval = (cases: GroundedCase[]): PromptEvalDefini
     evalCase.expectation.kind === 'mustNotDenyPremise'
       ? gradeMustNotDenyPremise(reply)
       : gradeMustAnswer(reply, evalCase.expectation.expected),
+  gradeEmpty: reason => ({ passed: false, reason, claims: [] }),
 });
 
 export function runGroundedNoInventionEval(

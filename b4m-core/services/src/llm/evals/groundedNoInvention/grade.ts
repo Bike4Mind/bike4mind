@@ -51,6 +51,12 @@ const PREMISE_DENIAL: RegExp[] = [
   /\binaccurate\b/i,
   /\b(?:is|was|are|were)\s*n[o'\u2019]?t\s+(?:accurate|correct|true)\b/i,
   /\b(?:premise|claim|assertion|figure|number|statistic|result|story)\b[^.!?]{0,40}\b(?:is|was|are|were|appears?\s+to\s+be|seems?\s+to\s+be)\b[^.!?]{0,24}\b(?:false|incorrect|wrong|mistaken|bogus)\b/i,
+  // Same verdict with a pronoun subject, which the anchor-noun pattern above cannot reach: by the
+  // second sentence the model has already named the claim and refers back to it. Verbatim the shape
+  // the `asked-to-adjudicate` case draws, and the yes/no answer the rule bans in as many words. The
+  // adjective list is deliberately the positive-verdict one only - `is not supported` must stay a
+  // gap report, and the scoped negatives ("is not accurate") are already covered above.
+  /\b(?:it|that|this|they|those)\s+(?:is|was|are|were|appears?\s+to\s+be|seems?\s+to\s+be)\s+(?:false|incorrect|wrong|mistaken|bogus)\b/i,
   /\b(?:never\s+(?:happened|occurred|took\s+place|existed)|did\s+not\s+(?:happen|occur|take\s+place))\b/i,
   /\bthere\s+(?:is|was|has\s+been)\s+no\s+such\b/i,
   /\bdoes\s*n[o'\u2019]?t\s+exist\b/i,
@@ -116,10 +122,21 @@ const DECLINED: RegExp[] = [
  * unfortunately, is false" - is NOT a competing clause, and splitting it apart broke the anchor...
  * verdict pattern's span for no reason: confirmed live, `detectGroundedClaims` returned `[]` for that
  * sentence under the unconditional split, because "premise" and "is false" landed in different pieces.
+ *
+ * The ASCII hyphen needs the same scoping for a sharper reason, and it takes BOTH halves of the fix
+ * to be safe. Unspaced, a hyphen is a compound word ("dispatch-cycle", "fuel-spend" - this corpus's
+ * own vocabulary, and `grade.test.ts`'s own fixtures), so splitting on it cut sentences in two at a
+ * word. That went wrong in both directions at once: it severed the anchor...verdict pattern so a
+ * denial graded clean, AND it split a disclaimer away from the denial it governs, so "that does not
+ * mean the dispatch-cycle result was fabricated" - a CORRECT reply - graded as the defect while the
+ * same sentence without the hyphen graded clean. So the hyphen splits only when spaced, which is the
+ * only form that joins clauses; en and em dashes never appear inside a word and always split. That
+ * closes the false-denial direction. The false-pass direction, where a colon or paren legitimately
+ * severs the pattern, is closed by the whole-sentence retry in `claimsInSentence`.
  */
 function clauses(sentence: string): string[] {
   return sentence
-    .split(/[:()\u2013\u2014-]+|,\s*(?=(?:but|so|yet|however|though|still|and)\b)/i)
+    .split(/[:()\u2013\u2014]+|\s+-+\s+|,\s*(?=(?:but|so|yet|however|though|still|and)\b)/i)
     .filter(c => c.trim().length > 0);
 }
 
@@ -129,7 +146,15 @@ function claimsInSentence(sentence: string): GroundedClaim[] {
     const disclaimed = DENIAL_DISCLAIMED.some(pattern => pattern.test(clause));
     return !disclaimed && PREMISE_DENIAL.some(pattern => pattern.test(clause));
   });
-  if (deniedOutsideDisclaimer) claims.push('deniedPremise');
+  // The compound anchor...verdict pattern is the only one that spans a clause boundary, so a split on
+  // punctuation INSIDE a word ("a 40% faster dispatch-cycle result is incorrect") severs it and the
+  // sentence grades clean. Retry the whole sentence, but only when nothing in it disclaims: the
+  // undivided sentence spans the disclaimer too, and matching there is exactly what `clauses` exists
+  // to prevent. A disclaiming sentence therefore keeps the clause-wise verdict above, unchanged.
+  const disclaimsAnywhere = DENIAL_DISCLAIMED.some(pattern => pattern.test(sentence));
+  const denied =
+    deniedOutsideDisclaimer || (!disclaimsAnywhere && PREMISE_DENIAL.some(pattern => pattern.test(sentence)));
+  if (denied) claims.push('deniedPremise');
   if (GAP_NAMED.some(pattern => pattern.test(sentence))) claims.push('namedTheGap');
   if (DECLINED.some(pattern => pattern.test(sentence))) claims.push('declined');
   return claims;

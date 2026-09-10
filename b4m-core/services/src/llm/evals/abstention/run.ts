@@ -10,20 +10,24 @@
 import { forcedRetrievalNoContextPrompt } from '../../forcedRetrievalAbstention';
 import { runPromptEval, type PromptEvalCaseResult, type PromptEvalConfig, type PromptEvalDefinition } from '../harness';
 import { ABSTENTION_CASES, type AbstentionCase } from './cases';
-import { gradeMustHedge, gradeMustNotMentionCoverage } from './grade';
+import { gradeMustHedge, gradeMustNotMentionCoverage, type GradeResult } from './grade';
 
-export const abstentionEval = (cases: AbstentionCase[]): PromptEvalDefinition<AbstentionCase> => ({
+// Grade type pinned for the same reason `../groundedNoInvention/run.ts` pins it: left at the
+// harness's EvalGrade default, `claims` is statically lost for the eval whose own predecessor type
+// carried them, which is the reason that file gives for pinning.
+export const abstentionEval = (cases: AbstentionCase[]): PromptEvalDefinition<AbstentionCase, GradeResult> => ({
   cases,
   systemPrompt: evalCase => forcedRetrievalNoContextPrompt(evalCase.finding),
   grade: (evalCase, reply) =>
     evalCase.expectation.kind === 'mustNotMentionCoverage'
       ? gradeMustNotMentionCoverage(reply)
       : gradeMustHedge(reply, evalCase.finding),
+  gradeEmpty: reason => ({ passed: false, reason, claims: [] }),
 });
 
 export function runAbstentionEval(
   config: PromptEvalConfig,
   cases: AbstentionCase[] = ABSTENTION_CASES
-): Promise<PromptEvalCaseResult<AbstentionCase>[]> {
+): Promise<PromptEvalCaseResult<AbstentionCase, GradeResult>[]> {
   return runPromptEval(config, abstentionEval(cases));
 }

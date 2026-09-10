@@ -46,6 +46,13 @@ export interface PromptEvalDefinition<TCase extends PromptEvalCase, TGrade exten
   /** The prompt under test, as the model will see it. Per-case because some evals vary the body. */
   systemPrompt: (evalCase: TCase) => string;
   grade: (evalCase: TCase, reply: string) => TGrade;
+  /**
+   * The grade to record for a sample whose completion carried no text. The definition supplies it
+   * because only the definition knows TGrade's full shape: the harness cannot construct one, and
+   * casting a partial in hands the first consumer of a wider field (`claims.join()`) an undefined
+   * the type promised was there.
+   */
+  gradeEmpty: (reason: string) => TGrade;
 }
 
 export interface PromptEvalConfig {
@@ -123,11 +130,9 @@ export async function runPromptEval<TCase extends PromptEvalCase, TGrade extends
         graded.push({ ...definition.grade(evalCase, reply), reply });
       } catch (error) {
         // A blank completion is as loud recorded as it is thrown, and a sequential sweep takes
-        // minutes: aborting would throw away every case already graded. Cast rather than reshaped:
-        // TGrade may require fields beyond EvalGrade (e.g. GroundedClaim[]), and a blank completion
-        // has none of those to report.
+        // minutes: aborting would throw away every case already graded.
         if (!(error instanceof EmptyCompletionError)) throw error;
-        graded.push({ passed: false, reason: error.message, reply: '' } as TGrade & { reply: string });
+        graded.push({ ...definition.gradeEmpty(error.message), reply: '' });
       }
     }
     results.push({

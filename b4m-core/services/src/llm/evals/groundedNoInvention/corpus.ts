@@ -20,6 +20,15 @@
  * not an approximation of production. The sections open with a column-0 `###` heading on purpose:
  * that heading is the CALLER's, which production also emits undefanged - only the content-derived
  * parts inside it go through `defangRetrievedContent`, and here those are ours and benign.
+ *
+ * One production element is deliberately absent, and it is worth naming rather than leaving the
+ * assembly described as header-rule-block: between the rule and the content, production also emits
+ * an unconditional ~700-char capability note telling the model the retrieved content is its only
+ * view of the library. It is omitted here to keep the eval measuring the rule alone, which is the
+ * same reason the header is copied rather than imported. Whether its presence would make the cases
+ * harder or easier is NOT established - the note both frames the corpus as closed and says in the
+ * same sentence that it is ranked passages and never a total - so treat this corpus as a floor on
+ * fidelity to production rather than as a conservative or an optimistic approximation of it.
  */
 
 import { renderRetrievedContentBlock } from '../../../dataLakeService/renderRetrievedContentBlock';

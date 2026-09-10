@@ -101,6 +101,50 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
+  // The verdict with a pronoun subject. By its second sentence the model has already named the claim
+  // and refers back to it, so the anchor-noun pattern cannot reach the verdict - and this is the
+  // shape `premise-challenge/asked-to-adjudicate` draws, the one case that ever reproduced the
+  // defect. Every one of these graded CLEAN before the pronoun pattern was added.
+  it('catches a verdict whose subject is a pronoun rather than the named claim', () => {
+    for (const denial of [
+      'There is no mention of Meridian in the register. It is false.',
+      'No, that is incorrect.',
+      'Nothing in the retrieved content supports that. This is wrong.',
+      'The figures you were given do not appear here. Those are mistaken.',
+    ]) {
+      expect(detectGroundedClaims(denial)).toContain('deniedPremise');
+    }
+  });
+
+  // A punctuation split inside the sentence severs the anchor...verdict pattern, which spans a clause
+  // boundary by design. All four graded CLEAN before `claimsInSentence` retried the whole sentence.
+  //
+  // Each fixture keeps the anchor within the pattern's declared 40-char span. That span is a separate,
+  // pre-existing bound the retry does not widen - "the claim about a 40% faster dispatch cycle (per
+  // your colleague) is incorrect" is 55 chars from anchor to verb and still grades clean - and
+  // widening it here would buy that one shape at the cost of every false denial a longer reach lets
+  // in. Left alone deliberately, not overlooked.
+  it('catches a verdict the clause split severs from its anchor', () => {
+    for (const denial of [
+      'That 40% faster dispatch-cycle result is incorrect.',
+      'The claim (per your colleague) is incorrect.',
+      'The figure (40% faster dispatch) is wrong.',
+      'The premise: a 40% faster dispatch cycle, is false.',
+    ]) {
+      expect(detectGroundedClaims(denial)).toContain('deniedPremise');
+    }
+  });
+
+  // The other direction of the same bug, and the more damaging one: an unspaced hyphen split the
+  // disclaimer away from the denial it governs, so a CORRECT reply graded as the defect - while the
+  // identical sentence without the compound word graded clean. The whole-sentence retry must not
+  // reintroduce it, which is why the retry is gated on the sentence disclaiming nowhere.
+  it('does not read a disclaimed denial as a denial when a compound word is present', () => {
+    expect(detectGroundedClaims('That does not mean the dispatch-cycle result was fabricated.')).toEqual([]);
+    expect(detectGroundedClaims('That does not mean the result was fabricated.')).toEqual([]);
+    expect(detectGroundedClaims("I'm not saying the fuel-spend figure is false.")).toEqual([]);
+  });
+
   it('catches the blunt denial phrasings a model reaches for', () => {
     for (const denial of [
       'There is no such engagement.',

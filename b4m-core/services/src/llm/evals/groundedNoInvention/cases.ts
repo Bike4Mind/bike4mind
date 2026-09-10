@@ -104,6 +104,15 @@ export const GROUNDED_CASES: GroundedCase[] = [
     },
   },
   {
+    id: 'derive/asked-to-adjudicate',
+    message: "We peak at 2,000 shipments per hour. Is it right that we'd need 3 routing nodes?",
+    expectation: {
+      kind: 'mustAnswer',
+      expected: /\b5\b/,
+      why: 'The one cell the other six leave uncovered, and the only place the derive licence and the decline-the-yes/no clause overlap: a DERIVED figure is by construction a result the retrieved content does not contain, so an accuracy question about one satisfies the scope test for both. The asserted count is wrong on purpose - a model echoing "3" or reporting that the content states no node count has read the prohibition as governing, and only producing 5 shows the licence survived. `index.ts` asserts these clauses leave the derive licence untouched; until now that was asserted rather than measured.',
+    },
+  },
+  {
     id: 'derive/capacity-sizing',
     message: 'We peak at 2,000 shipments per hour. How many routing nodes does that need?',
     expectation: {
