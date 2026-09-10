@@ -266,6 +266,73 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
     },
     { provider: wafProviderUsEast1, dependsOn: [wafAlarmSlackHandlerSnsPermission, wafAlarmDlqPolicy] }
   );
+
+  // Out-of-band alarm for WafAlarmSlackHandlerDlq itself.
+  // Cannot route to wafAiRateLimitAlarmTopic -- that would loop into the same failing Lambda.
+  // Must be in us-east-1: CloudWatch alarm actions must be in the same region as the alarm,
+  // and the DLQ + its alarm both live in us-east-1. This topic is intentionally separate from
+  // the OobAlarmTopic in dlqAlarms.ts (different regions -- they cannot be merged).
+  // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
+  // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
+  const wafOobAlarmTopic = new aws.sns.Topic(
+    'WafOobAlarmTopic',
+    { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
+    { provider: wafProviderUsEast1 }
+  );
+
+  if (process.env.OPS_ALERT_EMAIL) {
+    new aws.sns.TopicSubscription(
+      'WafOobAlarmTopicEmailSub',
+      {
+        topic: wafOobAlarmTopic.arn,
+        protocol: 'email',
+        endpoint: process.env.OPS_ALERT_EMAIL,
+      },
+      { provider: wafProviderUsEast1 }
+    );
+  }
+
+  // Message-count alarm: any message in the DLQ means WAF alert delivery to Slack is failing.
+  new aws.cloudwatch.MetricAlarm(
+    'WafAlarmSlackHandlerDlqMessages',
+    {
+      name: `${$app.name}-${$app.stage}-waf-alarm-slack-handler-dlq-messages`,
+      alarmDescription:
+        'WafAlarmSlackHandlerDlq has messages -- WAF rate-limit alert delivery to Slack is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ApproximateNumberOfMessagesVisible',
+      namespace: 'AWS/SQS',
+      period: 60,
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { QueueName: wafAlarmDlq.name },
+      alarmActions: [wafOobAlarmTopic.arn],
+    },
+    { provider: wafProviderUsEast1 }
+  );
+
+  // Age alarm: parity with the standard DLQ fleet -- any message older than 1 hour.
+  new aws.cloudwatch.MetricAlarm(
+    'WafAlarmSlackHandlerDlqAge',
+    {
+      name: `${$app.name}-${$app.stage}-waf-alarm-slack-handler-dlq-age`,
+      alarmDescription:
+        'WafAlarmSlackHandlerDlq oldest message exceeds 1 hour -- WAF alert delivery to Slack has been failing for an extended period.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ApproximateAgeOfOldestMessage',
+      namespace: 'AWS/SQS',
+      period: 60,
+      statistic: 'Maximum',
+      threshold: 3600,
+      treatMissingData: 'notBreaching',
+      dimensions: { QueueName: wafAlarmDlq.name },
+      alarmActions: [wafOobAlarmTopic.arn],
+    },
+    { provider: wafProviderUsEast1 }
+  );
 }
 
 if (isWafEnabled && $app.stage === 'production' && wafWebAcl && wafAiRateLimitAlarmTopic) {
