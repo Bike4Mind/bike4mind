@@ -116,11 +116,18 @@ if (isMonitoredStage) {
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
   const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
   if (process.env.OPS_ALERT_EMAIL) {
-    new aws.sns.TopicSubscription('OobAlarmTopicEmailSub', {
-      topic: oobAlarmTopic.arn,
-      protocol: 'email',
-      endpoint: process.env.OPS_ALERT_EMAIL,
-    });
+    // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
+    // If OPS_ALERT_EMAIL is unset on a later deploy before the link is clicked, retain the
+    // resource in AWS rather than dropping it from state and leaving a dangling subscription.
+    new aws.sns.TopicSubscription(
+      'OobAlarmTopicEmailSub',
+      {
+        topic: oobAlarmTopic.arn,
+        protocol: 'email',
+        endpoint: process.env.OPS_ALERT_EMAIL,
+      },
+      { retainOnDelete: true }
+    );
   }
 
   // Message-count alarm: any message in the DLQ means the Slack Lambda is failing.
