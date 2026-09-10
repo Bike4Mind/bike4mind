@@ -29,6 +29,25 @@ const handler = baseApi().get(
       filter.tags = { $ne: WHATS_NEW_TAG };
     }
 
+    // Publication state was only ever enforced in the browser, so a direct GET served Draft
+    // (enabled:false), not-yet-live and expired modals to any authenticated user. Admins keep
+    // the unfiltered list -- the admin tab lists drafts by design.
+    // startDate/endDate are usually date-only strings (`YYYY-MM-DD`, from the admin form's
+    // `type="date"` inputs), but the daily What's New generator and its edit form
+    // (whatsNewGeneration.ts, whatsNewModals.ts) write a full ISO timestamp into the same
+    // field. A bare `$lte: today` treats that longer string as greater than the bare date and
+    // hides the modal on its own start day, so the upper bound is padded with the
+    // highest-sorting UTF-8 char to stay tolerant of any same-day suffix. endDate's `$gte`
+    // side needs no padding: a same-day timestamp already sorts above the bare date.
+    if (!req.user?.isAdmin) {
+      const today = new Date().toISOString().slice(0, 10);
+      filter.enabled = true;
+      filter.$and = [
+        { $or: [{ startDate: null }, { startDate: { $exists: false } }, { startDate: { $lte: `${today}\uffff` } }] },
+        { $or: [{ endDate: null }, { endDate: { $exists: false } }, { endDate: { $gte: today } }] },
+      ];
+    }
+
     const modals = await ModalModel.find(filter);
 
     // Resolve the viewer's audience key server-side from their stored tags.

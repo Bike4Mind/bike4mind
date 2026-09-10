@@ -68,7 +68,6 @@
     "no_valid_emails_error": "請輸入有效的電郵地址",
     "send_referral": "發送推薦",
     "send_referral_success": "推薦發送成功！",
-    "send_referral_skipped": "{{count}} 個邀請已跳過 — 這些電子郵件地址已經有帳號。",
     "send_referral_failed": "{{count}} 個邀請無法發送。請再試一次。",
     "send_referral_error": "發送推薦出錯。請再試一次。",
     "slack_notification_default": "用戶USER_NAME:USER_ID向FRIEND_EMAIL發送了推薦"

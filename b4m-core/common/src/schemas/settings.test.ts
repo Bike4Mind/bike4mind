@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   settingsMap,
   publicSafeSettingKeys,
+  userReadableSettingKeys,
   redactSettingSecrets,
   redactSettingSecretsForBroadcast,
   buildPublicSettingsProjection,
@@ -170,6 +171,78 @@ describe('other object settings use makeObjectSetting', () => {
 });
 
 describe('public settings projection (M2.5 security boundary)', () => {
+  describe('userReadableSettingKeys', () => {
+    it('excludes admin-only operational config a non-admin has no claim to', () => {
+      // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
+      // filter served them to every authenticated caller.
+      const keys = new Set(userReadableSettingKeys());
+      for (const adminOnly of [
+        'sreAgentConfig',
+        'secopsTriageConfig',
+        'contextTelemetryAlerts',
+        'prReportIdentityMap',
+        'prReportRepo',
+        'prReportEgressAllowlist',
+      ]) {
+        expect(keys.has(adminOnly)).toBe(false);
+      }
+    });
+
+    it('excludes every isSensitive setting', () => {
+      const keys = new Set(userReadableSettingKeys());
+      const sensitive = (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>).filter(
+        s => s.isSensitive === true
+      );
+      expect(sensitive.length).toBeGreaterThan(0);
+      for (const s of sensitive) expect(keys.has(s.key)).toBe(false);
+    });
+
+    it('covers the whole experimental block except its sensitive members', () => {
+      // useExperimentalFeatureSettings selects these by group membership. Dropping one
+      // would not throw - it would silently serve the compiled default and discard the
+      // admin's override - so the block must be allowed as a block. The one exception is a
+      // member carrying a secret (ollamaBackend is an internal backend URL): isSensitive
+      // subtracts last, and no client hook reads that key by name.
+      const keys = new Set(userReadableSettingKeys());
+      const sensitive = new Set(
+        (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>)
+          .filter(s => s.isSensitive === true)
+          .map(s => s.key)
+      );
+      const expected = experimentalFeatureSettingKeys.filter(k => !sensitive.has(k));
+      expect(expected.length).toBeGreaterThan(0);
+      for (const k of expected) expect(keys.has(k)).toBe(true);
+    });
+
+    it('includes the publicSafe keys, which already ship unauthenticated', () => {
+      const keys = new Set(userReadableSettingKeys());
+      for (const k of publicSafeSettingKeys()) expect(keys.has(k)).toBe(true);
+    });
+
+    it('includes the explicitly tagged non-experimental keys the app needs', () => {
+      const keys = new Set(userReadableSettingKeys());
+      for (const k of [
+        'enforceCredits',
+        'pricePerCredit',
+        'MaxFileSize',
+        'defaultEmbeddingModel',
+        // ReferralModal and useSystemPromptFiles() both read these by name with no
+        // admin guard - carry no secret, but were missed by the initial opt-in pass.
+        'ReferralCreditsAmount',
+        'SystemFiles',
+      ]) {
+        expect(keys.has(k)).toBe(true);
+      }
+    });
+
+    it('is a strict subset of the catalog', () => {
+      const all = new Set((Object.values(settingsMap) as Array<{ key: string }>).map(s => s.key));
+      const keys = userReadableSettingKeys();
+      for (const k of keys) expect(all.has(k)).toBe(true);
+      expect(keys.length).toBeLessThan(all.size);
+    });
+  });
+
   describe('publicSafeSettingKeys', () => {
     it('returns only keys explicitly tagged publicSafe', () => {
       const keys = publicSafeSettingKeys();

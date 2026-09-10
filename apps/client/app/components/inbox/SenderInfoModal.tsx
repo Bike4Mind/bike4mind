@@ -17,7 +17,6 @@ export type Sender = {
   photoUrl?: string | null;
   avatarKey?: string | null;
   createdAt?: string | number | Date;
-  phone?: string | null;
 };
 
 export type SenderInfoModalProps = {
@@ -102,10 +101,9 @@ export default function SenderInfoModal({ open, onClose, sender }: SenderInfoMod
           {/* Divider */}
           <Box sx={{ borderBottom: '1px solid', borderBottomColor: 'inbox.border.light', mb: 1 }} />
 
-          {/* Row: Name | Phone */}
+          {/* Row: Name. The sender's phone number is not disclosed to recipients. */}
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1 }}>
             <Typography sx={{ color: 'text.primary', fontWeight: 500 }}>{getDisplayName(sender)}</Typography>
-            <Typography sx={{ color: 'text.primary50' }}>{sender?.phone || '—'}</Typography>
           </Box>
           <Box sx={{ borderBottom: '1px solid', borderBottomColor: 'inbox.border.light' }} />
 

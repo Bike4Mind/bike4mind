@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Inserisci indirizzi email validi",
     "send_referral": "Invia Referimento",
     "send_referral_success": "Referimento inviato con successo!",
-    "send_referral_skipped": "{{count}} invito/i saltato/i — quegli indirizzi email hanno già un account.",
     "send_referral_failed": "Impossibile inviare {{count}} invito/i. Riprova.",
     "send_referral_error": "Errore nell'invio del referimento. Per favore, riprova.",
     "slack_notification_default": "Referimento inviato dall'utente USER_NAME:USER_ID a FRIEND_EMAIL"

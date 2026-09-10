@@ -797,6 +797,16 @@ interface BaseSetting {
    * available-model list, theme). NEVER tag secrets or operational/internal config.
    */
   publicSafe?: boolean;
+  /**
+   * Opt-in: allow a NON-ADMIN authenticated caller to read this setting through
+   * GET /api/settings/fetch. Fail-closed and independent of `isSensitive`: that flag is
+   * opt-OUT, so an operational setting nobody remembered to tag (sreAgentConfig,
+   * secopsTriageConfig, contextTelemetryAlerts, prReportIdentityMap) was served to every
+   * user. Tag a setting here only when non-admin client code actually reads it.
+   * Experimental-group flags and `publicSafe` keys are readable already -- see
+   * `userReadableSettingKeys()` -- and do not need tagging.
+   */
+  userReadable?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
   /**
@@ -2409,6 +2419,7 @@ export const settingsMap = {
   }),
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
+    userReadable: true,
     name: 'Default Chunk Size',
     // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
     // as an explicit chunkSize override) produces a different granularity than one driven through
@@ -2541,6 +2552,7 @@ export const settingsMap = {
   }),
   pricePerCredit: makeNumberSetting({
     key: 'pricePerCredit',
+    userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
     description: 'The price per credit for purchasing credits.',
@@ -2627,6 +2639,9 @@ export const settingsMap = {
     defaultValue: 10000,
     description: 'Credits to give to the referred user.',
     category: 'Referrals',
+    // ReferralModal renders this for every non-admin sender - no secret, just the number
+    // displayed in the "invited person gets N credits" line.
+    userReadable: true,
   }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',
@@ -2818,6 +2833,7 @@ export const settingsMap = {
   }),
   MaxFileSize: makeNumberSetting({
     key: 'MaxFileSize',
+    userReadable: true,
     name: 'Max File Size',
     defaultValue: 30,
     min: 1, // clearing the field stores '', which z.coerce.number() reads as 0 - without a floor
@@ -2928,6 +2944,7 @@ export const settingsMap = {
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
+    userReadable: true,
     name: 'Enforce Credits',
     // Self-host runs on the operator's own LLM keys with no billing stack (Stripe is
     // not part of the open core), so metering defaults OFF there; hosted stays ON.
@@ -2952,6 +2969,7 @@ export const settingsMap = {
   }),
   enableTeamPlan: makeBooleanSetting({
     key: 'enableTeamPlan',
+    userReadable: true,
     name: 'Enable Team Plan',
     defaultValue: false,
     description: 'Whether to enable team plans',
@@ -3061,6 +3079,10 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.OPENAI.id,
     order: 8,
+    // useSystemPromptFiles() reads this by name with no admin guard - it lists file names,
+    // not a secret. The server independently resolves it when composing the prompt, so this
+    // read only affects what the non-admin UI displays.
+    userReadable: true,
   }),
   OpenWeatherKey: makeStringSetting({
     key: 'OpenWeatherKey',
@@ -3221,6 +3243,7 @@ export const settingsMap = {
   }),
   MaxContentLength: makeNumberSetting({
     key: 'MaxContentLength',
+    userReadable: true,
     name: 'Max Content Length',
     defaultValue: 50000,
     description: 'The maximum character length for file content displayed in workbench (truncated if larger).',
@@ -3388,6 +3411,7 @@ export const settingsMap = {
   }),
   defaultEmbeddingModel: makeStringSetting({
     key: 'defaultEmbeddingModel',
+    userReadable: true,
     name: 'Default Embedding Model',
     // Self-host with a local Ollama server and no cloud key defaults to a local embedder so RAG
     // works keyless out of the box; cloud deployments keep the OpenAI default. See embedding.ts.
@@ -3670,6 +3694,7 @@ export const settingsMap = {
   // a default - on an unparseable stored value. Rails (max) mirror the MAX_* constants.
   dataLakeEmbeddingSpendEnabled: makeBooleanSetting({
     key: 'dataLakeEmbeddingSpendEnabled',
+    userReadable: true,
     name: 'Data Lake Embedding Spend Enabled',
     defaultValue: true,
     description:
@@ -3680,6 +3705,7 @@ export const settingsMap = {
   }),
   dataLakeEmbeddingBudgetPerRunUsd: makeNumberSetting({
     key: 'dataLakeEmbeddingBudgetPerRunUsd',
+    userReadable: true,
     name: 'Embedding Budget Per Run (USD)',
     defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
     min: 0,
@@ -3902,6 +3928,7 @@ export const settingsMap = {
   }),
   enableVoiceSession: makeBooleanSetting({
     key: 'enableVoiceSession',
+    userReadable: true,
     name: 'Enable Voice Session',
     defaultValue: false,
     description: 'Whether to enable the voice session.',
@@ -3911,6 +3938,7 @@ export const settingsMap = {
   }),
   voiceV2Enabled: makeBooleanSetting({
     key: 'voiceV2Enabled',
+    userReadable: true,
     name: 'Enable Voice v2 (Model-Agnostic)',
     defaultValue: false,
     description:
@@ -3932,6 +3960,7 @@ export const settingsMap = {
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',
+    userReadable: true,
     name: 'Default Assistant Voice',
     defaultValue: 'alloy',
     description: 'The default voice for the assistant in the voice session.',
@@ -4504,6 +4533,7 @@ export const settingsMap = {
   }),
   orchestrationDefaults: makeObjectSetting({
     key: 'orchestrationDefaults',
+    userReadable: true,
     name: 'Agent Orchestration Defaults',
     defaultValue: OrchestrationDefaultsSchema.parse({}),
     description:
@@ -4781,6 +4811,34 @@ export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
     .map(s => s.key);
   return Array.from(new Set<SettingKey>([...groupKeys, ...experimentalNonGroupSettingKeys]));
 })();
+
+/**
+ * Setting keys a NON-ADMIN authenticated caller may read via GET /api/settings/fetch.
+ * Opt-in and fail-closed, replacing the opt-OUT `isSensitive` filter that governed this
+ * endpoint. Three sources, unioned:
+ *
+ *  1. The EXPERIMENTAL group (plus `experimentalNonGroupSettingKeys`). `useExperimentalFeatureSettings`
+ *     reads these as a BLOCK by group membership rather than by name, so they are allowed as a
+ *     block too -- omitting one would not crash the client, it would silently fall back to the
+ *     compiled default and drop the admin's configured override.
+ *  2. `publicSafe` keys, which already ship in the unauthenticated CDN artifact.
+ *  3. Anything explicitly tagged `userReadable: true`.
+ *
+ * `isSensitive` then subtracts from the union, so no arm can admit a secret by accident.
+ * Arm 1 is the one that needs it: the EXPERIMENTAL block is allowed wholesale by group, and
+ * `ollamaBackend` sits in that group carrying an internal backend URL. The subtraction is
+ * belt-and-braces next to `redactSettingSecrets` on the response -- that masks the VALUE,
+ * this keeps the key out of a non-admin's payload at all.
+ *
+ * Admins bypass this entirely and read the full catalog.
+ */
+export function userReadableSettingKeys(): string[] {
+  const entries = Object.values(settingsMap) as Array<{ key: string; userReadable?: boolean; isSensitive?: boolean }>;
+  const tagged = entries.filter(s => s.userReadable === true).map(s => s.key);
+  const sensitive = new Set(entries.filter(s => s.isSensitive === true).map(s => s.key));
+  const union = new Set<string>([...experimentalFeatureSettingKeys, ...publicSafeSettingKeys(), ...tagged]);
+  return Array.from(union).filter(k => !sensitive.has(k));
+}
 
 /** A single setting in the public artifact - slimmed to exactly the two fields the client needs. */
 export interface PublicSetting {
