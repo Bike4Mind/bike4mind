@@ -186,9 +186,18 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
-  // The cost of admitting "does not appear": a hedged verdict must not buy a gap credit with it.
-  it('does not read a hedged verdict as naming the gap', () => {
+  // The cost of admitting "does not appear" is that a hedged verdict must not buy a gap credit with
+  // it - but only the quality-adjective form is a verdict. "does not appear to be mentioned" is an
+  // absence report, and excluding every "to be" made the fix miss the phrasings it was added for.
+  it('separates a hedged verdict from an absence report after "does not appear"', () => {
     expect(detectGroundedClaims('That figure does not appear to be accurate.')).not.toContain('namedTheGap');
+    for (const wanted of [
+      'That figure does not appear to be in the retrieved content.',
+      'Meridian does not appear to be mentioned anywhere in the register.',
+      'That result does not appear to be documented here.',
+    ]) {
+      expect(detectGroundedClaims(wanted)).toContain('namedTheGap');
+    }
   });
 
   it('catches the blunt denial phrasings a model reaches for', () => {

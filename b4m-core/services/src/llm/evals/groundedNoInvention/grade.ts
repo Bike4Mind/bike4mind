@@ -80,8 +80,13 @@ const PREMISE_DENIAL: RegExp[] = [
  *
  * Four phrasings measured the wording rather than the behaviour - the same objection `GAP_NAMED`'s
  * docblock makes - so the near-synonyms of "does not mean" belong here as well: a model writing
- * "does not prove" wrote identical behaviour. Widen this set more carefully than `GAP_NAMED`, and in
- * the other direction: a miss here fails a correct reply, an over-reach hands a real denial a pass.
+ * "does not prove" wrote identical behaviour.
+ *
+ * EVERY pattern here leaks the same way, and adding one widens that leak rather than causing it: a
+ * comma splice with no coordinator is not a clause boundary, so "that does not prove anything, the
+ * premise is false" grades clean - as does the same shape built on "does not mean", which shipped
+ * first. See `clauses`. A miss here fails a correct reply; an over-reach passes a real denial, which
+ * is the more expensive direction now.
  */
 const DENIAL_DISCLAIMED: RegExp[] = [
   /\bdoes\s*n[o'\u2019]?t\s+mean\b/i,
@@ -108,9 +113,10 @@ const GAP_NAMED: RegExp[] = [
   // anchor-first pattern below reaches it.
   /\bn[o'\u2019]?t\s+in\s+the\s+(?:retrieved|knowledge\s*base|library|provided|available|approved)\b/i,
   /\bnothing\s+(?:in|on|about|regarding)\b/i,
-  // `appear` excludes "does not appear TO BE", which is a hedged verdict rather than an absence
-  // report and must not earn a gap credit with it.
-  /\b(?:does|do|did)\s*n[o'\u2019]?t\s+(?:appear(?!\s+to\s+be)|contain|mention|cover|include|reference|give|provide|specify|state|address|support|list)\b/i,
+  // `appear` covers the bare form ("does not appear anywhere in the retrieved content"). "does not
+  // appear TO BE" is excluded only when a quality follows it ("to be accurate"), which is a hedged
+  // verdict; "to be mentioned" and "to be in the retrieved content" are absence reports and count.
+  /\b(?:does|do|did)\s*n[o'\u2019]?t\s+(?:appear(?!\s+to\s+be(?!\s+(?:in|present|included|found|mentioned|referenced|documented|supported|covered|addressed|listed)\b))|contain|mention|cover|include|reference|give|provide|specify|state|address|support|list)\b/i,
   /\bI\s+(?:do\s*n[o'\u2019]?t|don['\u2019]t)\s+(?:have|see|find)\b/i,
   /\b(?:could|can)(?:n[o'\u2019]t|['\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:confirm|verify|find|locate|corroborate)\b/i,
   // Anchor-first: "Based on the retrieved content, there is no mention of X". This outnumbered every
