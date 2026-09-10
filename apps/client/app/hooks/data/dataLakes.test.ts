@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 const apiGet = vi.fn();
 const apiDelete = vi.fn();
 const apiPost = vi.fn();
+const apiPut = vi.fn();
 
 /**
  * A rejection shaped the way axios actually rejects: `.message` is the generic status line and the
@@ -36,6 +37,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
     get: (...args: unknown[]) => apiGet(...args),
     delete: (...args: unknown[]) => apiDelete(...args),
     post: (...args: unknown[]) => apiPost(...args),
+    put: (...args: unknown[]) => apiPut(...args),
   },
 }));
 // dataLakes.ts value-imports these at module load for its OTHER hooks; useBrowsePublicDataLakes
@@ -69,6 +71,7 @@ import {
   useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
+  useUpdateFallbackLakeSettings,
   useArchiveDataLake,
   useGetTransitionalDataLakes,
   useRetryLakeLifecycle,
@@ -591,7 +594,13 @@ describe('useCleanupDataLake queued purge', () => {
     expect(result.current.deleted.data).toEqual([deletedLake('lk2')]);
     // Exactly the mount fetch: a second GET would have re-added the still-soft-deleted lk1.
     expect(deletedFetchCount()).toBe(1);
-    expect(invalidate).not.toHaveBeenCalled();
+    // Was a blunt `not.toHaveBeenCalled()`. Its point was "this door refreshes nothing that could
+    // re-add the row", and the config-history key it now invalidates cannot - so the assertion is
+    // narrowed to the exhaustive list rather than dropped, keeping its real value: any FURTHER key
+    // added to this onSuccess still has to be justified here.
+    expect(invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey))).toEqual([
+      JSON.stringify(['dataLakeConfigHistory', 'lk1']),
+    ]);
   });
 
   it('brings the row back on the next fetch when the consumer releases a guard-refused purge (#1744)', async () => {
@@ -992,6 +1001,41 @@ describe('config-history invalidation on the non-update config writes', () => {
     const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
     await act(async () => {
       await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u2' });
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  // The purge door builds its own onSuccess around the pending-purge suppression rather than going
+  // through invalidateAfterLifecycle, which is how it missed this key while the other four
+  // lifecycle actions had it. Inert in today's UI (a purge is accepted from the Deleted section,
+  // History unmounted), so this pins the CONSISTENCY - and `purge` is the action least worth
+  // special-casing, being the only audit record a purge leaves. Not reachable via the retry path
+  // either: TransitionalRetryAction excludes it, so nothing else picks up the slack.
+  it("useCleanupDataLake invalidates the purged lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useCleanupDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+    // A purge writes module-scoped suppression state, and this describe has no reset of its own.
+    // Cleared before the assertion so a failure here cannot also strand 'lake1' for later cases.
+    __resetPurgingLakesForTests();
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  // The static/registry lake's admin overlay. A different route and a different service from
+  // useUpdateDataLake, but it records the same `update` action, so it owes the same invalidation.
+  it("useUpdateFallbackLakeSettings invalidates the edited lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+
+    const { result } = renderHook(() => useUpdateFallbackLakeSettings(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', groundingMode: 'retrieve' });
     });
 
     expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));

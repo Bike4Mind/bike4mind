@@ -503,8 +503,12 @@ export function useUpdateFallbackLakeSettings() {
       const response = await api.put<DataLakeConfig>(`/api/data-lakes/${id}/settings`, params);
       return response.data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // This door records an `update` config-change event too, same as useUpdateDataLake. Inert
+      // while the only caller is FallbackLakeSettingsModal, which does not mount the History
+      // section - kept for the same rule the other config doors follow.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success('Data lake settings updated');
     },
     onError: (error: Error) => {
@@ -611,9 +615,11 @@ function invalidateAfterLifecycle(queryClient: ReturnType<typeof useQueryClient>
   // lake list and the tag tree disagree - the page's lake rail (sourced from `list`) drops the
   // row while the tree beside it still shows that lake's branches and counts it in the totals.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
-  // Every lifecycle action records a config-history row. Invalidated for all five rather than
-  // only the reversible ones: for delete/cleanup the history observer is already unmounted, so
-  // the extra key is inert, and enumerating which actions qualify would rot as actions are added.
+  // Every lifecycle action records a config-history row. Invalidated for all four rather than only
+  // the reversible ones: after a delete the history observer is already unmounted, so the extra key
+  // is inert, and enumerating which actions qualify would rot as actions are added. Four, not five:
+  // `cleanup` never reaches this helper - the purge door builds its own onSuccess around the
+  // pending-purge suppression, and invalidates this same key itself.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
 }
 
@@ -723,6 +729,15 @@ export function useCleanupDataLake() {
       // ['data-lakes', 'deleted'], so it would refetch the list above and undo the removal. No
       // other catalog changes either - a purgeable lake is already soft-deleted, so it is
       // already absent from the active/archived/public lists.
+      //
+      // The history IS invalidated, and safely: ['dataLakeConfigHistory', id] does not prefix-match
+      // the deleted list, so it cannot undo the removal above. Inert in today's UI - a purge is
+      // accepted from the Deleted section, with the lake's History observer unmounted - and kept
+      // anyway for the rule `invalidateAfterLifecycle` already states: every door whose write can
+      // record a config-history row invalidates that lake's history, rather than each door
+      // re-deciding whether its row is currently observable. `purge` is the entry that rule can
+      // least afford to skip - it is the only audit record a purge leaves behind.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success('Data lake permanently purged');
     },
     onError: (error: Error) => {
