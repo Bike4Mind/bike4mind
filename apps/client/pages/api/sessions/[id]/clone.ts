@@ -1,6 +1,7 @@
 import { sessionService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  agentRepository,
   fabFileRepository,
   projectRepository,
   questRepository,
@@ -39,6 +40,7 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id?: string }>,
           users: userRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          agents: agentRepository,
         },
         // Lets the lake-tag derivation intersect against the CALLER's reachable lakes, instead of
         // persisting a tag scraped off a merely-readable file for a lake they cannot use. The case that

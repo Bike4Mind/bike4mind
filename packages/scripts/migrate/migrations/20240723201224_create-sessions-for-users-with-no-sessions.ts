@@ -1,4 +1,11 @@
-import { fabFileRepository, projectRepository, Session, sessionRepository, User } from '@bike4mind/database';
+import {
+  agentRepository,
+  fabFileRepository,
+  projectRepository,
+  Session,
+  sessionRepository,
+  User,
+} from '@bike4mind/database';
 import { type MigrationFile } from './index';
 import { sessionService } from '@bike4mind/services';
 
@@ -37,6 +44,7 @@ const migration: MigrationFile = {
               sessions: sessionRepository,
               projects: projectRepository,
               fabFiles: fabFileRepository,
+              agents: agentRepository,
             },
           }
         );

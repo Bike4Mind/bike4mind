@@ -9,7 +9,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { CreateBatchRequestInput } from '@bike4mind/common';
+import { CreateBatchRequestInput, isLakeIngestable } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
@@ -87,9 +87,7 @@ const handler = baseApi()
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
-    // Don't accept new uploads into an archived/deleted (or transitional) lake - only
-    // draft (first batch) or active lakes can receive a batch.
-    if (dataLake.status !== 'draft' && dataLake.status !== 'active') {
+    if (!isLakeIngestable(dataLake.status)) {
       return res.status(400).json({ error: `Cannot create a batch for a data lake in '${dataLake.status}' status` });
     }
 

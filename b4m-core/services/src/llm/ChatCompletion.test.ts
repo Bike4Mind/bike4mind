@@ -1263,6 +1263,33 @@ describe('ChatCompletionProcess', () => {
         }
       });
 
+      // Third auto-add site (see AUTO_ADDED_TOOL_NAMES). It keyed on promptMode alone until the
+      // skipAutoOffers field existed, so a caller suppressing our offers WITHOUT a mode still got
+      // blog_draft, and with it the tool-use preamble the suppression exists to keep out. Same
+      // admin user and same message as the test above, so the flag is the only difference.
+      it('withholds blog_draft under skipAutoOffers, on the very message that offers it', async () => {
+        (service as any).user.isAdmin = true;
+        try {
+          mockTextModel();
+          const body = {
+            ...startQuestParams,
+            message: 'Turn this conversation into a blog post',
+            skipAutoOffers: true,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? []).not.toContain(
+            'blog_draft'
+          );
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
+
       // The no-signal path: an ordinary "Hello" carries no blog intent and continues no prior
       // blog workflow, so blog_draft is not worth its tokens on this turn.
       it('does not offer blog_draft on an ordinary message with no blog intent', async () => {
@@ -2793,7 +2820,9 @@ describe('ChatCompletionProcess', () => {
       files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
-      promptMode?: 'raw';
+      promptMode?: 'raw' | 'grounded' | 'surface';
+      requestTools?: string[];
+      skipAutoOffers?: boolean;
       fabPromptMessages?: IMessage[];
       fabFileNotices?: FabFileNotice[];
     }) => {
@@ -2859,7 +2888,8 @@ describe('ChatCompletionProcess', () => {
       const body = {
         ...startQuestParams,
         ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
-        tools: [],
+        ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
+        tools: opts.requestTools ?? [],
         projectId: undefined,
         organizationId: undefined,
       };
@@ -3002,6 +3032,54 @@ describe('ChatCompletionProcess', () => {
       expect(getAccessibleFiles).not.toHaveBeenCalled();
     });
 
+    // The offer and the authored prompts used to be one switch, so both halves are asserted
+    // together: either alone still describes a control arm nobody can build. Note the attachment
+    // fixture is deliberately never read - under this flag the file lookup is skipped entirely and
+    // hasAttachedKnowledge comes from the null fail-open, which the first test pins.
+    describe('skipAutoOffers separates the offer from the prompt stack', () => {
+      const ABSTENTION_SENTINEL = 'ABSTENTION-LICENCE-SENTINEL';
+      beforeEach(() => {
+        mockedGetSettingsValue.mockImplementation(((key: string) =>
+          key === 'AbstentionPrompt' ? ABSTENTION_SENTINEL : undefined) as typeof getSettingsValue);
+      });
+      afterEach(() => {
+        mockedGetSettingsValue.mockReset();
+      });
+
+      it('withholds both knowledge tools while the abstention licence still reaches the model', async () => {
+        const { enabledToolsArg, contextAndSystemMessages, getAccessibleFiles } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          skipAutoOffers: true,
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+        expect(enabledToolsArg).not.toContain('search_knowledge_base');
+        expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+        expect(contextAndSystemMessages.map(m => String(m.content)).join('\n')).toContain(ABSTENTION_SENTINEL);
+        // The attachment DB read is elided too, same as the promptMode case above.
+        expect(getAccessibleFiles).not.toHaveBeenCalled();
+        // Withholding is deliberate here, so the invisible-failure warning must stay silent.
+        expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringMatching(/search_knowledge_base is not offered/));
+      });
+
+      // The gap this field routes around. The list is every PromptMode, so a fourth one cannot be
+      // added without deciding this, but raw and surface are the interesting ends: `raw` must never
+      // admit the licence (an admin prompt would invalidate the bare-model arm it exists to
+      // provide), whereas `surface` claims no such bareness and dropping a safety counterweight
+      // there is arguable - so if PROMPT_MODE_SOURCES.surface ever admits `abstention`, that is a
+      // deliberate decision and this test is where it surfaces.
+      it.each(['raw', 'grounded', 'surface'] as const)(
+        'promptMode %s strips the licence along with every other authored prompt',
+        async mode => {
+          const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            promptMode: mode,
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+          });
+          expect(contextAndSystemMessages.map(m => String(m.content)).join('\n')).not.toContain(ABSTENTION_SENTINEL);
+        }
+      );
+    });
+
     it('fails OPEN (still offers the tools) and completes the turn when the file lookup throws', async () => {
       const { enabledToolsArg } = await runKnowledgeGatingCase({
         knowledgeIds: ['f1'],
@@ -3049,7 +3127,71 @@ describe('ChatCompletionProcess', () => {
         });
 
         expect(enabledToolsArg).toContain('search_knowledge_base');
-        expect(retrieval).toEqual({ attempted: false, mode: 'optional', surfaces: [], dataLakeTags: [] });
+        expect(retrieval).toEqual({
+          attempted: false,
+          mode: 'optional',
+          surfaces: [],
+          dataLakeTags: [],
+          // false: this suite stubs getSettingsValue to undefined, so no guidance string resolves
+          // and the section does not ship. The populated case is its own test below.
+          knowledgeBaseGuidanceInjected: false,
+        });
+      });
+
+      /**
+       * Both arms of the A/B flag, driven through the real seed. Everything else in this suite runs
+       * with getSettingsValue stubbed to undefined, which only ever produces the `false` arm - so
+       * without these two the field could be hardwired to false and every other test would pass.
+       */
+      describe('records whether the guidance section shipped', () => {
+        const withGuidance = (value: string | undefined) => {
+          mockedGetSettingsValue.mockImplementation(((key: string) =>
+            key === 'KnowledgeBaseRetrievalPrompt' ? value : undefined) as typeof getSettingsValue);
+        };
+        afterEach(() => {
+          mockedGetSettingsValue.mockReset();
+        });
+
+        it('records true when the setting resolves a non-empty guidance string', async () => {
+          withGuidance('# KNOWLEDGE BASE\n\nsearch when it would settle the question.');
+          const { retrieval } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+          });
+          expect(retrieval?.knowledgeBaseGuidanceInjected).toBe(true);
+        });
+
+        it('records false when the setting is cleared - the A/B control arm', async () => {
+          // A cleared admin setting resolves to '' (this section is read 2-arg precisely so that
+          // stays '' instead of reverting to the default). The section drops, and the turn has to
+          // land in the control arm rather than look like a turn that was never instrumented.
+          withGuidance('');
+          const { retrieval } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+          });
+          expect(retrieval?.knowledgeBaseGuidanceInjected).toBe(false);
+          expect(retrieval).toHaveProperty('knowledgeBaseGuidanceInjected');
+        });
+
+        // The gate ToolBuilder does not own. A promptMode caller cannot receive the section at
+        // all - filterByPromptMode admits `toolPrompt` under no mode - but naming the tool itself
+        // still gets it OFFERED, since resolveEnabledTools unions requestTools ahead of
+        // skipAutoOffers. `raw` also leaves forced retrieval off, so the turn lands in the
+        // optional fold: recording `true` here would credit the treatment arm with a turn that
+        // saw no guidance, the one contamination the three-arm split exists to prevent.
+        it('records false under promptMode, where the tool prompt is filtered out entirely', async () => {
+          withGuidance('# KNOWLEDGE BASE\n\nsearch when it would settle the question.');
+          const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+            knowledgeIds: ['f1'],
+            files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+            promptMode: 'raw',
+            requestTools: ['search_knowledge_base'],
+          });
+
+          expect(enabledToolsArg).toContain('search_knowledge_base');
+          expect(retrieval).toMatchObject({ mode: 'optional', knowledgeBaseGuidanceInjected: false });
+        });
       });
 
       it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
@@ -3088,6 +3230,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: ['knowledgeBaseSearch'],
           dataLakeTags: [],
+          // Survives the tool arm's later write, which never sets it - the flag is seeded once
+          // and must reach the fold intact or the A/B loses the turn. False here for the same
+          // stubbed-settings reason as above; what this pins is survival, not the value.
+          knowledgeBaseGuidanceInjected: false,
         });
       });
     });
@@ -3955,7 +4101,30 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // One belief recalled and rendered. No `topScore`: belief relevance is a different scale
+        // from the cosine similarities the other surfaces report, so a max across the two would
+        // be a number that looks like a similarity and is not one.
+        // `chars` counts the sanitized fact text ONLY - not the rendered block, whose framing
+        // preamble and `- ` bullets would inflate it by a fixed overhead and make it mean
+        // something different here than on the surfaces this field is summed with.
+        injected: { chunks: 1, chars: 'The X-200 pump has a 5-year warranty.'.length },
+        knowledgeBaseGuidanceInjected: false,
       });
+    });
+
+    it('counts only the beliefs that survive sanitizing, since a blank fact reaches the model as nothing', async () => {
+      const fact = 'The X-200 pump has a 5-year warranty.';
+      const { retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [
+          { fact, relevance: 0.9, sources: ['doc1'] },
+          { fact: '   ', relevance: 0.8, sources: ['doc2'] },
+        ],
+      });
+
+      // buildLakeMemoryContext drops the whitespace-only fact, so two recalled beliefs render one
+      // bullet. `injected` is what reached the model, not what recall returned.
+      expect(retrieval).toMatchObject({ injected: { chunks: 1, chars: fact.length } });
     });
 
     it('emits no lake-memory block when recall returns nothing, but still records attempted:true, outcome:ok (#1867 zero case)', async () => {
@@ -3970,6 +4139,13 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // Recall completed, so the zero is RECORDED rather than unknown - the same distinction
+        // 'ok' draws for the outcome, now drawn for the volume.
+        injected: { chunks: 0, chars: 0 },
+        // false because this suite stubs getSettingsValue to undefined (see the restore note
+        // above), not because a forced turn cannot ship the section - these turns are forced AND
+        // offered the tool, so in production the resolved default would make this true.
+        knowledgeBaseGuidanceInjected: false,
       });
     });
 
@@ -3980,13 +4156,15 @@ describe('ChatCompletionProcess', () => {
       });
 
       expect(systemText).not.toContain('Background reference facts');
-      // A retrieval that threw must not be byte-identical to one never attempted.
+      // A retrieval that threw must not be byte-identical to one never attempted. No `injected`:
+      // recall broke mid-flight, so the volume is unknown and a zero would be a lie.
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        knowledgeBaseGuidanceInjected: false,
       });
     });
 
@@ -4009,6 +4187,7 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
+        knowledgeBaseGuidanceInjected: false,
       });
     });
   });

@@ -843,6 +843,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async claimIndexNotification(fabFileId: string, channel: string): Promise<boolean> {
+    // `$ne` in the filter + `$push` in the update, atomically: a concurrent/redelivered caller for
+    // the same (fabFileId, channel) pair loses the race on the filter once the first caller's push
+    // commits, so at most one claim ever succeeds per channel.
+    const res = await this.fabFileModel.updateOne(
+      { _id: fabFileId, 'dispatchedNotifications.channel': { $ne: channel } },
+      { $push: { dispatchedNotifications: { channel, at: new Date() } } }
+    );
+    return res.modifiedCount === 1;
+  }
+
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
     if (!tag) return 0;
     // Anchored and escaped for the same reason as removeTagByUserId, which queries this same
@@ -2614,6 +2625,17 @@ const FabFileVersionSchema = new Schema<IFabFileVersion>(
   { _id: false }
 );
 
+// One entry per completion-notification channel that has claimed this file (#2027 introduced it
+// for 'slack'). `_id: false` for the same reason as FabFileVersionSchema above - entries are
+// addressed by `channel`, not by their own ObjectId.
+const DispatchedNotificationSchema = new Schema<{ channel: string; at: Date }>(
+  {
+    channel: { type: String, required: true },
+    at: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
   {
     userId: { type: String, required: true },
@@ -2695,7 +2717,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from
-    // the client-supplied byte hash in `contentHash`.
+    // `contentHash` - which is NOT one consistent hash domain: the attachment door hashes the raw
+    // uploaded buffer, while the URL door (#2027) hashes extracted text, and both write the same
+    // field. A file added once as an attachment and once as a link is therefore not caught as a
+    // duplicate by `contentHash` alone.
     serverTextHash: { type: String },
     batchId: { type: String },
     relativePath: { type: String },
@@ -2714,6 +2739,9 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
+    // Per-channel claim guard for a completion notification (#2027 introduced it for 'slack') -
+    // see IFabFile's field doc.
+    dispatchedNotifications: { type: [DispatchedNotificationSchema], default: undefined },
 
     ...ShareableDocumentSchema,
   },

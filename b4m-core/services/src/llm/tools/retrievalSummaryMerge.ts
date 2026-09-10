@@ -28,6 +28,28 @@ function outcomeSeverity(outcome: RetrievalSummary['outcome']): number {
 }
 
 /**
+ * Sum-of-completions for `injected` (see RetrievalSummarySchema): absent + absent stays absent, so
+ * "volume unknown" survives a merge and is never converted into a recorded zero. A one-sided
+ * value passes through unchanged, which is why a `failed` surface writing nothing cannot erase the
+ * volume a successful surface already reported.
+ */
+function mergeInjected(
+  existing: RetrievalSummary['injected'],
+  incoming: RetrievalSummary['injected']
+): RetrievalSummary['injected'] {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  // Max over only the sides that HAVE a score: an absent topScore means "this surface has no
+  // comparable similarity to contribute", not zero.
+  const scores = [existing.topScore, incoming.topScore].filter((v): v is number => v !== undefined);
+  return {
+    chunks: existing.chunks + incoming.chunks,
+    chars: existing.chars + incoming.chars,
+    ...(scores.length ? { topScore: Math.max(...scores) } : {}),
+  };
+}
+
+/**
  * Merges two per-turn retrieval summaries (see RetrievalSummarySchema in promptMeta.ts).
  *
  * Extracted into its own module, with no heavy dependencies, so it can be called from the
@@ -49,9 +71,19 @@ function outcomeSeverity(outcome: RetrievalSummary['outcome']): number {
  *   makes this first-writer-wins under the accumulator convention (`existing` is the earlier
  *   write), not last-writer-wins. Unlike the fields above it is NOT commutative when both sides
  *   carry a different reason.
+ * - knowledgeBaseGuidanceInjected: first-writer-wins pass-through. Only the seed writes it, and
+ *   `??` rather than `||` because an explicit `false` is a real value (the A/B control arm) that
+ *   a boolean OR against an absent incoming side would silently discard.
  * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
+ * - injected: chunks and chars SUM, topScore is the max. The only NON-IDEMPOTENT rule here, and
+ *   safe only because every write site emits a delta once per completed search - merging the same
+ *   delta twice would double the volume, so a new writer must not re-emit an accumulated value.
+ *   Summing is what the field means: total volume the model received this turn, across surfaces
+ *   and across repeat knowledge-tool calls. An absent side contributes NOTHING rather than a
+ *   zero, so a surface with no volume to report cannot turn another's real number into a starve,
+ *   and an absent topScore never defaults to 0 - that would outrank a real negative cosine.
  *
  * The one-sided returns below are a verbatim passthrough, and both injection sites emit a PARTIAL
  * summary (ids with no count; `attempted` with no `outcome`) meant only as a merge delta. So a
@@ -70,10 +102,13 @@ export function mergeRetrievalSummary(
     outcomeSeverity(incoming.outcome) > outcomeSeverity(existing.outcome) ? incoming.outcome : existing.outcome;
   const mode = existing.mode === 'forced' || incoming.mode === 'forced' ? 'forced' : (existing.mode ?? incoming.mode);
   const forcedSkipReason = existing.forcedSkipReason ?? incoming.forcedSkipReason;
+  const knowledgeBaseGuidanceInjected =
+    existing.knowledgeBaseGuidanceInjected ?? incoming.knowledgeBaseGuidanceInjected;
   const injectedLakePromptIds =
     existing.injectedLakePromptIds || incoming.injectedLakePromptIds
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
       : undefined;
+  const injected = mergeInjected(existing.injected, incoming.injected);
   const preauthorizedLakeIdsUsed =
     existing.preauthorizedLakeIdsUsed || incoming.preauthorizedLakeIdsUsed
       ? [...new Set([...(existing.preauthorizedLakeIdsUsed ?? []), ...(incoming.preauthorizedLakeIdsUsed ?? [])])]
@@ -86,9 +121,11 @@ export function mergeRetrievalSummary(
     ...(outcome !== undefined ? { outcome } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
+    ...(knowledgeBaseGuidanceInjected !== undefined ? { knowledgeBaseGuidanceInjected } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),
+    ...(injected ? { injected } : {}),
     ...(preauthorizedLakeIdsUsed ? { preauthorizedLakeIdsUsed } : {}),
   };
 }

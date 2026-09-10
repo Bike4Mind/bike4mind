@@ -3,8 +3,12 @@ import { DATA_LAKES, type IDataLakeAccessGrantDocument, type IDataLakeDocument }
 import { transferLakeOwnership } from './transferLakeOwnership';
 import type { LakeTransferActor } from './lakeOwnershipCandidates';
 
+// Org-scoped by default: a PERSONAL lake is not transferable at all except by a platform admin
+// (resolveLakeTransferAuthority), so an org-less default would make every mechanical test below
+// assert against a refusal instead of the grant writes they exist to cover. Pass
+// `organizationId: undefined` explicitly for the personal cases.
 const lake = (over: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
-  ({ id: 'lake1', createdByUserId: 'creator', organizationId: undefined, ...over }) as IDataLakeDocument;
+  ({ id: 'lake1', createdByUserId: 'creator', organizationId: 'org1', ...over }) as IDataLakeDocument;
 
 const activeGrant = (over: Partial<IDataLakeAccessGrantDocument>): IDataLakeAccessGrantDocument =>
   ({
@@ -37,7 +41,15 @@ const makeAdapters = (
           upsertGrant,
         },
         users: { findById: vi.fn(async () => (over.userExists === false ? null : ({ id: 'newOwner' } as never))) },
-        organizations: { findById: vi.fn(async () => (over.org === undefined ? null : over.org)) },
+        organizations: {
+          // Default roster carries every principal the tests below hand a lake to, so the org
+          // membership check is not what any of them are exercising.
+          findById: vi.fn(async () =>
+            over.org === undefined
+              ? { userId: 'billing', adminUserIds: [], users: [{ userId: 'creator' }, { userId: 'newOwner' }] }
+              : over.org
+          ),
+        },
       },
     } as never,
   };
@@ -61,6 +73,29 @@ describe('transferLakeOwnership', () => {
       transferLakeOwnership({ userId: 'stranger', isAdmin: false, organizationIds: [] }, 'lake1', 'newOwner', adapters)
     ).rejects.toThrow(/do not have permission to transfer/i);
     expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('personal lake: refuses a non-admin owner, and says what would unblock them', async () => {
+    // The picker offers no candidates for an org-less lake, so the write path must not stay broader:
+    // otherwise anyone holding a user id could hand that user a lake - and with it, since #2495, the
+    // lake's systemPrompt into their system messages on any turn that retrieves from it.
+    const { adapters, upsertGrant } = makeAdapters({ lakeDoc: lake({ organizationId: undefined }) });
+    await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', adapters)).rejects.toThrow(
+      /personal data lake cannot be transferred/i
+    );
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('personal lake: a platform admin may still transfer it', async () => {
+    const { adapters, upsertGrant } = makeAdapters({ lakeDoc: lake({ organizationId: undefined }) });
+    const result = await transferLakeOwnership(
+      { userId: 'root', isAdmin: true, organizationIds: [] },
+      'lake1',
+      'newOwner',
+      adapters
+    );
+    expect(result.newOwnerUserId).toBe('newOwner');
+    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'newOwner', role: 'owner' }));
   });
 
   it('rejects a new owner that does not exist', async () => {
@@ -160,7 +195,7 @@ describe('transferLakeOwnership', () => {
     });
     // prevOwner is the current effective owner and may transfer onward.
     const result = await transferLakeOwnership(
-      { userId: 'prevOwner', isAdmin: false, organizationIds: [] },
+      { userId: 'prevOwner', isAdmin: false, organizationIds: ['org1'] },
       'lake1',
       'newOwner',
       adapters
@@ -235,7 +270,11 @@ describe('transferLakeOwnership', () => {
   });
 
   it('a platform admin MAY transfer a lake to themselves (superuser, exempt from the consent guard)', async () => {
-    const { adapters, upsertGrant } = makeAdapters({ lakeDoc: lake({ createdByUserId: 'someoneElse' }) });
+    // A personal lake, which only a platform admin may transfer at all - so this covers the consent
+    // guard's admin exemption without also dragging in the org roster check on the recipient.
+    const { adapters, upsertGrant } = makeAdapters({
+      lakeDoc: lake({ createdByUserId: 'someoneElse', organizationId: undefined }),
+    });
     const result = await transferLakeOwnership(
       { userId: 'root', isAdmin: true, organizationIds: [] },
       'lake1',

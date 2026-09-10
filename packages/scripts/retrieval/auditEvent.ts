@@ -22,10 +22,15 @@ export type AuditEventShape = Pick<RecordLakeAccessEventInput, 'fileIds' | 'scor
 /**
  * The tool's own notice when a nonzero relevance floor rejected every candidate passage.
  *
- * COUPLED BY TEXT to `knowledgeBaseSearch/index.ts` (both semantic arms build this literal when
- * `budgets.kbMinRelevance > 0 && search.results.length === 0`), because the tool exposes no
- * structural signal for it: the floor-emptied turn and a turn where the semantic arm was never
- * available reach the same keyword-arm status write, and `warnings` is the only field that differs.
+ * COUPLED BY TEXT to `knowledgeBaseSearch/index.ts` (both semantic arms build this literal when its
+ * `floorEmptiedResultSet` says so), because the tool exposes no structural signal for it: the
+ * floor-emptied turn and a turn where the semantic arm was never available reach the same
+ * keyword-arm status write, and `warnings` is the only field that differs.
+ *
+ * That predicate requires the floor to have had something to reject. A corpus that compared nothing
+ * returns zero results too, and it must NOT land in this bucket: with files in scope it is already
+ * `not_indexed` and never reaches the check below, but an empty scope (a tag filter matching no
+ * files) keeps `outcome: 'ok'` and would otherwise score as a floor rejection here.
  *
  * Drift is safe, not silent. If the wording changes, a floor-emptied turn stops matching, reads as
  * `keyword-fallback`, and ABORTS the sweep with an error - it can never quietly score a wrong row.

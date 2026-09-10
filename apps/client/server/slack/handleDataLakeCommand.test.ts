@@ -8,13 +8,19 @@ const { ingestSlackFilesIntoLake, ingestSlackLinkIntoLake, buildSlackAccessConte
   ingestSlackLinkIntoLake: vi.fn(),
   buildSlackAccessContext: vi.fn(),
 }));
-const { listDataLakes, grantedLakeIdsFor } = vi.hoisted(() => ({
+const { listDataLakes, grantedLakeReachFor } = vi.hoisted(() => ({
   listDataLakes: vi.fn(),
-  grantedLakeIdsFor: vi.fn(),
+  grantedLakeReachFor: vi.fn(),
 }));
 
-vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeIdsFor } }));
+vi.mock('@bike4mind/slack', async importOriginal => {
+  // escapeSlackMrkdwn imported from the REAL module, not reimplemented: some tests assert on exact
+  // reply text pinned to what it neutralizes (e.g. "<!channel>"), and a hand-copy would silently
+  // stop matching if the real implementation ever gains a new escaped character.
+  const actual = await importOriginal<typeof import('@bike4mind/slack')>();
+  return { parseDataLakeCommand, escapeSlackMrkdwn: actual.escapeSlackMrkdwn };
+});
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeReachFor } }));
 // Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
 // dispatch and reply composition only. Each path's own behavior has its own test file.
 vi.mock('./dataLakeIngestAuthz', () => ({ buildSlackAccessContext }));
@@ -25,6 +31,7 @@ import {
   handleDataLakeCommand,
   runDataLakeSlackCommand,
   formatIngestOutcome,
+  formatBareDataLakeMentionHint,
   slugTier,
   type ListScope,
 } from './handleDataLakeCommand';
@@ -46,7 +53,7 @@ const baseParams = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   buildSlackAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, userTags: [], entitlementKeys: [] });
-  grantedLakeIdsFor.mockResolvedValue([]);
+  grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: [], orgGrantedLakes: {} });
 });
 
 describe('handleDataLakeCommand', () => {
@@ -291,7 +298,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'granted-lake', slug: 'granted-only', name: 'Granted Only', canManage: true, organizationId: 'org-z' },
         ];
         listDataLakes.mockResolvedValue(catalog);
-        grantedLakeIdsFor.mockResolvedValue(['granted-lake']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['granted-lake'], orgGrantedLakes: {} });
 
         // Mirrors `add` by calling the SAME production ranking function `list` itself uses
         // (`slugTier`, exported from handleDataLakeCommand.ts) rather than a hand-rolled copy of
@@ -338,7 +345,7 @@ describe('handleDataLakeCommand', () => {
         listDataLakes.mockResolvedValue([
           { id: 'lake-1', slug: 'granted', name: 'Granted Lake', canManage: true, organizationId: 'org-b' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-1']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-1'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -350,7 +357,7 @@ describe('handleDataLakeCommand', () => {
         listDataLakes.mockResolvedValue([
           { id: 'lake-1', slug: 'ungranted', name: 'Ungranted Lake', canManage: true, organizationId: 'org-b' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue([]);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: [], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -364,7 +371,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'lake-own', slug: 'notes', name: 'Own Org Notes', canManage: true, organizationId: 'org-a' },
           { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-foreign']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-foreign'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -380,7 +387,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'lake-personal', slug: 'notes', name: 'Personal Notes', canManage: true },
           { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-foreign']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-foreign'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -395,7 +402,7 @@ describe('handleDataLakeCommand', () => {
           { id: 'lake-b', slug: 'shared-grant', name: 'From Org B', canManage: true, organizationId: 'org-b' },
           { id: 'lake-a', slug: 'shared-grant', name: 'From Org A', canManage: true, organizationId: 'org-a-foreign' },
         ]);
-        grantedLakeIdsFor.mockResolvedValue(['lake-b', 'lake-a']);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-b', 'lake-a'], orgGrantedLakes: {} });
 
         const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
@@ -461,6 +468,24 @@ describe('handleDataLakeCommand', () => {
       // No attachments, so the file path must not run at all.
       expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
       expect(reply).toContain('Added 1 file to *Sales*: "An Article"');
+    });
+
+    it('reports a re-added link as skipped, matching the FILE path wording', async () => {
+      // Acceptance criterion: re-adding the same URL answers "Already in <lake>, skipped", not a
+      // second "Added 1 file" - the bug #2027 was filed for.
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'An Article',
+        sourceUrl: 'https://x',
+        duplicate: true,
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toContain('Already in *Sales*, skipped: "An Article"');
+      expect(reply).not.toContain('Added 1 file');
     });
 
     it('surfaces a link refusal verbatim', async () => {
@@ -685,6 +710,21 @@ describe('formatIngestOutcome', () => {
     expect(text).toContain('x.exe');
   });
 
+  it('escapes a rejection reason embedding an attempted file name, so it cannot post as a broadcast', () => {
+    // Rejection reasons embed the attempted file name (dataLakeFileIngest.ts), which any channel
+    // member can set by naming an oversized or unsupported-type file "<!channel>" and attaching it.
+    const text = formatIngestOutcome({
+      ok: true,
+      lakeName: 'S',
+      added: [],
+      duplicates: [],
+      rejected: ['Could not add "<!channel>": some error.'],
+    });
+
+    expect(text).toContain('&lt;!channel&gt;');
+    expect(text).not.toContain('<!channel>');
+  });
+
   it('does not claim success when nothing happened at all', () => {
     const text = formatIngestOutcome({ ok: true, lakeName: 'S', added: [], duplicates: [], rejected: [] });
     expect(text).toMatch(/nothing to add/i);
@@ -710,6 +750,16 @@ describe('formatIngestOutcome', () => {
     );
 
     expect(text).toMatch(/searchable once indexing finishes/i);
+  });
+});
+
+describe('formatBareDataLakeMentionHint (#2027)', () => {
+  it('points at @datalake and the help subcommand, distinct from the unrecognized-subcommand reply', () => {
+    const text = formatBareDataLakeMentionHint();
+
+    expect(text).toContain('@datalake');
+    expect(text).toContain('@datalake help');
+    expect(text).not.toMatch(/unrecognized/i);
   });
 });
 

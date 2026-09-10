@@ -91,6 +91,27 @@ const handler = baseApi({ auth: false })
           return res.redirect(`/login?error=${encodeURIComponent(oauthFailureRedirectMessage(reason))}`);
         }
 
+        // Ban gate, mirroring saml/callback.ts and okta/callback.ts. Without it a banned
+        // user regained a full session just by signing in again through Google/GitHub -
+        // verifyJwtPayload does not re-check isBanned, so the token stayed live for its
+        // whole lifetime.
+        if (user.isBanned) {
+          try {
+            await authFailLogRepository.create({
+              strategy,
+              ip,
+              userAgent,
+              reason: 'user_banned',
+              email: user.email ?? undefined,
+              headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
+              meta: { path: req.url, status: 403 },
+            });
+          } catch (logErr) {
+            console.error('Failed to write AuthFailLog (oauth banned):', logErr);
+          }
+          return res.redirect('/login?error=account_suspended');
+        }
+
         const { accessToken } = await issueBrowserSession(req, res, user.id, {
           createdVia: 'oauth',
           tokenVersion: user.tokenVersion ?? 0,

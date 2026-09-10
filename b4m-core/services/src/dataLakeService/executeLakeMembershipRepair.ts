@@ -1,3 +1,4 @@
+import { NotFoundError } from '@bike4mind/common';
 import {
   membersRemovedByDecision,
   type MembershipRepairPlan,
@@ -69,7 +70,33 @@ export interface MembershipRepairOutcome {
    * nothing to do.
    */
   staleDecisions: { fileName: string; reviewedGroupIdentity: string; currentGroupIdentity: string }[];
+  /**
+   * Decisions withheld because two arrived for one file name. Applying either would make a
+   * destructive outcome depend on array position - `[keep-both, keep-newest]` removes members and
+   * the reverse removes none - so neither is applied and both are reported.
+   */
+  duplicateDecisions: string[];
+  /**
+   * Removals whose restore row failed to write, so re-adding is refused immediately rather than
+   * after the 30-minute TTL. A subset of `removedFabFileIds` - the membership removal itself stood.
+   *
+   * A bulk caller cannot infer this: the removal door writes that row best-effort in a catch that
+   * only warns, so without it a surface reports "removed 40" with no signal that k of them were
+   * never undoable. Empty is the ordinary case.
+   */
+  removedWithoutRestoreToken: string[];
+  /** True when the run stopped at MAX_MEMBERSHIP_REPAIR_REMOVALS with work still outstanding. */
+  truncated: boolean;
 }
+
+/**
+ * Hard ceiling on removals in one run, mirroring MAX_CONVERGENCE_WAVE on the sibling this executor
+ * is modelled on. The plan carries no cap of its own - `maxGroups`/`maxGroupMembers` are optional
+ * payload options on the health report, not safety bounds - so without this a hand-crafted plan is
+ * an unbounded sequential wave of removals, each one a read plus a `$pull` plus a full lake-stats
+ * recompute.
+ */
+export const MAX_MEMBERSHIP_REPAIR_REMOVALS = 200;
 
 /**
  * Which members a group loses in this run.
@@ -124,18 +151,35 @@ export async function executeLakeMembershipRepair(
   decisions: MembershipRepairDecisionInput[],
   adapters: RemoveFileFromDataLakeAdapters
 ): Promise<MembershipRepairOutcome> {
-  const { logger } = adapters;
-  const byFileName = new Map(decisions.map(d => [d.fileName, d]));
+  const { db, logger } = adapters;
+
+  // Built with duplicates REMOVED rather than last-wins: applying either of two rulings for one file
+  // name would let array order decide whether membership is destroyed.
+  const byFileName = new Map<string, MembershipRepairDecisionInput>();
+  const duplicateDecisions = new Set<string>();
+  for (const decision of decisions) {
+    if (byFileName.has(decision.fileName)) duplicateDecisions.add(decision.fileName);
+    byFileName.set(decision.fileName, decision);
+  }
+  for (const fileName of duplicateDecisions) byFileName.delete(fileName);
+
+  // Resolved ONCE, before any removal. A lake-level fault - missing, or an id addressing nothing - is
+  // invariant across the loop, so letting the per-member catch discover it issues one findById per
+  // removal and returns a success-shaped outcome carrying N copies of one message.
+  const lake = await db.dataLakes.findById(dataLakeId);
+  if (!lake) throw new NotFoundError('Data lake not found');
 
   const removedFabFileIds: string[] = [];
   const groupsActedOn: MembershipRepairOutcome['groupsActedOn'] = [];
   const failures: MembershipRepairOutcome['failures'] = [];
   const staleDecisions: MembershipRepairOutcome['staleDecisions'] = [];
+  const removedWithoutRestoreToken: string[] = [];
+  let truncated = false;
 
   // Sequential, not a fan-out: every removal recomputes the lake's stats and can activate a draft
   // lake, so concurrent removals would race each other's recompute and persist a count from a
-  // partial view. Nothing bounds the wave here - the plan carries no cap - so a large plan is slow
-  // by construction, and the route is where that has to be capped.
+  // partial view. Bounded by MAX_MEMBERSHIP_REPAIR_REMOVALS rather than left to the route, so the
+  // ceiling holds for every caller instead of only the one that remembers it.
   for (const group of [...plan.collapsible, ...plan.needsDecision]) {
     const { removals, stale } = removalsForGroup(group, byFileName);
     if (stale) staleDecisions.push(stale);
@@ -143,10 +187,15 @@ export async function executeLakeMembershipRepair(
 
     const removedHere: string[] = [];
     for (const fabFileId of removals) {
+      if (removedFabFileIds.length >= MAX_MEMBERSHIP_REPAIR_REMOVALS) {
+        truncated = true;
+        break;
+      }
       try {
-        await removeFileFromDataLake(actor, dataLakeId, fabFileId, adapters);
+        const { restoreTokenMinted } = await removeFileFromDataLake(actor, dataLakeId, fabFileId, adapters);
         removedHere.push(fabFileId);
         removedFabFileIds.push(fabFileId);
+        if (!restoreTokenMinted) removedWithoutRestoreToken.push(fabFileId);
       } catch (err) {
         // Per-member catch: a repair that abandons the rest of the plan on one failure leaves the
         // lake in a state neither the owner nor the next plan can reason about. Recorded and
@@ -163,7 +212,16 @@ export async function executeLakeMembershipRepair(
     }
 
     if (removedHere.length > 0) groupsActedOn.push({ fileName: group.fileName, removedFabFileIds: removedHere });
+    if (truncated) break;
   }
 
-  return { removedFabFileIds, groupsActedOn, failures, staleDecisions };
+  return {
+    removedFabFileIds,
+    groupsActedOn,
+    failures,
+    staleDecisions,
+    duplicateDecisions: [...duplicateDecisions],
+    removedWithoutRestoreToken,
+    truncated,
+  };
 }

@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
-import { ReActAgent, ReplSession, BudgetExceededError, makeCodeExecuteTool } from '@bike4mind/agents';
+import {
+  ReActAgent,
+  ReplSession,
+  BudgetExceededError,
+  makeCodeExecuteTool,
+  recordReplSandboxUnavailable,
+} from '@bike4mind/agents';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -12,6 +18,7 @@ import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
 import { resolveAccessibleLakes } from '@server/dataLakes';
+import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS, SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**
  * POST /api/data-lakes/rlm-answer
@@ -37,10 +44,12 @@ import { resolveAccessibleLakes } from '@server/dataLakes';
  * (keyword + Sonnet synth) and MIDDLE (vector + Sonnet synth). No direct
  * agent tool calls would muddy the attribution story.
  *
- * Production hardening (Quest 3) replaces:
- * - HTTP loopback in tools.ts with in-process service calls
- * - Per-request session disposal with longer-lived agent sessions
- * - vm.runInContext with a real sandbox (isolated-vm or worker pool)
+ * Guest code runs in an isolated-vm isolate (`executor: 'isolated'`), which
+ * is what makes step 3 a sandbox rather than just a fresh global scope.
+ *
+ * Still open from the spike:
+ * - HTTP loopback in tools.ts should become in-process service calls
+ * - Per-request session disposal should become longer-lived agent sessions
  *
  * See: apps/client/server/tavern/docs/07-PERSISTENT-REPL-TOOL.md
  */
@@ -78,13 +87,6 @@ const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 // 25 matches the per-session execution budget; v1 ran with 12 and clipped
 // T3 trajectories mid-orchestration. See doc 13-before-vs-middle-vs-after.md.
 const DEFAULT_MAX_ITERATIONS = 25;
-// Frontend Lambda is configured for 60s in `infra/web.ts`. AWS will SIGKILL
-// the function past that - `AbortSignal.timeout` would never fire. Cap our
-// internal timeout to fit within Lambda + ~5s buffer for response
-// serialization. Endpoint comments said "9 min" but that was infra-incorrect.
-// If we want long-running agent runs in production, that needs its own
-// Lambda with a higher `timeout` (or move to async-job + polling).
-const HARD_TIMEOUT_MS = 55_000;
 
 const handler = baseApi()
   .use(
@@ -178,18 +180,61 @@ const handler = baseApi()
     }
 
     // --- Construct a per-request ReplSession ---
+    // `executor: 'isolated'` is load-bearing, not a preference. The code this
+    // session runs is written by an LLM steered by the caller's own prompt,
+    // and this process holds the platform's credentials. Under a shared-realm
+    // backend an injected intrinsic or tool closure hands the guest the host
+    // realm's Function constructor, and from there `process.env` and a host
+    // `fetch`. There is deliberately NO fallback backend: if the isolate
+    // cannot be built, this endpoint refuses to run rather than running the
+    // guest next to the secrets.
     const sessionId = `rlm-answer-${randomUUID()}`;
     const baseUrl = `http://localhost:${process.env.PORT ?? '3000'}`;
-    const session = new ReplSession({
-      sessionId,
-      label: 'rlm-answer',
-      perCallTimeoutMs: 60_000,
-      budget: {
-        maxExecutions: parsed.budget?.max_executions ?? 25,
-        maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
-        maxCostUsd: parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD,
-      },
-    });
+    let session: ReplSession;
+    try {
+      session = new ReplSession({
+        sessionId,
+        label: 'rlm-answer',
+        executor: 'isolated',
+        // Must stay well under HARD_TIMEOUT_MS: the REPL-level caps only mean
+        // anything if they fire BEFORE the request-level abort. At 60s neither
+        // the isolate timeout nor the host deadline (timeout + grace) could ever
+        // run here, so one hanging step cost the caller the whole request
+        // (`run_error: TIMEOUT`, no answer) instead of costing the agent one step
+        // it can see in an observation and route around.
+        perCallTimeoutMs: PER_CALL_REPL_TIMEOUT_MS,
+        // The dispatch bound a tool gets is `min(toolTimeoutMs, run time
+        // left)`, so it shrinks as the run proceeds and crosses under
+        // SUB_LLM_HTTP_TIMEOUT_MS about 7s in. Past that point the dispatcher
+        // would abandon the await while the provider call is still
+        // generating: the reservation settles after `getUsage()` has been
+        // snapshotted below and the session disposed, so the spend is booked
+        // where nobody reads it, and the guest sees a call that never settled
+        // with budget left to retry it. Two provider calls, one recorded.
+        //
+        // Only `subAgentQuery` carries a floor. The read tools also bound
+        // themselves (TOOL_HTTP_TIMEOUT_MS), but an abandoned lookup costs a
+        // wasted fetch and still surfaces as an attributable dispatcher
+        // error - refusing those late in a run would reject calls that
+        // ordinarily finish in under a second.
+        executorOptions: { toolMinBudgetMs: { subAgentQuery: SUB_LLM_HTTP_TIMEOUT_MS } },
+        budget: {
+          maxExecutions: parsed.budget?.max_executions ?? 25,
+          maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
+          maxCostUsd: parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD,
+        },
+      });
+    } catch (e) {
+      req.logger.error(
+        `[rlm-answer] refusing request: isolated REPL sandbox unavailable: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+      // A 503 reads as an ordinary transient upstream, but a missing native
+      // addon is total for the build. Alarmed in infra/alarms.ts.
+      await recordReplSandboxUnavailable('rlm-answer', req.logger);
+      return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
+    }
 
     // Wire data-lake tools into the REPL (NOT into the agent's tool array)
     session.setTools(

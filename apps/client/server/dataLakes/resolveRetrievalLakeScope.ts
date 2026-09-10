@@ -15,7 +15,12 @@
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeAccessGrantRepository, dataLakeRepository, organizationRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
 import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
@@ -175,13 +180,14 @@ export async function resolveRetrievalLakeScopeForUser(
   const scope = await dataLakeService.getDynamicDataLakeAccess({
     db: {
       dataLakes: dataLakeRepository,
-      // The grant arm browse already has (listDataLakes' `grantedLakeIdsFor`), so a lake reached
-      // only by an owner/curator grant retrieves as it browses instead of being visible but
-      // ungroundable.
-      dataLakeAccessGrants: dataLakeAccessGrantRepository,
       organizations: {
         findMembershipOrgIds: opts.findMembershipOrgIds ?? (uid => organizationRepository.findMembershipOrgIds(uid)),
       },
+      // The grant rung, on the same terms browse resolves it. Both are wired here for the same
+      // reason the chat/tool contexts carry them: an unthreaded site is not a type error, it just
+      // silently drops a grant-reached lake out of retrieval.
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      adminSettings: adminSettingsRepository,
     },
     user: { id: user.id, tags: user.tags ?? [] },
     entitlementKeys,

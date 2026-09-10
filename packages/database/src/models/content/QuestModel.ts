@@ -45,7 +45,22 @@ const MessageTruncationSchema = subSchema({
 // `beliefCount` is required). Absent-or-fully-present, matching how the feature writes it.
 const LakeMemorySchema = subSchema({
   beliefCount: { type: Number, required: false },
+  beliefBudget: { type: Number, required: false },
   dataLakeTags: [{ type: String, required: false }],
+});
+
+// Injected retrieval volume (passages + characters + best similarity). Its own subSchema for a
+// DIFFERENT reason than LakeMemorySchema below: it has no array child, so nothing auto-vivifies
+// here. Declared inline, its `required` children would become unconditional validators, and a
+// quest carrying `retrieval` without a volume - the documented absent case - would throw
+// ValidationError on `promptMeta.retrieval.injected.chunks`. Absent-or-fully-present, and absence
+// is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
+// `default: undefined` on the path below is inert for a single nested subdocument (nothing
+// vivifies it) and kept only for symmetry with the siblings, where it does work.
+const InjectedVolumeSchema = subSchema({
+  chunks: { type: Number, required: true },
+  chars: { type: Number, required: true },
+  topScore: { type: Number, required: false },
 });
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
@@ -60,12 +75,19 @@ const RetrievalSummarySchema = subSchema({
   // Optional because it is present iff `attempted`: the seeded not-attempted turn has no outcome.
   outcome: { type: String, required: false },
   mode: { type: String, required: false },
+  // Optional, and an explicit `false` is meaningful (the A/B control arm) rather than a blank -
+  // see the field's comment on the Zod side.
+  knowledgeBaseGuidanceInjected: { type: Boolean, required: false },
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
   // default: undefined for the same auto-vivification reason as dataLakeTags above.
   injectedLakePromptIds: { type: [String], required: false, default: undefined },
   injectedLakePromptCount: { type: Number, required: false },
+  // default: undefined for the same auto-vivification reason as the paths above - and here it also
+  // preserves the field's presence contract, since a materialized empty object would report
+  // "unknown volume" as a recorded one.
+  injected: { type: InjectedVolumeSchema, required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as injectedLakePromptIds above.
   preauthorizedLakeIdsUsed: { type: [String], required: false, default: undefined },
 });

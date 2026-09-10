@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DATA_LAKE_STATUSES } from '@bike4mind/common';
 
 // Unit-level test of the connect handler's gate + org-credential capture. The repository layer,
 // AWS/SQS, auth gate, and crypto are mocked; the Drive folder-id validation runs for real.
@@ -75,7 +76,7 @@ const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unkn
 describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA' });
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
     h.userFindById.mockResolvedValue({ googleDrive: { refreshToken: 'enc-refresh' } });
     h.isEncrypted.mockReturnValue(true);
@@ -169,12 +170,41 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   });
 
   it('rejects a personal (org-less) lake before touching auth or credentials', async () => {
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined, status: 'active' });
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
       /organization-scoped/i
     );
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+  });
+
+  it.each(DATA_LAKE_STATUSES.filter(s => s !== 'draft' && s !== 'active'))(
+    'refuses to connect a folder to a lake in %s status',
+    async status => {
+      // Otherwise the connect door hands a non-writable lake an `enabled: true` connection and the
+      // poll enqueues it forever - work the ingest guard then drops every time - while the UI toasts
+      // a sync that will never happen. Same draft/active rule as the batch-create and presign doors.
+      h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status });
+      const { res } = makeRes();
+      await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+        new RegExp(`'${status}' status`)
+      );
+      // Gated before the credential capture and the Drive read probe, so a refused connect costs
+      // neither; and nothing is written.
+      expect(h.userFindById).not.toHaveBeenCalled();
+      expect(h.getFolderAccess).not.toHaveBeenCalled();
+      expect(h.connCreate).not.toHaveBeenCalled();
+      expect(h.connUpdateCredential).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
+
+  it('connects a draft lake (the first sync of a freshly created lake)', async () => {
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'draft' });
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+    expect(h.connCreate).toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(202);
   });
 
   it('404s an unknown lake', async () => {

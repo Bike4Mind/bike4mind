@@ -6,6 +6,7 @@ import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
 import { mcpServerUpdateBodySchema } from '@server/validators/mcpServerValidators';
+import { assertNoForbiddenMcpEnvKeys } from '@server/utils/mcpEnvValidation';
 
 const handler = baseApi()
   .delete(async (req, res) => {
@@ -30,6 +31,7 @@ const handler = baseApi()
       throw new BadRequestError('Invalid request body');
     }
     const { name, envVariables, enabled } = parsedBody.data;
+    assertNoForbiddenMcpEnvKeys(envVariables);
 
     const server = await McpServer.findById(id);
 

@@ -385,8 +385,12 @@ export interface IFabFile {
    * SHA-256 (hex) over the file's normalized server-extracted text, computed at chunk time by the
    * admission contract (`computeServerTextHash`). Hashed over the CANONICAL EXTRACTED TEXT, not the
    * chunk output, so it is stable across chunk-policy/embedding-model changes - the trustworthy dedup
-   * input for #1671, distinct from `contentHash` (client-side raw BYTES, unverified, absent on
-   * connector files). Tri-state: absent = never chunked (treat as UNKNOWN, never "no text"); null =
+   * input for #1671, distinct from `contentHash` (unverified, and NOT universal: only a
+   * `createFabFileByUrl` caller that opts into ingest-time dedup by supplying `checkDuplicate`
+   * stamps it - the Slack link door, as of #2027 - so it stays coupled to the dedup behavior rather
+   * than reaching doors that never asked for it; the web URL door, proposal admission, and the
+   * Google Drive connector, which calls `createFabFile` directly, do not stamp it). Tri-state:
+   * absent = never chunked (treat as UNKNOWN, never "no text"); null =
    * chunked with no extractable text; hex = fingerprint. Nulled by FAB_FILE_CONTENT_REWRITE_PATCH on
    * a byte rewrite and by the chunk pass on a text-less re-chunk, so it never outlives its text.
    */
@@ -413,6 +417,17 @@ export interface IFabFile {
 
   /** Soft-archive marker set when the file's data lake is archived (reversible). */
   archivedAt?: Date;
+
+  /**
+   * One entry per completion-notification channel that has claimed this file (#2027) - e.g.
+   * `{ channel: 'slack', at }` once the "finished indexing" Slack reply is claimed. An atomic
+   * per-channel claim guard, not just a record of when a post happened, so a redelivered or
+   * concurrent vectorize-completion message never posts the same reply twice on the same channel.
+   * Generalized (not `slackIndexNotifiedAt: Date`) so a future channel (Teams, email, webhook)
+   * reuses this array instead of accreting its own per-channel timestamp field. See
+   * `fabFileRepository.claimIndexNotification` and `notifySlackIndexingComplete.ts`.
+   */
+  dispatchedNotifications?: Array<{ channel: string; at: Date }>;
 
   /**
    * Non-destructive AI-edit history for binary Office documents (docx/xlsx). Absent for
@@ -848,6 +863,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
+  /**
+   * Atomic per-channel claim: appends a `dispatchedNotifications` entry for `channel` only if one
+   * does not already exist, succeeding only for the FIRST caller. The redelivery-safety primitive
+   * for a completion notification (#2027 introduced it for `'slack'`) - a redelivered or
+   * concurrent vectorize-completion message for the same file must post that channel's reply at
+   * most once. Mirrors `dataLakeBatchRepository.claimFileStatus`'s shape.
+   */
+  claimIndexNotification(fabFileId: string, channel: string): Promise<boolean>;
 
   /**
    * Search for files.

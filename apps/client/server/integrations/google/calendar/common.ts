@@ -1,4 +1,4 @@
-import { google } from 'googleapis';
+import { auth as googleAuth, calendar as calendarApi } from '@googleapis/calendar';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -15,14 +15,14 @@ export const calendarClient = async () => {
   const serviceAccountKey = getSettingsValue('googleCalendarServiceAccountSecret', settings);
   const organizerEmail = getSettingsValue('googleCalendarOrganizerEmail', settings);
 
-  const authClient = new google.auth.JWT({
+  const authClient = new googleAuth.JWT({
     email: serviceAccountEmail,
     key: Buffer.from(serviceAccountKey!, 'base64').toString('utf-8'),
     scopes,
     subject: organizerEmail,
   });
 
-  return google.calendar({ version: 'v3', auth: authClient });
+  return calendarApi({ version: 'v3', auth: authClient });
 };
 
 dayjs.extend(utc);

@@ -24,7 +24,13 @@ import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
 
-const FILE_ID = 'file-1';
+// ObjectId-shaped on purpose: `file_id` reaches Mongoose's `_id` cast, so a fixture that is not
+// an ObjectId cannot exercise the real Path A at all (it now stops at the shape guard). The
+// malformed pair below is what production actually saw - a trailing token of a corpus filename,
+// and an arXiv id whose dot the model turned into a space.
+const FILE_ID = '68b0f3a2c1d4e5f60718293a';
+const MALFORMED_FILE_ID = 'w7154539641';
+const MALFORMED_FILE_ID_FROM_CHUNK_TEXT = '2506 07866';
 
 function makeFile(overrides: Record<string, unknown> = {}) {
   return {
@@ -856,6 +862,149 @@ describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
 });
 
 /**
+ * A model composes `file_id` from conversation text, so it routinely supplies something that is
+ * not an ObjectId. Before the shape guard, Mongoose raised a CastError that the outer catch turned
+ * into `outcome: 'failed'` - reporting a bad tool argument as a retrieval OUTAGE, which is the one
+ * telemetry field operators would page on (#2530).
+ */
+describe('retrieve_knowledge_content rejects a malformed file_id without reporting an outage (#2530)', () => {
+  const retrievalOf = (ctx: ToolContext) => {
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const call = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    return (call?.[0] as { promptMeta: { retrieval: unknown } } | undefined)?.promptMeta.retrieval;
+  };
+
+  const castError = (value: unknown) =>
+    Object.assign(new Error(`Cast to ObjectId failed for value "${String(value)}" at path "_id"`), {
+      name: 'CastError',
+      value,
+    });
+
+  /**
+   * Mongoose casts `_id`, so the real repository THROWS on a non-ObjectId rather than returning
+   * null. A mock that just resolves undefined cannot reproduce the production failure at all,
+   * which is why the previous fixture (a plain 'file-1' id) never caught this.
+   */
+  const withCastingRepo = (ctx: ToolContext) => {
+    const cast = async (id: string) => {
+      if (!/^[0-9a-fA-F]{24}$/.test(id)) throw castError(id);
+      return null;
+    };
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockImplementation(cast);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockImplementation(cast);
+    return ctx;
+  };
+
+  it.each([
+    ['a filename token', MALFORMED_FILE_ID],
+    ['an id lifted from chunk text', MALFORMED_FILE_ID_FROM_CHUNK_TEXT],
+  ])('%s is answered as not-found and never reaches the database', async (_label, badId) => {
+    const ctx = withCastingRepo(makeContext());
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ file_id: badId })) as string;
+
+    expect(out).toContain(`No document found with ID "${badId}"`);
+    expect(out).toContain('Try using search_knowledge_base to find the correct file ID');
+    expect(ctx.db.fabfiles!.findByIdAndUserId).not.toHaveBeenCalled();
+    expect(ctx.db.fabfiles!.findById).not.toHaveBeenCalled();
+  });
+
+  it('records outcome:ok, not failed - a bad argument is a single-file miss, not a retrieval outage', async () => {
+    const ctx = withCastingRepo(makeContext());
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    await tool.toolFn({ file_id: MALFORMED_FILE_ID });
+
+    expect(retrievalOf(ctx)).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('answers a malformed id exactly as it answers a well-formed missing one (no existence oracle)', async () => {
+    const malformed = makeContext();
+    const missing = makeContext();
+    (missing.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (missing.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const malformedOut = (await knowledgeBaseRetrieveTool
+      .implementation(malformed, undefined)
+      .toolFn({ file_id: MALFORMED_FILE_ID })) as string;
+    const missingOut = (await knowledgeBaseRetrieveTool
+      .implementation(missing, undefined)
+      .toolFn({ file_id: FILE_ID })) as string;
+
+    // Same sentence, same outcome - the only difference is the id each quotes back.
+    expect(malformedOut.replace(MALFORMED_FILE_ID, FILE_ID)).toBe(missingOut);
+    expect(retrievalOf(malformed)).toEqual(retrievalOf(missing));
+  });
+
+  it('the agent-scoped branch also stops at the shape guard, before the scope membership check', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [FILE_ID] } });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ file_id: MALFORMED_FILE_ID })) as string;
+
+    expect(out).toContain(`No document found with ID "${MALFORMED_FILE_ID}"`);
+    expect(ctx.db.fabfiles!.findById).not.toHaveBeenCalled();
+    expect(retrievalOf(ctx)).toMatchObject({ outcome: 'ok' });
+  });
+
+  it('a well-formed id is unaffected and still retrieves', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Current Protocol.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('chunk body');
+    expect(ctx.db.fabfiles!.findByIdAndUserId).toHaveBeenCalledWith(FILE_ID, 'u1');
+  });
+
+  describe('catch backstop, for a cast that gets past the shape guard', () => {
+    it("a CastError on the MODEL's own file_id is reclassified as a miss, not an outage", async () => {
+      const ctx = makeContext();
+      (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(castError(FILE_ID));
+      // `logger` is shared across this file, so clear it or a prior test satisfies the assertion.
+      (logger.error as ReturnType<typeof vi.fn>).mockClear();
+
+      const out = await runById(ctx);
+
+      expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+      expect(retrievalOf(ctx)).toMatchObject({ outcome: 'ok' });
+      // Reclassified, never silenced - the throw is still logged so the rate stays greppable.
+      expect(logger.error).toHaveBeenCalledTimes(1);
+    });
+
+    it('a CastError on a SERVER-side id still reports failed', async () => {
+      const ctx = makeContext();
+      (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(
+        castError('some-corrupt-row-id')
+      );
+
+      const out = await runById(ctx);
+
+      expect(out).toContain('An error occurred while retrieving document content');
+      expect(retrievalOf(ctx)).toMatchObject({ outcome: 'failed' });
+    });
+
+    it('a non-cast fault still reports failed', async () => {
+      const ctx = makeContext();
+      (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+
+      const out = await runById(ctx);
+
+      expect(out).toContain('An error occurred while retrieving document content');
+      expect(retrievalOf(ctx)).toMatchObject({ outcome: 'failed' });
+    });
+  });
+});
+
+/**
  * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
  * fails to advance. Both were added with the paging and neither would fail if it were deleted.
  */
@@ -989,12 +1138,12 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
    */
   it('heads the document with its date, and omits the clause when it has none', async () => {
     const dated = await runById(retrievableCtx('body', { createdAt: new Date('2026-08-14T09:30:00.000Z') }));
-    expect(dated).toContain('### Handbook.pdf (ID: file-1) - dated 2026-08-14');
+    expect(dated).toContain(`### Handbook.pdf (ID: ${FILE_ID}) - dated 2026-08-14`);
     // The suffix must not create a second header or defang ours.
     expect(dated.match(/^### /gm)).toHaveLength(1);
 
     const undated = await runById(retrievableCtx('body'));
-    expect(undated).toContain('### Handbook.pdf (ID: file-1)\n');
+    expect(undated).toContain(`### Handbook.pdf (ID: ${FILE_ID})\n`);
     expect(undated).not.toContain(' - dated');
   });
 
