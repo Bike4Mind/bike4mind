@@ -119,7 +119,7 @@ describe('POST /api/secret-rotations/renewed', () => {
     mockUpdate.mockResolvedValue({ id: 's1' });
   });
 
-  it('captures previousKey from the secret the server itself holds', async () => {
+  it('captures a previousKey for JWT_SECRET', async () => {
     mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
     const { req, res } = request({ id: 's1' });
     await mockRefs.postHandler!(req, res);

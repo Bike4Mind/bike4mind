@@ -257,7 +257,12 @@ describe('GET /api/identify', () => {
       const PREV_SECRET = 'the-outgoing-signing-secret';
       configureSecretsAtRest(generateEncryptionKey());
       try {
-        mockFindByKeyName.mockResolvedValue({ rotatedAt: new Date(), previousKey: encryptAtRest(PREV_SECRET) });
+        const ciphertext = encryptAtRest(PREV_SECRET);
+        // Fixture self-guard: this test is the proof the reader decrypts, so a fixture
+        // that ever degraded to plaintext must fail here rather than pass with the
+        // decrypt dropped (mirrors verifyWsAccessToken.test.ts).
+        expect(ciphertext).not.toBe(PREV_SECRET);
+        mockFindByKeyName.mockResolvedValue({ rotatedAt: new Date(), previousKey: ciphertext });
         const { req, res } = fire({ bearer: 'live-jwt' });
         await handler(req, res);
 

@@ -276,8 +276,10 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
       // `requiredScopes` on baseApi now rejects here, ahead of the handler's own
-      // check - so the message is the gate's, not the route's.
-      expect(res._getJSONData().error).toMatch(/insufficient/i);
+      // check - pin the gate's exact message, not a loose /insufficient/ that the
+      // handler's own 'Insufficient scope' also satisfies (so deleting requiredScopes
+      // from events.ts would still pass a looser assertion).
+      expect(res._getJSONData().error).toBe('Insufficient API key permissions');
       expect(mockSendBatch).not.toHaveBeenCalled();
     });
 
