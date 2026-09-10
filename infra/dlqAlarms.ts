@@ -131,6 +131,8 @@ if (isMonitoredStage) {
   }
 
   // Message-count alarm: any message in the DLQ means the Slack Lambda is failing.
+  // evaluationPeriods: 1 is intentional -- any DLQ message here is an immediate failure
+  // signal, not transient noise, so a single breaching period is the right sensitivity.
   new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqMessages', {
     name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
     alarmDescription:
@@ -145,9 +147,11 @@ if (isMonitoredStage) {
     treatMissingData: 'notBreaching',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
     alarmActions: [oobAlarmTopic.arn],
+    tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
   });
 
-  // Age alarm: parity with the standard DLQ fleet -- any message older than 1 hour.
+  // Age alarm: same 1-hour threshold as the standard DLQ fleet. period is 60s (vs fleet
+  // 300s) to match the message-count alarm above and keep both alarms on the same cadence.
   new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqAge', {
     name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-age`,
     alarmDescription:
@@ -162,6 +166,7 @@ if (isMonitoredStage) {
     treatMissingData: 'notBreaching',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
     alarmActions: [oobAlarmTopic.arn],
+    tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });
 }
 
@@ -493,6 +498,12 @@ if (isMonitoredStage) {
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-messages`,
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-age`,
       ]);
+      // Include the OOB alarms for the alarm-pipeline DLQ itself so they appear in the
+      // health overview widget alongside the rest of the fleet.
+      alarmArns.push(
+        `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
+        `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-age`
+      );
 
       const widgets: Record<string, unknown>[] = [
         // Row 0: Alarm Status Overview
