@@ -7,6 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * resolve the lake and its active grants for themselves, so a single grant cost four round-trips.
  * Counting the repository calls is what makes "two, not four" a measurement rather than a reading of
  * the call graph - both counts below are 2 if either gate goes back to resolving its own copy.
+ *
+ * The counts alone would pass on a gate that read the right pair and then handed the door the wrong
+ * one, so each case also pins WHAT was read (`activeAsOf`, without which a lapsed curator or owner
+ * grant becomes live for the manage decision) and the curator case below pins that the grants the
+ * gate read are the ones the door actually decides on.
  */
 const repos = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -54,6 +59,7 @@ vi.mock('@bike4mind/database', () => ({
 import handler from '../grants';
 
 const OWNER = 'owner-1';
+const CURATOR = 'curator-1';
 const LAKE = { id: 'lake-oid-1', slug: 'my-lake', createdByUserId: OWNER, organizationId: undefined };
 
 const makeRes = () => {
@@ -98,8 +104,12 @@ describe('/api/data-lakes/[id]/grants read counts', () => {
     );
 
     expect(repos.upsertGrant).toHaveBeenCalledTimes(1);
+    expect(repos.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ dataLakeId: LAKE.id, principalId: 'u2', role: 'reader' })
+    );
     expect(repos.findById).toHaveBeenCalledTimes(1);
     expect(repos.listByLake).toHaveBeenCalledTimes(1);
+    expect(repos.listByLake).toHaveBeenCalledWith(LAKE.id, { activeAsOf: expect.any(Date) });
   });
 
   it('resolves the lake and its grants exactly once on a revoke', async () => {
@@ -115,7 +125,41 @@ describe('/api/data-lakes/[id]/grants read counts', () => {
     );
 
     expect(repos.removeGrant).toHaveBeenCalledTimes(1);
+    expect(repos.removeGrant).toHaveBeenCalledWith(LAKE.id, 'user', 'u2');
     expect(repos.findById).toHaveBeenCalledTimes(1);
+    expect(repos.listByLake).toHaveBeenCalledTimes(1);
+    expect(repos.listByLake).toHaveBeenCalledWith(LAKE.id, { activeAsOf: expect.any(Date) });
+  });
+
+  // The seam itself: a curator who is NOT the lake's creator reaches the manage gate ONLY through a
+  // grant row, and the door is now pure over the grants the gate handed it. So a gate that reads the
+  // grants and then returns the wrong set (`[]`, say) still passes every count above while silently
+  // dropping every grant-carried rung - this case is what fails when that happens.
+  it('decides the manage gate on the grants the access gate read', async () => {
+    repos.toAccessContext.mockResolvedValue({
+      userId: CURATOR,
+      isAdmin: false,
+      organizationIds: [],
+      administeredOrgIds: [],
+      userTags: [],
+      entitlementKeys: [],
+    });
+    repos.listByLake.mockResolvedValue([{ principalType: 'user', principalId: CURATOR, role: 'curator' }]);
+    const { res } = makeRes();
+
+    await call(
+      {
+        method: 'POST',
+        query: { id: LAKE.id },
+        body: { principalType: 'user', principalEmail: 'u2@example.com', role: 'reader' },
+        user: { id: CURATOR },
+      },
+      res
+    );
+
+    expect(repos.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ dataLakeId: LAKE.id, principalId: 'u2', grantedByUserId: CURATOR })
+    );
     expect(repos.listByLake).toHaveBeenCalledTimes(1);
   });
 

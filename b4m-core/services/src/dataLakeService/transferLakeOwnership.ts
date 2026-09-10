@@ -183,8 +183,8 @@ export const transferLakeOwnership = async (
       // gate (where this lake was resolved) and this final write - several awaits apart: grant
       // upserts, user and org lookups - would no-op with no exception for the catch to see. The
       // window is one round-trip wider than when this function resolved the lake itself. Checking
-      // the result is what
-      // makes "never fails silently" true for BOTH shapes, not just the throwing one.
+      // the result is what makes "never fails silently" true for BOTH shapes, not just the
+      // throwing one.
       const stamped = await db.dataLakes.update({ id: lake.id, ...stamp });
       if (!stamped) {
         warn('[dataLakes] ownership transferred but the lake was not found for the actor stamp', {
