@@ -244,7 +244,18 @@ jobs:
           # above: with the scrub on, the Claude CLI requires bwrap and its installer
           # aborts without it. The runner image does not ship bubblewrap, so dropping
           # this step silently reds every review with "Failed to install Claude Code".
-          sudo apt-get update
+          # Retried because one mirror timeout here would red the review just as hard
+          # as the install failure this step exists to prevent.
+          for attempt in 1 2 3; do
+            if sudo apt-get update; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::apt-get update failed after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
           sudo apt-get install -y bubblewrap
 
       - name: Run /bot-review
