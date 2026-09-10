@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
@@ -71,6 +72,10 @@ const handler = baseApi().post(
       // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
       // resolved file list) - called only when the service actually finds a prefix-arm join/leave.
       assertWriteScope: () => assertDataLakeWriteScope(req),
+      // Matches every other audited config-write door (#1917): undefined for a session caller,
+      // the key's principal for a `b4m_live_` caller - so a toggle that auto-activates a draft
+      // lake attributes the History row to the key, not the human.
+      auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
       logger: req.logger,
     });
 

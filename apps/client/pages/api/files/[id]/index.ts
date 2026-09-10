@@ -178,6 +178,9 @@ const handler = baseApi()
             // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived
             // from the user document this service is handed.
             administeredOrgIds: ctx.administeredOrgIds,
+            // Same reason the DELETE handler below attaches one: a tag write here can flip a draft
+            // lake to active, and this route accepts a `b4m_live_` key.
+            auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {

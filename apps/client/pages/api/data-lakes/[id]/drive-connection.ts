@@ -69,14 +69,27 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
  * findLakeConnection: `enabled` is a poll switch, not a disconnect, and only the DELETE here or the
  * phase-2 purge actually revokes.
  *
- * Org owner/manager (or platform admin) only. The connect + ingest trigger lives in POST
+ * DELETE is org owner/manager (or platform admin) only. GET is looser on purpose: a personal lake
+ * genuinely has no connection to report, so it resolves 200 with a null connection rather than
+ * 404 - a caller needs to tell "no connection" from "can't tell" apart, and conflating them into
+ * one 404 broke every consumer that renders differently for the two (see useLakeDriveConnection).
+ * A 404 from GET therefore always means a real failure: the lake doesn't exist, or the caller
+ * lacks org owner/manager access. The connect + ingest trigger lives in POST
  * /api/data-lakes/drive-sync; this route is the per-lake status + disconnect surface.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
-    const { lakeId, organizationId } = await resolveOrgLake(req);
-    const conn = await findLakeConnection(lakeId, organizationId);
+    const { id } = req.query as { id: string };
+    const lake = await dataLakeRepository.findById(id);
+    if (!lake) {
+      throw new NotFoundError('Data lake not found');
+    }
+    if (!lake.organizationId) {
+      return res.json({ connection: null });
+    }
+    await verifyOrgAccess(req.user, lake.organizationId);
+    const conn = await findLakeConnection(lake.id, lake.organizationId);
     return res.json({ connection: conn ? toSafeConnection(conn) : null });
   })
   .delete(async (req: Request, res) => {

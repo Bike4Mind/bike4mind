@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeBatchDocument, IDataLakeDocument, TaxonomyTag } from '@bike4mind/common';
+import { folderTagForFile, submittedTagPrefix } from '@bike4mind/common';
 import { applyTaxonomySuggestions } from './applyTaxonomySuggestions';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -96,6 +97,45 @@ describe('applyTaxonomySuggestions', () => {
     expect(updates[0].id).toBe('f1');
     const names = updates[0].tags.map((t: { name: string }) => t.name).sort();
     // Folder tag kept (unchanged), category tag added - never duplicated.
+    expect(names).toEqual(['acme:legal', 'acme:type:contract']);
+  });
+
+  it('lands under one namespace for a lake whose stored prefix has edge whitespace (#2467)', async () => {
+    // The end-to-end shape of the bug, for a lake row predating the create schema's trim.
+    //
+    // The upload pipeline normalizes before it builds anything - `runUploadPipeline` passes
+    // `submittedTagPrefix(config.tagPrefix)` to folderTagForFile, and in append mode
+    // config.tagPrefix is seeded from lake.fileTagPrefix - so the file already carries
+    // `acme:legal`, under the same form every read arm matches. This door was the one on the
+    // other side: it built from the RAW stored value, so the taxonomy tags it added landed under
+    // ` acme:` while the folder tag beside them stayed under `acme:`. One file, two namespaces,
+    // and the taxonomy half invisible to `satisfiesTagPrefix`, the tag-tree roots and the
+    // tag-count aggregates. Deriving the fixture from the pipeline's own normalizer is what pins
+    // that asymmetry - hand-writing the name would hide which side was wrong.
+    //
+    // The folder-tag subtraction did NOT break pre-fix: it compared the door's own two raw
+    // computations against each other, so it stayed self-consistent while both were wrong.
+    const RAW_PREFIX = ' acme:';
+    const uploadedFolderTags = folderTagForFile('legal/vendor.pdf', submittedTagPrefix(RAW_PREFIX));
+    expect(uploadedFolderTags).toEqual([{ name: 'acme:legal', strength: 1 }]);
+
+    const adapters = makeAdapters({
+      lakeDoc: lake({ fileTagPrefix: RAW_PREFIX }),
+      files: [file({ tags: uploadedFolderTags })],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    const names = updates[0].tags.map((t: { name: string }) => t.name).sort();
+    // Every tag under `acme:`, the form the read arms and the tag-count aggregates match, and
+    // exactly ONE folder tag - the pre-fix door also emitted " acme:legal" here.
     expect(names).toEqual(['acme:legal', 'acme:type:contract']);
   });
 

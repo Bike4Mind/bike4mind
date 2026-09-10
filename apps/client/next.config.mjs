@@ -108,6 +108,16 @@ const nextConfig = {
     '/api/agents/[id]/missions': [ISOLATED_VM_PREBUILDS],
   },
 
+  // DORMANT under Turbopack, which is what `next build` uses here: Next only applies these in
+  // collect-build-traces, and build/index.js gates that on `bundler !== Turbopack`. Measured -
+  // a swept build with this set still copied 545 *.test.ts into the standalone output. Kept as
+  // the floor for a webpack fallback; the working guards are the postbuild prune and
+  // apps/client/scripts/check-standalone-tree.mjs. Globs resolve against this package.
+  // Deliberately NOT public/**: server/help/retrieval.ts reads public/help-content per request.
+  outputFileTracingExcludes: {
+    '**/*': ['e2e/**', '**/*.test.ts?(x)'],
+  },
+
   transpilePackages: [
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',

@@ -45,9 +45,10 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
 /**
  * Whether to offer the Drive connect control for a lake.
  *
- * Connecting Drive is an org-lake, owner/manager capability server-side: the status route 404s on
- * a personal lake and 403s for a non-manager, so offering it in either case is a control that can
- * only fail. Both render sites (SelectedLakeHeader and the wizard's SourceSelectionStep) derive
+ * Connecting Drive is an org-lake, owner/manager capability server-side: a personal lake has no org
+ * to hold the connection (the status route resolves `connection: null` for it) and the status route
+ * 404s for a non-manager, so offering it in either case is a control that can only fail. Both render
+ * sites (SelectedLakeHeader and the wizard's SourceSelectionStep) derive
  * the gate here - they drifted once when each held its own copy of the expression.
  *
  * Absent fields fail closed: an unknown scope or manage status renders no control.

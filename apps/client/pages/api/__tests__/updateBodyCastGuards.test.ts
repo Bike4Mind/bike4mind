@@ -375,6 +375,10 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
   // The canonical `extraData` is a closed object, so the key is stripped before the `$set` rather
   // than reaching the cast -- these pin that, since a `z.record` would forward it.
   describe('agents/[id] share arrays', () => {
+    // `toEqual({})` rather than `not.toHaveProperty(key)`: the stripped key leaves `extraData`
+    // PRESENT and empty rather than absent (measured, not assumed), and only the exact form tells
+    // those two apart. Which one it is matters, because this is a `$set` of the whole array: an
+    // `extraData: {}` in the payload overwrites whatever was stored, where an absent key leaves it.
     it.each([
       ['a Map key containing a dot', 'a.b'],
       ['a Map key starting with a dollar', '$x'],
@@ -386,7 +390,7 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
       expect(outcome).toBeNull();
       expect(wrote).toBe(true);
       const written = (payload as { users?: { extraData?: Record<string, unknown> }[] })?.users;
-      expect(written?.[0]?.extraData ?? {}).not.toHaveProperty(key);
+      expect(written?.[0]?.extraData).toEqual({});
     });
 
     it.each([
@@ -422,6 +426,7 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
     // nothing into it: an undeclared key is stripped, and the declared one only accepts a form JSON
     // cannot carry. That is the accepted cost of reusing the canonical schema (nothing on Agent
     // reads `extraData` today), pinned here so it stays a deliberate tradeoff rather than a surprise.
+    // The key itself does still reach the `$set`, as `{}`, so such a body clears any stored value.
     it('strips even a legal key from users[].extraData, so a JSON body writes nothing into it', async () => {
       const { outcome, payload, wrote } = await run(byRoute('agents/[id]'), {
         users: [{ userId: 'u1', permissions: ['read'], extraData: { foo: 1 } }],
@@ -430,7 +435,7 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
       expect(outcome).toBeNull();
       expect(wrote).toBe(true);
       const written = (payload as { users?: { extraData?: Record<string, unknown> }[] })?.users;
-      expect(written?.[0]?.extraData ?? {}).not.toHaveProperty('foo');
+      expect(written?.[0]?.extraData).toEqual({});
     });
 
     it('rejects users[].extraData.lastExportDate as an ISO string, the only form JSON can send', async () => {
@@ -442,6 +447,24 @@ describe('update-payload cast guards - a wrong-typed body value is a client erro
       const sent400 = status.mock.calls.some(call => call[0] === 400);
       expect(threw400 || sent400).toBe(true);
       expect(wrote).toBe(false);
+    });
+
+    // Every strip above is on `users[]`; `groups[]` had no payload assertion at all, and its strip
+    // is load-bearing the same way. An `_id` that survived validation reaches `findOneAndUpdate`'s
+    // `_castUpdate` as `CastError path='groups' kind='embedded'` (verified on 8.24.1), and that
+    // path is not `_id`, so `errorHandler` does not answer 404 for it -- it is a 500 at `error`
+    // level on a caller-supplied key. `toEqual` on the whole entry rather than a `not.toHaveProperty`,
+    // because the `$set` replaces the array outright: anything left in the written entry is a value
+    // that reaches mongoose uncast.
+    it('strips a junk _id from a groups[] entry instead of forwarding it to the $set', async () => {
+      const { outcome, payload, wrote } = await run(byRoute('agents/[id]'), {
+        groups: [{ groupId: 'g1', permissions: ['read'], _id: 'junk' }],
+      });
+
+      expect(outcome).toBeNull();
+      expect(wrote).toBe(true);
+      const written = (payload as { groups?: Record<string, unknown>[] })?.groups;
+      expect(written?.[0]).toEqual({ groupId: 'g1', permissions: ['read'] });
     });
 
     it('still accepts a well-formed share pair', async () => {
