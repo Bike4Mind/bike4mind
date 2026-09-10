@@ -1,5 +1,5 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, InviteType, Permission } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
 import {
   AdminSettings,
   ApiKey,
@@ -21,7 +21,7 @@ import {
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@server/models/Subscription';
-import { questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import crypto from 'crypto';
@@ -33,6 +33,12 @@ import { Resource } from 'sst';
 import { resolveFieldLimits } from './dataSubscribeFieldLimits';
 
 const HARD_LIMIT = 200;
+
+// Server-side ceiling (ms) on the one-time initial fetch. The filter is client-authored, so even
+// with the operator allow-list on DataSubscribeRequestAction a badly-shaped-but-legal filter can
+// be slow; this makes the database abort it instead of letting it pin a pooled connection for the
+// whole Lambda timeout.
+const INITIAL_FETCH_MAX_TIME_MS = 5_000;
 
 // Adds a subscription for the given collection/query; the subscriber-fanout package
 // handles the actual change-stream delivery. Query is scoped to the user's ability here
@@ -83,14 +89,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   } else if (collectionName === Invite.collection.collectionName) {
     const canShareProjectsQuery = accessibleBy(userAbility, Permission.share).ofType(Project);
     const shareableProjectIds = await Project.find(canShareProjectsQuery).distinct('_id');
-    scope = {
-      $or: [
-        { 'recipients.pending': { $in: [user.email] } },
-        {
-          $and: [{ type: InviteType.Project }, { documentId: { $in: shareableProjectIds.map(id => id.toString()) } }],
-        },
-      ],
-    };
+    scope = inviteSubscriptionScope(
+      user.email,
+      shareableProjectIds.map(id => id.toString())
+    );
   } else {
     // To make a collection subscribeable, add it to this scope mapping:
     scope = {
@@ -120,7 +122,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // as `fields`, which is what the separate subscriber-fanout service reads to build its own
   // change-stream projection - so this exclusion applies to live update/insert events fanout
   // relays, not just the one-time fetchInitialData query above.
-  const fieldLimits = resolveFieldLimits(collectionName, Quest.collection.collectionName, isOwnQuestSession);
+  const fieldLimits = resolveFieldLimits(collectionName, {
+    questCollectionName: Quest.collection.collectionName,
+    organizationCollectionName: Organization.collection.collectionName,
+    isQuestOwner: isOwnQuestSession,
+    isPlatformAdmin: !!user.isAdmin,
+  });
 
   let scopedFields: undefined | Record<string, boolean | number> =
     (fields || fieldLimits) &&
@@ -169,7 +176,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const scopedQuery = { $and: [query, scope] };
   const findPromise = collection
     .find(scopedQuery, scopedFields ?? undefined)
-    .setOptions({ includeDeleted: true, limit: HARD_LIMIT });
+    .setOptions({ includeDeleted: true, limit: HARD_LIMIT, maxTimeMS: INITIAL_FETCH_MAX_TIME_MS });
   const normalizedQuery = findPromise.getQuery();
   const subscriber = { endpoint, connectionId, clientId: clientSubscriberId, attempts: 0 };
 

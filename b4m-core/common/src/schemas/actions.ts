@@ -10,6 +10,7 @@ import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
+import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -20,7 +21,14 @@ export const DataSubscribeRequestAction = z.object({
   accessToken: z.string().optional(),
   subscriptionId: z.string(),
   collectionName: z.string(),
-  query: z.looseObject({}),
+  // The server forwards this filter to Mongo and persists it for subscriber-fanout to replay, so
+  // the operator allow-list is enforced at parse time - before any query runs or any
+  // QuerySubscription is written. See subscriptionQueryFilter.ts for what it refuses and why.
+  query: z.looseObject({}).superRefine((filter, ctx) => {
+    for (const key of findDisallowedSubscriptionFilterKeys(filter)) {
+      ctx.addIssue({ code: 'custom', message: `Disallowed subscription filter operator: ${key}` });
+    }
+  }),
   fields: z.looseObject({}),
   fetchInitialData: z.boolean().prefault(true).optional(),
   clientId: z.string().optional(),
