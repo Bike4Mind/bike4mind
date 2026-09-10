@@ -31,6 +31,10 @@ const HISTORY_COUNT = 20;
 // one case worth bounding before it reaches a whole Slack channel.
 const MAX_ERROR_REPLY_LENGTH = 300;
 
+function capErrorReply(reply: string): string {
+  return reply.length > MAX_ERROR_REPLY_LENGTH ? `${reply.slice(0, MAX_ERROR_REPLY_LENGTH)}...` : reply;
+}
+
 import { SlackClient } from './SlackClient';
 import { ChatCompletionInvoke } from '@bike4mind/services';
 import { createLoadingBar } from './utils/loadingBar';
@@ -40,7 +44,10 @@ import { createLoadingBar } from './utils/loadingBar';
  * @bike4mind/slack package boundary if @bike4mind/common ever resolves as two distinct
  * module realms - the same reason `isZodError` and `isChunkClaimLostError`
  * (b4m-core/common/src/errors.ts) avoid a bare instanceof. Duck-type on `statusCode`,
- * which every HTTPError subclass sets, as a realm-safe fallback.
+ * which every HTTPError subclass sets, as a realm-safe fallback. The other error shapes
+ * most likely to reach this call path don't false-positive: AWS SDK v3 keeps its status
+ * under `$metadata.httpStatusCode` (not top-level `.statusCode`), axios under
+ * `.response.status`, and the Mongoose/MongoDB driver under `.code`.
  */
 function isHttpError(err: unknown): err is HTTPError {
   return err instanceof HTTPError || typeof (err as { statusCode?: unknown } | null)?.statusCode === 'number';
@@ -457,10 +464,8 @@ export class CommandHandler {
           // the same string) but cap the length: a curated message is always short, so this
           // only bites the unclassified case, keeping a large/unexpected internal error from
           // dumping wholesale into a Slack channel that may not be private.
-          if (!updatedQuest.reply) return 'Sorry, I encountered an error processing your request.';
-          return updatedQuest.reply.length > MAX_ERROR_REPLY_LENGTH
-            ? `${updatedQuest.reply.slice(0, MAX_ERROR_REPLY_LENGTH)}...`
-            : updatedQuest.reply;
+          if (!updatedQuest.reply?.trim()) return 'Sorry, I encountered an error processing your request.';
+          return capErrorReply(updatedQuest.reply);
         }
 
         // Wait before polling again
@@ -475,9 +480,11 @@ export class CommandHandler {
       // HTTPError subclasses (BadRequestError, ForbiddenError, InternalServerError, ...)
       // are thrown with a message already written to be shown to the caller - surface it
       // so a future failure names what broke. Anything else stays generic rather than
-      // leaking an unreviewed internal error message to a public Slack channel.
+      // leaking an unreviewed internal error message to a public Slack channel. Capped
+      // like the poll-error branch above: isHttpError's duck-type fallback matches any
+      // error with a numeric statusCode, not just the intended HTTPError hierarchy.
       if (isHttpError(error) && error.message) {
-        return error.message;
+        return capErrorReply(error.message);
       }
       return 'Sorry, I encountered an error processing your request.';
     }
