@@ -544,7 +544,11 @@ export function usableObjectIds(
   const all = ids ?? [];
   const usable = all.filter(id => mongoose.isObjectIdOrHexString(id));
   if (usable.length !== all.length) {
+    // `usable: 0` against a non-empty `received` is the case worth watching: callers drop the arm
+    // entirely rather than emit an `$in: []`, so access narrows with nothing else marking it.
     logger.warn(`[${label}] skipping ids that cannot address a row by _id`, {
+      received: all.length,
+      usable: usable.length,
       skipped: all.filter(id => !mongoose.isObjectIdOrHexString(id)),
     });
   }

@@ -303,8 +303,14 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     // failed-read path above, and it owes consumers the same admission. Re-checked here (not just
     // in the repo) so the warn carries the request logger.
     const reachIds = [...reach.grantedLakeIds, ...Object.values(reach.orgGrantedLakes).flat()];
-    if (usableObjectIds(reachIds, 'getDynamicDataLakeAccess.reach', context.logger).length !== reachIds.length) {
+    const usableReachIds = usableObjectIds(reachIds, 'getDynamicDataLakeAccess.reach', context.logger);
+    if (usableReachIds.length !== reachIds.length) {
       lakeViewComplete = false;
+      context.logger?.warn('[lake-grant-guard] lake view incomplete: unusable grant id dropped', {
+        received: reachIds.length,
+        usable: usableReachIds.length,
+        dropped: reachIds.length - usableReachIds.length,
+      });
     }
     try {
       const dbLakes = await context.db.dataLakes.findActiveByUserTagsAndEntitlements(

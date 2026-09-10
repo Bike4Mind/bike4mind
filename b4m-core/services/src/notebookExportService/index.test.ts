@@ -341,6 +341,8 @@ describe('notebook export', () => {
 
     expect(uploaded).toHaveLength(1);
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('[knowledge]'), {
+      received: 1,
+      usable: 0,
       skipped: ['not-an-objectid'],
     });
   });
