@@ -17,6 +17,15 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toContain('rather than denying it');
   });
 
+  // The observed escalation ran a correctly-scoped absence on into a verdict on the user's claim
+  // ("the premise appears to be fabricated"). The fabricated-absence clause above did not reach it -
+  // its enumeration is entity-shaped and a claimed RESULT is none of those - so this pins the sentence
+  // that does. Text only; the behaviour is measured in evals/groundedNoInvention.
+  it('forbids ruling on a premise the question asserts - absence is not a verdict', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/specific result,\s+engagement, or event/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/never call their premise false, fabricated,\s+invented, or\s+made up/);
+  });
+
   // Guards the round-2 fix for the multi-turn laundering loophole: grounding is scoped to labeled
   // Memory/Reference facts, and an earlier conversation claim (including the user's own) is explicitly
   // NOT such a fact - so a reword can't silently reopen "user asserted it a turn ago, so it's grounded."

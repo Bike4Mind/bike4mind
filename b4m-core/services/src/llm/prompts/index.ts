@@ -32,6 +32,19 @@
  * forbids that too: absence from retrieval is absence of information, not evidence the thing is unreal.
  * Kept as one shared const so the surfaces cannot drift apart.
  *
+ * The premise-challenge shape is the same slide with the specific supplied by the QUESTION - "how did
+ * <vendor> get <N>% faster with us". Retrieval returns nothing, the model scopes the absence correctly
+ * for a sentence or two, then escalates past abstention into a verdict on the claim ("the premise
+ * appears to be fabricated"). The clause above did not reach it: its enumeration is entity-shaped
+ * (product, capability, partnership, offering) and a claimed RESULT is none of those, so the closing
+ * sentence names that case directly. It is the worst-travelling form of the failure - it reads as
+ * adjudicated rather than merely unknown, and a rep repeats it to the prospect it was about.
+ *
+ * That sentence forbids a CHARACTERISATION, not a computation, so it leaves the derive licence below
+ * untouched: nothing in it tells the model to stop doing arithmetic in front of the user. The
+ * behavioural half is measured in evals/groundedNoInvention, whose `derive/` case exists to catch a
+ * future reword that does cross that line.
+ *
  * A MEASURED BEHAVIOUR DEPENDS ON THIS RULE'S SCOPE. `triage_router` STEP 1 (apps/client/server/utils/
  * systemPrompts/defaults.ts) tells the model to DERIVE figures the request supplies the inputs for -
  * size a problem, carry the arithmetic - and to label them as derived. That is deliberately outside
@@ -55,7 +68,11 @@ export const GROUNDED_NO_INVENTION_RULE =
   'Absence from the retrieved content means you lack information about something, not that it is absent ' +
   'from the world: never state or imply that a product, capability, partnership, or offering does not ' +
   'exist, is not real, or is not provided merely because it is not present here - say it is not in the ' +
-  'retrieved content (and, where useful, where it might be confirmed) rather than denying it.';
+  'retrieved content (and, where useful, where it might be confirmed) rather than denying it. ' +
+  'That holds for a claim the question itself asserts. When the user asks about a specific result, ' +
+  'engagement, or event the retrieved content does not contain, report that it is not in the retrieved ' +
+  'content and leave the claim itself open - never call their premise false, fabricated, invented, or ' +
+  'made up. Reporting the limits of what you retrieved is not a ruling on what happened.';
 
 /**
  * Shared prompt snippet for preview-first tool confirmation rules.
