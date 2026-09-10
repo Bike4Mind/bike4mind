@@ -40,7 +40,8 @@ vi.mock('@bike4mind/services', () => ({ userApiKeyService: { rotateUserApiKey, r
 const userApiKeyRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const organizationRepository = vi.hoisted(() => ({ findIdsAdministeredBy: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository }));
+const agentRepository = vi.hoisted(() => ({ findById: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository, agentRepository }));
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
 
@@ -65,7 +66,10 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
     expect(rotateUserApiKey).toHaveBeenCalledWith(
       'admin-user',
       { keyId: 'key-1' },
-      expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
+      // agents is threaded too - the embed-key re-ownership guard needs it reachable.
+      expect.objectContaining({
+        db: expect.objectContaining({ organizations: organizationRepository, agents: agentRepository }),
+      })
     );
   });
 
