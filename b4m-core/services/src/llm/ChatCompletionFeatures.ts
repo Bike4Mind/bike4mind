@@ -2544,7 +2544,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
         // No topScore: nothing was scored, so `topScore` is still its -1 sentinel and persisting
         // that would read as a real (very poor) similarity rather than as an absent one.
-        recordRetrieval('not_indexed', dataLakeTags, { chunks: 0, chars: 0 });
+        // pool.length is 0 here too (scoredCount === 0 means nothing ever cleared into it), but
+        // read off pool rather than hardcoded so this stays true if the guard above it ever moves.
+        recordRetrieval('not_indexed', dataLakeTags, { chunks: 0, chars: 0, preRelativeFloorCandidates: pool.length });
         return this.noContextMessages('unavailable');
       }
       const ranked = pool.sort(compareForcedRetrievalCandidates);
@@ -2649,6 +2651,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           chunks: 0,
           chars: 0,
           ...(scoredCount > 0 ? { topScore } : {}),
+          // The turn the field exists for: candidates cleared the absolute floor (ranked.length)
+          // but the relative floor (or a non-positive char budget) let none of them through as
+          // `chunks` - the loop below breaks before its first push whenever the budget is <= 0.
+          preRelativeFloorCandidates: ranked.length,
         });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
@@ -2662,6 +2668,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         chunks: sections.length,
         chars: used,
         ...(scoredCount > 0 ? { topScore } : {}),
+        // ranked.length vs sections.length is the relative floor's own effect: the gap between them
+        // is candidates the floor (or the char budget) trimmed, not candidates the corpus lacked.
+        preRelativeFloorCandidates: ranked.length,
       });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".

@@ -515,12 +515,23 @@ export const RetrievalSummarySchema = z.object({
    *
    * Date-bound any rollup, the same caveat `mode` documents on itself: turns recorded before this
    * landed carry no volume, and no backfill is possible - the volume of a past turn is gone.
+   *
+   * `preRelativeFloorCandidates` is the ONE field here that is not "what reached the model": it is
+   * `ranked.length` in KnowledgeRetrievalFeature, the candidate count AFTER the absolute similarity
+   * floor but BEFORE the relative floor (PR #2567) trims it to what `chunks` counts. It exists so a
+   * low `chunks` count is diagnosable - a small corpus and a relative floor that trimmed a large
+   * pool both end in the same `chunks` number, and only this field tells them apart. Optional
+   * because only forced retrieval computes a ranked pool to trim; a surface with no relative-floor
+   * concept of its own (lake memory, the knowledge tools) never writes it, and its absence must not
+   * read as zero candidates. SUMMED across surfaces/turns like `chunks`, for the same
+   * sum-of-completions reason, with the same absent-is-not-zero handling as `topScore`.
    */
   injected: z
     .object({
       chunks: z.number(),
       chars: z.number(),
       topScore: z.number().optional(),
+      preRelativeFloorCandidates: z.number().optional(),
     })
     .optional(),
   /**

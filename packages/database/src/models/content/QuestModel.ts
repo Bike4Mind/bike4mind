@@ -57,10 +57,15 @@ const LakeMemorySchema = subSchema({
 // is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
 // `default: undefined` on the path below is inert for a single nested subdocument (nothing
 // vivifies it) and kept only for symmetry with the siblings, where it does work.
+//
+// preRelativeFloorCandidates: optional like topScore, and for the same reason - only forced
+// retrieval's ranked pool has a relative floor to trim, so no other surface ever writes it. See
+// the field's own comment in promptMeta.ts.
 const InjectedVolumeSchema = subSchema({
   chunks: { type: Number, required: true },
   chars: { type: Number, required: true },
   topScore: { type: Number, required: false },
+  preRelativeFloorCandidates: { type: Number, required: false },
 });
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress

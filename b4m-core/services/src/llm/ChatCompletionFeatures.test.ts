@@ -2339,6 +2339,15 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(quest.promptMeta?.retrieval?.injected?.topScore).toBeCloseTo(1.0, 5);
   });
 
+  it('records the pre-floor candidate count so the relative floor own effect is measurable (#2571)', async () => {
+    // All four scores clear the 0.75 absolute floor and enter the ranked pool, but the relative
+    // floor at its shipped default (85% of top score) keeps only two of them (chunks: 2 above).
+    // Without this field, that turn is byte-identical in promptMeta to a corpus that only ever
+    // HAD two candidates to begin with - which is exactly the ambiguity #2571 was filed about.
+    const { quest } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
+    expect(quest.promptMeta?.retrieval?.injected?.preRelativeFloorCandidates).toBe(4);
+  });
+
   it('treats an out-of-range floor percent as unusable and keeps the shipped default', async () => {
     // Defense-in-depth, NOT a production-reachable path - the same standing as positiveIntOr's own
     // branches in the #1831 suite above. Both read paths run the setting's schema (`max: 100`)
@@ -3058,7 +3067,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
           forcedSkipReason?: string;
           surfaces: string[];
           dataLakeTags: string[];
-          injected?: { chunks: number; chars: number; topScore?: number };
+          injected?: { chunks: number; chars: number; topScore?: number; preRelativeFloorCandidates?: number };
         };
       }
     )?.retrieval;
@@ -3108,7 +3117,8 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // A recorded zero, not an unknown: the scan ran to completion, so nothing was injected and
     // that is a fact. `topScore` must be ABSENT - it is still the -1 sentinel here, and persisting
     // it would read as a real (terrible) similarity rather than as no comparison at all.
-    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0 });
+    // preRelativeFloorCandidates: 0 too - nothing was ever scored, so nothing entered the pool.
+    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0, preRelativeFloorCandidates: 0 });
   });
 
   it('records ok when the library was scanned and nothing cleared the similarity floor', async () => {
@@ -3122,7 +3132,9 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // THE case this field exists for: 'ok' alone made a fully-starved turn byte-identical to one
     // that injected its whole budget. `topScore: 0` is the diagnostic - the best candidate was
     // compared and scored 0, i.e. it missed the floor rather than never being looked at.
-    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0, topScore: 0 });
+    // preRelativeFloorCandidates: 0 - the score missed the ABSOLUTE floor, so it never reached the
+    // ranked pool at all; the relative floor never got a candidate to trim.
+    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0, topScore: 0, preRelativeFloorCandidates: 0 });
     // Still abstains to the user; 'ok' describes the retrieval, not the answer.
     expect(messages[0]?.content).toContain('does not cover this');
   });
@@ -3138,7 +3150,14 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // The other half of the pair: a grounded turn reports the volume it grounded on. `chars` is
     // the chunk text only ('text fileA'), never the heading, so it is comparable to the knowledge
     // tools' number. Query and chunk vectors are identical here, hence a topScore of 1.
-    expect(retrieval?.injected).toEqual({ chunks: 1, chars: 'text fileA'.length, topScore: 1 });
+    // preRelativeFloorCandidates: 1 - the single candidate cleared both floors, so nothing was
+    // trimmed and the pre- and post-floor counts agree.
+    expect(retrieval?.injected).toEqual({
+      chunks: 1,
+      chars: 'text fileA'.length,
+      topScore: 1,
+      preRelativeFloorCandidates: 1,
+    });
     expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
   });
 

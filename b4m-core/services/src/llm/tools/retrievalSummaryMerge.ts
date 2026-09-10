@@ -42,10 +42,18 @@ function mergeInjected(
   // Max over only the sides that HAVE a score: an absent topScore means "this surface has no
   // comparable similarity to contribute", not zero.
   const scores = [existing.topScore, incoming.topScore].filter((v): v is number => v !== undefined);
+  // Sum over only the sides that HAVE a count, same reasoning as topScore: only forced retrieval's
+  // ranked pool has one to report, and an absent side must not turn a real count into a smaller sum.
+  const preFloorCandidates = [existing.preRelativeFloorCandidates, incoming.preRelativeFloorCandidates].filter(
+    (v): v is number => v !== undefined
+  );
   return {
     chunks: existing.chunks + incoming.chunks,
     chars: existing.chars + incoming.chars,
     ...(scores.length ? { topScore: Math.max(...scores) } : {}),
+    ...(preFloorCandidates.length
+      ? { preRelativeFloorCandidates: preFloorCandidates.reduce((sum, v) => sum + v, 0) }
+      : {}),
   };
 }
 
@@ -77,13 +85,15 @@ function mergeInjected(
  * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
- * - injected: chunks and chars SUM, topScore is the max. The only NON-IDEMPOTENT rule here, and
- *   safe only because every write site emits a delta once per completed search - merging the same
- *   delta twice would double the volume, so a new writer must not re-emit an accumulated value.
- *   Summing is what the field means: total volume the model received this turn, across surfaces
- *   and across repeat knowledge-tool calls. An absent side contributes NOTHING rather than a
- *   zero, so a surface with no volume to report cannot turn another's real number into a starve,
- *   and an absent topScore never defaults to 0 - that would outrank a real negative cosine.
+ * - injected: chunks and chars SUM, topScore is the max, preRelativeFloorCandidates SUMS like
+ *   chunks (only over the sides that have one - see mergeInjected). The only NON-IDEMPOTENT rule
+ *   here, and safe only because every write site emits a delta once per completed search - merging
+ *   the same delta twice would double the volume, so a new writer must not re-emit an accumulated
+ *   value. Summing is what the field means: total volume the model received this turn, across
+ *   surfaces and across repeat knowledge-tool calls. An absent side contributes NOTHING rather than
+ *   a zero, so a surface with no volume to report cannot turn another's real number into a starve,
+ *   and an absent topScore or preRelativeFloorCandidates never defaults to 0 - that would outrank a
+ *   real negative cosine, or claim a surface with no ranked pool of its own ranked zero candidates.
  *
  * The one-sided returns below are a verbatim passthrough, and both injection sites emit a PARTIAL
  * summary (ids with no count; `attempted` with no `outcome`) meant only as a merge delta. So a

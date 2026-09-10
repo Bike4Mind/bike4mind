@@ -120,9 +120,9 @@ const FULL_PROMPT_META = {
     surfaces: ['knowledgeBaseSearch', 'lake-memory'],
     dataLakeTags: ['datalake:x'],
     // The parity test only checks that a Zod path has a Mongoose declaration; this round trip is
-    // what covers the BSON-type half, so a Number-vs-String slip on any of these three fails here
+    // what covers the BSON-type half, so a Number-vs-String slip on any of these four fails here
     // rather than shipping as a field that saves and then fails its Zod re-parse on read.
-    injected: { chunks: 5, chars: 1300, topScore: 0.88 },
+    injected: { chunks: 5, chars: 1300, topScore: 0.88, preRelativeFloorCandidates: 8 },
     // Deliberately `false`, not `true`: a falsy leaf is where a Mongoose/Zod mismatch silently
     // drops a value, and `false` is this field's load-bearing case (the A/B's control arm).
     knowledgeBaseGuidanceInjected: false,

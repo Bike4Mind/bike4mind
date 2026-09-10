@@ -213,6 +213,40 @@ describe('mergeRetrievalSummary', () => {
       expect(merged?.injected && 'topScore' in merged.injected).toBe(false);
     });
 
+    describe('preRelativeFloorCandidates', () => {
+      it('sums across surfaces, same as chunks', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, preRelativeFloorCandidates: 4 } }),
+          base({ injected: { chunks: 1, chars: 200, preRelativeFloorCandidates: 3 } })
+        );
+        expect(merged?.injected?.preRelativeFloorCandidates).toBe(7);
+      });
+
+      it('passes a one-sided count through without treating the other side as zero', () => {
+        // Only forced retrieval ever writes this field - a knowledge-tool surface reporting volume
+        // alongside it must not turn the absent side into a recorded 0.
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, preRelativeFloorCandidates: 4 } }),
+          base({ injected: { chunks: 1, chars: 200 } })
+        );
+        expect(merged?.injected).toEqual({ chunks: 3, chars: 600, preRelativeFloorCandidates: 4 });
+      });
+
+      it('omits the field entirely when neither side reports one', () => {
+        const merged = mergeRetrievalSummary(base({ injected: { chunks: 1, chars: 100 } }), base());
+        expect(merged?.injected).toEqual({ chunks: 1, chars: 100 });
+        expect(merged?.injected && 'preRelativeFloorCandidates' in merged.injected).toBe(false);
+      });
+
+      it('sums a recorded zero rather than treating it as absent', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 0, chars: 0, preRelativeFloorCandidates: 0 } }),
+          base({ injected: { chunks: 1, chars: 100, preRelativeFloorCandidates: 2 } })
+        );
+        expect(merged?.injected?.preRelativeFloorCandidates).toBe(2);
+      });
+    });
+
     it('keeps volume alongside a worse outcome from another surface', () => {
       const merged = mergeRetrievalSummary(
         base({ outcome: 'ok', surfaces: ['forced-retrieval'], injected: { chunks: 12, chars: 4000 } }),
