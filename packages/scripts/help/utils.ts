@@ -32,15 +32,21 @@ export const PUBLIC_HELP_CONTENT_DIR = 'public/help-content';
 export const ADMIN_HELP_CONTENT_DIR = 'app/generated/help-content-admin';
 
 /*
- * Keep both of the above plain string literals. Next's output-file tracing is what carries the
- * admin root into the standalone bundle: it statically resolves `path.join(process.cwd(), <this
- * constant>)` to a directory and traces the files under it, which is the only reason
- * `app/generated/help-content-admin/**` reaches a self-host image (the Dockerfile's runner stage
- * copies `.next/standalone`, `.next/static` and `public/`, and nothing copies `app/generated`).
- * Verified by inspecting `.next/server/pages/api/help/content.js.nft.json`, which lists all of the
- * admin articles by name alongside the public ones. Building either path from a runtime value
- * would defeat that analysis, and admin help would 404 in the container with nothing failing at
- * build time.
+ * Neither constant is statically resolvable at its read sites, and that is deliberate. Both server
+ * readers interpolate them into a template literal so that no content root ever reaches a `path.*`
+ * call: @vercel/nft cannot fold a `path.resolve()` whose base it does not know, and its fallback
+ * is to glob the entire app directory into the traced bundle - measured at 47 MB against Lambda's
+ * hard 250 MB ceiling. See `apps/client/server/help/contentPath.ts` for the full reasoning.
+ *
+ * The consequence is that nothing traces these directories implicitly any more. Both roots are
+ * declared in `outputFileTracingIncludes` in `apps/client/next.config.mjs`, and that declaration
+ * is now the ONLY thing carrying them into the Next server function - and, via `.next/standalone`,
+ * the only thing carrying the admin root into a self-host image (the Dockerfile's runner stage
+ * copies `.next/standalone`, `.next/static` and `public/`, so the public root arrives on its own
+ * but nothing copies `app/generated`).
+ *
+ * So a value changed here has to be changed in that glob too. Get it wrong and help content 404s
+ * at runtime with nothing failing at build time; `loadHelpContent` swallows the ENOENT.
  */
 
 /**
