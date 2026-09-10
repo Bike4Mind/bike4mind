@@ -671,6 +671,80 @@ describe('verifyCallback - OAuth create: username dedupe on collision', () => {
   });
 });
 
+describe('verifyCallback - OAuth create: unverified provider email is not persisted as login identity', () => {
+  it('does NOT persist the email on create when the provider marks it unverified', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'attacker' });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-attacker',
+      username: 'attacker',
+      emails: [{ value: 'victim@example.com', verified: false }],
+    });
+
+    // Sign-in still succeeds and the account is created, but WITHOUT the unverified
+    // email as its login identity - so it can't pre-seed a Stage-2 match key that a
+    // later verified sign-in for the same address would be auto-linked into.
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+  });
+
+  it('does NOT persist the email on create when the provider gives no verification signal', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'nosignal' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-nosignal',
+      username: 'nosignal',
+      emails: [{ value: 'victim@example.com' }], // no `verified` field
+    });
+
+    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+  });
+
+  it('DOES persist the email on create when the provider marks it verified (unchanged behavior)', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', email: 'real@example.com' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-real',
+      displayName: 'Real User',
+      emails: [{ value: 'real@example.com', verified: true }],
+    });
+
+    expect(mockCreate.mock.calls[0][0].email).toBe('real@example.com');
+  });
+
+  it('SAML create persists the email (IdP-attested, verified:true by construction)', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', email: 'saml-user@example.com' });
+
+    await runStandard(AuthStrategy.SAML, {
+      id: 'saml-nameid',
+      emails: [{ value: 'saml-user@example.com', verified: true }],
+    });
+
+    expect(mockCreate.mock.calls[0][0].email).toBe('saml-user@example.com');
+  });
+
+  it('creates an emailless account with a random username when the email is unverified and no username is given', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'user-abc12345' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-emailless',
+      emails: [{ value: 'victim@example.com', verified: false }],
+    });
+
+    const createArg = mockCreate.mock.calls[0][0];
+    expect(createArg.email).toBeUndefined();
+    // No username and no usable (verified) email local-part -> random fallback, no crash.
+    expect(createArg.username).toMatch(/^user-[a-f0-9]{8}$/);
+  });
+});
+
 describe('verifyCallback - Google "with params" callback signature', () => {
   it('strips the params arg and forwards profile + done correctly', async () => {
     mockFindOne.mockResolvedValueOnce(null);
