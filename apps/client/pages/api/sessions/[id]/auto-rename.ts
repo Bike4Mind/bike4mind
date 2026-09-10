@@ -12,7 +12,7 @@ const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }
 
   // Bind the caller-supplied session id to the caller before renaming. Outside the try
   // below so a 403/404 surfaces as-is instead of being remapped to a 500.
-  await assertSessionAccess(id, req.user?.id, 'write');
+  await assertSessionAccess(id, req.user!.id, 'write', req.user!.groups ?? []);
 
   try {
     // Get operations model

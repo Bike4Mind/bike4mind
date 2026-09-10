@@ -23,7 +23,7 @@ const handler = baseApi()
     const { diceSpec, sessionId } = RollRequestSchema.parse(req.body);
     req.logger.debug(`[DICE] Processing roll request: ${diceSpec} for session ${sessionId}`);
 
-    await assertSessionAccess(sessionId, req.user!.id, 'write');
+    await assertSessionAccess(sessionId, req.user!.id, 'write', req.user!.groups ?? []);
 
     const roll: number = rollDice(diceSpec);
     req.logger.debug(`[DICE] Roll result: ${roll}`);

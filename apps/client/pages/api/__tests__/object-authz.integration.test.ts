@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import jwt from 'jsonwebtoken';
+import { Types } from 'mongoose';
 
 const USER_A = 'user-a';
 const USER_B = 'user-b';
@@ -33,6 +34,7 @@ const {
   mockAgentFindAccessibleById,
   mockAutoName,
   mockGetOperationsModel,
+  mockQuestCreate,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindRotation: vi.fn(),
@@ -45,6 +47,7 @@ const {
   mockAgentFindAccessibleById: vi.fn(),
   mockAutoName: vi.fn(),
   mockGetOperationsModel: vi.fn(),
+  mockQuestCreate: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', async orig => {
@@ -67,6 +70,9 @@ vi.mock('@bike4mind/database', async orig => {
         findAccessibleById: (...a: unknown[]) => mockAgentFindAccessibleById(...a),
       },
     },
+    Quest: Object.assign(Object.create(actual.Quest as object), {
+      create: (...a: unknown[]) => mockQuestCreate(...a),
+    }),
     questRepository: {
       ...(actual.questRepository as object),
       findById: (...a: unknown[]) => mockQuestFindById(...a),
@@ -153,7 +159,10 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     // Authenticated user A: consented, non-system, current token version.
     mockFindById.mockResolvedValue({
       id: USER_A,
-      _id: USER_A,
+      // Distinct from `id` (a real ObjectId) so a `.id` -> `._id` mutation in any route becomes a
+      // deny-everyone gate and fails the positive controls below, instead of passing because the
+      // two held the same string.
+      _id: new Types.ObjectId('507f1f77bcf86cd799439099'),
       isSystem: false,
       isBanned: false,
       disputePending: false,
@@ -176,6 +185,7 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     mockAgentFindAccessibleById.mockResolvedValue(null);
     mockAutoName.mockResolvedValue({ id: SESSION_ID, userId: USER_A, name: 'Renamed' });
     mockGetOperationsModel.mockResolvedValue({ modelId: 'op-model', llm: { complete: vi.fn() } });
+    mockQuestCreate.mockResolvedValue({ _id: 'quest-new', sessionId: SESSION_ID, replies: ['You rolled a 20'] });
   });
 
   // Assert the error BODY, not just the status: the POST agents route has a second
@@ -246,7 +256,9 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     expect(res._getJSONData().error).toBe('Session not found');
   });
 
-  it('POST /api/ai/rapid-reply with a questId that resolves to nothing -> 404 Quest not found', async () => {
+  // A nonexistent questId and an existing-but-forbidden one must return the SAME 404 body, so quest
+  // existence is not a probing oracle: both surface as 'Session not found'.
+  it('POST /api/ai/rapid-reply with a questId that resolves to nothing -> 404 Session not found (no existence oracle)', async () => {
     mockQuestFindById.mockResolvedValue(null);
     const { req, res } = fire('POST', '/api/ai/rapid-reply', {
       questId: 'ghost',
@@ -255,7 +267,7 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     });
     await rapidReplyHandler(req, res);
     expect(res._getStatusCode()).toBe(404);
-    expect(res._getJSONData().error).toBe('Quest not found');
+    expect(res._getJSONData().error).toBe('Session not found');
   });
 
   // Positive control through the real chain: on the caller's OWN session the guard passes and the
@@ -310,6 +322,34 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_A, users: [] });
     const { req, res } = fire('POST', `/api/sessions/${SESSION_ID}/auto-rename`, {}, { id: SESSION_ID });
     await autoRenameHandler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  // Read-vs-write discrimination: session B shared to A read-only (a users[] entry with no
+  // 'update' permission). A read route passes; a write route denies. If any write route reverted
+  // to the default 'read' level, the rapid-reply leg here would flip to 200 and fail.
+  it('read-only sharee: GET agents -> 200 but POST rapid-reply -> 404 (write needs an update grant)', async () => {
+    mockSessionFindById.mockResolvedValue({
+      _id: SESSION_ID,
+      userId: USER_B,
+      users: [{ userId: USER_A, permissions: [] }],
+    });
+    const get = fire('GET', `/api/sessions/${SESSION_ID}/agents`, undefined, { id: SESSION_ID });
+    await agentsHandler(get.req, get.res);
+    expect(get.res._getStatusCode()).toBe(200);
+
+    const post = fire('POST', '/api/ai/rapid-reply', { sessionId: SESSION_ID, message: 'hi', model: 'm' });
+    await rapidReplyHandler(post.req, post.res);
+    expect(post.res._getStatusCode()).toBe(404);
+    expect(post.res._getJSONData().error).toBe('Session not found');
+  });
+
+  // Positive control for POST /api/roll: on the caller's OWN session the write gate passes and the
+  // request reaches Quest.create. A deny-everyone mutation would 404 this.
+  it('POST /api/roll on the caller-owned session -> 200 (guard passes, no over-denial)', async () => {
+    mockSessionFindById.mockResolvedValue({ _id: SESSION_ID, userId: USER_A, users: [] });
+    const { req, res } = fire('POST', '/api/roll', { diceSpec: '1d20', sessionId: SESSION_ID });
+    await rollHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
   });
 });
