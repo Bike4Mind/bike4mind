@@ -35,6 +35,12 @@ const h = vi.hoisted(() => {
     sessionFindById: vi.fn(async (id: string) =>
       id === SESSION_ID ? { _id: SESSION_ID, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] } : null
     ),
+    // filterReadableQuests resolves sessions in bulk and keys readability by `session.id`.
+    sessionFindAllByIds: vi.fn(async (ids: string[]) =>
+      ids
+        .filter(id => id === SESSION_ID)
+        .map(id => ({ id, _id: id, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] }))
+    ),
     planFindById: vi.fn(),
     questFind: vi.fn(() => ({
       lean: async () => [{ _id: 'q1', sessionId: SESSION_ID, reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
@@ -68,7 +74,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: { findOne: h.fabFileFindOne },
   fabFileRepository: { shareable: { findAccessibleById: h.findAccessibleById } },
   userRepository: { findById: h.findUserById },
-  sessionRepository: { findById: h.sessionFindById },
+  sessionRepository: { findById: h.sessionFindById, findAllByIds: h.sessionFindAllByIds },
   apiKeyRepository: {},
   adminSettingsRepository: {},
 }));
