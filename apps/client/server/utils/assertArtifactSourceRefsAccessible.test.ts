@@ -6,62 +6,80 @@ const OWNER = 'user-1';
 
 function deps(overrides: Partial<ArtifactRefAccessDeps> = {}): ArtifactRefAccessDeps {
   return {
-    // Default: the caller can access everything.
-    isAccessibleSession: vi.fn(async () => true),
-    getQuestSessionId: vi.fn(async () => 'session-accessible'),
+    // Default: the caller may write everything.
+    canUpdateSession: vi.fn(async () => true),
+    getQuestSessionId: vi.fn(async () => 'quest-session'),
     getArtifactOwner: vi.fn(async () => OWNER),
     ...overrides,
   };
 }
 
 describe('assertArtifactSourceRefsAccessible', () => {
-  it('passes when no refs are supplied (nothing to check)', async () => {
+  it('passes when no refs are supplied, and checks nothing', async () => {
     const d = deps();
     await expect(assertArtifactSourceRefsAccessible(OWNER, {}, d)).resolves.toBeUndefined();
-    expect(d.isAccessibleSession).not.toHaveBeenCalled();
+    expect(d.canUpdateSession).not.toHaveBeenCalled();
+    expect(d.getQuestSessionId).not.toHaveBeenCalled();
+    expect(d.getArtifactOwner).not.toHaveBeenCalled();
   });
 
-  it('passes when every supplied ref is accessible', async () => {
+  it('passes when every supplied ref is writable, checking each ref against its own id', async () => {
+    const d = deps();
     await expect(
-      assertArtifactSourceRefsAccessible(
-        OWNER,
-        { sessionId: 's1', sourceQuestId: 'q1', parentArtifactId: 'a1' },
-        deps()
-      )
+      assertArtifactSourceRefsAccessible(OWNER, { sessionId: 's1', sourceQuestId: 'q1', parentArtifactId: 'a1' }, d)
     ).resolves.toBeUndefined();
+    // Pin the exact ids so a swapped-argument regression fails here.
+    expect(d.canUpdateSession).toHaveBeenCalledWith('s1');
+    expect(d.getQuestSessionId).toHaveBeenCalledWith('q1');
+    expect(d.getArtifactOwner).toHaveBeenCalledWith('a1');
   });
 
-  it('passes for a session shared with the caller (access, not ownership)', async () => {
-    // A collaborator in a session the owner shared with them creates artifacts stamped with the
+  it('passes for a session shared with update access (write access, not ownership)', async () => {
+    // A collaborator with update access to a shared session creates artifacts stamped with the
     // owner's sessionId; access is granted though the caller does not own the session.
-    const d = deps({ isAccessibleSession: vi.fn(async () => true) });
+    const d = deps({ canUpdateSession: vi.fn(async () => true) });
     await expect(
       assertArtifactSourceRefsAccessible(OWNER, { sessionId: 'shared-with-me' }, d)
     ).resolves.toBeUndefined();
+    expect(d.canUpdateSession).toHaveBeenCalledWith('shared-with-me');
   });
 
-  it('rejects a sessionId the caller cannot access', async () => {
-    const d = deps({ isAccessibleSession: vi.fn(async () => false) });
+  it('rejects a sessionId the caller cannot write', async () => {
+    const d = deps({ canUpdateSession: vi.fn(async () => false) });
     await expect(assertArtifactSourceRefsAccessible(OWNER, { sessionId: 'someone-elses' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
   });
 
-  it('rejects a sourceQuestId whose session the caller cannot access', async () => {
+  it('checks a quest against its resolved session id, not the quest id', async () => {
+    // The invariant the util warns about: access is transitive through the quest's session, so the
+    // session check must run against getQuestSessionId's result, never the raw quest id.
+    const canUpdateSession = vi.fn(async () => true);
+    const d = deps({ getQuestSessionId: vi.fn(async () => 'resolved-session'), canUpdateSession });
+    await expect(assertArtifactSourceRefsAccessible(OWNER, { sourceQuestId: 'q-raw' }, d)).resolves.toBeUndefined();
+    expect(d.getQuestSessionId).toHaveBeenCalledWith('q-raw');
+    expect(canUpdateSession).toHaveBeenCalledWith('resolved-session');
+    expect(canUpdateSession).not.toHaveBeenCalledWith('q-raw');
+  });
+
+  it('rejects a sourceQuestId whose session the caller cannot write', async () => {
     const d = deps({
-      getQuestSessionId: vi.fn(async () => 'session-not-accessible'),
-      isAccessibleSession: vi.fn(async () => false),
+      getQuestSessionId: vi.fn(async () => 'session-not-writable'),
+      canUpdateSession: vi.fn(async () => false),
     });
     await expect(assertArtifactSourceRefsAccessible(OWNER, { sourceQuestId: 'q-other' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
   });
 
-  it('rejects a sourceQuestId that does not exist', async () => {
-    const d = deps({ getQuestSessionId: vi.fn(async () => null) });
+  it('rejects a sourceQuestId that does not exist (no session resolved)', async () => {
+    const canUpdateSession = vi.fn(async () => true);
+    const d = deps({ getQuestSessionId: vi.fn(async () => null), canUpdateSession });
     await expect(assertArtifactSourceRefsAccessible(OWNER, { sourceQuestId: 'ghost' }, d)).rejects.toBeInstanceOf(
       ForbiddenError
     );
+    // A missing quest must reject outright, never fall through to a session check on a null id.
+    expect(canUpdateSession).not.toHaveBeenCalled();
   });
 
   it('rejects a parentArtifactId owned by another user (artifacts are not shareable)', async () => {

@@ -93,8 +93,9 @@ const handler = baseApi()
 
       // The refs below are written verbatim onto the new artifact, so a caller must be entitled to
       // any it supplies - otherwise it could claim another user's session/quest/artifact as its
-      // source. Sessions are shareable, so the bar is access (owner or shared), matching the
-      // collaborator-in-a-shared-session flow; artifacts are not shareable, so parent is owner-only.
+      // source. Sessions are shareable and stamping a session is a write into its graph, so the bar
+      // is update access (owner or update-shared), matching the collaborator-in-a-shared-session
+      // flow; artifacts are not shareable, so parent stays owner-only.
       await assertArtifactSourceRefsAccessible(
         userId,
         {
@@ -103,11 +104,9 @@ const handler = baseApi()
           parentArtifactId: validatedData.parentArtifactId,
         },
         {
-          isAccessibleSession: async id => !!(await sessionRepository.shareable.findAccessibleById(req.user!, id)),
-          getQuestSessionId: async id =>
-            ((await questRepository.findById(id)) as { sessionId?: string } | null)?.sessionId ?? null,
-          getArtifactOwner: async id =>
-            ((await artifactRepository.findOne({ id })) as { userId?: string } | null)?.userId ?? null,
+          canUpdateSession: async id => !!(await sessionRepository.shareable.findUpdateAccessById(req.user!, id)),
+          getQuestSessionId: async id => (await questRepository.findById(id))?.sessionId ?? null,
+          getArtifactOwner: async id => (await artifactRepository.findOne({ id }))?.userId ?? null,
         }
       );
 
