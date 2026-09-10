@@ -114,6 +114,10 @@ export async function assertDataLakeTagWriteScope(
     return;
   }
   if (!newFile) return;
+  // assertDataLakeWriteScope below is a no-op for a JWT/browser caller (assertScope returns
+  // early when req.apiKeyInfo is absent), so skip the DB round-trip entirely when it can only
+  // ever be thrown away - this path runs on every colon-tagged upload, API key or not.
+  if (!req.apiKeyInfo) return;
   const stringTagNames = tagNames.filter((name): name is string => typeof name === 'string');
   // Every usable fileTagPrefix ends in ':' (normalizeTagPrefix), so a colon-free tag set cannot
   // satisfy any prefix arm - skip the candidate-lake query for the common case.

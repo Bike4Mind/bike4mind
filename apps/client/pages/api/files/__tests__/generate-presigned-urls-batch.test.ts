@@ -180,6 +180,29 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     expect(tagNamesOf()).toEqual(['acme:uncategorized', 'datalake:orga:acme-2026']);
   });
 
+  // Regression test: a bare content tag matching the caller's OWN lake's fileTagPrefix joins that
+  // lake via the prefix arm with no `dataLakeSlug`/meta-tag involved at all - the dataLakeSlug fix
+  // above closed the lake-level gap, but this is the file-tag-only path that fix does not cover.
+  it('refuses a files:write-only key applying a tag under its own lake prefix (no dataLakeSlug)', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+    const { res } = makeRes();
+    await expect(
+      run({ files: [file({ tags: [{ name: 'acme:legal', strength: 1 }] })] }, res, {
+        apiKeyInfo: { scopes: ['files:write'] },
+      })
+    ).rejects.toThrow(/datalake:write is required/);
+  });
+
+  it('allows a key holding datalake:write to join a lake via its prefix arm alone (no dataLakeSlug)', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+    const { res } = makeRes();
+    await run({ files: [file({ tags: [{ name: 'acme:legal', strength: 1 }] })] }, res, {
+      apiKeyInfo: { scopes: ['datalake:write'] },
+    });
+
+    expect(h.createFabFile).toHaveBeenCalled();
+  });
+
   it('leaves a file that already carries a lake content tag alone', async () => {
     const { res } = makeRes();
     await run(
