@@ -244,6 +244,33 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
       id: 'u1',
     });
   });
+
+  // A still-valid session JWT for a consented account must still be refused once the account is
+  // banned/disputed/suspended: ban does not bump tokenVersion, and the WS/CLI completion surfaces
+  // fall back to this primitive. Same gate verifyApiKey applies via assertOwnerAccountUsable.
+  describe('account state (ban / dispute / suspension) on the JWT/WS/CLI fallback', () => {
+    it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('User not found or banned');
+    });
+
+    it('rejects a chargeback/dispute-pending owner', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', disputePending: true }));
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('dispute resolution');
+    });
+
+    it('rejects a content-policy-suspended owner', async () => {
+      vi.mocked(User.findById).mockResolvedValue(
+        mockUser({ aupAcceptedVersion: 'v1', moderation: { status: 'suspended' } })
+      );
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('suspended for repeated content-policy');
+    });
+
+    it('accepts a usable account (not banned, disputed, or suspended)', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+      await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+    });
+  });
 });
 
 describe('verifyEmbedApiKey (embed credential-class gates)', () => {

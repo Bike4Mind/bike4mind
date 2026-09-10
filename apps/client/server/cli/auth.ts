@@ -104,6 +104,12 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       throw new Error('Policy acceptance required: accept the AUP/ToS and confirm 18+ before using this endpoint');
     }
 
+    // Account state (ban / chargeback / suspension) lands AFTER this JWT was minted and does
+    // not bump tokenVersion, so a still-valid session JWT would otherwise sail through. The
+    // WS/CLI completion surfaces fall back to this primitive, so apply the same gate
+    // verifyApiKey applies via assertOwnerAccountUsable - user is already loaded here.
+    assertAccountStateUsable(user);
+
     return {
       id: user.id,
       email: user.email,
@@ -188,8 +194,19 @@ function toApiKeyInfo(v: {
  */
 async function assertOwnerAccountUsable(userId: string): Promise<void> {
   const user = await User.findById(userId);
+  if (!user) {
+    throw new UnauthorizedError('User not found or banned');
+  }
+  assertAccountStateUsable(user);
+}
 
-  if (!user || user.isBanned) {
+/**
+ * The account-state checks of {@link assertOwnerAccountUsable} against an already-loaded
+ * user, so the JWT path (verifyJwtToken, which already holds the user) can apply the same
+ * gate without a second lookup. One helper so the two entry points can't drift.
+ */
+function assertAccountStateUsable(user: IUserDocument): void {
+  if (user.isBanned) {
     throw new UnauthorizedError('User not found or banned');
   }
   if (user.disputePending) {
