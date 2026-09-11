@@ -23,7 +23,11 @@ describe('stampChunkEmbeddingModel', () => {
     });
 
     expect(updateEmbeddingModel).toHaveBeenCalledWith('file-1', 'text-embedding-3-small');
-    expect(update).toHaveBeenCalledWith({ id: 'file-1', chunkEmbeddingModelStampedAt: expect.any(Date) });
+    expect(update).toHaveBeenCalledWith({
+      id: 'file-1',
+      embeddingModel: 'text-embedding-3-small',
+      chunkEmbeddingModelStampedAt: expect.any(Date),
+    });
     // Order matters: a reader must never see the readiness stamp before the chunks it vouches for.
     expect(calls).toEqual(['chunks', 'file']);
   });
@@ -54,10 +58,33 @@ describe('stampChunkEmbeddingModel', () => {
 
     expect(update).toHaveBeenCalledWith({
       id: 'file-1',
+      embeddingModel: 'text-embedding-3-small',
       chunkEmbeddingModelStampedAt: expect.any(Date),
       vectorized: true,
       vectorizedChunkCount: 3,
       isVectorizing: false,
     });
+  });
+
+  it('relabels the FILE with the model actually embedded, not the one chunkFile recorded', async () => {
+    // The regression this pins, caught on a live keyless preview: chunkFile stamps the file with
+    // the deployment default (ada-002), the vectorize pass falls back to keyless Bedrock and
+    // embeds with Titan, and the chunks get the Titan label. If the FILE keeps ada-002 the two
+    // disagree, and every retrieval reader drops the file at the FILE level as foreign
+    // (isForeignEmbeddingModel) without ever reading a chunk - a successfully embedded file
+    // returns zero hits and reports itself as needing a re-embed.
+    const updateEmbeddingModel = vi.fn();
+    const update = vi.fn().mockResolvedValue(null);
+
+    await stampChunkEmbeddingModel(
+      'file-1',
+      'amazon.titan-embed-text-v2:0',
+      { db: { fabFiles: { update }, fabFileChunks: { updateEmbeddingModel } } },
+      { vectorized: true, vectorizedChunkCount: 1 }
+    );
+
+    // Both labels come from the one argument, in one transaction, so they cannot drift apart.
+    expect(updateEmbeddingModel).toHaveBeenCalledWith('file-1', 'amazon.titan-embed-text-v2:0');
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'amazon.titan-embed-text-v2:0' }));
   });
 });

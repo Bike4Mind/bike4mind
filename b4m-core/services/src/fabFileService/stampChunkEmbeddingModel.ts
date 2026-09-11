@@ -11,10 +11,19 @@ interface StampChunkEmbeddingModelAdapters {
 }
 
 /**
- * Bulk-stamps every chunk of a file with the model its vectors were generated under, then
- * records when that stamp completed. Called once a file's WHOLE chunk batch has committed
- * (not per-chunk) - a per-chunk stamp on every vectorize message would leave a file's chunks
- * inconsistently labelled while a multi-message batch is still in flight.
+ * Bulk-stamps every chunk of a file with the model its vectors were generated under, stamps the
+ * FILE with that same label, then records when the stamp completed. Called once a file's WHOLE
+ * chunk batch has committed (not per-chunk) - a per-chunk stamp on every vectorize message would
+ * leave a file's chunks inconsistently labelled while a multi-message batch is still in flight.
+ *
+ * The file label is written HERE, from the same argument as the chunk label, because this is the
+ * first point that knows which model the vectors were ACTUALLY generated under. chunkFile writes
+ * an initial label from the deployment default, but the vectorize handler may resolve a different
+ * one (resolveEmbeddingWithKeylessFallback: no provider credential -> keyless Bedrock). Leaving
+ * the file on the requested label then strands the file: every retrieval reader excludes it at the
+ * FILE level as foreign (isForeignEmbeddingModel) and never reaches its correctly-stamped chunks,
+ * so a successfully embedded file returns zero hits and the user is told to re-embed it. Writing
+ * both from one argument in one transaction makes the two labels unable to disagree.
  *
  * `chunkEmbeddingModelStampedAt` is the readiness signal the Atlas `$vectorSearch` cutover reads
  * (see atlasSearchIndex.ts / vectorSearchEligibility.ts) - it must be set AFTER the chunk stamp
@@ -43,6 +52,11 @@ export const stampChunkEmbeddingModel = async (
 ): Promise<void> => {
   await withTransaction(async () => {
     await db.fabFileChunks.updateEmbeddingModel(fabFileId, embeddingModel);
-    await db.fabFiles.update({ id: fabFileId, chunkEmbeddingModelStampedAt: new Date(), ...fileUpdate });
+    await db.fabFiles.update({
+      id: fabFileId,
+      embeddingModel,
+      chunkEmbeddingModelStampedAt: new Date(),
+      ...fileUpdate,
+    });
   });
 };

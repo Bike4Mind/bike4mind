@@ -14,8 +14,10 @@ import { computeServerTextHash } from '../dataLakeService/admissionContract';
 
 const chunkFileSchema = z.object({
   fabFileId: z.string(),
-  // Enum-constrained, not a bare string: this function is the ONLY writer of
-  // FabFile.embeddingModel (below), and several readers compare that stored label to the query's
+  // Enum-constrained, not a bare string: this function writes FabFile.embeddingModel (below) with
+  // the label the deployment ASKED for; stampChunkEmbeddingModel rewrites it to the one the
+  // vectorize pass actually embedded under, which can differ (keyless Bedrock fallback). Those two
+  // are the only writers. Several readers compare that stored label to the query's
   // as an exact string, so a mis-cased or unrecognized value reads as positively FOREIGN rather
   // than unknown - dropping a correctly-embedded file from retrieval and telling the user to
   // re-embed it. See isForeignEmbeddingModel (dataLakeService/embeddingMismatch.ts) for the
