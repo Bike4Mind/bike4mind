@@ -52,7 +52,9 @@ import {
   modalLength,
   parseSupportedModels,
   planCapture,
+  readAllPages,
   selectReusableChunks,
+  toBatches,
   totalExcluded,
   type StoredChunk,
 } from './capturePlan';
@@ -61,6 +63,10 @@ import { corpusRegime, formatCorpusRegime, isLongDocumentRegime, loadEmbeddingFi
 /** The ingest tags each help file `help:<slug>`; that slug is what corpus.ts's ground truth names. */
 const HELP_TAG_PREFIX = 'help:';
 const SCRIPTS_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/** File ids per read - see `toBatches` for why a whole lake does not go into one `$in`. */
+const FILE_ID_BATCH = 200;
+/** Chunk rows per page. Vector-free rows, so this is prose and counters, not embeddings. */
+const CHUNK_PAGE = 5_000;
 
 const argv = await yargs(hideBin(process.argv))
   .option('lake', {
@@ -117,47 +123,91 @@ if (lake.status !== 'active') throw new Error(`Lake "${argv.lake}" is ${lake.sta
 const fileIds = await fabFileRepository.findIdsByDataLakeTag({ kind: 'registry', datalakeTag: lake.datalakeTag });
 if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`);
 
-// Stored vectors are only read by the --reuse-stored-vectors arm. Materializing them otherwise
-// would hold the whole lake's embeddings in memory to compute a token count and a char length.
+// Stored vectors are only read by the --reuse-stored-vectors arm, and on that arm only. Every other
+// path needs a token count, a text length and an embedding label, so reading the vectors would pull a
+// whole lake's embeddings over the wire - under --dry-run, to print a cost table that does not use
+// them.
 const needStoredVectors = argv['reuse-stored-vectors'];
+
+// Batched, not per file. The lake read hands back every candidate id at once; reading them one at a
+// time was two sequential round-trips per file, which is fine on 49 help files and is not what the
+// runbook points this at.
+type CapturedFile = { fileId: string; docId: string; embeddingModel?: string | null };
+const capturedFiles: CapturedFile[] = [];
+let filesUnreachable = 0;
+for (const batch of toBatches(fileIds, FILE_ID_BATCH)) {
+  const files = await fabFileRepository.findAllByIds(batch);
+  const byId = new Map(files.map(f => [String(f.id), f]));
+  // Iterated in the LAKE's id order rather than the read's, so what lands in the fixture does not
+  // depend on Mongo document order.
+  for (const fileId of batch) {
+    const file = byId.get(fileId);
+    // A tombstone (or a soft-deleted file) and a file the reachability predicate rejects are one
+    // class for this counter: the served path would never have returned either, so scoring their
+    // chunks would move the band by chunks production cannot surface.
+    if (!file || !isCapturableFile(file)) {
+      filesUnreachable++;
+      continue;
+    }
+    // Prefer the help slug so the capture joins to corpus.ts's ground truth; fall back to the file
+    // id, which is the right document identity for any other lake.
+    const helpTag = file.tags?.find(t => t.name.startsWith(HELP_TAG_PREFIX));
+    capturedFiles.push({
+      fileId,
+      docId: helpTag ? helpTag.name.slice(HELP_TAG_PREFIX.length) : fileId,
+      embeddingModel: file.embeddingModel,
+    });
+  }
+}
+
 const stored: StoredChunk[] = [];
 const tokenCounts: number[] = [];
 const capturedDocs = new Set<string>();
-let filesUnreachable = 0;
-for (const fileId of fileIds) {
-  const file = await fabFileRepository.findById(fileId);
-  // A tombstone (or a soft-deleted file, which the softDeletePlugin's findOne hook resolves to null)
-  // and a file the reachability predicate rejects are one class for this counter: the served path
-  // would never have returned either, so scoring their chunks would move the band by chunks
-  // production cannot surface.
-  if (!file || !isCapturableFile(file)) {
-    filesUnreachable++;
-    continue;
+for (const fileBatch of toBatches(capturedFiles, FILE_ID_BATCH)) {
+  const batch = fileBatch.map(f => f.fileId);
+  const fields = await readAllPages(
+    after => fabFileChunkRepository.findChunkFieldsByFabFileIds(batch, { limit: CHUNK_PAGE, afterChunkId: after }),
+    CHUNK_PAGE
+  );
+  // The vector read is a SECOND pass, joined on chunk id, so the width of a chunk row on the
+  // planning path does not depend on whether this arm wants embeddings. It skips vectorless chunks
+  // at the DB layer, so a chunk absent from this map is exactly `selectReusableChunks`' missingVector.
+  const vectorById = new Map<string, number[]>();
+  if (needStoredVectors) {
+    const withVectors = await readAllPages(
+      after => fabFileChunkRepository.findVectorsByFabFileIds(batch, { limit: CHUNK_PAGE, afterChunkId: after }),
+      CHUNK_PAGE
+    );
+    for (const chunk of withVectors) vectorById.set(chunk.id, chunk.vector);
   }
-  // Prefer the help slug so the capture joins to corpus.ts's ground truth; fall back to the file id,
-  // which is the right document identity for any other lake.
-  const helpTag = file.tags?.find(t => t.name.startsWith(HELP_TAG_PREFIX));
-  const docId = helpTag ? helpTag.name.slice(HELP_TAG_PREFIX.length) : fileId;
 
-  const fileChunks = await fabFileChunkRepository.findByFabFileId(fileId);
-  // The parent's label is a fallback for a WHOLE file, never for a single chunk. A file with no
-  // chunk-level stamps predates the field, and its parent label is the only truth there is. But once
-  // any chunk in the file is stamped, an unstamped sibling is genuinely unknown - and lending it the
-  // parent label would re-admit, one layer above `selectReusableChunks`, exactly the chunk that
-  // predicate excludes for being unlabeled. ada-002 and 3-small are both 1536, so the width guard
-  // would not catch the two spaces pooling.
-  const anyChunkStamped = fileChunks.some(c => Boolean(c.embeddingModel));
-  for (const chunk of fileChunks) {
-    const text = chunk.text ?? '';
-    stored.push({
-      chunkId: String(chunk.id ?? chunk._id),
-      docId,
-      text,
-      vector: needStoredVectors ? ((chunk.vector as number[]) ?? []) : [],
-      parentEmbeddingModel: anyChunkStamped ? chunk.embeddingModel : file.embeddingModel,
-    });
-    tokenCounts.push(chunkTokenCount(chunk.tokenCount, text));
-    capturedDocs.add(docId);
+  const chunksByFile = new Map<string, typeof fields>();
+  for (const chunk of fields) {
+    const existing = chunksByFile.get(chunk.fabFileId);
+    if (existing) existing.push(chunk);
+    else chunksByFile.set(chunk.fabFileId, [chunk]);
+  }
+
+  for (const { fileId, docId, embeddingModel } of fileBatch) {
+    const fileChunks = chunksByFile.get(fileId) ?? [];
+    // The parent's label is a fallback for a WHOLE file, never for a single chunk. A file with no
+    // chunk-level stamps predates the field, and its parent label is the only truth there is. But once
+    // any chunk in the file is stamped, an unstamped sibling is genuinely unknown - and lending it the
+    // parent label would re-admit, one layer above `selectReusableChunks`, exactly the chunk that
+    // predicate excludes for being unlabeled. ada-002 and 3-small are both 1536, so the width guard
+    // would not catch the two spaces pooling.
+    const anyChunkStamped = fileChunks.some(c => Boolean(c.embeddingModel));
+    for (const chunk of fileChunks) {
+      stored.push({
+        chunkId: chunk.id,
+        docId,
+        text: chunk.text,
+        vector: vectorById.get(chunk.id) ?? [],
+        parentEmbeddingModel: anyChunkStamped ? chunk.embeddingModel : embeddingModel,
+      });
+      tokenCounts.push(chunkTokenCount(chunk.tokenCount, chunk.text));
+      capturedDocs.add(docId);
+    }
   }
 }
 if (stored.length === 0) {
