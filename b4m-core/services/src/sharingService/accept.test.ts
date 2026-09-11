@@ -335,6 +335,39 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
     },
   });
 
+  // The gate used to short-circuit on `pending.length === 0`, which is precisely the state a
+  // Project or Organization invite was always in: its recipients are raw user ids that
+  // createInvite could not resolve. Any authenticated caller holding the invite id could accept
+  // and join, picking up grants on every file and session the project contains.
+  it('rejects a stranger accepting a named Project invite whose recipients did not resolve', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('stranger@x.com'));
+    adapters.db.invites.findById.mockResolvedValue({
+      ...makeInvite([], 1),
+      type: InviteType.Project,
+      isLinkOnly: false,
+    });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(ForbiddenError);
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a legacy named invite minted before the link-only flag existed', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('stranger@x.com'));
+    adapters.db.invites.findById.mockResolvedValue({ ...makeInvite([], 1), type: InviteType.Project });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(ForbiddenError);
+  });
+
+  it('still lets anyone redeem a genuine link invite', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('anyone@x.com'));
+    adapters.db.invites.findById.mockResolvedValue({ ...makeInvite([], 5), isLinkOnly: true });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).resolves.toBeDefined();
+  });
+
   it('rejects an accepter who is not among the still-pending named recipients', async () => {
     const adapters = makeAdapters();
     adapters.db.users.findById.mockResolvedValue(makeUser('uninvited@x.com'));

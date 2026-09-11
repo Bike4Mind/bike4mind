@@ -40,7 +40,7 @@ interface CreateInviteAdapters {
   db: {
     // TODO: Use Invite model create type def
     invites: IInviteRepository;
-    users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById'>;
+    users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById' | 'findByIds'>;
     // add findShareAccessById to fabFiles
     fabFiles: Pick<IFabFileRepository, 'findByIdAndUserId' | 'shareable'>;
     sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
@@ -141,6 +141,10 @@ export const createInvite = async (
   const recipientsArray = recipients ?? [];
   const users = await db.users.findAllByEmailsOrUsernames(recipientsArray, recipientsArray);
   const isLinkOnlyInvite = recipients?.length === 0;
+  // Persisted so the view and accept gates can tell "names nobody by design" from "named somebody
+  // who did not resolve". `recipients` omitted entirely names nobody just as `[]` does, which is
+  // why this is not simply isLinkOnlyInvite (that one sizes `available` and is left as it was).
+  const namesNobody = recipientsArray.length === 0;
 
   // By-Users sharing (FabFile/Session) sends real emails/usernames and must not silently
   // create a share nobody can see. Organization/Project invites send raw user ids through
@@ -173,6 +177,21 @@ export const createInvite = async (
     // Dedupe: two recipient strings (an email and that same person's username) can resolve to
     // the same one user, and pending.length below counts unique resolved users, not raw entries.
     pending = Array.from(new Set(resolved));
+  } else if ((type === InviteType.Project || type === InviteType.Organization) && recipientsArray.length > 0) {
+    // Project and Organization invites carry raw user ids (the add-members modals send
+    // `recipients: [userId]`), which findAllByEmailsOrUsernames cannot resolve - it queries email
+    // and username only, never _id. Left unresolved, `pending` stayed empty and every gate keyed
+    // on it fell open: the invite read as "names nobody", so any authenticated holder of the id
+    // could view it and accept it. Emails/usernames are accepted here too so a caller that sends
+    // those instead of ids keeps working.
+    const byId = await db.users.findByIds(recipientsArray);
+    pending = Array.from(
+      new Set([...users, ...byId].map(u => u.email).filter((email): email is string => Boolean(email)))
+    );
+    // An invite naming only unresolvable recipients can never be viewed or accepted by anyone now
+    // that those gates key on `pending`, so fail loudly at mint time instead of persisting a row
+    // that silently does nothing.
+    if (pending.length === 0) throw new BadRequestError('Could not find a user for any recipient');
   } else {
     pending = users.map(user => user.email).filter((email): email is string => Boolean(email));
   }
@@ -197,6 +216,7 @@ export const createInvite = async (
       refused: [],
     },
     accepted: 0,
+    isLinkOnly: namesNobody,
     name,
     // username of the user who is sharing instead of owner of the file
     username: user.username,

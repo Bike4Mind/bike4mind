@@ -33,7 +33,10 @@ wrote last, while `revoke` filters on that tag: revoking via the earlier project
 and returned the document as if it had succeeded, leaving access live, and revoking via the later
 one tore out the other project's grant as well. Entries are keyed on `(userId, projectId)`, so each
 project's grant and any direct share are separate rows, and a scoped revoke that matches no row now
-raises `NotFoundError` instead of reporting a success that removed nothing. Rows written before
+raises `NotFoundError` instead of reporting a success that removed nothing. That last part guards a
+future scoped caller more than a present one: the only code passing a `projectId` today is
+`revokeFromProject`'s own cascade, which swallows `NotFoundError` by design, and the HTTP route
+never sends one. Rows written before
 this change carry only the last project's tag; a scoped revoke against an earlier project hits the
 new not-found path, and revoking without a `projectId` still clears every row the user holds. A
 user may now legitimately hold several rows on one document, so the client-side permission helpers
@@ -45,6 +48,26 @@ HTTP copy carried it, so a project shared with a user was unreachable through ev
 builds an ability from `@bike4mind/database` rather than `@server/auth/ability` (the quest,
 slack-quest, image-edit, image-generation and video-generation queue handlers). Both copies now
 grant the same resource set, and a structural test reads the two files and fails if they drift.
+
+An invite now records whether it names anybody. Project and Organization invites carry raw user
+ids (the add-members modals send `recipients: [userId]`), and `findAllByEmailsOrUsernames` queries
+email and username only, so their `recipients.pending` always persisted as `[]`. Every gate keyed
+on `pending.length` therefore fell open for exactly those two types: any authenticated caller
+holding the invite id could read its contents, and could accept it and join the project or
+organization with grants on every file and session inside. `createInvite` resolves id-shaped
+recipients through `findByIds`, refuses to mint an invite whose recipients all fail to resolve, and
+persists an `isLinkOnly` flag; `canViewInvite` and the accept-time recipient gate key on that flag
+via `isLinkOnlyInvite` (`@bike4mind/common`) rather than on an empty `pending`. Invites minted
+before the flag fall back to inferring it, and only for FabFile and Session, whose recipients always
+did resolve to emails - so a legacy Project or Organization invite fails closed at both gates and
+has to be re-sent. A side effect worth knowing: organization seat accounting counts pending
+recipients, so it was undercounting and now holds.
+
+Revoking a session share cascades on share authority rather than ownership. Acceptance propagates a
+file grant whenever the inviter can share the file, so gating the revocation on the session owner
+*owning* it left grants on shared-but-not-owned files permanently un-revokable through the session
+path. Both sides now use `heldPermissions`, which returns everything for an owner, so ownership
+still passes.
 
 Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
 decliner's own slot: one recipient declining used to zero the invite for every other recipient, and

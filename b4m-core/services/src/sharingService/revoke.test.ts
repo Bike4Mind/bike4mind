@@ -212,7 +212,11 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
       users: [{ userId: sharedUserId, permissions: ['read'], projectId: 'some-other-project' }],
     };
 
-    mockAdapters.db.users.findById.mockResolvedValue({ id: sharedUserId });
+    // Id-aware: revoke resolves the revokee, and the cascade resolves the session owner to read
+    // the groups its share-authority check needs.
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === ownerId ? { id: ownerId, groups: [] } : { id: sharedUserId, groups: [] }
+    );
     mockAdapters.db.sessions.shareable.findAccessibleById.mockResolvedValue(session);
     mockAdapters.db.fabFiles.findAllByIds.mockResolvedValue([plainFile, projectScopedFile]);
 
@@ -225,6 +229,66 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     );
     // A grant tied to a different project is left untouched, and the file is never even written.
     expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalledWith(expect.objectContaining({ id: projectFileId }));
+  });
+
+  // accept.ts propagates a grant whenever the inviter can SHARE the file, not only when they own
+  // it, so a revoke gated on ownership alone left those grants permanently un-revokable here.
+  it('revokes on a file the session owner can share but does not own', async () => {
+    const foreignFileId = 'file-foreign';
+    const session = {
+      id: sessionId,
+      userId: ownerId,
+      knowledgeIds: [foreignFileId],
+      users: [{ userId: sharedUserId, permissions: ['read'] }],
+    };
+    const sharedWithOwner = {
+      id: foreignFileId,
+      userId: 'someone-else',
+      users: [
+        { userId: ownerId, permissions: ['read', 'share'] },
+        { userId: sharedUserId, permissions: ['read'] },
+      ],
+    };
+
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === ownerId ? { id: ownerId, groups: [] } : { id: sharedUserId, groups: [] }
+    );
+    mockAdapters.db.sessions.shareable.findAccessibleById.mockResolvedValue(session);
+    mockAdapters.db.fabFiles.findAllByIds.mockResolvedValue([sharedWithOwner]);
+
+    await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: foreignFileId, users: [{ userId: ownerId, permissions: ['read', 'share'] }] })
+    );
+  });
+
+  it('leaves a stranger file alone when the session owner holds only read on it', async () => {
+    const foreignFileId = 'file-foreign';
+    const session = {
+      id: sessionId,
+      userId: ownerId,
+      knowledgeIds: [foreignFileId],
+      users: [{ userId: sharedUserId, permissions: ['read'] }],
+    };
+    const readOnlyToOwner = {
+      id: foreignFileId,
+      userId: 'someone-else',
+      users: [
+        { userId: ownerId, permissions: ['read'] },
+        { userId: sharedUserId, permissions: ['read'] },
+      ],
+    };
+
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === ownerId ? { id: ownerId, groups: [] } : { id: sharedUserId, groups: [] }
+    );
+    mockAdapters.db.sessions.shareable.findAccessibleById.mockResolvedValue(session);
+    mockAdapters.db.fabFiles.findAllByIds.mockResolvedValue([readOnlyToOwner]);
+
+    await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalled();
   });
 });
 

@@ -12,6 +12,7 @@ import {
   IUserDocument,
   Permission,
   ShareableAccessShape,
+  isLinkOnlyInvite,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -85,13 +86,17 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new UnprocessableEntityError('User has already accepted the invite');
   }
 
-  // A By-Users invite names specific recipients in `pending`; only they may consume a slot,
-  // or `remaining` (now sized to the recipient count, not a flat 1) lets an unintended
-  // accepter claim a share meant for someone else while a named recipient still hasn't
-  // accepted. A link-only invite never populates `pending`, so this never applies to one -
-  // and once every named recipient has accepted, `pending` is empty and `remaining <= 0`
-  // above already blocks further accepts regardless of who is asking.
-  if ((invite.recipients?.pending?.length ?? 0) > 0 && !invite.recipients?.pending?.includes(user.email)) {
+  // A named invite names specific recipients in `pending`; only they may consume a slot, or
+  // `remaining` (now sized to the recipient count, not a flat 1) lets an unintended accepter claim
+  // a share meant for someone else while a named recipient still hasn't accepted.
+  //
+  // Keyed on isLinkOnly rather than `pending.length > 0`, which fell open in exactly the case that
+  // needed it most: Project and Organization invites carry raw user ids that createInvite could not
+  // resolve, so `pending` was empty and a stranger holding the id could accept and join. Rows
+  // minted before the flag and before that resolution landed have no recipients to check against,
+  // so they now fail closed here and have to be re-sent. Once every named recipient has accepted,
+  // `pending` is empty and the `remaining <= 0` check above blocks further accepts anyway.
+  if (!isLinkOnlyInvite(invite) && !invite.recipients?.pending?.includes(user.email)) {
     throw new ForbiddenError('This invite was not sent to your account');
   }
 

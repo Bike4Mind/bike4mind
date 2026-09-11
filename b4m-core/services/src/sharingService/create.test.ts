@@ -36,7 +36,7 @@ describe('sharingService - createInvite (group arm authority)', () => {
   beforeEach(() => {
     db = {
       invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-1', ...(build as object) })) },
-      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
       fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
       sessions: { findByIdAndUserId: vi.fn() },
       projects: { shareable: { findShareAccessById: vi.fn() } },
@@ -138,7 +138,7 @@ describe('sharingService - createInvite (project arm authority)', () => {
     findShareAccessById = vi.fn();
     db = {
       invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-2', ...(build as object) })) },
-      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
       projects: { shareable: { findShareAccessById } },
     };
   });
@@ -188,7 +188,7 @@ describe('sharingService - createInvite (recipient resolution)', () => {
   beforeEach(() => {
     db = {
       invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-3', ...(build as object) })) },
-      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
       fabFiles: {
         shareable: {
           findShareAccessById: vi.fn(async () => ({ id: FILE_ID, fileName: FILE_NAME, userId: 'owner-3' })),
@@ -234,15 +234,33 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     expect((invite as any).recipients.pending).toEqual(['Friend@Example.com']);
   });
 
-  it('does not throw on an Organization/Project invite with an unmatched, id-shaped recipient', async () => {
-    // No match, same as today, for an id-shaped recipient - the point is this must not become
-    // a hard failure just because milestone 2 added unresolved-recipient checking elsewhere.
+  it('resolves an id-shaped Project recipient by _id into pending', async () => {
+    // The add-members modals send `recipients: [userId]`, which findAllByEmailsOrUsernames cannot
+    // resolve (it queries email and username only). Leaving pending empty made the invite read as
+    // "names nobody", which is what let any authenticated holder of the id view and accept it.
     db.users.findAllByEmailsOrUsernames = vi.fn(async () => []);
+    db.users.findByIds = vi.fn(async () => [{ id: 'user-id-123', email: 'member@x.com', username: 'member' }]);
 
     const invite = await createProject(['user-id-123']);
 
-    expect(db.invites.create).toHaveBeenCalled();
-    expect((invite as any).recipients.pending).toEqual([]);
+    expect(db.users.findByIds).toHaveBeenCalledWith(['user-id-123']);
+    expect((invite as any).recipients.pending).toEqual(['member@x.com']);
+    expect((invite as any).isLinkOnly).toBe(false);
+  });
+
+  it('throws rather than minting a Project invite whose recipients all fail to resolve', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => []);
+    db.users.findByIds = vi.fn(async () => []);
+
+    await expect(createProject(['user-id-123'])).rejects.toBeInstanceOf(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('marks a recipientless share link as link-only and a named invite as not', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'a@x.com', username: 'a' }]);
+
+    expect(((await createFabFile([])) as any).isLinkOnly).toBe(true);
+    expect(((await createFabFile(['a@x.com'])) as any).isLinkOnly).toBe(false);
   });
 
   it('throws for a recipient matched only by username with no email, instead of silently dropping them', async () => {
@@ -321,7 +339,7 @@ describe('sharingService - createInvite (permission capping)', () => {
 
   const dbFor = (doc: unknown) => ({
     invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-cap', ...(build as object) })) },
-    users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+    users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
     fabFiles: { shareable: { findShareAccessById: vi.fn(async () => doc) } },
   });
 
@@ -396,7 +414,7 @@ describe('sharingService - createInvite (email-shaped recipients)', () => {
   beforeEach(() => {
     db = {
       invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-resolve', ...(build as object) })) },
-      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
       fabFiles: {
         shareable: { findShareAccessById: vi.fn(async () => ({ id: FILE_ID, fileName: 'doc.pdf', userId: OWNER })) },
       },

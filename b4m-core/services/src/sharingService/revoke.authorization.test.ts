@@ -27,7 +27,13 @@ describe('sharingService - revoke (session knowledge-file cascade authority)', (
         sessions: { shareable: { findAccessibleById: vi.fn(async () => session) }, update: vi.fn() },
         fabFiles: { findAllByIds: vi.fn(async () => files), update: vi.fn() },
         projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        users: { findById: vi.fn(async () => ({ id: targetId })) },
+        // Id-aware: revoke resolves both the revokee and the session owner, and the cascade
+        // reads the owner's groups to decide whether they could share the file.
+        users: {
+          findById: vi.fn(async (id: string) =>
+            id === sessionOwnerId ? { id: sessionOwnerId, groups: [] } : { id: targetId, groups: [] }
+          ),
+        },
       },
     };
     return session;

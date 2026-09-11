@@ -6,6 +6,9 @@ import {
   ISessionRepository,
   IUserRepository,
   IUserShare,
+  Permission,
+  ShareableAccessShape,
+  heldPermissions,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -69,9 +72,12 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     user.userId.toString() === userIdToRevoke && (type === 'projects' || !projectId || user.projectId === projectId);
 
   // Scope-aware, so a scoped revoke that matches no entry says so instead of removing nothing and
-  // returning the document as if it had succeeded. Entries written before pushShareable keyed on
-  // the pair carry only the last project's tag, so a scoped revoke against an earlier project can
-  // land here; revoking without a projectId still clears every entry the user holds.
+  // returning the document as if it had succeeded. Worth being honest about the reach: the only
+  // caller that passes a projectId today is revokeFromProject's cascade below, which swallows
+  // NotFoundError by design, and the HTTP route never sends one - so this currently guards a
+  // future scoped caller rather than surfacing an error anyone sees now. Entries written before
+  // pushShareable keyed on the pair carry only the last project's tag, so a scoped revoke against
+  // an earlier project can land here; revoking without a projectId still clears every entry.
   if (!document.users.some(isRevoked)) throw new NotFoundError(`User not found in document`);
 
   document.users = document.users.filter(user => !isRevoked(user));
@@ -99,13 +105,22 @@ const revokeSessionKnowledgeFileGrants = async (
   const { db } = adapters;
 
   const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
+  // Groups matter: a session owner who reaches a file only through a group still had the share
+  // authority that let acceptance materialize the grant, and an id alone would silently skip it.
+  const sessionOwner = await db.users.findById(session.userId);
   for (const file of files) {
     // knowledgeIds is client-writable with only shape validation (sessionService/update.ts), and
-    // this function is authorized against the SESSION, not each file. Without this ownership
-    // check anyone could point their own session at a stranger's file and strip a third party's
-    // grant on it. Under-revoking is the safe direction: a grant on a file the session owner does
-    // not own is not one this session's acceptance was entitled to create.
-    if (file.userId !== session.userId) continue;
+    // this function is authorized against the SESSION, not each file. Without a check here anyone
+    // could point their own session at a stranger's file and strip a third party's grant on it.
+    //
+    // The predicate mirrors accept.ts's propagation gate, which materializes a file grant whenever
+    // the inviter can SHARE the file, not only when they own it. Gating revocation on ownership
+    // alone left a grant on a shared-but-not-owned file permanently un-revokable through the
+    // session path. `heldPermissions` returns everything for the owner, so ownership still passes.
+    const ownerCanShare =
+      !!sessionOwner &&
+      heldPermissions(file as ShareableAccessShape, sessionOwner.id, sessionOwner.groups ?? []).has(Permission.share);
+    if (!ownerCanShare) continue;
 
     const remaining = file.users.filter(user => !(user.userId.toString() === userIdToRevoke && !user.projectId));
     if (remaining.length === file.users.length) continue;

@@ -102,6 +102,36 @@ describe('canViewInvite', () => {
     expect(authorizeByInviteType).toHaveBeenCalled();
   });
 
+  // Project and Organization invites carry raw user ids. Before createInvite resolved those by
+  // _id, their `pending` was always empty, so a link-only arm keyed on `pending.length` handed the
+  // invite's contents (project/org id, name, inviter username, permissions) to any authenticated
+  // caller holding the id.
+  it('does not treat a named Project invite as a link invite', async () => {
+    const named = linkInvite({ type: 'Project', isLinkOnly: false });
+    await expect(canViewInvite(user, named)).resolves.toBe(false);
+    expect(authorizeByInviteType).toHaveBeenCalled();
+  });
+
+  it('does not treat a named Organization invite as a link invite', async () => {
+    const named = linkInvite({ type: 'Organization', isLinkOnly: false });
+    await expect(canViewInvite(user, named)).resolves.toBe(false);
+  });
+
+  it('fails closed on a legacy Project invite that predates the flag', async () => {
+    // No isLinkOnly at all and an empty pending: indistinguishable from a link invite by shape,
+    // so the type is what decides. Only FabFile/Session recipients always resolved to emails.
+    const legacy = linkInvite({ type: 'Project' });
+    await expect(canViewInvite(user, legacy)).resolves.toBe(false);
+  });
+
+  it('still treats a legacy FabFile invite with no recipients as a link invite', async () => {
+    await expect(canViewInvite(user, linkInvite({ type: 'FabFile' }))).resolves.toBe(true);
+  });
+
+  it('honours an explicit isLinkOnly over the inferred fallback', async () => {
+    await expect(canViewInvite(user, linkInvite({ type: 'Project', isLinkOnly: true }))).resolves.toBe(true);
+  });
+
   it('still admits a named recipient by email, case-insensitively', async () => {
     const named = linkInvite({ recipients: { pending: ['VIEWER@x.com'], accepted: [], refused: [] } });
     await expect(canViewInvite(user, named)).resolves.toBe(true);

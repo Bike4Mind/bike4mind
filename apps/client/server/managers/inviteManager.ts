@@ -6,6 +6,7 @@ import {
   ISession,
   InviteType,
   IUserDocument,
+  isLinkOnlyInvite,
 } from '@bike4mind/common';
 import {
   FabFile,
@@ -79,12 +80,11 @@ export async function canViewInvite(user: IUserDocument, invite: IInviteDocument
     return true;
   }
 
-  // A link invite names nobody (createInvite stores `pending: []` for one), so the recipient arm
-  // can never match and the share arm never will either - the person following the link is the
-  // one being granted access, not someone who already holds it. Gating it out would 404 the
-  // /share/$id landing page and leave acceptInvite's link path unreachable. Redeemability is the
-  // gate here, matching what accept already enforces.
-  if (named.length === 0) {
+  // A link invite names nobody, so the recipient arm can never match and the share arm never will
+  // either - the person following the link is the one being granted access, not someone who
+  // already holds it. Gating it out would 404 the /share/$id landing page and leave acceptInvite's
+  // link path unreachable. Redeemability is the gate here, matching what accept already enforces.
+  if (isLinkOnlyInvite(invite)) {
     const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
     return invite.remaining > 0 && !expired;
   }
