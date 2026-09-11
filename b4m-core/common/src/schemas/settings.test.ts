@@ -609,6 +609,29 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
   });
 });
 
+describe('data-lake scan budgets are caller-altitude, not per-lake (#2624)', () => {
+  const SCAN_BUDGET_KEYS = ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks'] as const;
+
+  it('declares Organization and Owner but NOT Lake', () => {
+    // These two advertised a Lake rung that no retrieval caller ever resolved, so an operator could
+    // save a Lake-scoped override, see it in the admin UI, and have every search keep using the
+    // platform value. The rung is not merely unwired: resolveRetrievalLakeScope hands one scan every
+    // lake the caller can reach as a single dataLakeTags array, so there is no lakeId to key on.
+    // Restoring Lake here without per-lake sub-budgets in the scan would re-create that same lie.
+    for (const key of SCAN_BUDGET_KEYS) {
+      expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+    }
+  });
+
+  it('still declares a scope, so the read path must stay on the scoped resolver', () => {
+    // Dropping the block entirely would be the wrong fix: the Org and Owner rungs are resolvable
+    // (the caller is known) and resolveSearchBudgets honors them. Only Lake was unkeyable.
+    for (const key of SCAN_BUDGET_KEYS) {
+      expect(settingsMap[key].scope).toBeDefined();
+    }
+  });
+});
+
 describe('forced-retrieval relevance floors are levers (#2497)', () => {
   const FLOOR_KEYS = ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'] as const;
 
@@ -662,7 +685,7 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
     expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(1)).toBe(1);
   });
 
-  it('is settable at org and owner but NOT per lake, unlike dataLakeSearchMaxChunks', () => {
+  it('is settable at org and owner but NOT per lake', () => {
     // Deliberate, and the reason is structural rather than an oversight: one forced-retrieval turn
     // scans an uncapped SET of lakes into a single pool with a single top score, so there is no one
     // lake for a narrower rung to key on. Same call as kbSearchMinRelevancePct, whose corpus has the
@@ -672,7 +695,6 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
       expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
       expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
     }
-    expect(settingsMap.dataLakeSearchMaxChunks.scope?.settableAt).toContain(SettingScopeLevel.Lake);
   });
 
   it('declares a scope, so the read path must go through the scoped resolver', () => {
@@ -724,9 +746,10 @@ describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fall
 
   it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#1955)', () => {
     // A knowledge-base search spans a mixed multi-lake corpus plus the caller's own/shared files -
-    // there is no single lake for a Lake rung to key on, unlike dataLakeSearchMaxFiles/MaxChunks
-    // (which scan one lake at a time and do declare Lake). Pinned so adding Lake later is a
-    // deliberate decision rather than silent drift.
+    // there is no single lake for a Lake rung to key on. dataLakeSearchMaxFiles/MaxChunks were once
+    // believed to differ (one lake at a time) and declared Lake on that basis; #2624 found the
+    // premise false and they now match. Pinned so adding Lake later is a deliberate decision
+    // rather than silent drift.
     expect(settingsMap.kbSearchDefaultResults.scope?.settableAt).toEqual([
       SettingScopeLevel.Organization,
       SettingScopeLevel.Owner,
