@@ -31,7 +31,6 @@ export class OAuthClientSeeder {
     clientId: string,
     fields: {
       name: string;
-      pkceRequired: boolean;
       tokenEndpointAuthMethod: 'none' | 'client_secret_post';
       clientSecretHash: string;
     }
@@ -58,7 +57,6 @@ export class OAuthClientSeeder {
       const throwawayHash = await bcrypt.hash(crypto.randomBytes(32).toString('base64url'), 10);
       await this.createIfAbsent(PREVIEW_PUBLIC_CLIENT_ID, {
         name: 'Preview Public Client',
-        pkceRequired: true,
         tokenEndpointAuthMethod: 'none',
         clientSecretHash: throwawayHash,
       });
@@ -67,7 +65,6 @@ export class OAuthClientSeeder {
       const secretHash = await bcrypt.hash(await fetchSeederPassword(), 10);
       await this.createIfAbsent(PREVIEW_CONFIDENTIAL_CLIENT_ID, {
         name: 'Preview Confidential Client',
-        pkceRequired: false,
         tokenEndpointAuthMethod: 'client_secret_post',
         clientSecretHash: secretHash,
       });

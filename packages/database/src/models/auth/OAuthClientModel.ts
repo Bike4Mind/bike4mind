@@ -27,9 +27,9 @@ export interface IOAuthClientDocument extends IMongoDocument {
   name: string; // e.g. "VibesWire", "VibesTrader"
   redirectUris: string[];
   allowedScopes: string[];
-  pkceRequired: boolean;
   /**
-   * How the client authenticates at the token endpoint (RFC 8414 metadata):
+   * How the client authenticates at the token endpoint (RFC 8414 metadata) and,
+   * by the same token, whether PKCE is required:
    * - 'none': public client, no secret; MUST use PKCE on the auth-code exchange.
    * - 'client_secret_post': confidential client; MUST present its secret.
    * Defaults to 'none' so an unclassified client is treated as public (PKCE-gated),
@@ -57,7 +57,6 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
     name: { type: String, required: true },
     redirectUris: [{ type: String, required: true }],
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
-    pkceRequired: { type: Boolean, default: true },
     tokenEndpointAuthMethod: { type: String, enum: ['none', 'client_secret_post'], default: 'none' },
     isActive: { type: Boolean, default: true },
     // Pattern-A federated trust config. Absent (default) for ordinary "Sign in with B4M" clients;
