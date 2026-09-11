@@ -288,7 +288,7 @@ Preview environments (`pr<N>.preview.bike4mind.com`) are created **on demand by 
 
 Mementos are the exception: the memory ledger is pinned to `MEMENTO_EMBEDDING_MODEL` independently of the `defaultEmbeddingModel` setting, and on a keyless stage it records facts without a vector rather than switching provider.
 
-If you specifically need to exercise the OpenAI embedding path on a preview, it takes two steps: an admin pastes a key into Admin Settings (or you save your own in user settings), **and** Default Embedding Model is set to an OpenAI model. The key alone is not enough — it only decides which credential is available, while the model still comes from that setting. Both are read from the database on every request, so they take effect on the next call with no redeploy. Adding the key as a deploy secret does *not* work: an SST secret arrives as a linked Resource, never as the `process.env` value the embedding path would read.
+If you specifically need to exercise the OpenAI embedding path on a preview, an admin can paste a key into Admin Settings, or you can save your own personal key in user settings. Both are read from the database on every request, so they take effect on the next call with no redeploy. The keyless fallback only applies while no OpenAI or VoyageAI credential resolves, so supplying one is enough to put ingestion back on whatever model **Default Embedding Model** names — you only need to touch that setting too if an admin has explicitly pointed it at a non-OpenAI model. Adding the key as a deploy secret does *not* work: an SST secret arrives as a linked Resource, never as the `process.env` value the embedding path would read.
 
 ## The review process
 
