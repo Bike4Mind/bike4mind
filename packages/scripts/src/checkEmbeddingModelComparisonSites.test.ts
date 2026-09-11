@@ -128,6 +128,16 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       'is read, so it is not the retrievability rule. The literal right-hand name is the marker - ' +
       'a site that means the real rule cannot spell its operand `requestedEmbeddingModel`.',
   },
+  {
+    pattern: /(===|!==)\s*[A-Za-z0-9_.]+\s*\?[^:]*:\s*await\s+countQueryTokens\(/,
+    reason:
+      'A token-count memo in the semantic-search handler: has the query already been counted under ' +
+      'this model, reuse that count, else recount. Both operands are the request own query models ' +
+      'and no FabFile label is read - the lines only came into view because the query binding was ' +
+      'renamed from embedding_model to searchEmbeddingModel, the first spelling the prefilter can ' +
+      'see. The countQueryTokens false-branch is the marker: a site that means the retrievability ' +
+      'rule cannot resolve to a token count.',
+  },
 ];
 
 // This file's own path relative to REPO_ROOT, so it excludes itself by exact match rather than by
