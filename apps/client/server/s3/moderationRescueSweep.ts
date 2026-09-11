@@ -29,10 +29,12 @@ export interface ModerationRescueSweepArgs {
  * notebook-import path would otherwise leave (a transient scan failure releases the row to 'pending'
  * with nothing to retry it).
  *
- * Scoped to the `knowledge/` key prefix on purpose: this sweep writes TERMINAL outcomes, so it must
- * never touch an ordinary presigned upload (bare `<uuid>.<ext>`). An abandoned/slow ordinary upload
- * sitting 'pending' is not this sweep's concern - stamping it a terminal moderation verdict would be
- * an un-appealable false block. See KNOWLEDGE_KEY_PREFIX.
+ * The TERMINAL re-scan selection is scoped to the `knowledge/` key prefix on purpose: that path
+ * writes terminal outcomes, so it must never touch an ordinary presigned upload (bare `<uuid>.<ext>`).
+ * An abandoned/slow ordinary upload sitting 'pending' is not this sweep's concern - stamping it a
+ * terminal moderation verdict would be an un-appealable false block. See KNOWLEDGE_KEY_PREFIX. The
+ * stale-'scanning' reclaim below is deliberately NOT scoped: it only moves 'scanning' -> 'pending'
+ * (non-terminal) and is the sole writer that frees a crashed ordinary-upload claim.
  *
  * Re-scans in place with the same claim/persist wiring as the import path. Runs from the daily
  * reconcile cron; recovery latency is coarse but the held file is fail-closed (unservable) until it
@@ -59,11 +61,16 @@ export async function runModerationRescueSweep({
   // moderationClaimedAt (stamped when the claim was taken), not updatedAt: timestamps bumps updatedAt
   // on any write, so an unrelated edit to a scanning row would reset its staleness clock. Fall back
   // to updatedAt only for legacy rows claimed before moderationClaimedAt existed.
+  //
+  // NOT scoped to KNOWLEDGE_KEY_PREFIX, unlike the terminal selection below: this only moves
+  // 'scanning' -> 'pending' (never a terminal verdict), so it is safe on any FabFile - and it is the
+  // ONLY writer that un-sticks an ordinary presigned upload whose objectCreated scan crashed
+  // mid-claim (objectCreated's pending|null CAS can never re-claim its own 'scanning' row). Scoping
+  // this to knowledge/ would strand every such ordinary upload on 'scanning' forever (unservable).
   await FabFile.updateMany(
     {
       moderationStatus: 'scanning',
       deletedAt: null, // matches missing-or-null; never revive a soft-deleted row
-      filePath: KNOWLEDGE_KEY_PREFIX, // imported-knowledge rows only (see docstring)
       $or: [
         { moderationClaimedAt: { $lt: cutoff } },
         { moderationClaimedAt: { $exists: false }, updatedAt: { $lt: cutoff } },

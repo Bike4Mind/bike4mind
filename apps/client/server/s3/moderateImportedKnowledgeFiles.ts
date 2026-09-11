@@ -37,8 +37,9 @@ export interface ModerateImportedKnowledgeFilesArgs {
   /** Release a claim back to `pending` after a transient scan failure so the row is never stranded on `scanning`. */
   release(_id: unknown): Promise<void>;
   /**
-   * When true, a scan that fails because the object does not exist in storage (NoSuchKey/404)
-   * SOFT-DELETES the row (via `retireMissingObject`) instead of releasing it back to `pending`. Only
+   * When true, a scan that fails because the object does not exist in storage (NoSuchKey only, never
+   * a bare 404 - see isMissingObjectError) SOFT-DELETES the row (via `retireMissingObject`) instead
+   * of releasing it back to `pending`. Only
    * the rescue sweep sets this, and it selects only imported-knowledge rows already past the staleness
    * age floor, where a never-created object is a permanent orphan (an import whose bytes never
    * landed); releasing would re-select the same orphan every run - a poison batch that starves
@@ -57,14 +58,18 @@ export interface ModerateImportedKnowledgeFilesArgs {
 }
 
 /**
- * A storage read that failed because the object does not exist (vs a transient 5xx/throttle):
- * S3's GetObject throws `NoSuchKey` (404) for a key that was never written. Matches the AWS SDK v3
- * error shape structurally so this module needn't import the S3 client.
+ * A storage read that failed because the OBJECT (not the bucket) does not exist (vs a transient
+ * 5xx/throttle): S3's GetObject throws `NoSuchKey` for a key that was never written. Matched by the
+ * error's `name`/`Code` only - deliberately NOT by a bare `$metadata.httpStatusCode === 404`, because
+ * the AWS SDK maps `NoSuchBucket` to 404 identically, and a bucket misconfig (stage-name substitution
+ * miss, a self-host `.env` typo) must be treated as transient, never as a permanent orphan to
+ * soft-delete. Matches the AWS SDK v3 error shape structurally so this module needn't import the S3
+ * client.
  */
 function isMissingObjectError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
-  const e = err as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number } };
-  return e.name === 'NoSuchKey' || e.Code === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404;
+  const e = err as { name?: string; Code?: string };
+  return e.name === 'NoSuchKey' || e.Code === 'NoSuchKey';
 }
 
 /**

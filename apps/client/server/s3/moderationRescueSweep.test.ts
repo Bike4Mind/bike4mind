@@ -49,8 +49,15 @@ describe('runModerationRescueSweep', () => {
     expect(filter.filePath).toBeInstanceOf(RegExp);
     expect(filter.filePath.test('knowledge/u1/abc')).toBe(true);
     expect(filter.filePath.test('9f2c-abc.png')).toBe(false);
-    // Same scope on the stale-scanning reclaim.
-    expect(h.updateMany.mock.calls[0][0].filePath).toBeInstanceOf(RegExp);
+  });
+
+  it('reclaims stale scanning rows regardless of prefix, so a crashed ordinary upload is not stranded', async () => {
+    // The stale-'scanning' reclaim is deliberately NOT filePath-scoped: it only moves
+    // scanning -> pending (non-terminal), and is the sole writer that frees a crashed ordinary
+    // (non-knowledge) upload's claim. Scoping it would strand ordinary uploads on 'scanning' forever.
+    h.lean.mockResolvedValue([]);
+    await runModerationRescueSweep({ enabled: true, limit: 50, logger });
+    expect(h.updateMany.mock.calls[0][0].filePath).toBeUndefined();
   });
 
   it('re-scans each stranded file with its own owner and forwards the enabled flag', async () => {

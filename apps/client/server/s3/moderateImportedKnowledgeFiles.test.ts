@@ -116,6 +116,26 @@ describe('moderateImportedKnowledgeFiles', () => {
     expect(args.persist).not.toHaveBeenCalled();
   });
 
+  it('treats a NoSuchBucket 404 as transient (releases, never retires) even when terminalOnMissingObject is set', async () => {
+    // The AWS SDK maps NoSuchBucket to a 404 identically to NoSuchKey. A bucket misconfig must NOT
+    // look like a permanent missing-object orphan: releasing (not soft-deleting) is the only safe
+    // outcome, or a bad bucket name would mass-soft-delete every swept row.
+    const noSuchBucket = () =>
+      Object.assign(new Error('The specified bucket does not exist'), {
+        name: 'NoSuchBucket',
+        Code: 'NoSuchBucket',
+        $metadata: { httpStatusCode: 404 },
+      });
+    const moderate = vi.fn(async () => {
+      throw noSuchBucket();
+    }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
+    const args = buildArgs({ moderate, terminalOnMissingObject: true });
+    await moderateImportedKnowledgeFiles(args);
+    expect(args.release).toHaveBeenCalledWith('oid');
+    expect(args.retireMissingObject).not.toHaveBeenCalled();
+    expect(args.persist).not.toHaveBeenCalled();
+  });
+
   it('still releases (does not retire) a transient failure even when terminalOnMissingObject is set', async () => {
     const moderate = vi.fn(async () => {
       throw new Error('rekognition throttled'); // not a missing-object error
