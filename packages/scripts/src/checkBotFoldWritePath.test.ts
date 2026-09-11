@@ -238,6 +238,15 @@ describe('bot-fold write path', () => {
       expect(gate).toMatch(/env\.FOLD_MODE == 'true'/);
     }
     expect(step(src, 'Mint fold push token')).toMatch(/steps\.review_posted\.outputs\.posted == 'true'/);
+    // `Report fold failure` keys on the SAME measurement, which is what keeps it from
+    // double-commenting with `Report incomplete review` (gated on the complement).
+    // And on `!= 'success'` rather than `== 'failure'`, so a review that lands and
+    // then errors - which skips the mint, the push and the no-op reporter in one go -
+    // still gets an explanation instead of a bare red check.
+    const failureGate = step(src, 'Report fold failure');
+    expect(failureGate).toMatch(/steps\.review_posted\.outputs\.posted == 'true'/);
+    expect(failureGate).toMatch(/steps\.push_token\.outcome != 'success'/);
+    expect(failureGate).toMatch(/steps\.fold_push\.outcome != 'success'/);
   });
 
   it('refuses to commit a file CI executes', () => {
