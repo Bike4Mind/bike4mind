@@ -40,15 +40,20 @@ const WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'pr-bot-review.yml
  * the end of the file, since the last step in the job has no following step to stop at. The name
  * must match in full (a trailing parenthetical aside is allowed) and must resolve to exactly one
  * step, so a new step whose name merely starts with an asserted one cannot silently be picked up
- * instead. The terminator is any `- ` at step indent, not `- name: ` alone, so a step written in
- * some other YAML order cannot let one block bleed into the next.
+ * instead. The terminator is any `- ` at the SAME indent as the matched step (a backreference),
+ * not `- name: ` alone, so a step written in some other YAML order cannot let one block bleed
+ * into the next.
+ *
+ * Indent is matched loosely and the terminator derived from it, rather than pinned to the six
+ * columns this file happens to use. YAML does not care, so a step written `-   name:` is still a
+ * step - and keying on exact columns made such a step invisible to every sweep below at once.
  */
 function step(src: string, name: string): string {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const head = new RegExp(`^ {6}- name: ${escaped}(?: \\(.*\\))?$`, 'gm');
+  const head = new RegExp(`^ +-\\s+name: ${escaped}(?: \\(.*\\))?$`, 'gm');
   expect([...src.matchAll(head)], `step name is not unique: ${name}`).toHaveLength(1);
   const found = src.match(
-    new RegExp(`^ {6}- name: ${escaped}(?: \\(.*\\))?$[\\s\\S]*?(?=^ {6}- |$(?![\\s\\S]))`, 'm')
+    new RegExp(`^( +)-\\s+name: ${escaped}(?: \\(.*\\))?$[\\s\\S]*?(?=^\\1- |$(?![\\s\\S]))`, 'm')
   )?.[0];
   expect(found, `step not found: ${name}`).toBeTruthy();
   return found ?? '';
@@ -75,11 +80,15 @@ function withoutComments(yaml: string): string {
  * every assertion below while `ci.yml` already uses `>-` elsewhere in this repo. The indicator
  * is therefore `[|>][-+]?\d*`, and the single-line arm's lookahead has to exclude the same set
  * or a block header reads as a one-line body.
+ *
+ * Indent is likewise taken from the `run:` line itself by backreference rather than pinned to
+ * eight columns: a step at any other nesting is still a step, and pinning the columns made one
+ * invisible to the push, `git add` and tree-execution sweeps simultaneously.
  */
 function runBodies(src: string): string[] {
   return [
-    ...[...src.matchAll(/^ {8}run: [|>][-+]?\d*\n((?: {10}.*\n|\n)+)/gm)].map(m => m[1]),
-    ...[...src.matchAll(/^ {8}run: (?![|>][-+]?\d*$)(.*)$/gm)].map(m => m[1]),
+    ...[...src.matchAll(/^( +)run: [|>][-+]?\d*\n((?:\1 +.*\n|\n)+)/gm)].map(m => m[2]),
+    ...[...src.matchAll(/^ +run: (?![|>][-+]?\d*$)(.*)$/gm)].map(m => m[1]),
   ].map(withoutComments);
 }
 
@@ -232,11 +241,44 @@ function withKeys(src: string, name: string): string[] {
   return [...(block ?? '').matchAll(/^ {10}([a-z_]+):/gm)].map(m => m[1]);
 }
 
-/** The `--flag` names inside the review step's `claude_args:` block, in file order. */
-function claudeArgFlags(src: string): string[] {
+/**
+ * The review step's `claude_args:` block tokenised the way the action tokenises it.
+ *
+ * claude-code-action concatenates the whole block, drops WHOLE `#` lines, and then SHELL-PARSES
+ * the remainder. A newline is therefore ordinary whitespace to the consumer: `--max-turns 80
+ * --settings ./x.json` on ONE line is identical at the CLI to the same flag on its own line.
+ * A line-anchored regex over this block reads neither - it read only the first flag of each
+ * line, and an appended `--settings` whose file declares `hooks` is command execution with
+ * `Bash` and every write tool denied.
+ *
+ * `${{ ... }}` collapses to one word because GitHub substitutes it before the action runs, and
+ * the two substitutions here (a model id, a tool-list arm) each yield a single word.
+ */
+function claudeArgTokens(src: string): string[] {
   const block = step(src, 'Run /bot-review').match(/^ {10}claude_args: \|\n((?: {12}.*\n|\n)+)/m)?.[1];
   expect(block, 'no claude_args block').toBeTruthy();
-  return [...withoutComments(block ?? '').matchAll(/^\s*(--[A-Za-z0-9-]+)/gm)].map(m => m[1]);
+  const text = withoutComments(block ?? '').replace(/\$\{\{[\s\S]*?\}\}/g, 'EXPANSION');
+  return [...text.matchAll(/(?:"[^"]*"|'[^']*'|\S)+/g)].map(m => m[0]);
+}
+
+/**
+ * The only arguments this job may pass the action. Asserted as a SET, and over the token vector
+ * rather than over lines, because enumerating the ways to widen a permission model is the wrong
+ * side to enumerate: `--settings` and `--mcp-config` both reach command execution before any
+ * permission check has a say, and a BARE token is appended to the tool lists by
+ * `parseClaudeArgsToExtraArgs`, so it grants a tool without naming a flag.
+ */
+const ALLOWED_CLAUDE_ARGS = ['--allowedTools', '--disallowedTools', '--max-turns', '--model'];
+
+function assertArgSurface(tokens: string[]): void {
+  expect([...new Set(tokens.filter(token => token.startsWith('-')))].sort()).toEqual([...ALLOWED_CLAUDE_ARGS].sort());
+  // Flag/value pairs end to end. Anything else - a valueless flag, a second value, a bareword -
+  // lands on an odd index or leaves the vector an odd length, and is refused here.
+  expect(tokens).toHaveLength(ALLOWED_CLAUDE_ARGS.length * 2);
+  for (let i = 0; i < tokens.length; i += 2) {
+    expect(ALLOWED_CLAUDE_ARGS, `not an allowlisted argument: ${tokens[i]}`).toContain(tokens[i]);
+    expect(tokens[i + 1]?.startsWith('-'), `${tokens[i]} takes no value: ${tokens[i + 1]}`).toBe(false);
+  }
 }
 
 /** The value of a step's single-line `if:`, trimmed. */
@@ -570,7 +612,29 @@ describe('bot-fold write path', () => {
     // asked.
     expect(step(src, 'Run /bot-review')).toMatch(/^ {8}uses: anthropics\/claude-code-action@v1$/m);
     expect(withKeys(src, 'Run /bot-review').sort()).toEqual(['anthropic_api_key', 'claude_args', 'prompt']);
-    expect(claudeArgFlags(src).sort()).toEqual(['--allowedTools', '--disallowedTools', '--max-turns', '--model']);
+    assertArgSurface(claudeArgTokens(src));
+  });
+
+  it('sees an argument appended to an existing line, rather than only a new line', () => {
+    // POSITIVE CONTROL for the assertion above. It used to match `/^\s*(--[A-Za-z0-9-]+)/gm`,
+    // which sees the FIRST flag of each line and nothing after it - while the action
+    // shell-parses the concatenated block, to which a newline is just whitespace. So every
+    // shape below was live at the CLI and green in this suite. `--max-turns 80` in particular
+    // sits under a comment about the turn budget, so appending there is an ordinary edit.
+    const appended = [
+      '--settings ./ci-settings.json',
+      '--mcp-config /tmp/evil.json',
+      '--permission-mode bypassPermissions',
+      '--dangerously-skip-permissions',
+      // Not a flag: parseClaudeArgsToExtraArgs appends a bare token to the tool lists, so
+      // this GRANTS Bash without naming a flag at all.
+      'Bash',
+    ];
+    for (const suffix of appended) {
+      const injected = src.replace(/^ {12}--max-turns 80$/m, `            --max-turns 80 ${suffix}`);
+      expect(injected, 'the injection anchor moved').not.toBe(src);
+      expect(() => assertArgSurface(claudeArgTokens(injected)), `not caught: ${suffix}`).toThrow();
+    }
   });
 
   it('never runs repo-tracked code out of the checkout', () => {
@@ -602,14 +666,27 @@ describe('bot-fold write path', () => {
       'node "$GITHUB_WORKSPACE/x.js"',
       'npx tsx packages/scripts/src/x.ts',
     ];
-    for (const indicator of ['|', '|-', '|+', '>', '>-', '|2']) {
-      for (const body of shouldBeCaught) {
-        const injected = src.replace(
-          /^ {6}- name: Report skill-fetch failure$/m,
-          `      - name: Warm the toolchain\n        run: ${indicator}\n          ${body}\n      - name: Report skill-fetch failure`
-        );
-        expect(injected, 'the injection anchor moved').not.toBe(src);
-        expect(checkoutCodeReferences(injected), `not caught under \`run: ${indicator}\`: ${body}`).not.toEqual([]);
+    // Both step SHAPES too. YAML does not care how a list item is spaced, so `-   name:` puts
+    // the step's keys at column 10 and its body deeper - and every sweep in this file used to
+    // key on the six/eight/ten columns this workflow happens to use, so one oddly-indented step
+    // was invisible to all of them at once. Nothing in this repo produces that shape today
+    // (prettier normalises it away), which is exactly why it would not be noticed.
+    const shapes = [
+      (indicator: string, body: string) =>
+        `      - name: Warm the toolchain\n        run: ${indicator}\n          ${body}`,
+      (indicator: string, body: string) =>
+        `      -   name: Warm the toolchain\n          run: ${indicator}\n            ${body}`,
+    ];
+    for (const shape of shapes) {
+      for (const indicator of ['|', '|-', '|+', '>', '>-', '|2']) {
+        for (const body of shouldBeCaught) {
+          const injected = src.replace(
+            /^ {6}- name: Report skill-fetch failure$/m,
+            `${shape(indicator, body)}\n      - name: Report skill-fetch failure`
+          );
+          expect(injected, 'the injection anchor moved').not.toBe(src);
+          expect(checkoutCodeReferences(injected), `not caught under \`run: ${indicator}\`: ${body}`).not.toEqual([]);
+        }
       }
     }
     // Composite actions in this repo are tracked files too, and `uses:` is not a `run:`.
@@ -634,9 +711,11 @@ describe('bot-fold write path', () => {
     // (`-I`), because `python3 -` puts the process CWD - $GITHUB_WORKSPACE, the checkout the
     // agent holds Edit on - at `sys.path[0]`, so a planted `./json.py` wins the redactor's
     // own `import json`. Authenticating the program's bytes says nothing about either.
-    const pythonInvocations = (runBodies(src).join('\n').match(/python3[^\n]*/g) ?? []).map(text =>
-      text.replace(/;.*$/, '').trim()
-    );
+    const pythonInvocations = (
+      runBodies(src)
+        .join('\n')
+        .match(/python3[^\n]*/g) ?? []
+    ).map(text => text.replace(/;.*$/, '').trim());
     expect(pythonInvocations).toEqual(['python3 -I - "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"']);
     // The redactor derives the strings it strips by READING the skill file, so that file
     // is the redaction list, and it lives in the unfenced-by-default $RUNNER_TEMP. It is
@@ -809,7 +888,11 @@ describe('bot-fold write path', () => {
     // is a property of a NAME - any of this can be moved to a step the assertion does not
     // ask for. `update-index --add` and `stage` are the two spellings that stage a path
     // without the word `add` being the subcommand.
-    expect(runBodies(src).join('\n').match(/git (?:add|update-index|stage)[^\n]*/g)).toEqual(['git add -u']);
+    expect(
+      runBodies(src)
+        .join('\n')
+        .match(/git (?:add|update-index|stage)[^\n]*/g)
+    ).toEqual(['git add -u']);
     // The step must fail rather than fall through: without `-e` a failed `git commit`
     // reaches `git push`, which says "Everything up-to-date" and exits 0, so the step
     // emits pushed=true under a green check with nothing on the branch.
@@ -827,6 +910,10 @@ describe('bot-fold write path', () => {
       '.github/workflows/pr-bot-review.yml',
       '.husky/pre-commit',
       '.claude/settings.json',
+      // `changeset version` executes the changelog module `.changeset/config.json` names, and
+      // this repo's config names a tracked local `.cjs`, so the directory is executable config.
+      '.changeset/config.json',
+      '.changeset/changelog-github-retry.cjs',
       'scripts/check-no-control-bytes.sh',
       'infra/subscriberFanout.ts',
       'patches/some-dep.patch',
@@ -912,7 +999,7 @@ describe('bot-fold write path', () => {
     // the injection stopped mattering, the harness has started normalising again.
     const broken = src.replace(
       /^( {14}-e '\\\.\(sh\|bash\|zsh\)\$' \\\n)( {14}-e '\^\[\^\/\.\]\+\$' \\\n)/m,
-      "$1              # A comment here ends the grep, silently.\n$2"
+      '$1              # A comment here ends the grep, silently.\n$2'
     );
     expect(broken, 'the injection anchor moved').not.toBe(src);
     // The arms after the comment are gone, so an extensionless root file sails through.

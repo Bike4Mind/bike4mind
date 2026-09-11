@@ -497,8 +497,13 @@ jobs:
             # `gh` was checked and does not qualify: an alias cannot shadow a built-in
             # command, and the configured pager is not invoked when stdout is not a TTY.
             # `bash` does not qualify: GitHub runs step shells non-interactive and
-            # non-login, so no `~/.bashrc` / `~/.profile` is sourced, and every step here
-            # names its programs without relying on a `$PATH` entry under `$HOME`.
+            # non-login, so no `~/.bashrc` / `~/.profile` is sourced. Its `$PATH` search IS
+            # a default search path under `$HOME` - a hosted runner puts
+            # `/home/runner/.local/bin` first, and every step here resolves `git`, `gh`,
+            # `python3` and `jq` by bare name. What closes it is not the PATH but the exec
+            # bit: the agent's write tools create mode 0644, and bash skips a non-executable
+            # match and keeps searching. Stated rather than assumed, because the day a fold
+            # gains a tool that can chmod, this becomes live.
             #
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
@@ -649,7 +654,11 @@ jobs:
           # Tracked files only. The agent holds Write on a fold run, so injected
           # text could ask it to drop a NEW file into the tree; `git add -u` means
           # only edits to files that were already part of the repo can ride along.
-          UNTRACKED=$(git ls-files --others --exclude-standard)
+          # `core.excludesFile` is NOT covered by the GIT_CONFIG_* nulling in this step's
+          # env: git consults `~/.config/git/ignore` by default, with no config entry
+          # behind it. A planted one holding `*` would make --exclude-standard hide every
+          # file the agent dropped, i.e. silence the warning below rather than the commit.
+          UNTRACKED=$(git -c core.excludesFile=/dev/null ls-files --others --exclude-standard)
           if [ -n "$UNTRACKED" ]; then
             echo "::warning::fold left untracked files behind; they were NOT committed:"
             echo "$UNTRACKED"
@@ -702,6 +711,11 @@ jobs:
           # guard matches nothing at all for such a file. No tracked path in this repo
           # is non-ASCII today, so this arms the first time one is committed.
           #
+          # `.changeset/` is in the directory arm for a reason that is not obvious from
+          # the name: `changeset version` loads `.changeset/config.json` and executes the
+          # changelog module it names, and this repo's config names a tracked local
+          # `.cjs` file, so that directory is executable CI configuration like the rest.
+          #
           # NO COMMENTS INSIDE THE `grep -E` BELOW. Bash removes a backslash-newline
           # before it tokenizes, so a `#` line between two continued arguments ends the
           # command there: the arms after it are never passed to grep, the orphaned
@@ -722,7 +736,7 @@ jobs:
           #               `.dockerignore` the arm above catches at any depth.
           BLOCKED=$(
             git -c core.quotePath=false diff --cached --name-only | grep -E \
-              -e '^(\.github|\.husky|\.claude|scripts|infra|patches)/' \
+              -e '^(\.github|\.husky|\.claude|\.changeset|scripts|infra|patches)/' \
               -e '(^|/)package\.json$' \
               -e '(^|/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pnpm-workspace\.yaml|turbo\.json|\.npmrc|\.dockerignore)$' \
               -e '(^|/)Dockerfile(\..*)?$' \
@@ -737,7 +751,7 @@ jobs:
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"
             echo "$BLOCKED"
-            echo 'reason=the fixup touched CI configuration (anything under `.github/`, `.husky/`, `.claude/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, a `Dockerfile` of any suffix or `.dockerignore`, a `*.sh`/`*.bash`/`*.zsh`, or any extensionless repo-root file or repo-root dotfile), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
+            echo 'reason=the fixup touched CI configuration (anything under `.github/`, `.husky/`, `.claude/`, `.changeset/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, a `Dockerfile` of any suffix or `.dockerignore`, a `*.sh`/`*.bash`/`*.zsh`, or any extensionless repo-root file or repo-root dotfile), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
             emit blocked
             exit 1
           fi
