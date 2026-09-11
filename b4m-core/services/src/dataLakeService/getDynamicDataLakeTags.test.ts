@@ -736,7 +736,14 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
       // The fail-closed contract this resolver already had: a failed grant read narrows the view AND
       // says so via lakeViewComplete. A cached rejection would leave the second call narrowed while
       // silently reporting complete.
-      const ctx = grantCtx([theirGatedLake], [grantRow('theirs', 'owner')], { enforce: true });
+      // Its own castable-id pair, not the shared `theirGatedLake`: lakeViewComplete is the subject
+      // here, and an uncastable grant id would narrow the view on its own.
+      const gatedLake = dbLake({
+        id: CASTABLE_LAKE_ID,
+        createdByUserId: 'original-creator',
+        requiredUserTag: 'TagIDoNotHold',
+      });
+      const ctx = grantCtx([gatedLake], [grantRow(CASTABLE_LAKE_ID, 'owner')], { enforce: true });
       (ctx.db.dataLakeAccessGrants?.listByPrincipal as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
         new Error('grants down')
       );
@@ -746,7 +753,7 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
       expect(failed.lakeViewComplete).toBe(false);
 
       const recovered = await getDynamicDataLakeAccess(ctx);
-      expect(recovered.dataLakeTags).toEqual(['datalake:theirs']);
+      expect(recovered.dataLakeTags).toEqual([`datalake:${CASTABLE_LAKE_ID}`]);
       expect(recovered.lakeViewComplete).toBe(true);
       expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(2);
     });
