@@ -38,12 +38,25 @@ export enum OllamaEmbeddingModel {
 }
 
 /**
- * The default embedding model for the current deployment. On self-host with a local Ollama
- * server and no cloud embedding key, this is a local embedder, so RAG / knowledge search work
- * out of the box with no AWS/OpenAI/Voyage credential; otherwise it is the cloud default. Read
- * by the `defaultEmbeddingModel` admin-setting default and by the query-embedding fallback, so
- * an operator who never opens admin settings still gets a working, keyless embedder instead of
- * an unconfigured cloud model that fails with an opaque "security token" error.
+ * The default embedding model for the current deployment - always one this deployment can
+ * actually reach with the credentials it has, so RAG / knowledge search work out of the box.
+ * Read by the `defaultEmbeddingModel` admin-setting default and by the query-embedding fallback,
+ * so an operator who never opens admin settings still gets a working embedder instead of an
+ * unconfigured cloud model that fails with an opaque "security token" error.
+ *
+ * Resolution order, mirroring EmbeddingFactory.getDefaultEmbeddingModel (fab-pipeline), which is
+ * the same question asked of a resolved config rather than of the environment:
+ *   1. a real cloud embedding key -> the OpenAI cloud default;
+ *   2. self-host with a local Ollama server -> the local embedder;
+ *   3. any other cloud stage -> Bedrock, which needs no API key at all.
+ *
+ * Step 3 exists because preview stages deliberately carry no OPENAI_API_KEY (one shared key
+ * across every open PR's preview would burn embedding spend continuously), and the SST secret
+ * defaults to the literal 'not-configured'. Without it, every embedding path on a preview throws
+ * OPENAI_KEY_MISSING_MESSAGE and data-lake ingestion dies with nothing to fall back on.
+ *
+ * Must stay in lock-step with `hasKeylessCloudEmbedder` below and with toolAvailability.ts, which
+ * gates `search_knowledge_base` on the same question.
  */
 export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
   const selfHost = process.env.B4M_SELF_HOST === 'true';
@@ -57,7 +70,25 @@ export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
   if (selfHost && hasOllama && !hasCloudEmbeddingKey) {
     return OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B;
   }
+  // A keyless self-host keeps the OpenAI default on purpose: it has no AWS credentials to reach
+  // Bedrock with, and OPENAI_KEY_MISSING_MESSAGE names the two things a self-hoster can fix
+  // (OPENAI_API_KEY / OLLAMA_BASE_URL). Swapping in Bedrock there would trade an actionable error
+  // for an opaque credential one.
+  if (!hasCloudEmbeddingKey && hasKeylessCloudEmbedder()) {
+    return BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2;
+  }
   return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+}
+
+/**
+ * True when this deployment can embed with no provider API key at all: a cloud stage reaches
+ * Bedrock through its task/execution role's AWS credentials, which every stage has.
+ *
+ * Self-host is excluded because it has no such role - its keyless path is the local Ollama
+ * embedder (`isLocalEmbedderAvailable` in toolAvailability.ts), not Bedrock.
+ */
+export function hasKeylessCloudEmbedder(): boolean {
+  return process.env.B4M_SELF_HOST !== 'true';
 }
 
 export const SupportedEmbeddingModelSchema = z.union([

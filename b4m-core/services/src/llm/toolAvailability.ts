@@ -14,7 +14,7 @@
  * same name) so b4m-core/services can filter the model-facing tool list by availability, not just
  * the Tools-picker UI hint - see sharedToolBuilder.ts's use of `isToolOfferable`.
  */
-import { ApiKeyType, isPlaceholderApiKey, type B4MLLMTools } from '@bike4mind/common';
+import { ApiKeyType, hasKeylessCloudEmbedder, isPlaceholderApiKey, type B4MLLMTools } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsByNames } from '@bike4mind/utils';
 import {
@@ -255,8 +255,15 @@ export async function resolveToolAvailability(
       ),
       // Only search_knowledge_base needs an embeddings key; retrieve_knowledge_content
       // is a direct file/keyword lookup that needs no external key, so it isn't gated.
-      // Available with a cloud embeddings key OR a self-hosted local Ollama embedder (keyless).
-      search_knowledge_base: maybeFailOpen(hasEmbeddingKey || isLocalEmbedderAvailable(), taint.llmKeys),
+      // Available with a cloud embeddings key OR a keyless embedder: a self-hosted local Ollama
+      // server, or Bedrock on a cloud stage (reached with the role's AWS credentials). The last
+      // term is what keeps KB offered on a keyless preview, where defaultEmbeddingModelForEnv
+      // now resolves to Bedrock - without it the tool would stay hidden on exactly the stages
+      // that just gained a working embedder.
+      search_knowledge_base: maybeFailOpen(
+        hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
+        taint.llmKeys
+      ),
     };
   } catch (err) {
     // Last-resort safety net for anything outside the per-lookup Promise.allSettled above (this

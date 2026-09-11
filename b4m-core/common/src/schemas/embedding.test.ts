@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
+  BedrockEmbeddingModel,
   defaultEmbeddingModelForEnv,
   getEmbeddingModelCost,
+  hasKeylessCloudEmbedder,
   OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   VoyageAIEmbeddingModel,
@@ -60,9 +62,31 @@ describe('defaultEmbeddingModelForEnv', () => {
     }
   });
 
-  it('returns the cloud default on hosted (B4M_SELF_HOST unset)', () => {
+  it('returns the cloud default on hosted with a real key, ignoring OLLAMA_BASE_URL', () => {
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    process.env.OPENAI_API_KEY = 'sk-proj-0000aaaa1111bbbb2222cccc3333';
     expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('falls back to keyless Bedrock on a hosted stage with no cloud embedding key', () => {
+    // The preview bug: previews carry no OPENAI_API_KEY on purpose, so the OpenAI default was a
+    // model the vectorizer could never reach - every embedding path threw instead of degrading.
+    expect(defaultEmbeddingModelForEnv()).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
+  });
+
+  it('falls back to keyless Bedrock when the hosted key is the SST placeholder', () => {
+    // infra/secrets.ts defaults OPENAI_API_KEY to the literal 'not-configured', so an unset
+    // secret arrives as a placeholder string rather than as undefined.
+    process.env.OPENAI_API_KEY = 'not-configured';
+    expect(defaultEmbeddingModelForEnv()).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
+  });
+
+  it('never picks Bedrock on a keyless self-host (no AWS role to reach it with)', () => {
+    // Self-host keeps the OpenAI default so the thrown error names OPENAI_API_KEY /
+    // OLLAMA_BASE_URL - the two things a self-hoster can actually fix.
+    process.env.B4M_SELF_HOST = 'true';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(hasKeylessCloudEmbedder()).toBe(false);
   });
 
   it('returns a local embedder on keyless self-host with Ollama', () => {
@@ -129,9 +153,11 @@ describe('defaultEmbeddingModelForEnv', () => {
     expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
   });
 
-  it('only exactly "true" enables self-host (a "1" value keeps the cloud default)', () => {
+  it('only exactly "true" enables self-host (a "1" value never reaches the local embedder)', () => {
+    // The point is that OLLAMA_BASE_URL is ignored without a literal 'true'. With no cloud key
+    // such a deployment reads as hosted, so it lands on the keyless Bedrock arm, not on Ollama.
     process.env.B4M_SELF_HOST = '1';
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
   });
 });

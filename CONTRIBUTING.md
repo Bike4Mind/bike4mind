@@ -284,6 +284,10 @@ Two notes specific to fork PRs:
 
 Preview environments (`pr<N>.preview.bike4mind.com`) are created **on demand by maintainers** through an internal deploy pipeline — there is no label or comment command on this repo that triggers one. Every PR still runs the full CI suite (typecheck, lint, tests). When a maintainer wants to exercise your change in a live environment, they trigger a preview and a bot comment with the URL appears on the PR; previews are torn down automatically when the PR closes or after 3 days without a redeploy. The required **Deploy** check stays green either way — the absence of a preview is expected, not a failure.
 
+**Embeddings on a preview run on Bedrock, not OpenAI.** Preview stages deliberately carry no OpenAI key — one shared key across every open PR's preview would burn embedding spend continuously — so anything that embeds (data-lake ingestion, knowledge search, mementos) falls back to the keyless Bedrock embedder, which authenticates with the stage's own AWS role. That fallback is what `defaultEmbeddingModelForEnv` resolves; you don't have to configure anything.
+
+If you specifically need to exercise the OpenAI embedding path on a preview, an admin can paste a key into Admin Settings, or you can save your own personal key in user settings. Both are read from the database on every request, so they take effect on the next call with no redeploy. Adding the key as a deploy secret does *not* work: outside self-host, the environment variable is never consulted at runtime.
+
 ## The review process
 
 1. **Automated checks run first.** Get them green — maintainers generally review PRs with passing checks before ones without.

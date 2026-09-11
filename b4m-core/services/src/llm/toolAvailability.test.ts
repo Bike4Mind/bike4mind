@@ -119,12 +119,22 @@ describe('resolveToolAvailability - search_knowledge_base embedding-key gate', (
     expect(availability.search_knowledge_base).toBe(true);
   });
 
-  it('is NOT available when the only cloud key is a placeholder and no local embedder is configured', async () => {
+  it('is NOT available on self-host when the only cloud key is a placeholder and no local embedder is configured', async () => {
     // The bug this guards: a placeholder key used to read as a working cloud embedder, so KB
-    // advertised a provider the vectorizer would 401 on.
+    // advertised a provider the vectorizer would 401 on. Pinned to self-host, the only
+    // environment where it is still observable - a cloud stage always has keyless Bedrock.
+    process.env.B4M_SELF_HOST = 'true';
     getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-oai-dummy-routing-test' });
     const availability = await resolveToolAvailability('user-1', { db });
     expect(availability.search_knowledge_base).toBe(false);
+  });
+
+  it('stays available on a keyless cloud stage (Bedrock needs no provider key)', async () => {
+    // A preview carries no usable OPENAI_API_KEY, but defaultEmbeddingModelForEnv resolves to
+    // Bedrock there, so KB must not be greyed out on exactly the stages reviewers verify on.
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-oai-dummy-routing-test' });
+    const availability = await resolveToolAvailability('user-1', { db });
+    expect(availability.search_knowledge_base).toBe(true);
   });
 
   it('stays available on a placeholder key when a local Ollama embedder is configured (fallback)', async () => {
@@ -161,6 +171,10 @@ describe('resolveToolAvailability - injected llmKeys (caller already holds the t
   });
 
   it('honors an injected null (no keys) without falling back to a fetch', async () => {
+    // Pinned to self-host so search_knowledge_base can still discriminate: it is the only
+    // llmKeys-derived tool, and on a cloud stage keyless Bedrock makes it true regardless of the
+    // injected table, which would let this assertion pass for the wrong reason.
+    process.env.B4M_SELF_HOST = 'true';
     getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-1234567890abcdefABCDEF' });
     const availability = await resolveToolAvailability('user-1', { db }, { llmKeys: null });
     expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
