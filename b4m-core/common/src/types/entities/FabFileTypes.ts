@@ -90,8 +90,24 @@ export interface IFabFileChunk {
    *
    * Written just BEFORE the OpenSearch write, not after: the write is fail-open, and a removal for
    * an index that holds nothing is a harmless no-op, whereas a missed one orphans documents.
+   *
+   * Because it is written before, it OVER-claims: set on a chunk whose index write then threw.
+   * Retrieval needs the opposite bias, which is what `retrievalIndexConfirmedModel` below is for.
    */
   retrievalIndexModel?: string;
+  /**
+   * The retrieval index this chunk's document is CONFIRMED to be resident in, written only after
+   * the index write for it came back successful (and survived indexChunks' per-batch rollback).
+   *
+   * The read-side counterpart to `retrievalIndexModel`, and necessarily a separate field: removal
+   * needs an over-approximation (miss one and documents are orphaned forever), retrieval needs an
+   * under-approximation (claim one that is not there and the file silently contributes nothing).
+   * One field cannot be written both before and after the same call.
+   *
+   * Absent on every chunk whose file predates self-host OpenSearch being enabled - there is no
+   * backfill (see SELF_HOST.md), so those files are ANN-ineligible and stay on the scan path.
+   */
+  retrievalIndexConfirmedModel?: string;
 }
 
 /**
@@ -518,6 +534,21 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * a two-model lake doubles its removal traffic and most of it matches nothing.
    */
   retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
+  /** Record `retrievalIndexConfirmedModel` on chunks whose index write has come back successful. */
+  confirmRetrievalIndexed(chunkIds: string[], model: string): Promise<void>;
+  /**
+   * The subset of `fabFileIds` whose chunks are confirmed RESIDENT in `model`'s external retrieval
+   * index: every chunk dispatched to that index carries a matching `retrievalIndexConfirmedModel`.
+   *
+   * All-or-nothing per file, and deliberately so - a file half of whose chunks are missing from
+   * the index would serve half its content with no error anywhere, which is the failure this
+   * answers. Files with no dispatched chunk at all (they predate the feature) are simply absent.
+   *
+   * Counts `retrievalIndexModel` rather than vector-bearing chunks as the denominator: the two
+   * cover the same chunks on the write path and only the former is a small indexable field, so
+   * this stays off the `vector` fetch that makes computeChunkVectorRollup expensive.
+   */
+  annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**

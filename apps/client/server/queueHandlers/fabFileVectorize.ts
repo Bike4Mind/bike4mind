@@ -450,7 +450,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         embeddableChunks.forEach(chunk => {
           chunk.embeddingModel = embeddingModel;
         });
-        await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
+        const indexedChunkIds = await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
+        // Confirmed residency, the read path's ANN eligibility signal - written only for the
+        // chunks the index actually accepted, and inside this same fail-open try so a failure
+        // here leaves them scan-only rather than failing the vectorize. Cannot be folded into
+        // the pre-write `retrievalIndexModel` above: see IFabFileChunk.retrievalIndexConfirmedModel.
+        await fabFileChunkRepository.confirmRetrievalIndexed(indexedChunkIds, embeddingModel);
       } catch (error) {
         logger.warn(`Self-host OpenSearch indexing failed for FabFile ${fabFileId}, chunks remain scan-only`, {
           error: error instanceof Error ? error.message : String(error),
