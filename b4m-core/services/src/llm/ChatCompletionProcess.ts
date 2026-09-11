@@ -1841,7 +1841,8 @@ export class ChatCompletionProcess {
         forcedRetrievalEnabled,
         session.retrievalTags,
         session.citationStyle,
-        toRetrievalFilter(session)
+        toRetrievalFilter(session),
+        session.lakeScopeExplicit
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -5714,7 +5715,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     forceKnowledgeRetrieval?: boolean,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    lakeScopeExplicit?: boolean
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -5836,7 +5838,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       // being read forever). Also needs the host to have wired the app-layer ledger read.
       if (adminSettingsEnableLakeMemory && this.recallLakeMemory) {
         this.logger.log('  - Enabling LakeMemory (hot-card) feature');
-        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter));
+        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter, lakeScopeExplicit));
       }
     }
 

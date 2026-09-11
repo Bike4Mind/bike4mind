@@ -58,6 +58,9 @@ export const CreateSessionRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  // Marks `retrievalTags` as a deliberate selection: an empty one then scopes the lake-memory card
+  // to no lake at all instead of widening to every entitled lake (see resolveLakeMemoryScope).
+  lakeScopeExplicit: z.boolean().optional(),
   // Resolved from the lake by the create route (resolveLakeSessionDefaults) so the merged create
   // params carry it through to core; declared here for the shared type only. NOT client-supplied:
   // the route strips any client-sent value, so the lake stays authoritative for the grounding mode.

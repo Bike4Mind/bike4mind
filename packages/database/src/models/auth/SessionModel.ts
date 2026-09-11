@@ -53,6 +53,9 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     disableUserIntegrations: { type: Boolean, required: false },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
+    // DELIBERATELY no default: absent must stay distinguishable from false, since `retrievalTags`
+    // itself hydrates to [] either way. See SessionTypes.lakeScopeExplicit.
+    lakeScopeExplicit: { type: Boolean, required: false },
     // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
     // a session not created for a lake must read back undefined, which the completion path's corpus
     // defer plan treats as its pre-existing size-only behavior (a default here would change that).

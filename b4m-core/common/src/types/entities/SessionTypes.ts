@@ -569,6 +569,15 @@ export interface ISession {
    */
   retrievalTags?: string[];
   /**
+   * Whether `retrievalTags` above is a deliberate lake selection rather than an absent or derived
+   * default. It is what makes "the user deselected every lake" expressible: Mongoose hydrates an
+   * omitted array to `[]`, so an empty `retrievalTags` cannot say that on its own, and the
+   * lake-memory hot card would otherwise read it as "no scoping wanted" and widen to every entitled
+   * lake (see resolveLakeMemoryScope). Also suppresses the file-driven scope derivation, so
+   * attaching a lake file does not silently re-scope a session the user scoped by hand.
+   */
+  lakeScopeExplicit?: boolean;
+  /**
    * How this session grounds an attached data-lake corpus (inline vs retrieve vs auto-by-size),
    * resolved ONCE at create time from the lake this session was created for (see
    * resolveLakeSessionDefaults). The completion path's corpus defer plan reads this to decide
