@@ -31,6 +31,7 @@ export const createMockRepository = <T>(): IBaseRepository<T> => ({
   find: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  updateGuarded: vi.fn(),
   delete: vi.fn(),
   updateMany: vi.fn(),
   count: vi.fn(),
