@@ -1258,6 +1258,28 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope
   ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
   /**
+   * Top content tags for a lake by document count (#1292) - the tag tree read as a topic map.
+   * Same membership + liveness filter as computeDataLakeStats. Excludes the datalake: meta-tag
+   * namespace and, for a prefix-arm lake, both the bare fileTagPrefix and `<prefix>uncategorized`
+   * - all three are membership signals, not topics.
+   */
+  countDataLakeTopicTags(scope: DataLakeMembershipScope, limit?: number): Promise<{ tag: string; count: number }[]>;
+  /**
+   * Whole-lake indexing health as scalars (#1292), on the same membership + liveness predicate as
+   * computeDataLakeStats - so a member whose extraction failed BEFORE chunking is counted, which
+   * findDataLakeHealthMembers' chunk-bearing $match structurally cannot see. Bucket definitions
+   * track evaluateMemberHealth (`embeddedChunkCount` for vectorized, non-empty-string `error` for
+   * failed); `inFlightFiles` keeps a not-yet-measured member out of both other buckets.
+   */
+  summarizeDataLakeIndexingHealth(scope: DataLakeMembershipScope): Promise<{
+    chunkedFiles: number;
+    fullyVectorizedFiles: number;
+    failedFiles: number;
+    inFlightFiles: number;
+    totalChunks: number;
+    totalEmbeddedChunks: number;
+  }>;
+  /**
    * Per-member health rollups (#1666) for a lake, read from FabFile documents only (never the chunk
    * collection). Raw numbers the pure evaluator grades; char fields stay `null` when unmeasured.
    * Members with no chunks are excluded. `limit` fetches one extra row so the caller can detect and

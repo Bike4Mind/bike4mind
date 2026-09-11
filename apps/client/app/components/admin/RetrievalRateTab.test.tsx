@@ -164,6 +164,112 @@ describe('RetrievalRateTab', () => {
     expect(within(section).getByText('7')).toBeTruthy();
   });
 
+  it('renders the guidance A/B arms and the lift between them', async () => {
+    renderTab();
+    // The lift is hand-computed in the component, so this pins the arithmetic and the sign:
+    // 35.0% with the section against 20.0% without it. Scoped to the section because the arm
+    // denominators overlap other cards in this fixture.
+    const section = await screen.findByTestId('retrieval-rate-guidance');
+    expect(within(section).getByText('+15.0 pp')).toBeTruthy();
+    expect(within(section).getByText('35.0%')).toBeTruthy();
+    expect(within(section).getByText('7 of 20 turns carrying the section')).toBeTruthy();
+    expect(within(section).getByText('20.0%')).toBeTruthy();
+    expect(within(section).getByText('3 of 15 turns with the setting cleared')).toBeTruthy();
+    // Pre-flag turns are their own arm, not the control group.
+    expect(within(section).getByText('5')).toBeTruthy();
+  });
+
+  it('signs a lift that went the wrong way rather than dropping the sign', async () => {
+    mockGet.mockResolvedValue(
+      response({
+        summary: summary({
+          guidance: {
+            injected: { turns: 20, retrievedTurns: 4, rate: 0.2 },
+            notInjected: { turns: 20, retrievedTurns: 7, rate: 0.35 },
+            unrecorded: { turns: 5, retrievedTurns: 0, rate: 0 },
+          },
+        }),
+      })
+    );
+    renderTab();
+    const section = await screen.findByTestId('retrieval-rate-guidance');
+    expect(within(section).getByText('-15.0 pp')).toBeTruthy();
+  });
+
+  it('distinguishes a measured no-effect from an unmeasurable one', async () => {
+    // The pair to the empty-control case below: both arms ran, and the section moved nothing. That
+    // has to read as a result (+0.0 pp), never as the n/a an absent arm gets.
+    mockGet.mockResolvedValue(
+      response({
+        summary: summary({
+          guidance: {
+            injected: { turns: 20, retrievedTurns: 4, rate: 0.2 },
+            notInjected: { turns: 15, retrievedTurns: 3, rate: 0.2 },
+            unrecorded: { turns: 5, retrievedTurns: 0, rate: 0 },
+          },
+        }),
+      })
+    );
+    renderTab();
+    const section = await screen.findByTestId('retrieval-rate-guidance');
+    expect(within(section).getByText('+0.0 pp')).toBeTruthy();
+    expect(within(section).queryByText('n/a')).toBeNull();
+  });
+
+  it('reports an absent control arm instead of a zero lift', async () => {
+    // The failure this guards: nobody has cleared the setting, so there is no comparison - which
+    // must not render as "the section was tried and moved nothing".
+    mockGet.mockResolvedValue(
+      response({
+        summary: summary({
+          guidance: {
+            injected: { turns: 35, retrievedTurns: 7, rate: 0.2 },
+            notInjected: { turns: 0, retrievedTurns: 0, rate: null },
+            unrecorded: { turns: 5, retrievedTurns: 0, rate: 0 },
+          },
+        }),
+      })
+    );
+    renderTab();
+    const alert = await screen.findByTestId('retrieval-rate-guidance-no-control');
+    expect(alert.textContent).toContain('KnowledgeBaseRetrievalPrompt');
+    const section = screen.getByTestId('retrieval-rate-guidance');
+    expect(within(section).queryByText('+0.0 pp')).toBeNull();
+    // The treatment arm is the live rate and stays readable without a control to compare it to.
+    expect(within(section).getByText('7 of 35 turns carrying the section')).toBeTruthy();
+  });
+
+  it('does not ask for a control arm when there is no optional-path traffic at all', async () => {
+    // An empty window is not a one-armed experiment, and telling the operator to clear a setting
+    // would send them after traffic that does not exist.
+    mockGet.mockResolvedValue(
+      response({
+        summary: summary({
+          offeredTurns: 0,
+          retrievedTurns: 0,
+          rate: null,
+          guidance: {
+            injected: { turns: 0, retrievedTurns: 0, rate: null },
+            notInjected: { turns: 0, retrievedTurns: 0, rate: null },
+            unrecorded: { turns: 0, retrievedTurns: 0, rate: null },
+          },
+        }),
+      })
+    );
+    renderTab();
+    await screen.findByTestId('retrieval-rate-guidance');
+    expect(screen.queryByTestId('retrieval-rate-guidance-no-control')).toBeNull();
+  });
+
+  it('renders the rest of the panel when the response predates the guidance field', async () => {
+    // Same shape as the answerability case below: the fold always emits `guidance`, but a response
+    // from an API pod behind the client bundle does not have to.
+    mockGet.mockResolvedValue(response({ summary: summary({ guidance: undefined }) }));
+    renderTab();
+    expect(await screen.findByText('25.0%')).toBeTruthy();
+    expect(screen.queryByTestId('retrieval-rate-guidance')).toBeNull();
+  });
+
   it('renders the rest of the panel when the response predates the answerability field', async () => {
     // A real shape, not a hypothetical: an API pod one deploy behind the client bundle returns
     // exactly this - the fold gained the field, but the response this request actually got did
