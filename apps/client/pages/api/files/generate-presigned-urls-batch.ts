@@ -10,7 +10,6 @@ import {
   type IDataLakeBatchFile,
   type IDataLakeDocument,
   isLakeIngestable,
-  settingsMap,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -24,6 +23,7 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -152,9 +152,7 @@ const handler = baseApi().post(async (req: Request, res) => {
 
   // Check individual file sizes against max file size setting
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-  // MaxFileSize's own definition always sets defaultValue; makeNumberSetting's shared param type
-  // widens it to number|undefined for settings that omit one.
-  const maxFileSize = getSettingsValue('MaxFileSize', settings, settingsMap.MaxFileSize.defaultValue!) * 1024 * 1024;
+  const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
   // Validate every file up front (size + supported type) BEFORE any FabFile is
   // created below, so a single unsupported file can't leave partial lake state.
