@@ -131,15 +131,19 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |
 | `recall`/`prec`/`hit`/`mrr` | did the wider band actually buy better retrieval, or just rescale the same ordering? |
 
-The last six columns all read `n/a` when no captured document matches a supporting slug in `corpus.ts`
-(the report says so in a note). `posTop`/`negTop` are partitioned by `supporting.length`, so on a lake
-the ground truth does not describe, the "positive" and "negative" halves are an arbitrary split and
-their gap is noise. `band` and `spread` need no labels and stay valid.
+The last six columns read `n/a` for an arm whose captured documents match no supporting slug in
+`corpus.ts` (the report says so in a note, **naming the arms** - it is a per-arm property, and on a
+mixed set the other rows' cells are real numbers). `posTop`/`negTop` are partitioned by
+`supporting.length`, so on a lake the ground truth does not describe, the "positive" and "negative"
+halves are an arbitrary split and their gap is noise. `band` and `spread` need no labels and stay
+valid.
 
 PARTIAL overlap gets its own note, because the all-or-nothing check above passes on it: a lake sharing
 one supporting slug renders a full set of quality columns computed against the whole supporting set,
 so `recall` and `prec` are bounded well below 1 by the corpus rather than by the model. The note states
-the fraction (`3 of 49 supporting documents captured`); compare arms to each other, not to 1.
+each arm's own fraction (`3-small@1536: 3 of 49, ada-002@1536: 2 of 49 supporting documents captured`),
+because coverage really does differ between arms - a `--reuse-stored-vectors` baseline drops a whole
+document whose chunks are unlabeled. Compare arms to each other, not to 1.
 
 Each arm block prints the band **twice**. `overall band` is pooled across every probe question,
 including the 5 deliberate negatives; `positives-only band` is the same statistic over the answerable
@@ -313,3 +317,16 @@ pnpm --filter @bike4mind/scripts retrieval:model-comparison \
 `fixtures/tiny-comparison.fixture.json` is a 16-dim **synthetic** capture with a planted topical
 structure. It exercises the truncation, the scoring and the rendering end to end without credentials.
 No number it produces is a measurement of any embedding model.
+
+It carries `"syntheticMatryoshka": true`, which is what lets a model the registry does not know be
+truncated to a narrower arm. Only a committed test fixture sets it: without the flag, "unregistered
+model" and "synthetic fixture" would be one signal, and a typo in a hand-edited capture
+(`text-embedding-ada-oo2`) would render width arms of a model that never had them.
+
+## Re-capturing after a question is reworded
+
+Every captured query carries a `questionHash` of the `PROBE_QUESTIONS` text it embeds, and
+`loadEmbeddingFixture` checks it. Changing a question's wording therefore invalidates existing
+fixtures by design: the id still matches, so nothing downstream would have noticed that two arms were
+scored on different questions under one label. Re-capture every arm (the whole set - a mixed pair is
+the bug) before scoring again.
