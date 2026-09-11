@@ -99,6 +99,44 @@ describe('bot-fold write path', () => {
     expect(allow.review).not.toContain('Bash');
   });
 
+  it('grants only read-shaped GitHub tools plus the review-submission ones', () => {
+    // Pinned BY VALUE, not by spot-checks. The list already holds five write-shaped
+    // `mcp__github__*` names (the pending-review lifecycle), so one more - say
+    // `create_or_update_file` - reads as routine and would let the agent write to the
+    // branch through claude-code-action's OWN App token, routing around `git add -u`,
+    // the path guard, the size bound, the non-force flag and the refspec at once.
+    // Nothing else in this repo can catch that, so the whole set is spelled out here
+    // and adding to it has to be a deliberate edit in two places.
+    const allow = toolListModes(toolFlagValues(src, 'allowedTools')[0]);
+    expect(allow.review.sort()).toEqual(
+      [
+        'Agent',
+        'Glob',
+        'Grep',
+        'Read',
+        'Task',
+        'mcp__github__add_comment_to_pending_review',
+        'mcp__github__create_and_submit_pull_request_review',
+        'mcp__github__create_pending_pull_request_review',
+        'mcp__github__delete_pending_pull_request_review',
+        'mcp__github__get_commit',
+        'mcp__github__get_file_contents',
+        'mcp__github__get_issue',
+        'mcp__github__get_issue_comments',
+        'mcp__github__get_pull_request',
+        'mcp__github__get_pull_request_diff',
+        'mcp__github__get_pull_request_files',
+        'mcp__github__get_pull_request_review_comments',
+        'mcp__github__get_pull_request_reviews',
+        'mcp__github__get_pull_request_status',
+        'mcp__github__list_commits',
+        'mcp__github__submit_pending_pull_request_review',
+      ].sort()
+    );
+    // The fold mode adds exactly the three local file-write tools and no API writer.
+    expect(allow.fold.filter(tool => !allow.review.includes(tool)).sort()).toEqual(['Edit', 'MultiEdit', 'Write']);
+  });
+
   it('grants the file-write tools on the fold mode only', () => {
     // Deny beats allow, so the deny list is the side that actually decides this.
     const deny = toolListModes(toolFlagValues(src, 'disallowedTools')[0]);
@@ -107,11 +145,61 @@ describe('bot-fold write path', () => {
       expect(deny.fold).not.toContain(tool);
     }
     // The two modes differ by those three names and nothing else.
-    expect(deny.review.filter(tool => !deny.fold.includes(tool)).sort()).toEqual([
-      'Edit',
-      'MultiEdit',
-      'Write',
-    ]);
+    expect(deny.review.filter(tool => !deny.fold.includes(tool)).sort()).toEqual(['Edit', 'MultiEdit', 'Write']);
+  });
+
+  it('fences the fold write tools out of .github/ and .git/', () => {
+    // The path guard in the push step gates what gets COMMITTED. It does not gate what
+    // the agent may edit in a tree this same job then runs code from - and on the runs
+    // that do run that code the guard never executes at all, because the transcript
+    // step is gated on `posted != 'true'` while the guard needs `posted == 'true'`.
+    // So the write tools are fenced here as well:
+    //   .github/** - `Redact and upload review transcript` runs a tracked script, and
+    //     the later `gh` steps hold GITHUB_TOKEN with pull-requests and issues write,
+    //     so $GITHUB_PATH/$GITHUB_ENV are reachable from anything that runs.
+    //   .git/** - `git add -u` in the push step would run a `filter.*.clean` command
+    //     out of .git/info/attributes, in the step holding the push token. Denying
+    //     Read(.git/**) blocks writes there today too, but that is harness behaviour,
+    //     not a contract, so it is stated rather than relied on.
+    const deny = toolListModes(toolFlagValues(src, 'disallowedTools')[0]);
+    for (const root of ['.github/**', '.git/**']) {
+      for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+        expect(deny.fold).toContain(`${tool}(${root})`);
+      }
+    }
+    // Read fences asserted on BOTH arms. The step's own comment says both branches are
+    // spelled out in full by design, so every edit here is a both-arms edit, and a
+    // fold-arm-only assertion waves the review arm through.
+    for (const spec of ['Read(.git/**)', 'Read(//proc/**)', 'Read(//sys/**)']) {
+      expect(deny.fold).toContain(spec);
+      expect(deny.review).toContain(spec);
+    }
+  });
+
+  it('runs the transcript redactor from a copy taken before the agent ran', () => {
+    // Second half of the .github/** fence, and the half that does not depend on the
+    // permission system: the executed copy is read out of the commit with `git show`
+    // in a step that precedes the review, so editing the tracked file changes nothing
+    // that runs. Both halves are asserted because either alone closes the hole and
+    // neither is obvious from the other's absence.
+    const stageStep = 'Stage the transcript redactor out of the working tree';
+    const staging = runCommands(step(src, stageStep));
+    expect(staging).toMatch(/git show HEAD:\.github\/scripts\/redact-review-transcript\.py > "\$REDACTOR"/);
+    // Before the review step, not after it.
+    expect(src.indexOf(`- name: ${stageStep}`)).toBeLessThan(src.indexOf('- name: Run /bot-review'));
+    // And the transcript step executes that copy and never the path in the checkout.
+    const transcript = runCommands(step(src, 'Redact and upload review transcript'));
+    expect(transcript).toMatch(/python3 "\$REDACTOR"/);
+    // Scoped to the checkout path: the step's own `env:` names the $RUNNER_TEMP copy,
+    // which is the whole point, so a bare filename check would match that instead.
+    expect(transcript).not.toMatch(/\.github\/scripts\//);
+    // Both steps have to name the same file for the staging to mean anything.
+    const dest = /^\s*REDACTOR: \$\{\{ runner\.temp \}\}\/redact-review-transcript\.py$/gm;
+    expect(src.match(dest)).toHaveLength(2);
+    // Nothing else in the job may run repo-tracked code from the checkout, or the
+    // fence above is the only thing standing between an edit and execution.
+    const runBodies = [...src.matchAll(/^ {8}run: \|\n((?: {10}.*\n|\n)+)/gm)].map(m => runCommands(m[1])).join('\n');
+    expect(runBodies).not.toMatch(/GITHUB_WORKSPACE/);
   });
 
   it('never tells the agent to push', () => {
@@ -149,9 +237,7 @@ describe('bot-fold write path', () => {
       expect(gate).not.toMatch(/always\(\)/);
       expect(gate).toMatch(/env\.FOLD_MODE == 'true'/);
     }
-    expect(step(src, 'Mint fold push token')).toMatch(
-      /steps\.review_posted\.outputs\.posted == 'true'/
-    );
+    expect(step(src, 'Mint fold push token')).toMatch(/steps\.review_posted\.outputs\.posted == 'true'/);
   });
 
   it('refuses to commit a file CI executes', () => {
@@ -160,11 +246,44 @@ describe('bot-fold write path', () => {
     // guard is the only thing bounding it by path, and without it injected text in a public PR
     // comment becomes code execution on the next `synchronize`.
     const commands = runCommands(step(src, 'Push fold commit'));
-    const guard = commands.match(/BLOCKED=\$\(git diff --cached --name-only \| grep -E[\s\S]*?\|\| true\)/)?.[0];
+    // Tracked files only, and asserted rather than left to the comment: with Write in
+    // hand the agent can drop a NEW file into the tree, and `git add -A` would commit
+    // it. `-u` is cited as a control by both this test and the workflow.
+    expect(commands).toMatch(/^ {10}git add -u$/m);
+    expect(commands).not.toMatch(/git add (-A|--all|\.)/);
+    // The step must fail rather than fall through: without `-e` a failed `git commit`
+    // reaches `git push`, which says "Everything up-to-date" and exits 0, so the step
+    // emits pushed=true under a green check with nothing on the branch.
+    expect(commands).toMatch(/^ {10}set -euo pipefail$/m);
+
+    const guard = commands.match(/BLOCKED=\$\([\s\S]*?^ {10}\)$/m)?.[0];
     expect(guard, 'no staged-path guard in the push step').toBeTruthy();
-    for (const pattern of ['.github', '.husky', '.claude', 'scripts', 'infra', 'package\\.json', 'sh']) {
+    // The whole denied set, not a spot-check: each of these is a distinct route from a
+    // pushed file to code running in a later job with a write token or a repo secret,
+    // and the prompt promises the agent the same list.
+    for (const pattern of [
+      '.github',
+      '.husky',
+      '.claude',
+      'scripts',
+      'infra',
+      'patches',
+      'package\\.json',
+      'pnpm-lock\\.yaml',
+      'package-lock\\.json',
+      'yarn\\.lock',
+      'pnpm-workspace\\.yaml',
+      'turbo\\.json',
+      '\\.npmrc',
+      'Dockerfile',
+      'sh|bash|zsh',
+      'sst-dev-fast',
+    ]) {
       expect(guard).toContain(pattern);
     }
+    // A binary is `-` in numstat, so it scores 0 against the size bound however large
+    // the rewrite; it is refused by the path guard instead.
+    expect(guard).toMatch(/awk '\$1 == "-" \{ print \$3 \}'/);
     // Refuse the whole fixup rather than committing the acceptable subset. Scoped to the `if`
     // block's own `fi`, so a stray `exit 1` from a later block cannot stand in for this one.
     const refusal = commands.match(/^ {10}if \[ -n "\$BLOCKED" \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
@@ -175,7 +294,7 @@ describe('bot-fold write path', () => {
 
     // Same principle, on volume rather than path: a fold applies review findings, so a sprawling
     // diff means something else happened. Asserted so the bound cannot decay into a log line.
-    const sizeBound = commands.match(/^ {10}if \[ "\$CHANGED" -gt \d+ \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
+    const sizeBound = commands.match(/^ {10}if \[ "\$CHANGED" -gt 800 \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
     expect(sizeBound, 'no diff-size bound in the push step').toBeTruthy();
     expect(sizeBound).toMatch(/^ {12}exit 1$/m);
     expect(commands.indexOf('CHANGED=')).toBeLessThan(commands.indexOf('git commit'));
@@ -189,8 +308,18 @@ describe('bot-fold write path', () => {
     // same step is exactly the regression a first-match anchor waves through.
     expect(commands.match(/git push/g)).toHaveLength(1);
     expect(commands).not.toMatch(/--force|(?:^|\s)-f(?:\s|$)|\+HEAD/);
-    // One ref, and it is the one the PR came from.
+    // One ref, and it is the one the PR came from. The literal alone is not enough:
+    // rebinding HEAD_REF in the step env to `base.ref` (or to `github.ref_name`) leaves
+    // this text untouched and pushes the fold commit to the PR's BASE branch - i.e. to
+    // main. So the binding is pinned too, in the step that holds the token.
     expect(commands.match(/refs\/heads\/\S+/g)).toEqual(['refs/heads/${HEAD_REF}"']);
+    const pushStep = step(src, 'Push fold commit');
+    expect(pushStep).toMatch(/^ {10}HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.ref \}\}$/m);
+    expect(pushStep).toMatch(/^ {10}PUSH_TOKEN: \$\{\{ steps\.push_token\.outputs\.token \}\}$/m);
+    // The push host is pinned with it: an explicit URL is what keeps the narrowly
+    // scoped token in use instead of the wider one claude-code-action left on origin.
+    expect(commands).toContain('https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git');
+    expect(commands).not.toMatch(/git push \S*origin/);
 
     // The checkout must not leave a credential in .git/config for anything to reach. Scoped to
     // the step, plus a file-wide check so a second checkout cannot persist one either.
