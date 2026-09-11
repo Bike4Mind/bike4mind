@@ -56,6 +56,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
       // takes createSession's "explicit wins" arm, so it costs no DB read.
       retrievalTags: session.retrievalTags,
+      lakeScopeExplicit: session.lakeScopeExplicit,
     },
     adapters
   );

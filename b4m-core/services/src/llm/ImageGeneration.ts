@@ -391,7 +391,9 @@ export class ImageGenerationService {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      await this.db.quests.update(quest);
+      // Write only the fields this error path sets, not the whole stale quest: this catch can run
+      // after the success-path update above, and a whole-doc write would clobber that update.
+      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
     }
 
     Logger.globalInstance.log(`[DEBUG INVOKE] Returning quest:`, {

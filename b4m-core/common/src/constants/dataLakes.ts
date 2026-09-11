@@ -70,6 +70,18 @@ export const isReservedTagPrefix = (prefix: string | undefined | null): boolean 
   typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
 
 /**
+ * Suffix stamped under a lake's `fileTagPrefix` for a file no other tag under that prefix covers -
+ * `acme:uncategorized`. Lowercase literal: the tag tree renders it as a node label.
+ *
+ * Lives in `common` rather than beside its writer (`fallbackLakeTags` in `@bike4mind/services`,
+ * which re-exports it) because `@bike4mind/database` has to READ it: a tag meaning "nothing else
+ * covers this file" is a membership placeholder, not a topic, so the topic-ranking aggregate must
+ * exclude it exactly as it excludes the bare prefix. `packages/database` cannot depend on
+ * `services`, and a second copy of the literal is precisely the drift this shared home prevents.
+ */
+export const UNCATEGORIZED_TAG_SUFFIX = 'uncategorized';
+
+/**
  * Does any of these tag names already place a file under `prefix`?
  *
  * The ONE satisfaction rule, so the write-door reconciler and the backfill migration cannot

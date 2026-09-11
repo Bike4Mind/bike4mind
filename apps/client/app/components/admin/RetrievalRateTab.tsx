@@ -11,7 +11,7 @@ import Input from '@mui/joy/Input';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { OptionalPathRetrievalRate } from '@bike4mind/common';
+import type { OptionalPathRetrievalRate, RateArm } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 
 /**
@@ -47,6 +47,24 @@ const formatDate = (iso: string | null): string => (iso ? new Date(iso).toLocale
  */
 const missRate = (arm: { turns: number; retrievedTurns: number }): number | null =>
   arm.turns === 0 ? null : (arm.turns - arm.retrievedTurns) / arm.turns;
+
+/**
+ * The A/B's verdict: treatment rate minus control rate. Null unless BOTH arms hold turns - a lift
+ * measured against an empty control arm is not a small effect, it is no comparison at all, and
+ * rendering it as 0 would report the section as having been tried and found useless.
+ *
+ * Recomputed from the two counts rather than read off `arm.rate` so it cannot contradict either
+ * the denominators printed beside it or the empty-control banner, which ask `turns` the same
+ * question. Equivalent at the producer, which sets every arm's rate from exactly this ratio.
+ */
+const rateLift = (treatment: RateArm, control: RateArm): number | null =>
+  treatment.turns === 0 || control.turns === 0
+    ? null
+    : treatment.retrievedTurns / treatment.turns - control.retrievedTurns / control.turns;
+
+/** Signed percentage points, because a difference of rates is not itself a rate. */
+const formatLift = (lift: number | null): string =>
+  lift === null ? 'n/a' : `${lift < 0 ? '-' : '+'}${Math.abs(lift * 100).toFixed(1)} pp`;
 
 function StatCard({ label, value, caption }: { label: string; value: string; caption: string }) {
   return (
@@ -247,6 +265,58 @@ export default function RetrievalRateTab() {
                 Replayed after the fact, not measured during the turn: the corpus may have moved since, and for turns
                 where retrieval never ran the lake scope is reconstructed from the session as it stands now. Treat a
                 replay run long after the window as weak evidence.
+              </Typography>
+            </Sheet>
+          )}
+
+          {/* Guarded for the same reason the answerability section above is: a response from an API
+             pod one deploy behind the client bundle predates the field. */}
+          {summary.guidance && (
+            <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }} data-testid="retrieval-rate-guidance">
+              <Typography level="title-sm">Does the when-to-retrieve guidance help?</Typography>
+              <Typography level="body-xs" textColor="text.secondary" sx={{ mb: 1.5 }}>
+                Offered turns split by whether the knowledge-base when-to-retrieve section shipped on the turn. The
+                control arm is produced by clearing the KnowledgeBaseRetrievalPrompt admin setting, which needs no
+                deploy to throw.
+              </Typography>
+
+              {/* Unlike the answerability split, the arms stay visible with no control traffic: the
+                 treatment arm is the live rate and is worth reading on its own. */}
+              {summary.guidance.injected.turns > 0 && summary.guidance.notInjected.turns === 0 && (
+                <Alert color="neutral" sx={{ mb: 1.5 }} data-testid="retrieval-rate-guidance-no-control">
+                  No offered turn in this window ran with the section cleared, so there is no control arm and no lift to
+                  read. Clear the KnowledgeBaseRetrievalPrompt admin setting to open one.
+                </Alert>
+              )}
+
+              <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
+                <StatCard
+                  label="Lift from guidance"
+                  value={formatLift(rateLift(summary.guidance.injected, summary.guidance.notInjected))}
+                  caption="Retrieval rate with the section minus the rate without it"
+                />
+                <StatCard
+                  label="With guidance"
+                  value={formatRate(summary.guidance.injected.rate)}
+                  caption={`${summary.guidance.injected.retrievedTurns.toLocaleString()} of ${summary.guidance.injected.turns.toLocaleString()} turns carrying the section`}
+                />
+                <StatCard
+                  label="Without guidance"
+                  value={formatRate(summary.guidance.notInjected.rate)}
+                  caption={`${summary.guidance.notInjected.retrievedTurns.toLocaleString()} of ${summary.guidance.notInjected.turns.toLocaleString()} turns with the setting cleared`}
+                />
+                <StatCard
+                  label="Unrecorded"
+                  value={summary.guidance.unrecorded.turns.toLocaleString()}
+                  caption="Excluded from both arms - offered turns from before the flag shipped, not a control group"
+                />
+              </Stack>
+
+              <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
+                The arms are whatever traffic arrived, not a matched sample: they are not balanced on answerability, so
+                a lift over few turns can be a difference in the questions asked rather than in the section. A non-zero
+                Unrecorded count means the window reaches back before the flag shipped - narrow the dates to drop those
+                turns rather than reading them as a third arm.
               </Typography>
             </Sheet>
           )}
