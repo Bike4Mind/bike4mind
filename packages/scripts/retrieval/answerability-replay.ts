@@ -41,6 +41,9 @@
  */
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+// `Resource` needs a real SST-linked environment (a deployed stage via `sst shell`, or the
+// self-host container's `--import` alias hook) - a plain `tsx` run against local self-host
+// throws "It does not look like SST links are active", same known limitation as createUser.ts.
 import { Resource } from 'sst';
 import {
   adminSettingsRepository,
