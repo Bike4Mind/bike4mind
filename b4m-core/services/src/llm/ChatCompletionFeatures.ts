@@ -2502,15 +2502,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Off unless the admin setting says otherwise - the weakest identity tier is a bare file
       // name, so this ships default-off (see EnableRetrievalSupersessionCollapse).
       const supersessionCollapseEnabled = await this.readSupersessionCollapseSetting();
-      const collapse =
-        supersessionCollapseEnabled && lakes.length > 0
-          ? partitionBySupersession(
-              modelMatchedFiles.map(f => ({ ...f, fileTags: f.tags?.map(t => t.name) ?? [] })),
-              { lakes }
-            )
-          : { servable: modelMatchedFiles, superseded: [] };
+      // Named, rather than inlined into the ternary, because the audit trail needs the RAN /
+      // did-not-run distinction that the count alone cannot carry: `supersession.count` is 0 both
+      // when the collapse ran and suppressed nothing and when it never ran at all, and persisting
+      // the second as 0 would claim the corpus was checked for superseded generations when it
+      // never was - see ILakeAccessEvent.filesSupersededCollapsed's tri-state contract.
+      const collapseRan = supersessionCollapseEnabled && lakes.length > 0;
+      const collapse = collapseRan
+        ? partitionBySupersession(
+            modelMatchedFiles.map(f => ({ ...f, fileTags: f.tags?.map(t => t.name) ?? [] })),
+            { lakes }
+          )
+        : { servable: modelMatchedFiles, superseded: [] };
       const scanCandidates = collapse.servable;
       const supersession = buildSupersessionReport(collapse.superseded);
+      // The audit value, resolved once here and used by every write site below. Deliberately NOT
+      // read off `coverage.filesSupersededCollapsed`, which is the user-facing coverage note's
+      // number and flattens the two zeroes above into one.
+      const auditSupersededCollapsed = collapseRan ? supersession.count : undefined;
       if (supersession.count > 0) {
         this.logger.warn(`🔒 Forced retrieval: suppressed ${supersession.count} superseded document(s) before ranking`);
       }
@@ -2762,6 +2771,62 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           postRelativeFloorCandidates: scored.length,
         });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
+        // The ZERO ROW. Unlike every other write in this collection it records an ATTEMPT AGAINST A
+        // SCOPE, not a read: nothing was returned, so there is no file tag to reverse into a lake
+        // and `resolvedLakeIds` is the scope that was searched. Written on THIS exit alone - the
+        // corpus was scanned and compared against the query - because a floor starve is the one
+        // empty outcome that says something about the LAKE's coverage rather than about access,
+        // config or corpus health, which the other empty exits report through
+        // `promptMeta.retrieval` instead. See the PRODUCT DECISION block in LakeAccessEventTypes.ts
+        // for the whole rule.
+        //
+        // Gated on `lakeScoped` AND on the session adding no content tag of its own, because both
+        // are needed for "this lake served nothing" to be literally true.
+        //
+        // `lakeScoped` alone is not enough. With it true, `lakes` is exactly the lake(s) the
+        // session named (narrowLakeAccessToSession filters to them) - but `nonLakeRetrievalTags` is
+        // AND'ed into the candidate listing above, so a session scoped to `datalake:alpha` plus a
+        // content tag searches only alpha INTERSECT that tag. Attributing that starve to alpha
+        // would report a coverage gap in a lake that was never searched whole - an OVER-count, and
+        // in a compliance artifact that is the wrong direction to be wrong in. So a session
+        // carrying any non-lake retrieval tag writes no row at all.
+        //
+        // With `lakeScoped` false the lake was one of several mixed sources behind a question that
+        // was not about it, and counting a starve against it would be the same category error the
+        // grounded write below refuses by passing `allowFullScopeFallback: false`.
+        //
+        // `this.retrievalFilter` deliberately does NOT disqualify a row: it excludes files the lake
+        // itself marks unretrievable, so a starve behind it is still a fact about what this lake can
+        // serve. Both gates together keep the per-lake count a deliberate LOWER bound.
+        const attributableToLake = lakeScoped && nonLakeRetrievalTags.length === 0;
+        const searchedLakeIds = attributableToLake ? lakes.map(lake => lake.id) : [];
+        if (searchedLakeIds.length > 0) {
+          recordLakeAccessEvent(
+            this.chatCompletion.db.lakeAccessEvents,
+            {
+              principalKind: 'user',
+              principalId: user.id,
+              organizationId: normalizeId(user.organizationId),
+              resolvedLakeIds: searchedLakeIds,
+              fileIds: [],
+              chunkIds: [],
+              // The marker. NOT inferable from the two empty arrays above - a
+              // data-lake-public-browse row has both empty too and is a real read.
+              servedNothing: true,
+              candidateCapReached: coverage.moreFilesBeyondCap,
+              filesSupersededCollapsed: auditSupersededCollapsed,
+              surface: 'forced-retrieval',
+              // The query that found nothing, subject to the same per-lake opt-in as any other
+              // row. This is the row where the text earns its keep: an unanswered question is the
+              // most actionable thing a lake owner can be shown about their own corpus.
+              queryText: query,
+              questId: quest.id,
+              sessionId: quest.sessionId,
+            },
+            this.logger,
+            this.chatCompletion.db.adminSettings
+          );
+        }
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
       }
       const partialCoverage = this.reportCoverage(quest, coverage, embeddingModel);
@@ -2932,6 +2997,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             chunkIds: injectedChunkIds,
             scores: injectedScores,
             candidateCapReached: coverage.moreFilesBeyondCap,
+            filesSupersededCollapsed: auditSupersededCollapsed,
             surface: 'forced-retrieval',
             queryText: query,
             questId: quest.id,
