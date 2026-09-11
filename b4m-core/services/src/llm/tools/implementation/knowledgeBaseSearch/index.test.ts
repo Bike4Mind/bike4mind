@@ -2272,6 +2272,8 @@ describe('search_knowledge_base retrieval outcome when nothing was compared (#22
     annFilesQueried: 0,
     annHits: 0,
     annModelsQueried: 0,
+    capPromotions: 0,
+    candidatePoolK: 0,
     budgets: { maxFiles: 20000, maxChunks: 100000 },
   };
 
@@ -2914,6 +2916,39 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
 
       expect(passageCount(out)).toBe(5);
       expect(out).not.toContain('**Doc B**');
+    });
+
+    /**
+     * The agent-scoped arm runs its own cap pass over a different search call, so the pair above
+     * cannot cover it: replacing that pass with the uncapped results leaves them green.
+     */
+    describe('agent-scoped arm', () => {
+      const scopedContext = (settings: Record<string, string>) =>
+        contextWithKbSettings(settings, undefined, { kbScope: { fileIds: ['fileA', 'fileB'] } as never });
+
+      beforeEach(() => {
+        fileScopedSemanticSearchMock.mockResolvedValue({
+          results: crowdedTopK,
+          totalChunksSearched: 400,
+          filesInScope: 200,
+          scan,
+        });
+      });
+
+      it('serves the promoted chunk that the engine top-K parked past the ceiling', async () => {
+        const out = await runWith({}, scopedContext({ dataLakeSearchMaxChunksPerFile: '2' }));
+
+        expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+        expect(passageCount(out)).toBe(5);
+        expect(out).toContain('**Doc B**');
+      });
+
+      it('leaves the served set alone with the cap off, so the case above is the cap and not the slice', async () => {
+        const out = await runWith({}, scopedContext({}));
+
+        expect(passageCount(out)).toBe(5);
+        expect(out).not.toContain('**Doc B**');
+      });
     });
   });
 

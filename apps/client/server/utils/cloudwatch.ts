@@ -531,7 +531,16 @@ export async function recordReconcileRun(): Promise<void> {
  * on a self-host install. So a zero here means the hosted cron found no work, never that no
  * install swept.
  *
- * Alarm on ChunkRescueFailures: infra/alarms.ts -> dataLakeChunkRescueFailuresHigh.
+ * Alarms, both in infra/alarms.ts: dataLakeChunkRescueFailuresHigh reads ChunkRescueFailures,
+ * and dataLakeChunkRescueSweepFailing reads ChunkRescueRuns at outcome=failed.
+ *
+ * No `Stage` dimension, unlike the feedback-delivery metrics below: every deployed stage writes
+ * the same stream, so a dev-stage failure counts toward production's threshold. Deliberately not
+ * fixed here - a dimensioned metric is a DISTINCT stream, so scoping means emitting a coarse
+ * `{ Stage }` rollup alongside and repointing BOTH alarms at it, and half of that change leaves
+ * an alarm reading a stream nobody writes (see buildFeedbackDeliveryFailureMetrics below for that
+ * trap, already live on one sibling alarm). Worth doing where it can be verified on a deployed
+ * stage; the gap predates this function.
  */
 export async function recordChunkRescueSweep(
   outcome: ChunkRescueOutcome,

@@ -193,6 +193,19 @@ export interface SemanticSearchScanAccounting {
    * operator needs to see cap pressure.
    */
   annModelsQueried: number;
+  /**
+   * Slots the per-document cap actually redistributed: entries it admitted that the uncapped
+   * top-K would not have held. 0 both when the cap is off and when it was on but inert, which is
+   * the distinction an operator needs - the setting shows only that it is enabled.
+   */
+  capPromotions: number;
+  /**
+   * The limit the ANN queries actually requested. Equal to the caller's topK unless the cap can
+   * bind, where it widens to topK * DIVERSITY_CANDIDATE_POOL_FACTOR so the merge has surplus to
+   * select among. Reported because it is what makes `annHits` step by that factor - without it
+   * the jump reads as a change in retrieval behaviour rather than a wider ask.
+   */
+  candidatePoolK: number;
   /** Budgets in force, echoed so a caller can explain a truncation without guessing. */
   budgets: { maxFiles: number; maxChunks: number };
 }
@@ -550,6 +563,9 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     annFilesQueried: 0,
     annHits: 0,
     annModelsQueried: 0,
+    capPromotions: 0,
+    // A search that never ran asked for nothing; 0 rather than a topK it never used.
+    candidatePoolK: 0,
     budgets: { maxFiles: resolved.maxFiles, maxChunks: resolved.maxChunks },
   };
 }
@@ -1217,9 +1233,10 @@ async function rankChunksForFiles(args: {
   const candidates = merged.drain();
   const mergedResults = capChunksPerFile(candidates, topK, perFileCap);
   // How many slots the cap actually redistributed: entries it admitted that the uncapped top-K
-  // would not have held. Without this nothing distinguishes a cap that bound from one that was on
-  // and inert, and the widened pool makes `ann hits` jump by DIVERSITY_CANDIDATE_POOL_FACTOR with
-  // nothing in the log to attribute the jump to. O(topK), and skipped entirely when off.
+  // would not have held. Rides the scan accounting (not just the debug line below) because that
+  // is the only one of the two a deployed stage can read - LOG_LEVEL is never set away from
+  // 'info', so `logger.debug` is computed and discarded everywhere it would be useful.
+  // O(topK), and skipped entirely when off.
   const uncappedIds = perFileCap > 0 ? new Set(candidates.slice(0, topK).map(c => c.chunkId)) : undefined;
   const capPromotions = uncappedIds ? mergedResults.filter(c => !uncappedIds.has(c.chunkId)).length : 0;
 
@@ -1235,6 +1252,8 @@ async function rankChunksForFiles(args: {
     annFilesQueried: annEligible.length + outcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
     annHits: annResult.hitsReturned + alternateHitsReturned,
     annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
+    capPromotions,
+    candidatePoolK,
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
 

@@ -188,6 +188,12 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
   ann_models_queried: scan.annModelsQueried,
+  // Per-document cap: whether it actually bound, and the ANN limit that was requested. `cap_pool`
+  // is why ann_hits can step by a factor of 3 with the cap on - a wider ask, not a retrieval
+  // change - and cap_promotions is the only signal that separates a cap that redistributed slots
+  // from one that was enabled and inert.
+  cap_promotions: scan.capPromotions,
+  cap_pool: scan.candidatePoolK,
   budgets: { max_files: scan.budgets.maxFiles, max_chunks: scan.budgets.maxChunks },
 });
 
