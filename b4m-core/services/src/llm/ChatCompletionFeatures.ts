@@ -127,6 +127,7 @@ import {
   SYSTEM_PROMPT_RESERVE_TOKENS,
 } from './ChatCompletionProcess';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
+import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -716,16 +717,20 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
   private retrievalFilter: RetrievalExclusionOptions;
   /** Session's lake allowlist. When non-empty, scope the card to these tags (mirrors forced retrieval). */
   private retrievalTags: string[];
+  /** `session.lakeScopeExplicit` - see resolveLakeMemoryScope for why an empty list needs it. */
+  private lakeScopeExplicit: boolean | undefined;
 
   constructor(
     chatCompletion: ChatCompletionContext,
     retrievalTags?: string[],
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    lakeScopeExplicit?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
     this.user = chatCompletion.user;
     this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
+    this.lakeScopeExplicit = lakeScopeExplicit;
     this.retrievalFilter = retrievalFilter ?? {};
   }
 
@@ -743,8 +748,8 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     message: string
   ): Promise<IMessage[]> {
     // A personal corpus suppresses this card. The two compose badly otherwise: personalCorpusOnly is
-    // only ever true when `retrievalTags` is empty (see resolvePersonalCorpusOnly), which is exactly
-    // the branch below that falls back to the FULL entitled set - so a notebook about its own uploads
+    // only ever true when `retrievalTags` is empty (see resolvePersonalCorpusOnly), which without an
+    // explicit lake scope falls back to the FULL entitled set - so a notebook about its own uploads
     // would get every entitled lake's beliefs injected, the always-on injection this change exists to
     // stop, just through the other surface. Checked FIRST so a suppressed turn also skips the
     // entitlement and prompt resolution below rather than doing that work and discarding it.
@@ -806,13 +811,16 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         user: this.user,
         entitlementKeys,
       });
-      // SCOPE to the session's selected lakes, mirroring KnowledgeRetrievalFeature (which narrows by
-      // `retrievalTags`). Without this the card would inject EVERY entitled lake's beliefs into every
-      // turn regardless of which lake the session is about - the always-on injection #1108 removed for
-      // lake prompts. Empty `retrievalTags` means "no per-lake scoping" (the session picker sets none
-      // today), so it falls back to the full entitled set, same as forced retrieval.
-      const dataLakeTags =
-        this.retrievalTags.length > 0 ? entitledTags.filter(tag => this.retrievalTags.includes(tag)) : entitledTags;
+      // SCOPE to the session's selected lakes. Without this the card would inject EVERY entitled
+      // lake's beliefs into every turn regardless of which lake the session is about - the always-on
+      // injection #1108 removed for lake prompts. An empty selection still widens to the full
+      // entitled set, but ONLY while the session expressed no scope at all; a scope the user set and
+      // then emptied selects nothing. resolveLakeMemoryScope holds that tri-state.
+      const dataLakeTags = resolveLakeMemoryScope({
+        entitledTags,
+        retrievalTags: this.retrievalTags,
+        lakeScopeExplicit: this.lakeScopeExplicit,
+      });
       attemptedDataLakeTags = dataLakeTags;
       if (dataLakeTags.length === 0) {
         // The single most common real answer to "why did I get nothing from my lake": the user

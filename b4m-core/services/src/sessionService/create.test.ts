@@ -131,6 +131,20 @@ describe('createSession lake-scope derivation', () => {
     expect(findAllAccessibleByIds).not.toHaveBeenCalled();
   });
 
+  it('derives nothing for an explicit scope that selected no lake', async () => {
+    // A deliberate "no lakes" must survive the files the session is born holding - otherwise the
+    // attachment hands back a scope the caller just cleared.
+    const { adapters, findAllAccessibleByIds } = makeAdapters([lakeFile]);
+    const session = await createSession(
+      user,
+      { name: 'n', knowledgeIds: [FILE_A], lakeScopeExplicit: true },
+      adapters as never
+    );
+    expect(session.retrievalTags).toBeUndefined();
+    expect(session.lakeScopeExplicit).toBe(true);
+    expect(findAllAccessibleByIds).not.toHaveBeenCalled();
+  });
+
   it('skips the lookup entirely when no files are attached', async () => {
     const { adapters, findAllAccessibleByIds } = makeAdapters([]);
     await createSession(user, { name: 'n' }, adapters as never);

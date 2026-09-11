@@ -31,6 +31,9 @@ const createSessionParametersSchema = z.object({
   disableUserIntegrations: z.boolean().optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  // Marks the `retrievalTags` above as a deliberate selection, so an EMPTY one scopes the
+  // lake-memory card to nothing instead of widening to every entitled lake.
+  lakeScopeExplicit: z.boolean().optional(),
   // Resolved from the lake at the create route (resolveLakeSessionDefaults) whenever `dataLakeId`
   // is set: the route deletes the client-sent value there, so the lake is authoritative. A session
   // that names a lake ONLY by `retrievalTags` keeps the caller's own mode, having no lake-defaults
@@ -111,8 +114,10 @@ export const createSession = async (
   // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set
   // tags is authoritative, so derivation runs only for a file-seeded session that named neither.
   // Derives from the filtered ids: an unusable one addresses no file, and fabFiles is _id-keyed.
+  // `lakeScopeExplicit` counts as explicit even with no tags: a caller who deliberately selected
+  // no lake must not have one derived back from the files they attached.
   const retrievalTags =
-    rest.retrievalTags?.length || knowledgeIds.length === 0
+    rest.retrievalTags?.length || rest.lakeScopeExplicit || knowledgeIds.length === 0
       ? rest.retrievalTags
       : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
 

@@ -117,7 +117,9 @@ export const updateSession = async (
   // write that adds nothing (a rename, a tag edit) must not acquire a scope as a side effect.
   // Derives from the whole surviving list, since the scope describes the attached set, not the
   // delta.
-  if (knowledgeIds && addedFileIds.length > 0 && !session.retrievalTags?.length) {
+  // An explicit lake scope blocks derivation even when it selected NO lake - otherwise attaching a
+  // lake file would hand a scope back to a user who had deliberately cleared it.
+  if (knowledgeIds && addedFileIds.length > 0 && !session.retrievalTags?.length && !session.lakeScopeExplicit) {
     const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
       db: { fabFiles: db.fabFiles },
       logger: adapters.logger,

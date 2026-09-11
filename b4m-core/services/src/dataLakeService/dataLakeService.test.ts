@@ -1975,7 +1975,7 @@ describe('updateDataLake — clearing an access gate', () => {
     expect(written).not.toHaveProperty('requiredEntitlement');
   });
 
-  it('lets an admin clear a gate on someone else’s lake, and refuses a non-owner', async () => {
+  it("lets an admin clear a gate on someone else's lake, and refuses a non-owner", async () => {
     const { db, update } = makeDb(gated());
     await expect(
       updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredUserTag: '' }, { db })
@@ -1996,7 +1996,7 @@ describe('updateDataLake — clearing an access gate', () => {
     ).resolves.toMatchObject({ requiredUserTag: '' });
   });
 
-  it('an ungated, org-less lake is owner-only — clearing does not make it world-readable', async () => {
+  it('an ungated, org-less lake is owner-only - clearing does not make it world-readable', async () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
