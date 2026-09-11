@@ -448,17 +448,31 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('dataLakeSearchMaxChunksPerFile'));
   });
 
-  it('the scoped path resolves a lake-rung override for the per-document cap', async () => {
+  it('the scoped path resolves an org-rung override for the per-document cap', async () => {
     // The scoped path is a SECOND resolution path with its own key list and its own return object.
     // A key added to one and not the other is invisible at runtime: the search just never sees the
     // operator's cap on whichever path it took. That is what this pins.
     //
-    // NOT end-to-end, deliberately: no caller passes a lakeId today. The KB tool resolves on the
-    // caller's org/owner rung on purpose (a KB search spans a mixed multi-lake corpus, so there is
-    // no single lake to key on - see resolveKbBudgets), and the semantic-search route passes no
-    // scope at all. The Lake rung is declared to match the sibling scan budgets, which are equally
-    // unreachable at that rung, so it starts working the moment a lake-scoped caller exists rather
-    // than needing a settings change then.
+    // Org rather than Lake: the cap is enforced at a merge whose pool spans EVERY lake the caller
+    // can reach in one pass, so there is no lakeId for an override to key on - the same finding
+    // that took the rung off dataLakeSearchMaxFiles/MaxChunks (#2624).
+    const orgScope: SettingScope = { organizationId: 'org-1' };
+    const db = makeDb({ dataLakeSearchMaxChunksPerFile: '0' }, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'org-1',
+        settingName: 'dataLakeSearchMaxChunksPerFile',
+        settingValue: '2',
+      },
+    ]);
+    expect((await resolveSearchBudgets(db, undefined, orgScope)).maxChunksPerFile).toBe(2);
+  });
+
+  it('a stored lake-rung override for the per-document cap stays inert', async () => {
+    // A row can exist from any path that wrote one; the guarantee is that the resolver does not
+    // honor it, so re-declaring the rung is a deliberate decision rather than silent drift. This
+    // is the failure mode #2624 found on the sibling scan budgets: an operator saves a Lake-scoped
+    // override, sees it in the admin UI, and every search keeps using the platform value.
     const lakeScope: SettingScope = { organizationId: 'org-1', lakeId: 'lake-1' };
     const db = makeDb({ dataLakeSearchMaxChunksPerFile: '0' }, [
       {
@@ -468,7 +482,7 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
         settingValue: '2',
       },
     ]);
-    expect((await resolveSearchBudgets(db, undefined, lakeScope)).maxChunksPerFile).toBe(2);
+    expect((await resolveSearchBudgets(db, undefined, lakeScope)).maxChunksPerFile).toBe(0);
   });
 
   it('two-way drift guard: the resolver falls back to each setting-schema default, not a hand-copied literal', async () => {

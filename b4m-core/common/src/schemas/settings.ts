@@ -3473,7 +3473,11 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 11,
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // Organization/Owner only, no Lake rung - same reason as dataLakeSearchMaxFiles/MaxChunks
+    // (#2624). The cap is enforced at a merge whose pool spans EVERY lake the caller can reach in
+    // one pass, so there is no single lakeId for a narrower rung to key on and a Lake-scoped
+    // override would be silently inert. Reinstating it needs per-lake sub-budgets in the scan.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalCharBudget: makeNumberSetting({
     key: 'forcedRetrievalCharBudget',

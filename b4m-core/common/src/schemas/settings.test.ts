@@ -835,13 +835,15 @@ describe('dataLakeSearchMaxChunksPerFile (#1422)', () => {
     );
   });
 
-  it('is settable down to the Lake rung, like the scan budgets it sits with', () => {
-    // Retrieval breadth is a per-corpus property: one lake of many long documents can want the cap
-    // while the rest of an org does not.
+  it('is settable at org and owner but NOT per lake, like the scan budgets it sits with', () => {
+    // A per-lake cap reads as the natural shape - one lake of long documents wants it, the rest of
+    // an org does not - but it is unkeyable: the cap is enforced at a merge whose pool spans EVERY
+    // lake the caller can reach in one pass, so there is no lakeId to resolve an override against.
+    // dataLakeSearchMaxFiles/MaxChunks shipped that rung on the same intuition and it resolved
+    // nothing (#2624). Pinned so restoring Lake is a deliberate decision, not silent drift.
     expect(settingsMap.dataLakeSearchMaxChunksPerFile.scope?.settableAt).toEqual([
       SettingScopeLevel.Organization,
       SettingScopeLevel.Owner,
-      SettingScopeLevel.Lake,
     ]);
   });
 });
