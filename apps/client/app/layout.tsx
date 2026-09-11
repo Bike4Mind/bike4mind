@@ -1,7 +1,7 @@
 import '@/app/globals.css';
 import Script from 'next/script';
 import { ReactNode } from 'react';
-import { Poppins } from 'next/font/google';
+import { Poppins, Source_Serif_4, JetBrains_Mono } from 'next/font/google';
 import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
 import { ClientProviders } from './providers';
 import { ColorSchemeScript } from './ColorSchemeScript';
@@ -19,6 +19,29 @@ const poppins = Poppins({
   preload: true,
 });
 
+// Reading faces for long-form rendered markdown. Exposed as CSS variables
+// rather than applied to <html>, so they reach only the surfaces that opt in
+// and the app's own chrome stays Poppins. Both are variable fonts: omitting
+// `weight` ships the whole range in one file, and the serif carries an optical
+// size axis that the browser applies automatically from font-size.
+const sourceSerif = Source_Serif_4({
+  subsets: ['latin'],
+  style: ['normal', 'italic'],
+  axes: ['opsz'],
+  display: 'swap',
+  preload: true,
+  variable: '--font-reading-serif',
+});
+
+// Not preloaded: mono only appears once a reply contains code, a table or a
+// figure, so it should not compete with the serif on first paint.
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  display: 'swap',
+  preload: false,
+  variable: '--font-reading-mono',
+});
+
 export const viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -34,7 +57,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={poppins.className} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${poppins.className} ${sourceSerif.variable} ${jetbrainsMono.variable}`}
+      suppressHydrationWarning
+    >
       <body>
         <ColorSchemeScript />
         {process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && (

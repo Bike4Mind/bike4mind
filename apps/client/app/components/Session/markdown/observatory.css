@@ -60,9 +60,11 @@
 }
 
 /* -- shape, fonts, measure -----------------------------------------------
-   No webfont is loaded. The body face is a system serif stack; the UI face
-   inherits whatever the app already set (Poppins today); mono defers to Joy's
-   own code family, which is what the rest of globals.css already does.
+   Three faces doing three jobs: a serif to read in, sans for chrome (headings
+   below h2, table heads, labels), mono for data. The serif and mono are
+   self-hosted by next/font in app/layout.tsx and reach this file as CSS
+   variables; the sans is deliberately the app's own UI face, so rendered
+   markdown does not introduce a fourth typeface next to the surrounding chrome.
 
    `.b4m-md` is a plain <div> that wraps the markdown and nothing else. It
    deliberately does NOT sit on the reply bubble: the bubble is a Joy
@@ -75,7 +77,12 @@
   --b4m-md-r: 10px;
   --b4m-md-r-sm: 6px;
 
-  --b4m-md-font-body: Georgia, 'Iowan Old Style', 'Source Serif 4', serif;
+  /* Self-hosted by next/font in app/layout.tsx. The fallback belongs INSIDE
+     var(): an undefined custom property makes the whole font-family invalid at
+     computed-value time, so a trailing comma-list would never be reached. The
+     variable is set on <html> server-side, but tests and any surface that
+     renders this CSS without the root layout rely on this. */
+  --b4m-md-font-body: var(--font-reading-serif, 'Source Serif 4'), Georgia, 'Iowan Old Style', serif;
 
   /* Must be a real stack, not `inherit`. This element sets font-family to the
      body serif, so an inheriting UI font would resolve to that serif and
@@ -92,16 +99,9 @@
     Arial,
     sans-serif
   );
-  --b4m-md-font-mono: var(
-    --joy-fontFamily-code,
-    ui-monospace,
-    'Monaco',
-    'Menlo',
-    'Ubuntu Mono',
-    'Consolas',
-    'source-code-pro',
-    monospace
-  );
+  --b4m-md-font-mono:
+    var(--font-reading-mono, 'JetBrains Mono'), ui-monospace, 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas',
+    'source-code-pro', monospace;
 
   /* Cap the reading measure on the flow children rather than on `.b4m-md`
      itself: the element is the reply bubble, and narrowing it would shrink its
@@ -212,19 +212,23 @@
   text-wrap: balance;
 }
 
+/* Optical sizing is left to the browser, which reads the serif's `opsz` axis
+   straight off font-size. Setting it by hand would mean font-variation-settings,
+   which resets every axis it does not name - including `wght`, silently
+   undoing the font-weight below. */
 .b4m-md h1 {
   font-family: var(--b4m-md-font-body);
+  font-optical-sizing: auto;
   font-size: 1.42em;
   font-weight: 600;
-  font-variation-settings: 'opsz' 44;
   margin: 2em 0 0.62em;
 }
 
 .b4m-md h2 {
   font-family: var(--b4m-md-font-body);
+  font-optical-sizing: auto;
   font-size: 1.2em;
   font-weight: 600;
-  font-variation-settings: 'opsz' 30;
   letter-spacing: -0.018em;
   margin: 1.85em 0 0.6em;
   padding-top: 0.72em;
