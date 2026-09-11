@@ -17,7 +17,7 @@ import {
   lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { apiKeyService, creditService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
-import { getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   getEmbeddingModelCost,
@@ -357,12 +357,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // search_knowledge_base tool's resolveEmbeddingContext, which already resolves the full
       // multi-provider table this way.
       const userIdForService = req.user?.id || 'system';
-      const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
-      // A cloud stage can always reach Bedrock with its own role, so a missing provider key is
-      // not fatal there - knowledgeBaseSearch's resolveEmbeddingContext falls back rather than
-      // losing semantic search. Preflighting a 500 here would pre-empt that fallback; self-host,
-      // which has no such role, still gets the actionable error below.
-      const keylessFallbackAvailable = hasKeylessCloudEmbedder();
+      const requestedEmbeddingModel = embedding_model as SupportedEmbeddingModel;
+      // A cloud stage reaches Bedrock with its own role, so a missing provider key is not fatal
+      // there: the vectorizer already fell back to Bedrock when it wrote this corpus, and the
+      // query has to be embedded in the space the corpus actually occupies. Two carve-outs keep
+      // the loud error where it is still the right answer:
+      //   - self-host has no AWS role, so there is nothing to fall back TO;
+      //   - a caller who NAMED embedding_model gets the error rather than a silent answer out of
+      //     a different vector space than the one they asked about.
+      const mayFallBack = parsed.data.embedding_model === undefined && hasKeylessCloudEmbedder();
       const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
         userIdForService,
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
@@ -374,18 +377,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // which degrades gracefully via semanticDataLakeSearch's own missingCredential skip reason
       // instead. A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats
       // it as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
-      if (!keylessFallbackAvailable) {
-        if (embeddingProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
+      const requestedProvider = getProviderFromModel(requestedEmbeddingModel);
+      if (!mayFallBack) {
+        if (requestedProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
           return res.status(500).json({
             error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
           });
-        } else if (embeddingProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
+        } else if (requestedProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
           return res.status(500).json({
-            error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+            error: `${requestedProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
           });
-        } else if (embeddingProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
+        } else if (requestedProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
           return res.status(500).json({
-            error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+            error: `${requestedProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
           });
         }
       }
@@ -395,6 +399,22 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         voyageai: effectiveKeys?.voyageai,
         ollama: effectiveKeys?.ollama,
       };
+
+      // Bind the query's model ONCE, here: the resolved key table is the first thing that can
+      // answer "is that model reachable from this deployment" (an SST secret never lands in
+      // process.env, so no env read can). Everything below keys off the resolved model, so a
+      // substitution is never billed or reported as the model it stood in for. The credit
+      // pre-flight above priced the REQUESTED model, which stays conservative: Titan is cheaper
+      // per token than every cloud model it can stand in for.
+      const { model: searchEmbeddingModel } = mayFallBack
+        ? resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable)
+        : { model: requestedEmbeddingModel };
+      if (searchEmbeddingModel !== requestedEmbeddingModel) {
+        req.logger?.warn(
+          `[semantic-search] no credential resolved for ${requestedEmbeddingModel}; embedding the query with keyless ${searchEmbeddingModel} instead`
+        );
+      }
+      const embeddingProvider = getProviderFromModel(searchEmbeddingModel);
 
       if (isAborted()) return res.end();
 
@@ -411,7 +431,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
           tags,
           topK: top_k,
           minScore: min_score,
-          embeddingModel: embedding_model as SupportedEmbeddingModel,
+          embeddingModel: searchEmbeddingModel,
           apiKeyTable: embeddingApiKeyTable,
           dataLakeTags,
           dataLakeTagPrefixes,
@@ -506,7 +526,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
           };
 
           await Promise.all([
-            recordEmbeddingUsage(embedding_model, embeddingProvider),
+            recordEmbeddingUsage(searchEmbeddingModel, embeddingProvider),
             // Defensive: the planner (alternateModelAnn.ts) already only ever selects a
             // registry-known model, so this filter should never actually drop anything. Mirrors
             // the same guard in knowledgeBaseSearch/index.ts's recordAllEmbeddingUsage.

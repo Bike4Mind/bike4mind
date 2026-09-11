@@ -231,6 +231,11 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     // The vectorize pipeline and the chat tool both use defaultEmbeddingModel; querying in a
     // different space returns nothing (dimension skip) or nonsense (same dim, other space).
     mockGetSettingsValue.mockResolvedValue('voyage-3-large');
+    // The block default holds an OpenAI key only. Give the model the caller is asserting on its
+    // OWN credential: this test is about the SETTING driving the query model, and without the
+    // key it would also be asserting that an unreachable model is used anyway - which is the
+    // keyless fallback's job to prevent, and is covered in the keyless-providers block below.
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key', voyageai: 'test-voyage-key' });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
@@ -709,15 +714,68 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     expect(searchParams().apiKeyTable).toEqual({ openai: 'k-openai', voyageai: 'k-voyage', ollama: null });
   });
 
-  it('still rejects a keyed provider whose credential is genuinely absent', async () => {
-    // The guard must keep failing for providers that DO need a key - the fix is about Bedrock,
-    // not about making every missing credential silent.
+  it('still rejects a keyed provider whose credential is genuinely absent, on self-host', async () => {
+    // Self-host has no AWS role, so there is nothing to fall back TO: the actionable error
+    // naming the missing key is the only useful answer, and must not degrade into a silent
+    // empty result. This is the half of the old guard that survives.
+    const originalEnv = { ...process.env };
+    process.env.B4M_SELF_HOST = 'true';
+    try {
+      mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+      mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
+      mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
+      const res = makeRes();
+
+      await handler(makeReq({ query: 'onboarding' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(mockSemanticSearch).not.toHaveBeenCalled();
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it('embeds the query with the keyless model rather than failing when the DEFAULT has no credential', async () => {
+    // On a cloud stage the vectorizer already fell back to Bedrock when it wrote this corpus, so
+    // failing the query is answering from a space nothing was written into. The search has to run,
+    // and it has to run under the model that was actually reachable.
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
     const res = makeRes();
 
     await handler(makeReq({ query: 'onboarding' }), res);
+
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(searchParams().embeddingModel).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
+  });
+
+  it('says in the log which model it substituted, so an empty result is distinguishable', async () => {
+    // A stage that HAD a key and lost it searches a corpus it cannot match and returns nothing.
+    // This line is the only thing separating that from a genuine no-hits answer.
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
+    const req = makeReq({ query: 'onboarding' });
+
+    await handler(req, makeRes());
+
+    const warned = (req as unknown as { logger: { warn: ReturnType<typeof vi.fn> } }).logger.warn.mock.calls
+      .map(c => String(c[0]))
+      .join('\n');
+    expect(warned).toContain('text-embedding-3-small');
+    expect(warned).toContain(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
+  });
+
+  it('still rejects when the CALLER named the model, rather than answering from another space', async () => {
+    // A caller who passed embedding_model asked about one specific vector space. Silently
+    // answering out of a different one is worse than telling them it is unreachable - the
+    // fallback covers the deployment default only.
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding', embedding_model: 'text-embedding-3-small' }), res);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(mockSemanticSearch).not.toHaveBeenCalled();

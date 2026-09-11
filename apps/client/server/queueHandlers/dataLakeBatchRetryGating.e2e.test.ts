@@ -69,6 +69,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   },
   getProviderFromModel: vi.fn(() => 'openai'),
   resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
+  // Echoes the requested model back: these suites are about retry/recovery bookkeeping, not
+  // about the keyless fallback, so the handler must stamp exactly what the payload asked for.
+  resolveEmbeddingWithKeylessFallback: vi.fn((model: unknown) => ({ config: {}, missing: null, model })),
   // Mirror the real name-based guard so the failure branch classifies a plain Error correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   // Bypassed: this test's mock vectors are 3-wide, not a real model's actual width, and Atlas

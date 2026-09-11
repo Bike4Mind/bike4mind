@@ -120,6 +120,14 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       'Compares the QUERY model to the deployment default for a telemetry warning. No file label ' +
       'is involved; a `file.embeddingModel` form still trips the guard.',
   },
+  {
+    pattern: /[eE]mbeddingModel\s*!==\s*requestedEmbeddingModel/,
+    reason:
+      'Compares the model the keyless fallback SETTLED ON to the one the caller asked for, to log ' +
+      "the substitution. Both operands are this request's own query/write model; no FabFile label " +
+      'is read, so it is not the retrievability rule. The literal right-hand name is the marker - ' +
+      'a site that means the real rule cannot spell its operand `requestedEmbeddingModel`.',
+  },
 ];
 
 // This file's own path relative to REPO_ROOT, so it excludes itself by exact match rather than by

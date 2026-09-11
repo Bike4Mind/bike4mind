@@ -104,17 +104,39 @@ describe('POST /api/sessions/semantic-search embedding provider resolution', () 
     expect(bodies.some(b => b.includes('Unsupported embedding provider'))).toBe(false);
   });
 
-  it('still rejects a keyed provider whose credential is genuinely absent', async () => {
-    // The fix is about keyless providers, not about making every missing credential silent.
+  it('still rejects a keyed provider whose credential is genuinely absent, on self-host', async () => {
+    // Self-host has no AWS role, so there is nothing to fall back TO and the actionable error
+    // naming the provider is the only useful answer. This is the half of the old guard that
+    // survives the keyless-fallback change.
+    const originalSelfHost = process.env.B4M_SELF_HOST;
+    process.env.B4M_SELF_HOST = 'true';
+    try {
+      mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+      mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
+      const res = makeRes();
+
+      await handler(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('OpenAI') }));
+      expect(mockGenerateEmbedding).not.toHaveBeenCalled();
+    } finally {
+      if (originalSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+      else process.env.B4M_SELF_HOST = originalSelfHost;
+    }
+  });
+
+  it('embeds with the keyless model instead of 400ing when a cloud stage has no credential', async () => {
+    // The vectorizer already fell back to Bedrock when it wrote this stage's corpus, so refusing
+    // the query answers from a space nothing was written into.
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
     const res = makeRes();
 
     await handler(makeReq(), res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('OpenAI') }));
-    expect(mockGenerateEmbedding).not.toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalledWith(400);
+    expect(mockGenerateEmbedding).toHaveBeenCalledTimes(1);
   });
 
   it('still passes a present credential through to the factory', async () => {

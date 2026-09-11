@@ -68,6 +68,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   },
   getProviderFromModel: vi.fn(() => 'openai'),
   resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
+  // Echoes the requested model back: these suites are about retry/recovery bookkeeping, not
+  // about the keyless fallback, so the handler must stamp exactly what the payload asked for.
+  resolveEmbeddingWithKeylessFallback: vi.fn((model: unknown) => ({ config: {}, missing: null, model })),
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   // See the sibling e2e: this suite's mock vectors are 3-wide, so Atlas dimension validation is
   // bypassed here and covered on its own elsewhere.
