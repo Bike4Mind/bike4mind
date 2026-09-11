@@ -75,6 +75,9 @@ function makeHarness(lake: { id: string; status?: string } | null = { id: 'lake-
         bulkInsert: vi.fn(async (payloads: { fabFileId: string }[]) => {
           chunks.push(...payloads);
         }),
+        findFabFileIdsWithChunks: vi.fn(
+          async (ids: string[]) => new Set(chunks.filter(c => ids.includes(c.fabFileId)).map(c => c.fabFileId))
+        ),
       } as never,
       dataLakes: {
         findBySlug: vi.fn(async () => (lake ? ({ status: 'active', ...lake } as never) : null)),
@@ -151,6 +154,32 @@ describe('ingestHelpDatalake', () => {
     // The point of the differential mirror: no re-embed, and no delete window on the live lake.
     expect(h.embed.mock.calls).toHaveLength(embedCallsAfterFirstRun);
     expect(h.deletedFileIds).toEqual([]);
+  });
+
+  it('re-creates a member whose chunks are gone even though its body never changed (#2583)', async () => {
+    writeCorpus([makeEntry('features/a'), makeEntry('features/b')], {
+      'features/a': '## One\n\nalpha\n',
+      'features/b': '## Two\n\nbeta\n',
+    });
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+    const strandedId = h.files.find(f => f.tags.some(t => t.name === 'help:features/a'))!.id;
+
+    // The state #2583 reports: an interrupted delete took the chunks and left the file row
+    // standing, still claiming `vectorized: true` over a positive vectorizedChunkCount. The body
+    // and the embedding model are untouched, so a hash-and-model reuse gate re-elects it on every
+    // tick and the article is silently unanswerable forever.
+    for (let i = h.chunks.length - 1; i >= 0; i--) {
+      if (h.chunks[i].fabFileId === strandedId) h.chunks.splice(i, 1);
+    }
+
+    const result = await ingestHelpDatalake(h.deps, opts());
+
+    // Healed on the very next tick, and the sibling that still has its chunks is not re-embedded.
+    expect(result).toMatchObject({ created: 1, removed: 1, unchanged: 1 });
+    expect(h.files.some(f => f.id === strandedId)).toBe(false);
+    const replacement = h.files.find(f => f.tags.some(t => t.name === 'help:features/a'))!;
+    expect(h.chunks.some(c => c.fabFileId === replacement.id)).toBe(true);
   });
 
   it('re-embeds an article whose body changed, and leaves its untouched sibling alone', async () => {

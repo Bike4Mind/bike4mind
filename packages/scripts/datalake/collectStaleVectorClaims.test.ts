@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { collectStaleVectorClaims, type StaleVectorClaimCandidate } from './collectStaleVectorClaims';
+import {
+  collectStaleVectorClaims,
+  repairStaleVectorClaims,
+  type StaleVectorClaimCandidate,
+} from './collectStaleVectorClaims';
 
 /**
  * Fakes the two repository primitives (proven separately against real Mongo in
@@ -61,5 +65,34 @@ describe('collectStaleVectorClaims (#2583)', () => {
 
     expect(report).toEqual({ scanned: 0, stale: [] });
     expect(deps.findFabFileIdsWithChunks).not.toHaveBeenCalled();
+  });
+});
+
+describe('repairStaleVectorClaims (#2583)', () => {
+  it('resets exactly the flagged ids through the canonical reset', async () => {
+    const resetChunkStateByIds = vi.fn(async (ids: string[]) => ids);
+
+    const repair = await repairStaleVectorClaims({ resetChunkStateByIds }, ['f2', 'f5']);
+
+    expect(resetChunkStateByIds).toHaveBeenCalledWith(['f2', 'f5']);
+    expect(repair).toEqual({ reset: ['f2', 'f5'], skipped: [] });
+  });
+
+  it('reports the ids the reset refused rather than claiming it repaired them', async () => {
+    // `resetChunkStateByIds` is preconditioned on `isChunking: {$ne: true}` and returns only the
+    // ids it changed. Counting the request as the result would report a clean repair over files
+    // still claiming chunks they do not have - the silent-success this issue is about.
+    const resetChunkStateByIds = vi.fn(async (ids: string[]) => ids.filter(id => id !== 'busy'));
+
+    const repair = await repairStaleVectorClaims({ resetChunkStateByIds }, ['free', 'busy']);
+
+    expect(repair).toEqual({ reset: ['free'], skipped: ['busy'] });
+  });
+
+  it('writes nothing when the sweep found nothing to repair', async () => {
+    const resetChunkStateByIds = vi.fn(async (ids: string[]) => ids);
+
+    expect(await repairStaleVectorClaims({ resetChunkStateByIds }, [])).toEqual({ reset: [], skipped: [] });
+    expect(resetChunkStateByIds).not.toHaveBeenCalled();
   });
 });
