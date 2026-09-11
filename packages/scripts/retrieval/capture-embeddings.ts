@@ -56,7 +56,13 @@ import {
   totalExcluded,
   type StoredChunk,
 } from './capturePlan';
-import { corpusRegime, formatCorpusRegime, isLongDocumentRegime, loadEmbeddingFixture } from './embeddingFixture';
+import {
+  corpusRegime,
+  formatCorpusRegime,
+  hashQuestionText,
+  isLongDocumentRegime,
+  loadEmbeddingFixture,
+} from './embeddingFixture';
 
 /** The ingest tags each help file `help:<slug>`; that slug is what corpus.ts's ground truth names. */
 const HELP_TAG_PREFIX = 'help:';
@@ -123,6 +129,11 @@ const needStoredVectors = argv['reuse-stored-vectors'];
 const stored: StoredChunk[] = [];
 const tokenCounts: number[] = [];
 const capturedDocs = new Set<string>();
+// Counted alongside `capturedDocs` rather than read off it: docId is the help slug for `system-help`,
+// so two files sharing a slug are one document but two files, and a capturable file with no chunk
+// rows is no document at all. Only a real file counter makes the printed line add up to fileIds.
+let capturableFiles = 0;
+let filesWithoutChunks = 0;
 let filesUnreachable = 0;
 for (const fileId of fileIds) {
   const file = await fabFileRepository.findById(fileId);
@@ -138,8 +149,10 @@ for (const fileId of fileIds) {
   // which is the right document identity for any other lake.
   const helpTag = file.tags?.find(t => t.name.startsWith(HELP_TAG_PREFIX));
   const docId = helpTag ? helpTag.name.slice(HELP_TAG_PREFIX.length) : fileId;
+  capturableFiles++;
 
   const fileChunks = await fabFileChunkRepository.findByFabFileId(fileId);
+  if (fileChunks.length === 0) filesWithoutChunks++;
   // The parent's label is a fallback for a WHOLE file, never for a single chunk. A file with no
   // chunk-level stamps predates the field, and its parent label is the only truth there is. But once
   // any chunk in the file is stamped, an unstamped sibling is genuinely unknown - and lending it the
@@ -166,12 +179,15 @@ if (stored.length === 0) {
       `(${filesUnreachable} unreachable: archived, deleted, not fully vectorized or retrieval-excluded).`
   );
 }
-console.log(`\nfiles: ${capturedDocs.size} capturable, ${filesUnreachable} unreachable of ${fileIds.length}`);
+console.log(
+  `\nfiles: ${capturableFiles} capturable (${filesWithoutChunks} with no chunk rows, ` +
+    `${capturedDocs.size} distinct documents), ${filesUnreachable} unreachable of ${fileIds.length}`
+);
 
 // --- Corpus-regime gate: is this the long-document case the model question is about? ---
 const regime = corpusRegime(
   stored.map(c => ({ docId: c.docId, charLength: countCodePoints(c.text) })),
-  capturedDocs.size
+  capturableFiles
 );
 console.log(`\n${formatCorpusRegime(regime)}\n`);
 if (!isLongDocumentRegime(regime)) {
@@ -291,12 +307,16 @@ for (const model of models) {
     dims,
     corpus: argv.lake,
     capturedAt,
-    filesInScope: capturedDocs.size,
+    filesInScope: capturableFiles,
     chunksExcluded,
     filesExcluded,
     filesUnreachable,
     chunks,
-    queries: PROBE_QUESTIONS.map((q, i) => ({ id: q.id, vector: queryVectors[i] })),
+    queries: PROBE_QUESTIONS.map((q, i) => ({
+      id: q.id,
+      vector: queryVectors[i],
+      questionHash: hashQuestionText(q.question),
+    })),
   };
 
   // Validate before writing, not on the next read: `dims` is taken from chunks[0] alone, so a
