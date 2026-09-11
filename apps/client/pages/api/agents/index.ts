@@ -6,7 +6,6 @@ import {
   IAgent,
   IAgentCapabilities,
   IAgentDocument,
-  isConcurrencyConflictError,
   supportedChatModels,
   supportedImageModels,
   UserLevelType,
@@ -256,11 +255,6 @@ const handler = baseApi()
       });
     } catch (error: any) {
       console.error('Error creating agent:', error);
-      if (isConcurrencyConflictError(error)) {
-        // A guarded write lost an optimistic-concurrency race; surface it as a retryable 409
-        // rather than masking it as a 500.
-        return res.status(409).json({ error: error.message });
-      }
       if (error.name === 'BadRequestError' || error.statusCode === 400) {
         return res.status(400).json({ error: error.message });
       }

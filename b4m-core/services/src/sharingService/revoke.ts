@@ -74,12 +74,16 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
 
   // This filters `document.users` in memory and writes the whole doc back - a lost-update-sensitive
   // grant path, so it opts in to the version guard (`updateGuarded`). Because the doc carries `__v`, a
-  // concurrent grant to the same doc racing this revoke throws ConcurrencyConflictError (409, surfaced
-  // by the shared errorHandler) instead of being silently clobbered - the revoke fails loud rather than
-  // resurrecting access. The route wraps this in `withTransaction`, so a conflict also rolls back the
-  // `revokeFromProject` side effects above. (Access *widening* via updateDocumentSharing is a targeted
-  // `$set` of isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
-  await dbModel.updateGuarded(document);
+  // racing whole-doc write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
+  // surfaced by the shared errorHandler) instead of clobbering this revoke, and the route's
+  // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Note the
+  // guard only defends against other *guarded* writers: a plain `update` of the same doc (e.g. some
+  // accept.ts paths) is not conditioned on `__v` and can still resurrect access - guarding those is a
+  // follow-up. (Access *widening* via updateDocumentSharing is a targeted `$set` of
+  // isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
+  // `updateGuarded` is optional on IBaseRepository (additive for external implementers), but every
+  // in-repo repo is a concrete BaseRepository that provides it.
+  await dbModel.updateGuarded!(document);
 
   return document;
 };
