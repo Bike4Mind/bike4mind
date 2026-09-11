@@ -21,6 +21,7 @@ import {
   apiKeyService,
   creditService,
   dataLakeService,
+  isOperationalBillingEnabled,
   recordOperationalUsage,
   scopedSettingsService,
 } from '@bike4mind/services';
@@ -40,14 +41,7 @@ import {
   type SettingScope,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import {
-  createTokenizer,
-  getSettingsByNames,
-  getSettingsMap,
-  getSettingsValue,
-  normalizeId,
-  type ITokenizer,
-} from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -350,13 +344,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // Gated on the exact pair recordOperationalUsage requires to debit; a deployment that
       // never bills must not start rejecting searches.
       const queryTokens = await countQueryTokens();
-      const billingSettings = await getSettingsMap(
-        { adminSettings: adminSettingsRepository },
-        { names: ['billOperationalUsage', 'enforceCredits'], logger: req.logger }
-      );
-      const shouldBill =
-        (getSettingsValue('billOperationalUsage', billingSettings) ?? false) &&
-        (getSettingsValue('enforceCredits', billingSettings) ?? false);
+      // Shared with the settlement in recordOperationalUsage, so the two cannot drift on
+      // "does operational spend actually debit here".
+      const shouldBill = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger);
 
       // Resolved once and reused by the settlement below, so the pre-flight and the charge
       // can never disagree about which holder pays. Best-effort: a billing-store failure leaves

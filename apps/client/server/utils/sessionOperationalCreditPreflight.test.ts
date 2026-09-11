@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockFindUserById, mockFindOrgById, mockGetSettingsMap } = vi.hoisted(() => ({
+const { mockFindUserById, mockFindOrgById, mockBillingEnabled } = vi.hoisted(() => ({
   mockFindUserById: vi.fn(),
   mockFindOrgById: vi.fn(),
-  mockGetSettingsMap: vi.fn(async () => ({}) as Record<string, unknown>),
+  mockBillingEnabled: vi.fn(async () => false),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -12,9 +12,11 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: mockFindOrgById },
   userRepository: { findById: mockFindUserById },
 }));
-vi.mock('@bike4mind/utils', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  getSettingsMap: mockGetSettingsMap,
+// The pair semantics of the two toggles are this helper's own contract, covered by
+// b4m-core/services/src/billing/isOperationalBillingEnabled.test.ts; here it is the gate.
+vi.mock('@bike4mind/services', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
+  isOperationalBillingEnabled: mockBillingEnabled,
 }));
 
 import {
@@ -28,7 +30,7 @@ const USER_ID = 'user-1';
 const ORG_ID = 'org-1';
 
 /** Both gates on - the only configuration in which recordOperationalUsage can debit. */
-const billingOn = () => mockGetSettingsMap.mockResolvedValue({ billOperationalUsage: 'true', enforceCredits: 'true' });
+const billingOn = () => mockBillingEnabled.mockResolvedValue(true);
 
 const preflight = (overrides: Partial<Parameters<typeof checkSessionOperationalCredits>[0]> = {}) =>
   checkSessionOperationalCredits({ userId: USER_ID, operationCount: 1, operation: 'session tagging', ...overrides });
@@ -36,7 +38,7 @@ const preflight = (overrides: Partial<Parameters<typeof checkSessionOperationalC
 describe('checkSessionOperationalCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetSettingsMap.mockResolvedValue({});
+    mockBillingEnabled.mockResolvedValue(false);
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
     mockFindOrgById.mockResolvedValue(null);
   });
@@ -51,11 +53,16 @@ describe('checkSessionOperationalCredits', () => {
     expect(mockFindUserById).not.toHaveBeenCalled();
   });
 
-  it('allows when billOperationalUsage is on but enforceCredits is off', async () => {
-    mockGetSettingsMap.mockResolvedValue({ billOperationalUsage: 'true', enforceCredits: 'false' });
+  // The settings read is inside the same fail-open boundary as the user/org reads.
+  // AdminSettingsCache awaits findAll() on a cache miss with no error handling of its own, so a
+  // cold container is enough to reach this - and on the project-attach path a throw here lands
+  // after withTransaction has committed, 500ing an action that already succeeded.
+  it('allows when the settings read throws', async () => {
+    mockBillingEnabled.mockRejectedValue(new Error('mongo down'));
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
 
     await expect(preflight()).resolves.toEqual({ allowed: true });
+    expect(mockFindUserById).not.toHaveBeenCalled();
   });
 
   it('allows a funded holder when billing is on', async () => {
@@ -141,7 +148,52 @@ describe('checkSessionOperationalCredits', () => {
     billingOn();
 
     await expect(preflight({ operationCount: 0 })).resolves.toEqual({ allowed: true });
-    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
+  });
+
+  // `pushShareable` shares by bare userId with no org constraint, so a requester holding update
+  // on a shared session can sit outside the holder's org entirely. Second person plus a figure
+  // would address the wrong party and disclose another tenant's balance.
+  it('gives a non-holder requester an impersonal refusal with no balance', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 37, userDetails: [] });
+
+    // Underfunded but non-zero, so there is a real balance the message could have leaked.
+    const verdict = await preflight({ requesterId: 'someone-else', operationCount: 40 });
+
+    expect(verdict.allowed).toBe(false);
+    const reason = verdict.allowed === false ? verdict.reason : '';
+    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
+    expect(reason).not.toContain('37');
+    expect(reason).not.toContain('Your organization');
+  });
+
+  // The cap message tells the reader to contact an administrator they may have no relationship
+  // with, so it is withheld from a non-holder too.
+  it('withholds the per-member cap wording from a non-holder requester', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+    mockFindOrgById.mockResolvedValue({
+      id: ORG_ID,
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 10,
+      userDetails: [{ id: USER_ID, usedCredits: 10 }],
+    });
+
+    const verdict = await preflight({ requesterId: 'someone-else' });
+
+    expect(verdict.allowed === false && verdict.reason).not.toContain('administrator');
+  });
+
+  // The common case is requester == owner, where the actionable detail is the whole point.
+  it('keeps the detailed refusal when the requester is the holder', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+
+    const verdict = await preflight({ requesterId: USER_ID });
+
+    expect(verdict.allowed === false && verdict.reason).toContain('currently have 0 credits');
   });
 
   // A half-resolved pair would skip the cap and bill the member personally for org usage.
@@ -202,7 +254,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
     });
 
   it('passes every session through when operational billing is off', async () => {
-    mockGetSettingsMap.mockResolvedValue({});
+    mockBillingEnabled.mockResolvedValue(false);
 
     const allowed = await filter([
       { id: 's1', userId: USER_ID },
@@ -215,7 +267,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
   // A project holds sessions shared in from other users, and the Summarize handler bills the
   // session OWNER. Checking the requester instead would gate the wrong balance in both
   // directions: a broke requester blocking a funded owner's summary, and vice versa.
-  it('checks each distinct owner once, sized to that owner\'s share of the batch', async () => {
+  it("checks each distinct owner once, sized to that owner's share of the batch", async () => {
     billingOn();
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
 
@@ -230,7 +282,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
     expect(mockFindUserById).toHaveBeenCalledWith(OTHER_USER_ID);
   });
 
-  it('drops only the refused owner\'s sessions, and logs why', async () => {
+  it("drops only the refused owner's sessions, and logs why", async () => {
     billingOn();
     mockFindUserById.mockImplementation(async (id: string) =>
       id === USER_ID ? { id, currentCredits: 0 } : { id, currentCredits: 1000 }
@@ -252,7 +304,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
 
   // Two sessions at 2 operations each is 4 credits, so a 3-credit owner must be refused - the
   // per-session floor would have waved this through.
-  it('multiplies the per-session operation count across the owner\'s sessions', async () => {
+  it("multiplies the per-session operation count across the owner's sessions", async () => {
     billingOn();
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 3 });
 

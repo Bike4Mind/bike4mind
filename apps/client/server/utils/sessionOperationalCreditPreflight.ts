@@ -1,7 +1,6 @@
 import { insufficientCreditsError, type ISessionDocument } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, userRepository } from '@bike4mind/database';
-import { creditService, isOperationalBillingEnabled, OPERATIONAL_BILLING_SETTING_NAMES } from '@bike4mind/services';
-import { getSettingsMap } from '@bike4mind/utils';
+import { creditService, isOperationalBillingEnabled } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -36,6 +35,16 @@ export interface SessionOperationalCreditPreflightArgs {
    * Scales the requirement, so a 500-notebook fan-out is not gated like a single tag.
    */
   operationCount: number;
+  /**
+   * Who is asking, when the caller knows. Decides how much of the refusal is safe to say:
+   * `pushShareable` shares by bare userId with no org constraint, so a requester holding
+   * update on a shared session can be outside the holder's organization entirely. Second
+   * person ("Your organization ... has 37 credits") would then both address the wrong party
+   * and disclose another tenant's balance, so a non-holder gets an impersonal reason with no
+   * figures. Omit it on a path whose reason never reaches a client (the fan-out logs its
+   * refusals for ops, where the figures are the point).
+   */
+  requesterId?: string;
   /** Named in the refusal message, e.g. 'session tagging'. */
   operation: string;
   logger?: Logger;
@@ -69,18 +78,24 @@ export async function checkSessionOperationalCredits({
   userId,
   operationCount,
   operation,
+  requesterId,
   logger,
 }: SessionOperationalCreditPreflightArgs): Promise<SessionOperationalCreditVerdict> {
   if (operationCount <= 0) return { allowed: true };
 
   // Gated on the exact pair recordOperationalUsage requires to debit, via the shared helper:
   // operational billing defaults OFF, and a deployment that never bills for this work must not
-  // start rejecting it.
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { names: OPERATIONAL_BILLING_SETTING_NAMES, logger }
-  );
-  if (!isOperationalBillingEnabled(settings)) return { allowed: true };
+  // start rejecting it. Inside the fail-open boundary like the reads below: AdminSettingsCache
+  // awaits findAll() on a cache miss with no error handling of its own, so a cold container or
+  // a TTL expiry during a mongo blip would otherwise reject - and on the project-attach path
+  // that lands after withTransaction has already committed.
+  try {
+    const billingEnabled = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger);
+    if (!billingEnabled) return { allowed: true };
+  } catch (err) {
+    logger?.warn('[sessionOperationalCreditPreflight] failed to read billing settings', err);
+    return { allowed: true };
+  }
 
   // Best-effort resolution, matching the semantic-search pre-flight: a billing-store blip must
   // not turn a working request into a 500. Both assigned only after both reads succeed - a
@@ -106,17 +121,27 @@ export async function checkSessionOperationalCredits({
 
   const requiredCredits = operationCount * MIN_CREDITS_PER_OPERATION;
 
+  // Everything second-person, and every figure, is scoped to the requester being the holder.
+  // A caller that cannot say who is asking is treated as the holder, which is the pre-existing
+  // wording; the entry points that can face a cross-tenant share all pass requesterId.
+  const requesterIsHolder = requesterId === undefined || requesterId === userId;
+  const crossHolderReason = `The owner of this notebook does not have enough credits for ${operation}.`;
+
   // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be refused
   // even when the org pool is flush.
   if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
     return {
       allowed: false,
-      reason: `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`,
+      // "Contact your organization administrator" is only actionable for a member of that org.
+      reason: requesterIsHolder
+        ? `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`
+        : crossHolderReason,
     };
   }
 
   const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
   if (availableCredits < requiredCredits) {
+    if (!requesterIsHolder) return { allowed: false, reason: crossHolderReason };
     return {
       allowed: false,
       reason: billingOrg
