@@ -23,6 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   projectRepository: {},
   sessionRepository: {},
   userRepository: {},
+  withTransaction: (fn: any) => fn(),
 }));
 
 import '@pages/api/[type]/[id]/revokeSharing';

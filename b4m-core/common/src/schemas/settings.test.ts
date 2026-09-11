@@ -1056,6 +1056,7 @@ describe('KnowledgeBaseRetrievalPrompt default tells the model when to retrieve'
   it('names no knowledge tool the gate does not guarantee', () => {
     expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/retrieve_knowledge_content/);
     expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/count_knowledge_base/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/describe_knowledge_base/);
   });
 
   it('ships as the KnowledgeBaseRetrievalPrompt setting default (no drift between const and setting)', () => {
