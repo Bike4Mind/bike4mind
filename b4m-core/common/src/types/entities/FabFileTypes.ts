@@ -589,6 +589,21 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     options?: { limit?: number; afterChunkId?: string }
   ): Promise<FabFileChunkVector[]>;
   /**
+   * One page of chunk fields for the given files, `vector` excluded, ascending by `_id` - same
+   * exact-cursor contract as `findVectorsByFabFileIds`, and vectorless chunks included.
+   *
+   * The batched, vector-free counterpart of `findByFabFileId`, which is per-file and carries the
+   * embedding - the overwhelming bulk of a chunk row. A consumer that plans over a whole lake
+   * (token counts, text lengths, which model each chunk was embedded under) reads every chunk and
+   * needs none of the vectors, so pulling them costs a lake's worth of embeddings over the wire to
+   * compute a sum. Pair it with `findVectorsByFabFileIds` and join on `id` when the vectors are
+   * actually wanted.
+   */
+  findChunkFieldsByFabFileIds(
+    fabFileIds: string[],
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<{ id: string; fabFileId: string; text: string; tokenCount?: number; embeddingModel?: string }[]>;
+  /**
    * One page of chunk TEXT for a single file, ascending by `_id`, same exact-cursor contract as
    * `findVectorsByFabFileIds`. Returns vectorless chunks too - a text consumer that inherited the
    * vector filter would silently drop content.
