@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off. The third
   // parameter is here for the same reason - dropping it silently strands paused files (#2120).
   runSweep: vi.fn(async () => ({ enqueued: 0, failed: 0 })),
+  runModerationSweep: vi.fn(async () => ({ rescanned: 0 })),
   buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date) => ({
     vectorizeEnqueueFailedAt: { $lt: cutoff },
   })),
@@ -75,6 +76,9 @@ vi.mock('sst', () => ({
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/worker/chunkRescueSweep', () => ({
   runChunkRescueSweep: (...a: unknown[]) => h.runSweep(...(a as [])),
+}));
+vi.mock('@server/s3/moderationRescueSweep', () => ({
+  runModerationRescueSweep: (...a: unknown[]) => h.runModerationSweep(...(a as [])),
 }));
 // Only the stranded-vectorize filter is stubbed (so the call args are assertable); the real
 // age/stale cutoff constants stay real so these tests pin the actual windows the cron uses.
@@ -162,6 +166,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedChunkFiles: 0,
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
+      rescannedModerationFiles: 0,
     });
   });
 
@@ -178,6 +183,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedChunkFiles: 0,
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
+      rescannedModerationFiles: 0,
     });
   });
 
