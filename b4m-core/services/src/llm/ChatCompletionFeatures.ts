@@ -148,7 +148,12 @@ interface DatabaseAdapters {
   fabfiles: IFabFileRepository;
   fabfilechunks: Pick<
     IFabFileChunkRepository,
-    'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+    | 'findByFabFileId'
+    | 'findVectorsByFabFileIds'
+    | 'findTextsByFabFileId'
+    | 'countByFabFileId'
+    // Must stay a superset of ToolContext.db.fabfilechunks - this is what feeds it (ToolBuilder).
+    | 'distinctRetrievalIndexModelsByFabFileIds'
   >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
