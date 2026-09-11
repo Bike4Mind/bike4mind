@@ -42,9 +42,17 @@ export type PublicTools = Exclude<
   B4MLLMTools,
   // `skill` is auto-enabled server-side when the user has skills defined - invocation is
   // via `/skill-name` slash mentions, not a tool toggle, so it stays out of the UI picker.
-  // `count_knowledge_base` is paired server-side with `search_knowledge_base` (a corpus you can
-  // search but not count is the bug it exists to fix), so it needs no toggle of its own.
-  'edit_image' | 'blog_publish' | 'blog_edit' | 'blog_draft' | 'skill' | 'count_knowledge_base' | SlackLlmTools
+  // `count_knowledge_base` and `describe_knowledge_base` are paired server-side with
+  // `search_knowledge_base` (a corpus you can search but not count/describe is the bug they exist
+  // to fix), so neither needs a toggle of its own.
+  | 'edit_image'
+  | 'blog_publish'
+  | 'blog_edit'
+  | 'blog_draft'
+  | 'skill'
+  | 'count_knowledge_base'
+  | 'describe_knowledge_base'
+  | SlackLlmTools
 >;
 
 export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {

@@ -6,6 +6,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   type DataLakeMembershipFileCounts,
+  effectiveTagPrefixArm,
   FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
@@ -1563,6 +1564,63 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1, totalChunkedChars: 1 } },
     ]);
     return agg ?? { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 };
+  }
+
+  /**
+   * Top content tags for a lake by document count (#1292) - the tag tree read as a topic map.
+   * Same membership + liveness filter as computeDataLakeStats, so a lake's topic list is scoped
+   * identically to its own count and browse rather than by a second, independently-written
+   * predicate (see lakeScope's docblock in knowledgeBaseCount for the parity bug that mistake
+   * caused once already).
+   *
+   * Excludes both signals that made a file a MEMBER rather than describing what it is ABOUT: the
+   * `datalake:` meta-tag namespace (NOT_META_TAG, shared with the tag-count surfaces above) and,
+   * for a prefix-arm lake, the bare fileTagPrefix itself with no suffix - `acme:` alone identifies
+   * the lake, not a topic within it (mirrors buildLacksContentPrefixTagFilter's same distinction).
+   */
+  async countDataLakeTopicTags(scope: DataLakeMembershipScope, limit = 15): Promise<{ tag: string; count: number }[]> {
+    const bareMembershipPrefix = effectiveTagPrefixArm(scope);
+    const tagFilter = bareMembershipPrefix
+      ? { $and: [{ tagNames: NOT_META_TAG }, { tagNames: { $ne: bareMembershipPrefix } }] }
+      : { tagNames: NOT_META_TAG };
+
+    return this.fabFileModel.aggregate([
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        },
+      },
+      // Dedupe a document's own tag array before unwinding - a file carrying the same tag name
+      // twice (e.g. imported from two sources) must count as ONE document for that topic, not two.
+      // `tags` is [Object] with no sub-schema and legacy rows carry elements with a missing or
+      // non-string `name` (see pullTagsByFabFileId's own $ifNull note above) - filtered out here
+      // rather than surfaced as a spurious "null" topic.
+      {
+        $project: {
+          tagNames: {
+            $setUnion: [
+              {
+                $map: {
+                  input: { $filter: { input: '$tags', as: 't', cond: { $eq: [{ $type: '$$t.name' }, 'string'] } } },
+                  as: 't',
+                  in: '$$t.name',
+                },
+              },
+              [],
+            ],
+          },
+        },
+      },
+      { $unwind: '$tagNames' },
+      { $match: tagFilter },
+      { $group: { _id: '$tagNames', count: { $sum: 1 } } },
+      { $sort: { count: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: { tag: '$_id', count: 1, _id: 0 } },
+    ]);
   }
 
   /**

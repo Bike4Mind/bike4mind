@@ -100,6 +100,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   advanceVectorizeProgress: vi.fn(),
   setChunkPolicyConflict: vi.fn(),
   computeDataLakeStats: vi.fn(),
+  countDataLakeTopicTags: vi.fn().mockResolvedValue([]),
   findDataLakeHealthMembers: vi.fn(),
   findDataLakeMembershipMembers: vi.fn().mockResolvedValue([]),
   findLakeMemberSiblingsByFileName: vi.fn().mockResolvedValue([]),

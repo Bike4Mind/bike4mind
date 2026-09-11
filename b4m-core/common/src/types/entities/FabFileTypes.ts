@@ -1243,6 +1243,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope
   ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
   /**
+   * Top content tags for a lake by document count (#1292) - the tag tree read as a topic map.
+   * Same membership + liveness filter as computeDataLakeStats. Excludes the datalake: meta-tag
+   * namespace and, for a prefix-arm lake, the bare fileTagPrefix itself - neither is a topic.
+   */
+  countDataLakeTopicTags(scope: DataLakeMembershipScope, limit?: number): Promise<{ tag: string; count: number }[]>;
+  /**
    * Per-member health rollups (#1666) for a lake, read from FabFile documents only (never the chunk
    * collection). Raw numbers the pure evaluator grades; char fields stay `null` when unmeasured.
    * Members with no chunks are excluded. `limit` fetches one extra row so the caller can detect and

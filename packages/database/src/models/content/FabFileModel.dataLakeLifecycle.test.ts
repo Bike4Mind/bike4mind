@@ -207,6 +207,80 @@ describe('FabFile data lake lifecycle membership', () => {
     });
   });
 
+  describe('countDataLakeTopicTags (#1292)', () => {
+    it('counts content tags on lake members only, most-frequent first', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne(
+        { _id: rows.metaTagged._id },
+        { $set: { tags: [{ name: DATALAKE_TAG }, { name: 'oncology' }, { name: 'oncology' }] } }
+      );
+      await FabFile.updateOne(
+        { _id: rows.prefixOwned._id },
+        { $set: { tags: [{ name: 'acme:report' }, { name: 'oncology' }, { name: 'radiology' }] } }
+      );
+      // Retags this row with no lake-membership tag at all, so it drops out of the $match
+      // entirely - its 'oncology' tag must not contribute despite the identical name.
+      await FabFile.updateOne({ _id: rows.unrelated._id }, { $set: { tags: [{ name: 'oncology' }] } });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      // 'acme:report' and 'radiology' tie at count 1; the sort's _id tiebreaker orders them
+      // alphabetically, which is why 'acme:report' precedes 'radiology' below.
+      expect(topics).toEqual([
+        { tag: 'oncology', count: 2 },
+        { tag: 'acme:report', count: 1 },
+        { tag: 'radiology', count: 1 },
+      ]);
+    });
+
+    it('excludes the datalake: meta-tag itself - a membership signal, not a topic', async () => {
+      await seedLakeRows();
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain(DATALAKE_TAG);
+    });
+
+    it('excludes a bare fileTagPrefix tag with no suffix, but keeps a real prefixed topic tag', async () => {
+      // 'acme:' alone identifies the lake, the same way a bare prefix is excluded from the tag
+      // tree elsewhere (buildLacksContentPrefixTagFilter). 'acme:report' has a suffix, so it IS a
+      // real topic and must survive.
+      await makeFile({ fileName: 'bare.txt', userId: CREATOR, tags: [{ name: 'acme:' }] });
+      await seedLakeRows(); // contributes prefixOwned, tagged 'acme:report'
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain('acme:');
+      expect(topics.map(t => t.tag)).toContain('acme:report');
+    });
+
+    it('caps the returned tags at `limit`, highest count first', async () => {
+      await makeFile({
+        fileName: 'many-tags.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: 'a' }, { name: 'b' }, { name: 'c' }, { name: 'd' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope, 3);
+
+      expect(topics).toHaveLength(3);
+    });
+
+    it('ignores a legacy tag element with a missing or non-string name rather than reporting it as a topic', async () => {
+      // `tags` is [Object] with no sub-schema, and legacy rows are known to carry elements with a
+      // missing or non-string `name` (six other call sites in this file guard the same shape).
+      await makeFile({
+        fileName: 'legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, {}, { name: 42 }, { name: 'oncology' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics).toEqual([{ tag: 'oncology', count: 1 }]);
+    });
+  });
+
   // #1040: the single-lake browse (fabFileRepository.search with lakeMembership +
   // restrictToDataLake, what GET /api/data-lakes/:id/articles runs) must agree with
   // computeDataLakeStats above about who is a member - a file only reached through a share or a
