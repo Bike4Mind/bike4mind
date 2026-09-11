@@ -42,14 +42,45 @@ describe('FabFileChunkRepository.updateEmbeddingModel', () => {
     expect(f2Chunks[0].embeddingModel).toBeUndefined();
   });
 
-  it('overwrites a chunk already stamped with a different model (re-embed)', async () => {
-    await FabFileChunk.create(makeChunk({ fabFileId: 'f1', text: 'existing' }));
-    await fabFileChunkRepository.updateEmbeddingModel('f1', 'text-embedding-ada-002');
+  it('leaves an already-labeled chunk alone and fills only its unlabeled siblings', async () => {
+    // This method used to be an unfiltered `updateMany({ fabFileId })`, and the overwrite it
+    // performed is now a bug rather than a feature. A file's chunks are fanned across several
+    // vectorize messages that each resolve their own credential, so a credential appearing or
+    // lapsing mid-ingest leaves one half embedded at 1024 dims and the other at 1536. A blanket
+    // `$set` from whichever message observed the file complete relabeled BOTH halves with its own
+    // model - silently mislabeling half the vectors at the wrong dimensionality, with no repair
+    // short of a full re-embed.
+    //
+    // Overwriting on a genuine re-embed did not move to a different filter here, it moved to a
+    // different WRITER: fabFileVectorize now assigns `chunk.embeddingModel` in the same transaction
+    // that stores `chunk.vector`, so every re-embedded chunk is relabeled beside the vector that
+    // justifies the new label. What is left for this method is exactly what predates that writer -
+    // legacy chunks, and the packages/scripts/datalake backfill's whole purpose.
+    const labeled = await FabFileChunk.create(makeChunk({ fabFileId: 'f1', text: 'already-embedded' }));
+    await FabFileChunk.updateOne({ _id: labeled._id }, { $set: { embeddingModel: 'text-embedding-ada-002' } });
+    const unlabeled = await FabFileChunk.create(makeChunk({ fabFileId: 'f1', text: 'legacy' }));
+
+    await fabFileChunkRepository.updateEmbeddingModel('f1', 'text-embedding-3-small');
+
+    const byId = new Map(
+      (await FabFileChunk.find({ fabFileId: 'f1' }).lean()).map(c => [String(c._id), c.embeddingModel])
+    );
+    expect(byId.get(String(labeled._id))).toBe('text-embedding-ada-002');
+    expect(byId.get(String(unlabeled._id))).toBe('text-embedding-3-small');
+  });
+
+  it('treats null and empty-string labels as unlabeled, not as a model to preserve', async () => {
+    // Both shapes are real: '' from an older write path, and null from stampChunkEmbeddingModel
+    // clearing a FILE label. Neither names an embedding space, so neither may block the fill.
+    const nulled = await FabFileChunk.create(makeChunk({ fabFileId: 'f1', text: 'nulled' }));
+    await FabFileChunk.updateOne({ _id: nulled._id }, { $set: { embeddingModel: null } });
+    const blank = await FabFileChunk.create(makeChunk({ fabFileId: 'f1', text: 'blank' }));
+    await FabFileChunk.updateOne({ _id: blank._id }, { $set: { embeddingModel: '' } });
 
     await fabFileChunkRepository.updateEmbeddingModel('f1', 'text-embedding-3-small');
 
     const chunks = await FabFileChunk.find({ fabFileId: 'f1' }).lean();
-    expect(chunks[0].embeddingModel).toBe('text-embedding-3-small');
+    expect(chunks.every(c => c.embeddingModel === 'text-embedding-3-small')).toBe(true);
   });
 });
 

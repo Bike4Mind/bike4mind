@@ -121,12 +121,16 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       'is involved; a `file.embeddingModel` form still trips the guard.',
   },
   {
-    pattern: /[eE]mbeddingModel\s*!==\s*requestedEmbeddingModel/,
+    pattern: /(===|!==)\s*requestedEmbeddingModel\b/,
     reason:
-      'Compares the model the keyless fallback SETTLED ON to the one the caller asked for, to log ' +
-      "the substitution. Both operands are this request's own query/write model; no FabFile label " +
-      'is read, so it is not the retrievability rule. The literal right-hand name is the marker - ' +
-      'a site that means the real rule cannot spell its operand `requestedEmbeddingModel`.',
+      'Compares the model the keyless fallback SETTLED ON to the one the caller asked for - to log ' +
+      "the substitution, or to decide whether one happened. Both operands are this request's own " +
+      'query/write model; no FabFile label is read, so it is not the retrievability rule. The ' +
+      'right-hand NAME is the whole marker, and the left operand is deliberately unconstrained: a ' +
+      'site that means the real rule compares against the query model, which cannot be spelled ' +
+      '`requestedEmbeddingModel` - whereas the settled side is spelled differently at each site ' +
+      '(`searchEmbeddingModel`, `resolution.model`), and pinning that half made the exclusion ' +
+      'depend on a local name rather than on what is being compared.',
   },
   {
     pattern: /(===|!==)\s*[A-Za-z0-9_.]+\s*\?[^:]*:\s*await\s+countQueryTokens\(/,

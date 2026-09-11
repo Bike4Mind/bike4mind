@@ -778,6 +778,11 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     hasMore?: boolean;
     /** Admin's configured default-embedding-model setting; undefined = unset (factory default wins). */
     defaultEmbeddingModel?: string;
+    /**
+     * What the credential seam resolved for this turn (ChatCompletionProcess publishes it). Undefined
+     * models a construction that never reached the seam, which is what every other test here is.
+     */
+    embeddingBinding?: { requested: string; model: string; missing: string | null };
   }) => {
     const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
     // Honours limit + afterChunkId like the real repository, so the probe and the within-batch
@@ -807,6 +812,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+      embeddingBinding: opts.embeddingBinding,
     };
   };
 
@@ -1137,6 +1143,76 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('different embedding models')
     );
+  });
+
+  describe('which vector space a keyless stage queries in', () => {
+    const TITAN = 'amazon.titan-embed-text-v2:0';
+    const embedWith = async (ctx: ReturnType<typeof makeCtx>) => {
+      const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
+      const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => TITAN };
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      await feature.getContextMessages(
+        makeQuest(),
+        factory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'q'
+      );
+      return createEmbeddingService;
+    };
+
+    /**
+     * One unlabeled-but-vectorized file, so the majority vote defers entirely to the fallback.
+     * `requested` defaults to the configured setting, which is what the seam is seeded with.
+     */
+    const keylessCtx = (binding: { model: string; missing: string | null; requested?: string }) =>
+      makeCtx({
+        files: [{ id: 'f1', fileName: 'F1.pdf', vectorizedChunkCount: 3 }],
+        rows: () => [{ id: 'c1', fabFileId: 'f1', text: 'content', vector: [1, 0] }],
+        defaultEmbeddingModel: 'text-embedding-ada-002',
+        embeddingBinding: { requested: binding.requested ?? 'text-embedding-ada-002', ...binding },
+      });
+
+    it('overrides the stale setting when the DEPLOYMENT resolved no credential at all', async () => {
+      // The stage holds no key, so ingestion also fell back: the corpus really is in Titan space and
+      // the ada-002 setting is simply stale. `missing: null` is what says the fallback actually fired.
+      const createEmbeddingService = await embedWith(keylessCtx({ model: TITAN, missing: null }));
+      expect(createEmbeddingService).toHaveBeenCalledWith(TITAN);
+    });
+
+    it('does NOT override for an expired CALLER key on a keyed stage', async () => {
+      // The regression this pins: `resolveEmbeddingConfig` returns an empty config for an expired
+      // personal key too, and an empty config makes EmbeddingFactory report Titan - so deriving
+      // keylessness from the factory embedded this one caller's query in Titan space against a
+      // production ada-002 corpus. Silently zero results, and the expired-key error that would have
+      // told them to rotate it never surfaces. The deployment's own key state is unchanged by one
+      // expiry, so the configured model must still win.
+      const createEmbeddingService = await embedWith(
+        keylessCtx({ model: 'text-embedding-ada-002', missing: 'openai' })
+      );
+      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+    });
+
+    it('does NOT override on self-host / local dev / CI, which have no role to reach Bedrock with', async () => {
+      // Same empty-config shape, no execution role: substituting Bedrock here trades the actionable
+      // OPENAI_KEY_MISSING_MESSAGE for an opaque AWS CredentialsProviderError against an endpoint
+      // none of those three can reach. The resolver already declines to substitute (hence a non-null
+      // `missing`); this asserts the forced-retrieval path honours that instead of re-deciding.
+      const createEmbeddingService = await embedWith(
+        keylessCtx({ model: 'text-embedding-ada-002', missing: 'ollama' })
+      );
+      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+    });
+
+    it('does NOT override when a Bedrock model was ASKED for rather than substituted', async () => {
+      // `resolveEmbeddingConfig`'s Bedrock arm returns `{ config: {}, missing: null }` for a Bedrock
+      // model it was handed directly, so "missing === null and the provider is Bedrock" is also true
+      // on a fully keyed stage where an admin or caller simply named Titan. Without the
+      // `model !== requested` test that case overrides the configured model with the wrong vector
+      // space - the same silent zero-result, arrived at from the opposite direction.
+      const createEmbeddingService = await embedWith(keylessCtx({ requested: TITAN, model: TITAN, missing: null }));
+      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+    });
   });
 
   it("falls back to the admin's configured default, not the embedding factory's credential-derived default", async () => {

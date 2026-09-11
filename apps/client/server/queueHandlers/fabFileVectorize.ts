@@ -438,8 +438,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await Promise.all(
         embeddableChunks.map((chunk, index) => {
           chunk.vector = vectors[index];
-          // Index residency, recorded per MESSAGE and persisted here rather than with the
-          // file-complete `embeddingModel` stamp below - see IFabFileChunk.retrievalIndexModel.
+          // The model THIS message resolved, written beside the vector it produced and in the same
+          // transaction, so a chunk's label can never name a model other than the one its vector
+          // came from. A file's chunks are fanned across several messages that each resolve
+          // independently, so if a credential appears or lapses mid-ingest the halves genuinely
+          // differ in model AND width; labeling per message is what keeps each one honest and lets
+          // the file-complete stamp detect the split instead of flattening it (see
+          // stampChunkEmbeddingModel and updateEmbeddingModel).
+          chunk.embeddingModel = embeddingModel;
+          // Index residency, recorded per MESSAGE - see IFabFileChunk.retrievalIndexModel.
           // Deliberately written BEFORE the fail-open OpenSearch write it predicts: removing from
           // an index that holds nothing is a no-op, missing one orphans documents forever.
           if (indexesToOpenSearch) chunk.retrievalIndexModel = embeddingModel;
@@ -453,14 +460,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // failed - the Mongo write above already succeeded and is the source of truth).
     if (indexesToOpenSearch) {
       try {
-        // embeddingModel is NOT persisted per-chunk yet at this point - stampChunkEmbeddingModel
-        // below writes it to Mongo in bulk, only once the whole file finishes. Setting it on
-        // these in-memory objects is accurate right now regardless (this IS the model `vectors`
-        // was generated with) and mapDocument requires it to build the right per-model index
-        // document; it does not touch Mongo or the file-completion timing invariant.
-        embeddableChunks.forEach(chunk => {
-          chunk.embeddingModel = embeddingModel;
-        });
+        // `embeddingModel` is already set on these chunks by the transaction above, which is also
+        // what mapDocument reads to build the right per-model index document.
         await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
       } catch (error) {
         logger.warn(`Self-host OpenSearch indexing failed for FabFile ${fabFileId}, chunks remain scan-only`, {
@@ -495,8 +496,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await fabFilesService.stampChunkEmbeddingModel(
         fabFileId,
         embeddingModel,
-        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } },
-        { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
+        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository }, logger },
+        {
+          vectorized: true,
+          vectorizedChunkCount,
+          isVectorizing: false,
+          embeddedChunkCount,
+          embeddedCharCount,
+          // The FILE-level label, which is exclusion authority for every retrieval reader, so only
+          // this path - the one that knows which model it just embedded with - asks for it. The
+          // backfill script deliberately does not; see stampChunkEmbeddingModel.
+          stampFile: true,
+        }
       );
     } else {
       // Guarded, not a plain update: sibling messages for this same file each recompute the

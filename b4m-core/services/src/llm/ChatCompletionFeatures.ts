@@ -512,6 +512,7 @@ export type ChatCompletionContext = Pick<
   | 'entitlementKeys'
   | 'resolveEntitlementKeys'
   | 'personalCorpusOnly'
+  | 'embeddingBinding'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -2060,18 +2061,36 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * not an error, so a silent fallback would be a support ticket.
    *
    * ONE exception to preferring the setting: a deployment that resolved no provider credential at
-   * all. The factory is built through `resolveEmbeddingWithKeylessFallback` (ChatCompletionProcess),
-   * so a Bedrock-defaulting factory is this deployment saying it holds no key - and ingestion
-   * resolved through that same seam, meaning the corpus was WRITTEN with the keyless model too. The
-   * setting still reads ada-002 there and is simply stale; handing it back threw
-   * OPENAI_KEY_MISSING_MESSAGE on any lake whose files had not voted yet (newly created, or still
-   * mid-ingest). Deliberately narrow: on a KEYED deployment the configured model is returned even
-   * when it names a different provider than the factory holds, because there it really is the space
-   * the corpus was written in, and quietly querying a different one would turn a loud credential
-   * error into a silent zero-result.
+   * all, which is `embeddingBinding` (published by ChatCompletionProcess at the credential-table
+   * seam) reporting a Bedrock model with NOTHING missing. Ingestion resolved through that same
+   * seam, so the corpus was WRITTEN with the keyless model too; the setting still reads ada-002
+   * there and is simply stale, and handing it back threw OPENAI_KEY_MISSING_MESSAGE on any lake
+   * whose files had not voted yet (newly created, or still mid-ingest).
+   *
+   * Read the BINDING, never `embeddingFactory.getDefaultEmbeddingModel()`. The factory reports
+   * Titan for any empty config, and `resolveEmbeddingConfig` returns an empty config for three
+   * different states - a genuine keyless substitution, an EXPIRED caller key, and a missing Ollama
+   * base URL. Only the first is this deployment saying it holds no key; the other two are states the
+   * resolver deliberately declines to substitute for, and `missing` is non-null on both. Deriving
+   * keylessness from the factory collapsed all three together and embedded the query in Titan space
+   * for a caller whose personal key had merely lapsed on a KEYED production stage (querying a vector
+   * space the corpus was never written in, so: silently zero results, and the expired-key error that
+   * would have told them to rotate it never surfaces), and on self-host / `next dev` / CI traded the
+   * actionable OPENAI_KEY_MISSING_MESSAGE for an opaque AWS CredentialsProviderError against a
+   * Bedrock endpoint none of them can reach.
+   *
+   * Deliberately narrow in the other direction too: on a KEYED deployment the configured model is
+   * returned even when it names a different provider than the binding holds, because there it really
+   * is the space the corpus was written in, and quietly querying a different one would turn a loud
+   * credential error into a silent zero-result.
    */
   private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingFactory): Promise<SupportedEmbeddingModel> {
-    const factoryDefault = embeddingFactory.getDefaultEmbeddingModel?.() ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+    const binding = this.chatCompletion.embeddingBinding;
+    // The binding is the model this turn will actually embed with, so it is also the right thing to
+    // fall back TO when the setting is unusable. `getDefaultEmbeddingModel()` only stands in if the
+    // seam has not run (no production path reaches here before it; a unit test can).
+    const factoryDefault =
+      binding?.model ?? embeddingFactory.getDefaultEmbeddingModel?.() ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
     let configured: unknown;
     // Scoped to the settings READ alone. Widening it to cover the decision below would let a
     // programming error there be swallowed as "could not read the setting" and silently answer
@@ -2087,7 +2106,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     if (typeof configured === 'string' && isSupportedEmbeddingModel(configured)) {
-      const deploymentIsKeyless = getProviderFromModel(factoryDefault) === ModelBackend.Bedrock;
+      // Two independent guards, and neither may be dropped.
+      //
+      // `missing === null` distinguishes "this deployment resolved no credential and substituted the
+      // keyless embedder" from "this CALLER's key expired" and "this self-host set no
+      // OLLAMA_BASE_URL". All three present as a Bedrock-reporting factory, but the latter two must
+      // keep their own actionable errors rather than be quietly rerouted to Bedrock.
+      //
+      // `model !== requested` is what makes this a SUBSTITUTION rather than a choice. The resolver's
+      // Bedrock arm returns `{ config: {}, missing: null }` for a Bedrock model it was asked for
+      // directly, so a caller or admin naming Titan outright on a fully keyed stage would otherwise
+      // satisfy the provider check and override the configured model - embedding the query in a space
+      // the corpus was never written in, which is exactly the silent zero-result this method exists
+      // to prevent.
+      const deploymentIsKeyless =
+        binding !== undefined &&
+        binding.missing === null &&
+        binding.model !== binding.requested &&
+        getProviderFromModel(binding.model) === ModelBackend.Bedrock;
       if (deploymentIsKeyless && getProviderFromModel(configured) !== ModelBackend.Bedrock) {
         this.logger.warn(
           `🔒 Forced retrieval: no credential resolved for defaultEmbeddingModel "${configured}"; ` +

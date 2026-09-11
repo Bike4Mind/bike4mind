@@ -10,6 +10,7 @@ import {
   SettingKey,
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
+  type SupportedEmbeddingModel,
   QueryComplexityType,
   getTextModelCost,
   CACHE_READ_MULTIPLIER,
@@ -70,7 +71,7 @@ import {
   effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
-import type { FabFileNotice } from '@bike4mind/utils';
+import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -800,6 +801,33 @@ export class ChatCompletionProcess {
    */
   public personalCorpusOnly = false;
 
+  /**
+   * The embedding model this turn actually resolved to, and the credential (if any) that was
+   * missing when it did - the single answer to "which vector space is this turn working in".
+   * Set once per turn at the credential-table seam in `process()`; read by KnowledgeRetrievalFeature,
+   * which must NOT re-derive either value from the EmbeddingFactory (see the note at the seam for
+   * the three states an empty factory config conflates).
+   *
+   * `missing: null` is the only state that means "ready to embed": a non-null value means this turn
+   * holds no usable credential for `model` AND the resolver declined to substitute a keyless one,
+   * so the loud missing-credential error is still the right answer.
+   *
+   * Undefined before the seam runs, which readers must treat as "not resolved yet" rather than as
+   * any particular model - defaulting it to the stage-neutral advertised model is what would let a
+   * keyless stage compare its Bedrock-stamped corpus against ada-002 and call every file foreign.
+   *
+   * `requested` is what the seam was ASKED for, kept so a reader can tell a substitution from a
+   * deliberate choice. `model === requested` means no substitution happened, however keyless the
+   * provider looks: a caller (or an admin) may name a Bedrock model outright on a fully keyed
+   * stage, and reading that as "this deployment is keyless" would override the configured model
+   * with itself at best, and with the wrong vector space at worst.
+   */
+  public embeddingBinding?: {
+    requested: SupportedEmbeddingModel;
+    model: SupportedEmbeddingModel;
+    missing: EmbeddingCredential | null;
+  };
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -1124,6 +1152,19 @@ export class ChatCompletionProcess {
     /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
     retrievalFilter: RetrievalExclusionOptions;
     /**
+     * The model this turn will actually embed its query with, and whether a credential was missing
+     * when that was resolved (`this.embeddingBinding`). NOT the raw `defaultEmbeddingModel` setting,
+     * which is deliberately stage-neutral and browser-safe: on a keyless stage the corpus is stamped
+     * with the keyless model the vectorizer settled on, so comparing file labels to the raw setting
+     * marks every correctly-embedded file as living in a foreign vector space. Undefined means the
+     * credential seam has not run, which - like a missing credential - means nothing is deferrable.
+     */
+    embeddingBinding?: {
+      requested: SupportedEmbeddingModel;
+      model: SupportedEmbeddingModel;
+      missing: EmbeddingCredential | null;
+    };
+    /**
      * The session's resolved per-lake grounding mode (`session.corpusGroundingMode`), set at
      * create time for a lake session. Overrides the size heuristic: `inline` never defers,
      * `retrieve` always defers the retrievable subset. Absent on a non-lake session -> the
@@ -1226,7 +1267,11 @@ export class ChatCompletionProcess {
       // the #1440 lake-memory copy of this same "can the knowledge tool actually reach this doc"
       // predicate (fully vectorized + same embedding model + live/not-excluded). The two live in
       // different packages with no shared symbol; change one, change the other.
-      const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
+      // The model the query will ACTUALLY be embedded with, not the advertised setting. A missing
+      // credential leaves it undefined, which the `sameVectorSpace` test below reads as "the
+      // semantic arm cannot run", so nothing is deferrable - the same conclusion the old unresolvable
+      // -setting case reached, now for the credential reason too.
+      const queryEmbeddingModel = input.embeddingBinding?.missing === null ? input.embeddingBinding.model : undefined;
       const retrievableIds = files
         .filter(file => {
           const lakeTagged = (file.tags ?? []).some(tag => accessibleTags.has(tag.name));
@@ -2228,10 +2273,39 @@ export class ChatCompletionProcess {
       // threw on the first embed; this is the same credential-table seam the ingest and search
       // paths resolve at, so forced retrieval cannot disagree with the corpus it reads.
       // apiKeyTable.ollama carries the Ollama base URL (self-host); no secret.
-      const { config: embeddingConfig } = resolveEmbeddingWithKeylessFallback(
-        embeddingModel && isSupportedEmbeddingModel(embeddingModel) ? embeddingModel : defaultEmbeddingModelForEnv(),
-        apiKeyTable
-      );
+      //
+      // All THREE return values are kept, and that is load-bearing. `config` alone cannot tell the
+      // downstream readers apart, because `resolveEmbeddingConfig` returns an empty config for three
+      // different states: a real keyless-Bedrock substitution, an expired CALLER key, and a missing
+      // Ollama base URL - and the latter two are states the resolver deliberately refuses to
+      // substitute for. Any reader that re-derives "this deployment is keyless" from the factory's
+      // own default (which reports Titan for ANY empty config) collapses them back together and
+      // queries Bedrock on a keyed production stage or a self-host box. `missing` is what separates
+      // them: null means the config is ready to embed with, anything else means it is not.
+      //
+      // Seeded from the ADMIN setting, because that is the model the CORPUS is written in: ingest
+      // hard-requires `defaultEmbeddingModel` from admin settings (fabFileChunk.ts) and stamps each
+      // chunk with whatever this same keyless seam then substituted for it. `defaultEmbeddingModelForEnv()`
+      // is env-derived (ada-002, or the Ollama model on a self-host), so seeding from it agreed with
+      // the corpus only by coincidence - whenever an admin picked any other model, every retrieval
+      // reader compared an env-derived model against an admin-chosen corpus and called the whole
+      // library foreign. It stays as the last resort for an unset or unregistered setting.
+      const configuredEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
+      const requestedEmbeddingModel =
+        embeddingModel && isSupportedEmbeddingModel(embeddingModel)
+          ? embeddingModel
+          : typeof configuredEmbeddingModel === 'string' && isSupportedEmbeddingModel(configuredEmbeddingModel)
+            ? configuredEmbeddingModel
+            : defaultEmbeddingModelForEnv();
+      const {
+        config: embeddingConfig,
+        missing,
+        model: resolvedEmbeddingModel,
+      } = resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, apiKeyTable);
+      // Published on the instance rather than threaded through getContextMessages, whose signature
+      // is the shared feature interface - every feature implements it, so widening it to carry one
+      // feature's input would touch all of them. Same pattern as `personalCorpusOnly` above.
+      this.embeddingBinding = { requested: requestedEmbeddingModel, model: resolvedEmbeddingModel, missing };
       const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
       // Fetch previous messages. Token-bound the verbatim window to a fraction of
@@ -2467,6 +2541,9 @@ export class ChatCompletionProcess {
         // drift between them. Narrower than "the two agree": reachability also depends on the tool
         // surviving the denylist, which is what knowledgeSearchDisabled above covers.
         retrievalFilter: toRetrievalFilter(session),
+        // Resolved at the credential seam above, so the defer gate compares file labels to the space
+        // the query will really occupy rather than to the advertised default.
+        embeddingBinding: this.embeddingBinding,
         // Per-lake grounding mode, resolved onto the session at create time. Absent on a non-lake
         // session -> the plan keeps its pre-existing size-only behavior.
         groundingMode: session.corpusGroundingMode,

@@ -261,8 +261,10 @@ export async function resolveToolAvailability(
       // term is what keeps KB offered on a keyless cloud stage, where the search path falls back
       // to Bedrock (resolveEmbeddingWithKeylessFallback) rather than losing semantic search -
       // without it the tool would stay hidden on exactly the stages that can still answer.
-      // It also makes the two preceding terms non-decisive on cloud, which is correct: they only
-      // settle the answer on self-host.
+      // It also makes the two preceding terms non-decisive on a hosted stage, which is correct.
+      // They stay decisive wherever there is no execution role to reach Bedrock with, and that is
+      // three environments, not one: self-host, plain `next dev`, and CI (see the positive
+      // execution-role evidence hasKeylessCloudEmbedder requires - embedding.ts).
       search_knowledge_base: maybeFailOpen(
         hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
         taint.llmKeys

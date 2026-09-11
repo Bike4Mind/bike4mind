@@ -166,10 +166,16 @@ export interface EmbeddingLabeledFile {
  *  - the QUERY model can only be a canonical id: `defaultEmbeddingModel` is declared with an
  *    `options` list, which makeStringSetting turns into a membership check that the settings
  *    update route runs on every admin write.
- *  - the STORED label has exactly one writer - chunkFabfile (fabFileService/chunk.ts) - whose
- *    `chunkFileSchema` validates it against SupportedEmbeddingModelSchema before the file is
- *    saved. Chunk labels are stamped from that same validated value by the vectorize handler and by
- *    the chunk-model backfill script (packages/scripts/datalake).
+ *  - the STORED label has THREE writers, and only the first validates. chunkFabfile
+ *    (fabFileService/chunk.ts) writes the label the deployment ASKED for, and its `chunkFileSchema`
+ *    validates against SupportedEmbeddingModelSchema before the file is saved. stampChunkEmbeddingModel
+ *    (fabFileService/stampChunkEmbeddingModel.ts) then rewrites it to the model the vectorize pass
+ *    actually embedded under, which can differ (keyless Bedrock fallback); its parameter is a bare
+ *    `string`, so it is the callers - the vectorize handler and the chunk-model backfill script
+ *    (packages/scripts/datalake) - that owe a canonical id. The system-help lake mirror
+ *    (packages/scripts/help/ingestHelpDatalake.ts) writes it on create from its own resolved model.
+ *    Chunk labels come from the same value stampChunkEmbeddingModel writes on the file, which is what
+ *    keeps the two levels agreeing.
  *
  * Folding here would therefore mask a malformed label without buying anything, and a malformed
  * label is exactly what should stay visible. An unrecognized id also already fails CLOSED one

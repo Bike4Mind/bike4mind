@@ -98,8 +98,13 @@ export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
  * Ollama embedder (`isLocalEmbedderAvailable` in toolAvailability.ts), not Bedrock.
  *
  * Answers "is Bedrock reachable here", NOT "should we use it" - a keyed stage is keyless-capable
- * too. Only ask this alongside a resolved credential table that came back empty; see
- * `resolveEmbeddingWithKeylessFallback`, the one place that pairs the two questions.
+ * too, so this must only ever be asked ALONGSIDE a resolved credential table that came back empty.
+ * `resolveEmbeddingWithKeylessFallback` is where the two questions are paired for callers free to
+ * choose the model, and is what such a caller should use instead of asking this directly. The
+ * direct callers are the ones that additionally need the answer BEFORE resolving, to decide
+ * policy: toolAvailability reports whether embedding-backed tools are usable at all, and
+ * data-lakes/semantic-search decides whether a substitution is permitted for this request before
+ * it knows whether one is needed. Both still pair it with the table.
  */
 export function hasKeylessCloudEmbedder(): boolean {
   if (process.env.B4M_SELF_HOST === 'true') return false;

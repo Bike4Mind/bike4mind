@@ -15,7 +15,7 @@ import {
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useEffectiveEmbeddingModel } from '@client/app/hooks/data/settings';
 import { useReprocessFile } from '@client/app/hooks/data/fabFiles';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
@@ -154,7 +154,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const isAnyFileReprocessing = Object.values(reprocessingFiles).some(Boolean);
   const { currentUser } = useUser();
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
-  const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
+  const effectiveEmbeddingModel = useEffectiveEmbeddingModel();
   const reprocessFile = useReprocessFile();
   const queryClient = useQueryClient();
 
@@ -176,12 +176,17 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
     return currentSession?.userId === currentUser?.id || !currentSession;
   }, [currentSession, currentUser]);
 
-  // Check if file has different embedding model than current setting
+  // Does this file's vectors live in a different space than the one this deployment would query
+  // with? Compared against the EFFECTIVE model, not the advertised `defaultEmbeddingModel` setting:
+  // on a stage that fell back to the keyless embedder the corpus carries the fallback's label, and
+  // comparing against the advertised model flags every healthy file with a mismatch badge whose
+  // reprocess button re-runs the same fallback and re-stamps the same label - an unclearable
+  // warning. Unknown effective model -> no badge, rather than a badge we cannot substantiate.
   const hasEmbeddingMismatch = useCallback(
     (file: IFabFileDocument) => {
-      return file.embeddingModel && currentEmbeddingModel && file.embeddingModel !== currentEmbeddingModel;
+      return file.embeddingModel && effectiveEmbeddingModel && file.embeddingModel !== effectiveEmbeddingModel;
     },
-    [currentEmbeddingModel]
+    [effectiveEmbeddingModel]
   );
 
   // Handle reprocessing file with new embedding model

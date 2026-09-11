@@ -2,15 +2,20 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import {
+  apiKeyService,
   resolveToolAvailability,
   isLocalImageBackendAvailable,
   isLocalEmbedderAvailable,
   type ToolAvailability,
 } from '@bike4mind/services';
+import { getSettingsByNames } from '@bike4mind/utils';
+import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
 
 export { isLocalImageBackendAvailable, isLocalEmbedderAvailable, type ToolAvailability };
+
+type LLMApiKeyTable = Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>;
 
 export type ServerConfig = {
   websocketUrl: string;
@@ -38,13 +43,41 @@ export type ServerConfig = {
   platformEmailDomain: string;
   /** Per-request availability of key-gated tools, for the tools picker. */
   toolAvailability: ToolAvailability;
+  /**
+   * The embedding model this deployment will ACTUALLY embed with, which is not always the one
+   * `defaultEmbeddingModel` advertises: a stage holding no credential for the configured model falls
+   * back to the keyless Bedrock embedder and stamps its corpus with that instead.
+   *
+   * Served from here rather than from `/api/settings/fetch` on purpose. That route is the admin
+   * settings surface and must keep returning the admin's OWN configured value - overwriting the
+   * entry would show the substituted model as the configured one in the settings dropdown and write
+   * it back on the next save. This is a resolved capability, like `toolAvailability` beside it.
+   *
+   * Empty string when it cannot be resolved (unreadable setting, unsupported value, no credential
+   * and nothing to fall back to). Clients must treat that as "unknown" and not as a model name.
+   */
+  effectiveEmbeddingModel: string;
 };
 
 // Get Admin Settings - requires authentication
 // Public pre-login fields (apiUrl, defaultTheme) are served by /api/settings/serverConfigPublic
 const handler = baseApi({ auth: true }).get(
   asyncHandler(async (req, res) => {
-    const toolAvailability = await computeToolAvailability(req.user?.id);
+    // One key-table lookup, shared. Both computations below need the caller's effective LLM keys,
+    // and this route is hit on every page load - resolving it twice was a second
+    // `findByUserIdAndTypes` per request for an identical answer. A failure here is not fatal: both
+    // consumers accept a null table and degrade the way they would have on their own lookup
+    // failing (tools fail open, the embedding model reports unknown).
+    const llmKeys = await apiKeyService
+      .getEffectiveLLMApiKeys(req.user?.id ?? null, {
+        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+        getSettingsByNames,
+      })
+      .catch(() => null);
+    const [toolAvailability, effectiveEmbeddingModel] = await Promise.all([
+      computeToolAvailability(req.user?.id, llmKeys),
+      computeEffectiveEmbeddingModel(req.user?.id, llmKeys),
+    ]);
 
     const config: ServerConfig = {
       websocketUrl: Resource.websocket.url,
@@ -73,6 +106,7 @@ const handler = baseApi({ auth: true }).get(
       // Inbound-email recipient domain, externalized for open-core; no brand fallback.
       platformEmailDomain: process.env.PLATFORM_EMAIL_DOMAIN || '',
       toolAvailability,
+      effectiveEmbeddingModel,
     };
 
     return res.json(config);
@@ -90,10 +124,43 @@ const handler = baseApi({ auth: true }).get(
  * `MISSING_KEY_TOOLTIPS` in `apps/client/app/components/Session/AISettings/ToolsSection.tsx`,
  * which supplies the user-facing "why it's disabled" text.
  */
-export async function computeToolAvailability(userId: string | undefined): Promise<ToolAvailability> {
-  return resolveToolAvailability(userId, {
-    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-  });
+export async function computeToolAvailability(
+  userId: string | undefined,
+  llmKeys?: LLMApiKeyTable | null
+): Promise<ToolAvailability> {
+  return resolveToolAvailability(
+    userId,
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+    // `llmKeys` is the resolver's own injection point, added so a caller holding the table can
+    // share it; omitted, it resolves its own.
+    llmKeys === undefined ? {} : { llmKeys }
+  );
+}
+
+/**
+ * The embedding model this deployment will really embed with - the configured `defaultEmbeddingModel`
+ * put through the SAME credential-table seam the ingest and search paths resolve at
+ * (`resolveEmbeddingWithKeylessFallback`), so the client compares a file's recorded label against the
+ * space the corpus actually occupies.
+ *
+ * Resolving in the browser is not an option, and that is the whole reason this field exists: an SST
+ * secret reaches a hosted stage as a linked Resource rather than a `process.env` value, the key that
+ * settles it lives in Mongo, and `settingsMap` is bundled into the browser where every env read is
+ * undefined. The client cannot see any of the three.
+ *
+ * Deliberately NOT served by overwriting the `defaultEmbeddingModel` entry on /api/settings/fetch:
+ * that route backs the admin settings form, so a substituted value there would render as the
+ * CONFIGURED one and be written back on the next save.
+ *
+ * '' is the wire form of "unknown" (see resolveEffectiveEmbeddingModel for the three situations it
+ * covers). The client must read it as "suppress the comparison", never as a reason to fall back to
+ * the advertised setting - that fallback is the bug this field exists to remove.
+ */
+export async function computeEffectiveEmbeddingModel(
+  userId: string | undefined,
+  llmKeys?: LLMApiKeyTable | null
+): Promise<string> {
+  return (await resolveEffectiveEmbeddingModel(userId, llmKeys === undefined ? {} : { llmKeys })) ?? '';
 }
 
 export const config = {

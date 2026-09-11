@@ -282,11 +282,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         });
       }
 
-      // --- Credit pre-flight: per-member cap, then the pool the charge would land on ---
+      // --- Billing inputs: token count, the bill/enforce pair, and the holder who would pay ---
+      // Gathered here, but the pre-flight gate itself runs further down, after the query's
+      // embedding model is bound - it has to price the model that will actually be embedded with.
       // Gated on the exact pair recordOperationalUsage requires to debit; a deployment that
-      // never bills must not start rejecting searches. This is a CHECK, not the reservation
-      // music/sound-effects do: settlement here runs through recordOperationalUsage, which
-      // moves the balance itself, so reserving would charge the same query twice.
+      // never bills must not start rejecting searches.
       const queryTokens = await countQueryTokens();
       const billingSettings = await getSettingsMap(
         { adminSettings: adminSettingsRepository },
@@ -346,13 +346,40 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         { logger: req.logger }
       );
 
+      const embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {
+        openai: effectiveKeys?.openai,
+        voyageai: effectiveKeys?.voyageai,
+        ollama: effectiveKeys?.ollama,
+      };
+
+      // Bind the query's model ONCE, here: the resolved key table is the first thing that can
+      // answer "is that model reachable from this deployment" (an SST secret never lands in
+      // process.env, so no env read can). Everything below keys off the resolved model, so a
+      // substitution is never billed or reported as the model it stood in for.
+      //
+      // Gated on whether a substitution ACTUALLY HAPPENED, not on whether one was permitted.
+      // `mayFallBack` only says the route allows one, and the resolver then declines to substitute
+      // for two states it refuses to read as "this deployment is keyless" - an EXPIRED caller key,
+      // and `missing: 'ollama'`. On a keyless cloud stage with an expired caller key, `mayFallBack`
+      // is true while `missing` comes back 'openai', so gating the 500 block on `mayFallBack` alone
+      // skipped this route's crafted, provider-naming error in exactly the case that most needed it
+      // and let the request fail a layer down in semanticDataLakeSearch with a vaguer message.
+      const resolution = resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable);
+      const substituted = mayFallBack && resolution.missing === null && resolution.model !== requestedEmbeddingModel;
+      const searchEmbeddingModel = substituted ? resolution.model : requestedEmbeddingModel;
+      if (substituted) {
+        req.logger?.warn(
+          `[semantic-search] no credential resolved for ${requestedEmbeddingModel}; embedding the query with keyless ${searchEmbeddingModel} instead`
+        );
+      }
+
       // Branch POSITIVELY on the PRIMARY model's own provider only - a hard 500 here is about the
       // model the caller actually asked for, not about a downstream alternate model's coverage,
       // which degrades gracefully via semanticDataLakeSearch's own missingCredential skip reason
       // instead. A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats
       // it as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
       const requestedProvider = getProviderFromModel(requestedEmbeddingModel);
-      if (!mayFallBack) {
+      if (!substituted) {
         if (requestedProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
           return res.status(500).json({
             error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
@@ -368,24 +395,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         }
       }
 
-      const embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {
-        openai: effectiveKeys?.openai,
-        voyageai: effectiveKeys?.voyageai,
-        ollama: effectiveKeys?.ollama,
-      };
-
-      // Bind the query's model ONCE, here: the resolved key table is the first thing that can
-      // answer "is that model reachable from this deployment" (an SST secret never lands in
-      // process.env, so no env read can). Everything below keys off the resolved model, so a
-      // substitution is never billed or reported as the model it stood in for.
-      const { model: searchEmbeddingModel } = mayFallBack
-        ? resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable)
-        : { model: requestedEmbeddingModel };
-      if (searchEmbeddingModel !== requestedEmbeddingModel) {
-        req.logger?.warn(
-          `[semantic-search] no credential resolved for ${requestedEmbeddingModel}; embedding the query with keyless ${searchEmbeddingModel} instead`
-        );
-      }
       const embeddingProvider = getProviderFromModel(searchEmbeddingModel);
       // Counted under the model that will actually run, and reused by the settlement below so the
       // pre-flight and the charge can never disagree about the token basis either.

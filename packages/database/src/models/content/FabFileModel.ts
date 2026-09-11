@@ -321,8 +321,43 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * Label this file's still-UNLABELED chunks with the model their vectors were generated under.
+   *
+   * Scoped to unlabeled on purpose - it used to be an unfiltered `updateMany({ fabFileId })`, and a
+   * file's chunks are fanned across several vectorize messages that each resolve their own model
+   * (see resolveEmbeddingWithKeylessFallback). If a credential appears or lapses mid-ingest, one
+   * message writes 1024-dim vectors and a later one 1536-dim, and a blanket `$set` from whichever
+   * message observed the file complete relabeled BOTH halves with its own model - silently
+   * mislabeling half the file's vectors at the wrong dimensionality, undetectably, with no repair
+   * short of a full re-embed. The vectorize handler now labels each chunk in the same transaction
+   * that stores its vector, so this only fills what predates that (legacy chunks, and the
+   * packages/scripts/datalake backfill's whole purpose) and can no longer overwrite a truthful label
+   * with a different one.
+   *
+   * Safe to scope this way because a re-chunk is never an in-place relabel: `commitFabFileChunks`
+   * deletes every chunk of the file and inserts fresh, unlabeled ones (fabFileService/chunk.ts), so
+   * there is no path on which a stale label needs correcting here.
+   */
   async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
-    await this.fabFileChunkModel.updateMany({ fabFileId }, { $set: { embeddingModel } });
+    await this.fabFileChunkModel.updateMany(
+      { fabFileId, $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }] },
+      { $set: { embeddingModel } }
+    );
+  }
+
+  /**
+   * Every distinct non-blank `embeddingModel` this file's chunks declare. More than one means the
+   * file's vectors span two spaces (and so two widths) - the mid-ingest credential change described
+   * on `updateEmbeddingModel`. The vectorize handler reads this at file completion to decide whether
+   * a single file-level label would be a lie.
+   */
+  async distinctEmbeddingModelsByFabFileId(fabFileId: string): Promise<string[]> {
+    const models = await this.fabFileChunkModel.distinct('embeddingModel', {
+      fabFileId,
+      embeddingModel: { $nin: [null, ''] },
+    });
+    return models.filter((model): model is string => typeof model === 'string');
   }
 
   /**

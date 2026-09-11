@@ -1,6 +1,7 @@
 import {
   BedrockEmbeddingModel,
   hasKeylessCloudEmbedder,
+  isPlaceholderApiKey,
   ModelBackend,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
@@ -47,8 +48,19 @@ type EmbeddingProvider = ModelBackend.OpenAI | ModelBackend.VoyageAI | ModelBack
  * ("OpenAI rejected the embedding request") instead of the actionable missing-credential path.
  */
 const EXPIRED_KEY_SENTINEL = 'expired';
-const usableKey = (value: string | null | undefined): string | null =>
-  value && value !== EXPIRED_KEY_SENTINEL ? value : null;
+/**
+ * A placeholder is rejected for the same reason the sentinel is, and the two sibling answers to
+ * "is this key usable" both already do it (modelDiscoveryService/credentials.ts,
+ * toolAvailability.ts, and defaultEmbeddingModelForEnv's own key test). Keeping a placeholder here
+ * would report `missing: null`, so the keyless fallback would never fire and EmbeddingFactory would
+ * then throw on the placeholder itself - the PR's headline case failing silently rather than
+ * substituting. `.trim()` because a whitespace-only value is no key either.
+ */
+const usableKey = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === EXPIRED_KEY_SENTINEL || isPlaceholderApiKey(trimmed)) return null;
+  return trimmed;
+};
 
 /**
  * The slot is missing because THIS CALLER's key expired, not because the deployment holds none.
