@@ -307,7 +307,9 @@ describe('getAccessibleDataLakePrompts', () => {
         principalGrants: { 'user:somebody-else': [{ dataLakeId: 'shared', role: 'curator' }] },
       });
       expect(await getAccessibleDataLakePrompts(ctx)).toEqual([]);
-      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, expect.anything());
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, {
+        activeAsOf: expect.any(Date),
+      });
     });
 
     it('feeds the granted ids to the DB pre-filter as its grant arm', async () => {
@@ -348,7 +350,9 @@ describe('getAccessibleDataLakePrompts', () => {
       // pre-wired, and flipping `includeReaders` would activate it with no other edit.
       const ctx = asCurator('curator');
       await getAccessibleDataLakePrompts(ctx);
-      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, expect.anything());
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, {
+        activeAsOf: expect.any(Date),
+      });
       expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
     });
 
