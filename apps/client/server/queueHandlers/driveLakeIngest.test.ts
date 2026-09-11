@@ -1855,7 +1855,7 @@ describe('driveLakeIngest consumer', () => {
 
       expect(h.listChanges).not.toHaveBeenCalled(); // no cursor on the connection yet
       expect(h.getStartPageToken).toHaveBeenCalled();
-      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date));
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), { fullWalk: true });
     });
 
     it('does not fail the run when a cursor cannot be established after a full walk', async () => {
@@ -1891,7 +1891,9 @@ describe('driveLakeIngest consumer', () => {
       expect(h.fetchDriveFileContent).not.toHaveBeenCalled();
       expect(h.createFabFile).not.toHaveBeenCalled();
       expect(h.batchCreate).not.toHaveBeenCalled();
-      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date));
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
+        fullWalk: false,
+      });
       expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
     });
 
@@ -1913,7 +1915,9 @@ describe('driveLakeIngest consumer', () => {
 
       expect(h.isUnderRoot).toHaveBeenCalledWith(expect.anything(), ['FOLDER'], 'FOLDER', expect.anything());
       expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd1' }), expect.anything());
-      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date));
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
+        fullWalk: false,
+      });
     });
 
     it('ignores a changed file that does not resolve under the connected root (Drive-wide feed, folder-scoped lake)', async () => {
@@ -1933,7 +1937,9 @@ describe('driveLakeIngest consumer', () => {
       await run();
 
       expect(h.createFabFile).not.toHaveBeenCalled();
-      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date));
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
+        fullWalk: false,
+      });
     });
 
     it('prunes a previously-tracked file that Drive reports removed', async () => {
@@ -1952,7 +1958,9 @@ describe('driveLakeIngest consumer', () => {
         'ff-d1',
         expect.anything()
       );
-      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date));
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
+        fullWalk: false,
+      });
     });
 
     it('prunes a previously-tracked file that moved out of the connected tree (still live in Drive, no longer here)', async () => {
@@ -1992,7 +2000,9 @@ describe('driveLakeIngest consumer', () => {
 
       expect(h.walkFolder).toHaveBeenCalled();
       expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd1' }), expect.anything());
-      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'fresh-cursor', expect.any(Date));
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'fresh-cursor', expect.any(Date), {
+        fullWalk: true,
+      });
     });
 
     it('rethrows a changes.list failure that is not an invalid-cursor error rather than silently falling back', async () => {
@@ -2032,6 +2042,76 @@ describe('driveLakeIngest consumer', () => {
         'ingest-queue-url',
         expect.objectContaining({ connectionId: 'conn1', resumeBatchId: 'batch1', forceFullWalk: true })
       );
+    });
+
+    it('retires EVERY stored copy of a removed driveFileId, not just the newest', async () => {
+      // The full-walk arm unpicks every copy; this arm used to take newestCopyOf only. The duplicate
+      // sweep deliberately skips an id gone from the folder, and Drive never mentions a removed id
+      // again - so an older copy missed here would stay a live lake member forever, holding content
+      // the user deleted from Drive.
+      withCursor();
+      setExisting([
+        { id: 'ff-older', driveFileId: 'd1', userId: 'user1', createdAt: '2026-01-01T00:00:00.000Z' },
+        { id: 'ff-newest', driveFileId: 'd1', userId: 'user1', createdAt: '2026-02-01T00:00:00.000Z' },
+      ]);
+      h.listChanges.mockResolvedValue({
+        changes: [{ fileId: 'd1', removed: true }],
+        newStartPageToken: 'cursor-1',
+      });
+
+      await run();
+
+      expect(h.removeFileFromLake).toHaveBeenCalledTimes(2);
+      expect(h.removeFileFromLake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'ff-older',
+        expect.anything()
+      );
+      expect(h.removeFileFromLake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'ff-newest',
+        expect.anything()
+      );
+    });
+
+    it('holds the cursor back when an ancestry check could not be resolved this run', async () => {
+      // The feed reports a modification ONCE. Advancing past an entry this run could not decide would
+      // put it permanently behind the cursor, so the file would sit missing until a human re-synced.
+      withCursor();
+      h.listChanges.mockResolvedValue({
+        changes: [
+          {
+            fileId: 'd1',
+            removed: false,
+            file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', parents: ['FOLDER'] },
+          },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+      h.isUnderRoot.mockRejectedValue(new Error('rate limited'));
+
+      await run();
+
+      expect(h.createFabFile).not.toHaveBeenCalled();
+      expect(h.updateSyncCursor).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+    });
+
+    it('takes the baseline cursor BEFORE the walk, so a file created mid-walk is not lost by both modes', async () => {
+      // Taken afterwards, a file created after its parent folder was listed is in neither the walk's
+      // result nor the first incremental pull. Taken first, the pull merely replays covered changes.
+      h.walkFolder.mockImplementation(async () => {
+        expect(h.getStartPageToken).toHaveBeenCalled();
+        return [{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }];
+      });
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+      h.getStartPageToken.mockResolvedValue('cursor-1');
+
+      await run();
+
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), { fullWalk: true });
     });
 
     it('does not advance the cursor when the chain stops short (claim lost mid-slice)', async () => {
@@ -2077,6 +2157,7 @@ describe('classifyDriveChanges', () => {
       adds: [{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }],
       changed: [],
       removedFileIds: [],
+      ambiguous: 0,
     });
   });
 
@@ -2106,7 +2187,7 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [] });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 0 });
     expect(h.isUnderRoot).not.toHaveBeenCalled();
   });
 
@@ -2193,7 +2274,7 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [] });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 1 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('tracked file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -2209,7 +2290,7 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [] });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 1 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('new file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -2231,7 +2312,92 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'SAME' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [] });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 0 });
+  });
+
+  it('collapses repeated entries for one fileId to the last one (the feed is a log, not a snapshot)', async () => {
+    // Drive only collapses records WITHIN a page, so a file edited either side of a page boundary
+    // arrives twice. Un-collapsed, a never-tracked id would be pushed into `adds` twice and ingest as
+    // two FabFiles for one Drive file.
+    h.isUnderRoot.mockResolvedValue(true);
+    const result = await classifyDriveChanges(
+      drive,
+      [
+        {
+          fileId: 'd1',
+          removed: false,
+          file: { id: 'd1', name: 'old.txt', mimeType: 'text/plain', parents: ['ROOT'] },
+        },
+        {
+          fileId: 'd1',
+          removed: false,
+          file: { id: 'd1', name: 'new.txt', mimeType: 'text/plain', parents: ['ROOT'] },
+        },
+      ],
+      'ROOT',
+      () => undefined,
+      logger
+    );
+    expect(result.adds).toEqual([{ id: 'd1', name: 'new.txt', mimeType: 'text/plain', relativePath: 'new.txt' }]);
+  });
+
+  it('emits a removed fileId only once when the feed reports it more than once', async () => {
+    // A doubled removal makes the second removeFileFromLake throw NotFoundError mid-prune, outside
+    // the try that settles reclaimed bytes - so the whole run aborts and retries to the DLQ.
+    const result = await classifyDriveChanges(
+      drive,
+      [
+        { fileId: 'd1', removed: false, file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', trashed: true } },
+        { fileId: 'd1', removed: true },
+      ],
+      'ROOT',
+      id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
+      logger
+    );
+    expect(result.removedFileIds).toEqual(['d1']);
+  });
+
+  it('takes the LAST entry per fileId, so a file edited and then deleted classifies as removed', async () => {
+    h.isUnderRoot.mockResolvedValue(true);
+    const result = await classifyDriveChanges(
+      drive,
+      [
+        {
+          fileId: 'd1',
+          removed: false,
+          file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', md5Checksum: 'NEW', parents: ['ROOT'] },
+        },
+        { fileId: 'd1', removed: true },
+      ],
+      'ROOT',
+      id => (id === 'd1' ? { driveMd5Checksum: 'OLD' } : undefined),
+      logger
+    );
+    expect(result.removedFileIds).toEqual(['d1']);
+    expect(result.changed).toEqual([]);
+  });
+
+  it('counts one ambiguous entry per unresolved candidate, and still applies the resolvable ones', async () => {
+    h.isUnderRoot.mockImplementation(async (_drive: never, parents: string[]) => {
+      if (parents[0] === 'FLAKY') throw new Error('rate limited');
+      return true;
+    });
+    const result = await classifyDriveChanges(
+      drive,
+      [
+        { fileId: 'ok', removed: false, file: { id: 'ok', name: 'a.txt', mimeType: 'text/plain', parents: ['ROOT'] } },
+        {
+          fileId: 'bad',
+          removed: false,
+          file: { id: 'bad', name: 'b.txt', mimeType: 'text/plain', parents: ['FLAKY'] },
+        },
+      ],
+      'ROOT',
+      () => undefined,
+      logger
+    );
+    expect(result.adds.map(f => f.id)).toEqual(['ok']);
+    expect(result.ambiguous).toBe(1);
   });
 });
 

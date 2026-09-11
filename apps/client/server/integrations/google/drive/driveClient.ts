@@ -321,9 +321,13 @@ const CHANGES_FIELDS =
 
 /**
  * Establish the baseline cursor for incremental sync: the pageToken meaning "now". Call once right
- * after a full walk succeeds (first sync, or a cursor-invalidation fallback - see
- * isDriveInvalidCursorError) and persist the result as the connection's syncCursor; `listChanges` from
- * that token onward reports everything that happens AFTER the walk that just ran, never before it.
+ * BEFORE a full walk (first sync, or a cursor-invalidation fallback - see isDriveInvalidCursorError)
+ * and persist the result as the connection's syncCursor only once that walk has been applied.
+ *
+ * Before, not after, and the order is the point: a file created mid-walk, after its parent folder was
+ * already listed, is in neither the walk's result nor a feed read from a token taken afterwards. Taken
+ * first, the token instead overlaps the walk - `listChanges` replays some changes the walk already
+ * covered, which the caller diffs out as no-ops. Overlap is recoverable; a gap is not.
  */
 export async function getStartPageToken(drive: drive_v3.Drive): Promise<string> {
   const res = await withDriveRetry('changes.getStartPageToken', () =>

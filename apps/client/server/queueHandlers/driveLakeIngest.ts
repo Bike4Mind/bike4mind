@@ -177,6 +177,12 @@ export type DriveChangeClassification = {
   changed: WalkedDriveFile[];
   /** driveFileIds to prune: Drive deleted/trashed them, or they moved out of the connected tree. */
   removedFileIds: string[];
+  /**
+   * Entries this run could not DECIDE: the ancestry lookup hit a transient Drive failure, so neither
+   * "under the root" nor "moved out" was proven and the entry was left unapplied. Non-zero means this
+   * run's delta is incomplete and the caller must hold the cursor back - see the note in the header.
+   */
+  ambiguous: number;
 };
 
 /**
@@ -201,12 +207,23 @@ function toWalkedDriveFile(file: DriveFile & { parents?: string[]; trashed?: boo
  * which case it is folded into removedFileIds - matching what a full walk would report for a file
  * that moved out of the tree (present elsewhere in Drive, but no longer a candidate here).
  *
+ * The feed is a LOG, not a snapshot: one record per modification, and Drive only collapses records
+ * WITHIN a page. A file renamed and later edited, or edited either side of a page boundary, arrives
+ * as several entries for one fileId. They are collapsed to the last entry per id up front (last wins -
+ * it is the file's most recent state) because the downstream apply is not idempotent per id: a
+ * doubled add ingests two FabFiles for one Drive file, and a doubled removal makes the second
+ * removeFileFromLake throw NotFoundError mid-prune, outside the try that settles reclaimed bytes.
+ * Same hazard the full walk's `seenIds` de-dup exists to prevent.
+ *
  * isUnderRoot can also throw (a TRANSIENT Drive failure mid ancestry-walk, not a confirmed answer -
  * see its doc comment). That is caught here per-candidate rather than left to fail the whole batch:
- * for a new file the candidate is simply excluded this run (same outcome as a confirmed false - the
- * next poll or full walk re-resolves it); for an already-tracked file the candidate is left untouched
- * rather than evicted - misreading a Drive hiccup as "moved out of the tree" would silently drop a
- * still-live file from the lake.
+ * a new file is excluded from this run, and an already-tracked file is left untouched rather than
+ * evicted - misreading a Drive hiccup as "moved out of the tree" would silently drop a still-live
+ * file from the lake. Neither is a free skip: the feed reports a modification ONCE, so a caller that
+ * advanced its cursor past an unresolved entry would never be told about it again, and the file would
+ * sit missing (or stale) until a human clicked Re-sync. Every such entry is counted into `ambiguous`
+ * so the caller can hold the cursor and let the next poll replay the same window - cheap, and
+ * idempotent, since anything already applied diffs out as a no-op.
  */
 export async function classifyDriveChanges(
   drive: drive_v3.Drive,
@@ -219,8 +236,14 @@ export async function classifyDriveChanges(
   const changed: WalkedDriveFile[] = [];
   const removedFileIds: string[] = [];
   const ancestryCache = new Map<string, string[] | null>();
+  let ambiguous = 0;
 
-  for (const { fileId, removed, file } of changes) {
+  // Last entry per fileId wins; Map.set keeps the first insertion's position, so feed order is
+  // otherwise preserved. See the header for why a repeated id is not survivable downstream.
+  const latestPerFileId = new Map<string, DriveChange>();
+  for (const change of changes) latestPerFileId.set(change.fileId, change);
+
+  for (const { fileId, removed, file } of latestPerFileId.values()) {
     const tracked = newestCopyOf(fileId);
     const gone = removed || file?.trashed === true;
 
@@ -234,6 +257,7 @@ export async function classifyDriveChanges(
       try {
         underRoot = await isUnderRoot(drive, file.parents, rootFolderId, ancestryCache);
       } catch (e) {
+        ambiguous++;
         logger.warn('[driveLakeIngest] ancestry check failed for a tracked file; leaving it in place this run', {
           fileId,
           error: e instanceof Error ? e.message : String(e),
@@ -253,6 +277,7 @@ export async function classifyDriveChanges(
     try {
       underRoot = await isUnderRoot(drive, file.parents, rootFolderId, ancestryCache);
     } catch (e) {
+      ambiguous++;
       logger.warn('[driveLakeIngest] ancestry check failed for a new file; excluding it from this run', {
         fileId,
         error: e instanceof Error ? e.message : String(e),
@@ -268,7 +293,7 @@ export async function classifyDriveChanges(
     }
   }
 
-  return { adds, changed, removedFileIds };
+  return { adds, changed, removedFileIds, ambiguous };
 }
 
 /**
@@ -594,10 +619,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     //    happened since the stored cursor) whenever the connection already carries one and the caller
     //    did not force a full walk, otherwise the full recursive folder walk - first sync, an
     //    invalidated cursor (Drive expires them - isDriveInvalidCursorError), or the manual "Re-sync
-    //    everything" action (drive-sync.ts sets forceFullWalk on its reconnect branch). Whichever mode
-    //    runs, `pendingSyncCursor` is only PERSISTED once this run's delta is fully applied with no
+    //    everything" action (drive-sync.ts sets forceFullWalk on its reconnect branch), or the poll
+    //    cron's periodic forced re-walk (driveLakeResyncPoll.FULL_WALK_INTERVAL_MS - the reconcile for
+    //    subtree moves, which Drive's per-file changes feed cannot report). Whichever mode runs,
+    //    `pendingSyncCursor` is only PERSISTED once this run's delta is fully applied with no
     //    continuation pending (see the two call sites below) - advancing it any earlier would let a
-    //    chain that stops short skip the very changes it never got to ingest.
+    //    chain that stops short skip the very changes it never got to ingest, and an incremental run
+    //    that could not resolve every entry drops it outright for the same reason.
     let syncMode: 'full' | 'incremental' = 'full';
     let rawChanges: DriveChange[] = [];
     let pendingSyncCursor: string | undefined;
@@ -691,6 +719,22 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // known, purely for the cap check and logging - it never populates walkedRaw/seenIds.
     let walkedRaw: WalkedDriveFile[] = [];
     if (syncMode === 'full') {
+      // Baseline cursor BEFORE the walk, not after. A file created mid-walk - after its parent folder
+      // was already listed - is in neither the walk's result nor, if the token were taken afterwards,
+      // the first incremental pull: its change record would already sit behind that cursor. On a large
+      // first sync that blind window is minutes wide. Taking it first inverts the error into a harmless
+      // one - the first incremental pull replays some changes this walk already covered, and they diff
+      // out as no-ops (hasDriveFileChanged) against the set this run is about to store.
+      //
+      // Not fatal on failure: the walk still reconciles, the connection just falls back to another full
+      // walk next time instead of going incremental.
+      pendingSyncCursor = await getStartPageToken(drive).catch(e => {
+        logger.warn('[driveLakeIngest] could not establish a Drive changes cursor before a full walk', {
+          connectionId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return undefined;
+      });
       try {
         walkedRaw = await walkFolder(drive, connection.driveFolderId, remainingMs);
       } catch (err) {
@@ -747,9 +791,22 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       pureAdds = classified.adds;
       changed = classified.changed;
       const removedIds = new Set(classified.removedFileIds);
-      removed = classified.removedFileIds
-        .map(newestCopyOf)
-        .filter((doc): doc is (typeof existingDocs)[number] => doc != null);
+      // EVERY stored copy of a removed id, not just the newest - matching the full-walk arm below.
+      // The duplicate-retire sweep in step 4b deliberately skips an id gone from the folder (all of
+      // its copies are supposed to be here), and Drive never mentions a removed id again, so no later
+      // incremental run revisits it either. An older copy missed here would stay a live, searchable
+      // lake member holding content the user deleted from Drive, with nothing left to clean it up.
+      removed = classified.removedFileIds.flatMap(id => existingByDriveId.get(id) ?? []);
+      // An unresolved entry means this run's delta is INCOMPLETE, so do not advance past it: dropping
+      // pendingSyncCursor leaves the stored cursor where it is and the next poll re-pulls the same
+      // window. Re-applying a delta is idempotent; losing one of its changes is not (classifyDriveChanges).
+      if (classified.ambiguous > 0) {
+        logger.warn('[driveLakeIngest] holding the Drive cursor back; some changes could not be resolved', {
+          connectionId,
+          ambiguous: classified.ambiguous,
+        });
+        pendingSyncCursor = undefined;
+      }
       walkedIds = new Set(existingByDriveId.keys());
       for (const id of removedIds) walkedIds.delete(id);
       for (const add of pureAdds) walkedIds.add(add.id);
@@ -777,18 +834,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         });
         removed = [];
       }
-
-      // A full walk just proved the current tree; establish (or re-establish) the baseline cursor the
-      // NEXT run can go incremental from. Not fatal on failure - the walk itself already succeeded, so
-      // this run's reconcile proceeds regardless; the connection just falls back to another full walk
-      // next time instead of going incremental.
-      pendingSyncCursor = await getStartPageToken(drive).catch(e => {
-        logger.warn('[driveLakeIngest] could not establish a Drive changes cursor after a full walk', {
-          connectionId,
-          error: e instanceof Error ? e.message : String(e),
-        });
-        return undefined;
-      });
     }
 
     // The batch a previous slice of this chain was filling, if this run is a continuation of one. Only
@@ -1136,7 +1181,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // past it now. Also the O(1) fast path for an incremental poll with zero relevant changes:
         // nothing below this point runs.
         if (pendingSyncCursor) {
-          await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date());
+          await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date(), {
+            fullWalk: syncMode === 'full',
+          });
         }
         await releaseClaim(null);
         return;
@@ -1465,7 +1512,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // make the "next scheduled poll continues from here" promise above false - a poll that goes
       // incremental from an already-advanced cursor would never see them again.
       if (deferred === 0 && pendingSyncCursor) {
-        await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date());
+        await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date(), {
+          fullWalk: syncMode === 'full',
+        });
       }
       await releaseClaim(stoppedShort);
     } finally {
