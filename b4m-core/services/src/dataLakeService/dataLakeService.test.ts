@@ -3584,7 +3584,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
       fabFiles: {
         // Second call is the post-purge survivor resolve: nothing joined mid-sweep by default.
         findIdsByDataLakeTag: vi.fn().mockResolvedValueOnce(['f1', 'f2']).mockResolvedValue([]),
-        hardDeleteByIds: vi.fn().mockResolvedValue(['f1', 'f2']),
+        hardDeleteOneById: vi.fn().mockResolvedValue(true),
         findById: vi.fn().mockResolvedValue(null),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       },
@@ -3622,7 +3622,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     // a HALF-PURGED lake as restorable. Anything failing after the guards must therefore surface as
     // some other error, so the consumer rethrows it to the DLQ rather than releasing.
     const adapters = makeAdapters('purging');
-    adapters.db.fabFiles.hardDeleteByIds = vi.fn().mockRejectedValue(new Error('mongo went away'));
+    adapters.db.fabFiles.hardDeleteOneById = vi.fn().mockRejectedValue(new Error('mongo went away'));
     const err = await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters).catch(
       (e: unknown) => e
     );
@@ -3636,7 +3636,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     const adapters = makeAdapters('deleted');
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(2);
-    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteOneById).toHaveBeenCalled();
     expect(adapters.db.batches.delete).toHaveBeenCalledWith('b1');
     expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
   });
@@ -3652,16 +3652,18 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     const releaseDriveConnection = vi.fn(async () => {
       order.push('release-drive');
     });
-    adapters.db.fabFiles.hardDeleteByIds = vi.fn(async () => {
+    adapters.db.fabFiles.hardDeleteOneById = vi.fn(async () => {
       order.push('hard-delete');
-      return [];
+      return true;
     });
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       ...adapters,
       releaseDriveConnection,
     });
     expect(releaseDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
-    expect(order).toEqual(['release-drive', 'hard-delete']);
+    // One hard-delete per member id (the row/chunk writes are paired per file, #2583), so what is
+    // pinned here is that the release precedes ALL of them, not the call count.
+    expect(order).toEqual(['release-drive', 'hard-delete', 'hard-delete']);
   });
 
   it('aborts the sweep when the Drive release fails, rather than purging the lake around it', async () => {
@@ -3707,7 +3709,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     expect(indexRemove).toBeLessThan(
       Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder)
     );
-    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0]);
+    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[0]);
   });
 
   it('purges exactly the ids it announced, so a mid-sweep joiner is not destroyed unaccounted for', async () => {
@@ -3719,13 +3721,13 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
     // By id, never by re-running the predicate: a file tagged into the lake after the resolve
     // would otherwise be hard-deleted with its chunks intact and the index never told.
-    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
+    expect(adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(memberIds);
     expect(removalInput(retrievalIndex).fabFileIds).toEqual(memberIds);
     // Resolved once for the purge and reused. Re-resolving BEFORE the hard delete would pass the
     // assertions above while reopening the window they exist to close; the only other resolve is
     // the survivor sweep, which runs after.
     const resolves = adapters.db.fabFiles.findIdsByDataLakeTag.mock.invocationCallOrder;
-    const hardDelete = adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0];
+    const hardDelete = adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[0];
     expect(resolves.filter(order => order < hardDelete)).toHaveLength(1);
   });
 
@@ -3739,7 +3741,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
     // The survivor keeps its bytes but stops matching a lake that no longer exists, so a later
     // lake claiming 'lk:' cannot adopt it - the create-time guard only sees surviving lakes.
-    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
+    expect(adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(memberIds);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('joiner', [lake().datalakeTag, 'lk:late']);
     const pull = adapters.db.fabFiles.pullTagsByFabFileId.mock.invocationCallOrder[0];
     expect(pull).toBeLessThan(adapters.db.dataLakes.delete.mock.invocationCallOrder[0]);
@@ -3770,7 +3772,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     // can never be reconciled. The queue retry re-runs the whole sweep, so leaving it zero-progress
     // is what makes propagating safe.
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
     expect(adapters.db.batches.delete).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
@@ -3790,12 +3792,26 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     // Rows before chunks is the #2583 invariant: see cleanupDeletedDataLake.test.ts for why.
     const firstChunk = Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
     const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
-    const hardDelete = adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0];
+    const hardDelete = Math.min(...adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder);
     const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
     const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
     expect(hardDelete).toBeLessThan(firstChunk);
     expect(lastChunk).toBeLessThan(firstBatch);
     expect(firstBatch).toBeLessThan(lakeDelete);
+    // Per file, not just in aggregate: each row delete precedes ITS OWN chunk delete. The two are
+    // paired inside one iteration so a DLQ retry can still re-derive the ids this run never
+    // reached - a bulk row delete followed by a separate chunk fan-out would satisfy the aggregate
+    // check above while leaving the retry nothing to resolve.
+    const rowOrderById = new Map(
+      adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]: [string], i: number) => [
+        id,
+        adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[i],
+      ])
+    );
+    adapters.db.fabFileChunks.deleteManyByFabFileId.mock.calls.forEach(([id]: [string], i: number) => {
+      const chunkOrder = adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder[i];
+      expect(rowOrderById.get(id)).toBeLessThan(chunkOrder);
+    });
   });
 });
 

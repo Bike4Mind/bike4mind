@@ -212,9 +212,10 @@ describe('ingestHelpDatalake', () => {
     await ingestHelpDatalake(h.deps, opts());
 
     // The file goes first (#2583): an interruption between the two steps must strand only
-    // orphaned chunks - unreachable without their file, and already a tracked, separately
-    // cleanable class (#2539) - never a file reporting a stale vectorizedChunkCount over chunks
-    // that no longer exist.
+    // orphaned chunks - unreachable without their file, costing storage rather than recall -
+    // never a file reporting a stale vectorizedChunkCount over chunks that no longer exist. Note
+    // `deleteManyInIds` tombstones the row rather than removing it; see the site comment for what
+    // that costs the retry story.
     expect(order).toEqual(['files', 'chunks']);
   });
 

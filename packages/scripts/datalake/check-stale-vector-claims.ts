@@ -4,9 +4,9 @@
  * ZERO rows in fabfilechunks. Such a file is unretrievable by both read paths (the ANN index has
  * nothing for it, the brute-force scan finds no vectors to score) while every counter-based health
  * surface reads it as vectorized - a stale count left behind by an interrupted chunk/file delete
- * (see purgeDataLakeDocument.ts, cleanupDeletedDataLake.ts, ingestHelpDatalake.ts, all fixed to
- * order the two writes the other way as of this issue, so this should only ever report pre-existing
- * damage going forward).
+ * (see purgeDataLakeDocument.ts, cleanupDeletedDataLake.ts, ingestHelpDatalake.ts and
+ * retrieval/supersession-probe.ts, all fixed to order the two writes the other way as of this issue,
+ * so this should only ever report pre-existing damage going forward).
  *
  * Deliberately NOT wired into GET /api/data-lakes/:id/health (computeLakeHealth.ts): that endpoint
  * is read-gated for any lake reader and is documented to NEVER scan the chunk collection (#1665 -
@@ -29,6 +29,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Resource } from 'sst';
 import { connectDB, fabFileChunkRepository, fabFileRepository } from '@bike4mind/database';
+import { collectStaleVectorClaims } from './collectStaleVectorClaims';
 
 interface Options {
   batchSize: number;
@@ -39,24 +40,16 @@ async function main(opts: Options): Promise<number> {
   await connectDB(dbUri);
   console.log(`Connected (stage: ${Resource.App.stage}).`);
 
-  let afterFileId: string | undefined;
-  let scanned = 0;
-  const stale: { id: string; fileName?: string }[] = [];
-
-  for (;;) {
-    const page = await fabFileRepository.findFileIdsWithPositiveVectorizedCount({
-      limit: opts.batchSize,
-      afterFileId,
-    });
-    if (page.length === 0) break;
-    afterFileId = page[page.length - 1].id;
-    scanned += page.length;
-
-    const withChunks = await fabFileChunkRepository.findFabFileIdsWithChunks(page.map(f => f.id));
-    for (const file of page) {
-      if (!withChunks.has(file.id)) stale.push(file);
-    }
-  }
+  // The sweep itself lives in collectStaleVectorClaims.ts so it can be tested without a DB; this
+  // file stays the connection, the argv and the reporting.
+  const { scanned, stale } = await collectStaleVectorClaims(
+    {
+      findFileIdsWithPositiveVectorizedCount: options =>
+        fabFileRepository.findFileIdsWithPositiveVectorizedCount(options),
+      findFabFileIdsWithChunks: ids => fabFileChunkRepository.findFabFileIdsWithChunks(ids),
+    },
+    { batchSize: opts.batchSize }
+  );
 
   console.log(`Scanned ${scanned} file(s) declaring a vectorized chunk count.`);
   if (stale.length === 0) {

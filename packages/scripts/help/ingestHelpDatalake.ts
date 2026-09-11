@@ -374,9 +374,20 @@ export async function ingestHelpDatalake(
       // it runs directly in a Lambda, not behind a queue - so it is the least protected of the
       // sites this ordering matters for. Chunks-then-files used to leave an interruption between
       // the two steps stranding a FILE with a stale vectorizedChunkCount over zero real chunks -
-      // unretrievable, but every counter-based health surface reported it vectorized. This order
-      // fails the other, harmless way: an interruption here only orphans chunk rows, unreachable
-      // without their file and already a tracked, separately cleanable class (#2539).
+      // unretrievable, but every counter-based health surface reported it vectorized.
+      //
+      // `deleteManyInIds` is a SOFT delete (unlike `hardDeleteByIds`, it does not pass
+      // `{ hardDelete: true }`, so the row is tombstoned with `deletedAt`, not removed). That is
+      // deliberate and unchanged here, and it is enough to fix the symptom: a tombstoned row is
+      // filtered out of every read path, so it can no longer report itself vectorized. But it does
+      // change what an interruption costs, and the trade is worth stating plainly. Under
+      // chunks-then-files an interruption was self-healing - the live row re-entered `removable` on
+      // the next run and was re-swept. Under this order the tombstone is final: the next run's
+      // candidate list is plugin-filtered, so the row never re-enters `removable` and its chunks
+      // are never revisited. Those orphans are unreachable without their file and cost storage
+      // rather than recall, and nothing sweeps them today (#2539 is a different population - chunks
+      // whose `fabFileId` is a serialized document, which a cleaner for it would match instead).
+      // A permanently harmless remnant beats a self-healing but actively wrong one.
       await deps.db.fabFiles.deleteManyInIds(removeIds);
       for (const id of removeIds) await deps.db.fabFileChunks.deleteManyByFabFileId(id);
     }

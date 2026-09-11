@@ -38,7 +38,10 @@ interface CleanupDeletedDataLakeAdapters {
     dataLakeResearchConfigs?: Pick<IDataLakeResearchConfigRepository, 'deleteForLake'>;
     dataLakeResearchRuns?: Pick<IDataLakeResearchRunRepository, 'deleteForLake'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
-    fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByIds' | 'findById' | 'pullTagsByFabFileId'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'findIdsByDataLakeTag' | 'hardDeleteOneById' | 'findById' | 'pullTagsByFabFileId'
+    >;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
   };
   retrievalIndex?: RetrievalIndexPort;
@@ -149,19 +152,32 @@ export const cleanupDeletedDataLake = async (
   // Re-resolving would also destroy anything that became a member since - a file the creator
   // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
   // this run instead, which is the recoverable direction.
-  await db.fabFiles.hardDeleteByIds(fileIds);
+  //
+  // Each file's row goes first and its own chunks immediately after, in the SAME iteration (#2583).
+  // Rows-then-chunks is the ordering that matters: chunks-then-row used to leave an interruption
+  // between the two stranding a ROW with a stale vectorizedChunkCount over zero real chunks -
+  // unretrievable, but every counter-based health surface reported it vectorized. This order fails
+  // the other, harmless way: an interruption orphans chunk rows, unreachable without their file
+  // (no chunk carries a lake or tag field). Nothing sweeps those yet - #2539 is a different
+  // population, chunks whose `fabFileId` is a serialized document rather than an id.
+  //
+  // PAIRING the two per id is what keeps the sweep retry-safe, and it is why this is not a bulk
+  // `hardDeleteByIds` followed by a separate chunk fan-out. `fileIds` is derived from the rows
+  // themselves, so once they are all gone a DLQ retry re-enters at `findIdsByDataLakeTag` with an
+  // EMPTY list and the chunk sweep becomes a permanent no-op - a whole lake's chunks leaked, with
+  // no id list left anywhere that names them. Paired, the ids this run has not reached yet are
+  // still resolvable on replay, so a run that dies mid-fan-out resumes where it stopped and the
+  // docstring's "a DLQ retry re-runs it" stays true. The irreducible window is one file wide.
+  //
+  // Chunked so a large lake doesn't fan out unbounded (Lambda timeout/memory); both writes are
+  // no-ops on already-purged data, so a replay over a partially-swept lake is harmless. Chunk
+  // deletion covers soft-deleted files too, since the id list is resolved before any hard delete.
+  await inChunks(fileIds, chunkSize, async id => {
+    await db.fabFiles.hardDeleteOneById(id);
+    await db.fabFileChunks.deleteManyByFabFileId(id);
+  });
 
-  // 3. Delete chunks for every member file (covers soft-deleted files too). Chunked so a large
-  // lake doesn't fan out unbounded (Lambda timeout/memory); each delete is a no-op on
-  // already-purged data, so a DLQ retry resumes safely. Runs AFTER the rows are gone (#2583):
-  // chunks-then-rows used to leave an interruption between the two steps stranding a ROW with a
-  // stale vectorizedChunkCount over zero real chunks - unretrievable, but every counter-based
-  // health surface reported it vectorized. This order fails the other, harmless way: an
-  // interruption here only orphans chunk rows, unreachable without their file and already a
-  // tracked, separately cleanable class (#2539).
-  await inChunks(fileIds, chunkSize, id => db.fabFileChunks.deleteManyByFabFileId(id));
-
-  // 3b. Whatever the predicate STILL names is exactly that spared mid-sweep joiner, and sparing it
+  // 2b. Whatever the predicate STILL names is exactly that spared mid-sweep joiner, and sparing it
   // is only half a decision: step 5 deletes the lake, so its prefix tag would outlive the lake it
   // points at. A later lake claiming the same prefix then adopts it silently, because the
   // create-time collision guard (`findCollidingPrefixLakes`) only compares against lakes that

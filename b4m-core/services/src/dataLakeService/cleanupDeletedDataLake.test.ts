@@ -36,7 +36,7 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
       .fn()
       .mockResolvedValueOnce(fileIds)
       .mockResolvedValue([] as never),
-    hardDeleteByIds: vi.fn(async (ids: string[]) => ids),
+    hardDeleteOneById: vi.fn(async () => true),
     findById: vi.fn(async () => undefined as never),
     pullTagsByFabFileId: vi.fn(async () => {}),
   },
@@ -45,39 +45,55 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
   },
 });
 
+/** Records every row/chunk delete as `<kind>:<id>` so both ORDER and PAIRING are assertable. */
+const traceDeletes = (db: ReturnType<typeof makeDb>) => {
+  const order: string[] = [];
+  db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+    order.push(`row:${id}`);
+    return true;
+  });
+  db.fabFileChunks.deleteManyByFabFileId = vi.fn(async (id: string) => {
+    order.push(`chunks:${id}`);
+  });
+  return order;
+};
+
 describe('cleanupDeletedDataLake', () => {
-  it('hard-deletes the file rows before deleting their chunks, so an interruption orphans chunks rather than stranding a row (#2583)', async () => {
-    const order: string[] = [];
+  it("hard-deletes each file's row immediately before its own chunks, so an interruption orphans chunks rather than stranding a row (#2583)", async () => {
     const db = makeDb();
-    db.fabFiles.hardDeleteByIds = vi.fn(async (ids: string[]) => {
-      order.push('files');
-      return ids;
-    });
-    db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
-      order.push('chunks');
-    });
+    const order = traceDeletes(db);
 
-    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+    // chunkSize:1 makes the fan-out strictly sequential. At the default size `inChunks` runs the
+    // slice under Promise.all, so the two files' awaits interleave and the recorded order stops
+    // distinguishing pairing from a bulk-then-bulk sweep - which is the exact thing under test.
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, chunkSize: 1 });
 
-    // The rows go first (#2583): a crash between the two steps must strand only orphaned chunks -
-    // unreachable without their file, and already a tracked, separately cleanable class (#2539) -
-    // never a row reporting a stale vectorizedChunkCount over chunks that no longer exist.
-    expect(order).toEqual(['files', 'chunks', 'chunks']);
-    expect(db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(['f1', 'f2']);
-    expect(db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledWith('f1');
-    expect(db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledWith('f2');
+    // Row-before-its-chunks (#2583): a crash between the two must strand only orphaned chunks -
+    // unreachable without their file - never a row reporting a stale vectorizedChunkCount over
+    // chunks that no longer exist.
+    //
+    // Interleaved, NOT ['row:f1','row:f2','chunks:f1','chunks:f2']: the pairing is the retry
+    // contract, not a style choice. `fileIds` is derived from the rows, so a bulk row delete
+    // followed by a separate chunk fan-out leaves a DLQ replay re-resolving an EMPTY id list and
+    // skipping the chunk sweep for the whole lake. Flattening this back would restore that.
+    expect(order).toEqual(['row:f1', 'chunks:f1', 'row:f2', 'chunks:f2']);
   });
 
-  it('leaves the file rows already gone, not stranded with stale rollups, when the chunk delete is interrupted (#2583)', async () => {
+  it('leaves the ids it has not reached still resolvable when a chunk delete is interrupted, so a DLQ retry resumes (#2583)', async () => {
     const db = makeDb();
-    db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
-      throw new Error('simulated crash');
+    const order = traceDeletes(db);
+    db.fabFileChunks.deleteManyByFabFileId = vi.fn(async (id: string) => {
+      order.push(`chunks:${id}`);
+      if (id === 'f1') throw new Error('simulated crash');
     });
 
-    await expect(cleanupDeletedDataLake(ADMIN, 'lake-1', { db })).rejects.toThrow('simulated crash');
+    await expect(cleanupDeletedDataLake(ADMIN, 'lake-1', { db, chunkSize: 1 })).rejects.toThrow('simulated crash');
 
-    // The hard-delete already committed by the time the chunk delete threw.
-    expect(db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    // f1's row committed before its chunk delete threw, so f1 leaks orphaned chunks - the harmless
+    // direction. f2 was never touched at all: its row survives, so the replay's
+    // `findIdsByDataLakeTag` still names it and the sweep resumes there rather than no-opping.
+    expect(order).toEqual(['row:f1', 'chunks:f1']);
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalledWith('f2');
   });
 
   it('is a no-op when the lake is already gone', async () => {
@@ -86,6 +102,6 @@ describe('cleanupDeletedDataLake', () => {
 
     await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
 
-    expect(db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
 });

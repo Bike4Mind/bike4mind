@@ -23,6 +23,31 @@ describe('stale vector claim detection (#2583)', () => {
     expect(page).toEqual([{ id: String(vectorized._id), fileName: 'vectorized.txt' }]);
   });
 
+  it('findFileIdsWithPositiveVectorizedCount pages forward on afterFileId and terminates', async () => {
+    // The sweep's only loop-exit is an empty page, so `afterFileId` is the sole thing advancing it
+    // (see collectStaleVectorClaims.ts). A cursor that did not move past the last id of a page -
+    // `$gte` instead of `$gt`, or a cast that silently matched nothing - would either spin forever
+    // or stop after one page. Nothing else exercises `limit`/`afterFileId` at all.
+    const created = [];
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+      created.push(await makeFile(name, { chunkCount: 1, vectorizedChunkCount: 1 }));
+    }
+    const idsInOrder = created.map(f => String(f._id)).sort();
+
+    const seen: string[] = [];
+    let afterFileId: string | undefined;
+    for (;;) {
+      const page = await fabFileRepository.findFileIdsWithPositiveVectorizedCount({ limit: 2, afterFileId });
+      if (page.length === 0) break;
+      expect(page.length).toBeLessThanOrEqual(2);
+      afterFileId = page[page.length - 1].id;
+      seen.push(...page.map(f => f.id));
+    }
+
+    // Every candidate exactly once, in id order, and the loop ended.
+    expect(seen).toEqual(idsInOrder);
+  });
+
   it('findFabFileIdsWithChunks returns exactly the candidate ids that have a chunk row', async () => {
     await FabFileChunk.create({ fabFileId: 'has-chunks', text: 't', tokenCount: 1 });
 
