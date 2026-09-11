@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FabFile, FabFileChunk, fabFileChunkRepository } from '../models/content/FabFileModel';
-import { setupMongoTest } from '../__test__/utils';
+import { setupMongoTest, testFabFileId as fid } from '../__test__/utils';
 
 /**
  * DB half of the stranded-vectorize rescue. A file whose chunks committed but whose vectorize
@@ -21,13 +21,13 @@ describe('stranded vectorize hand-off recovery', () => {
     it('returns only chunks of the requested file that hold no vector', async () => {
       // A half-finished fan-out is the interesting case: some batches landed, some never sent.
       const created = await FabFileChunk.create([
-        { fabFileId: 'stranded', text: 'vectorized', tokenCount: 2, vector: [0.1, 0.2] },
-        { fabFileId: 'stranded', text: 'empty vector', tokenCount: 2, vector: [] },
-        { fabFileId: 'stranded', text: 'no vector field', tokenCount: 2 },
-        { fabFileId: 'other-file', text: 'not ours', tokenCount: 2 },
+        { fabFileId: fid('stranded'), text: 'vectorized', tokenCount: 2, vector: [0.1, 0.2] },
+        { fabFileId: fid('stranded'), text: 'empty vector', tokenCount: 2, vector: [] },
+        { fabFileId: fid('stranded'), text: 'no vector field', tokenCount: 2 },
+        { fabFileId: fid('other-file'), text: 'not ours', tokenCount: 2 },
       ]);
 
-      const ids = await fabFileChunkRepository.findVectorlessChunkIds('stranded');
+      const ids = await fabFileChunkRepository.findVectorlessChunkIds(fid('stranded'));
 
       const expected = created
         .filter(c => ['empty vector', 'no vector field'].includes(c.text))
@@ -37,11 +37,11 @@ describe('stranded vectorize hand-off recovery', () => {
 
     it('returns nothing for a file whose fan-out fully completed', async () => {
       await FabFileChunk.create([
-        { fabFileId: 'done', text: 'a', tokenCount: 2, vector: [0.1] },
-        { fabFileId: 'done', text: 'b', tokenCount: 2, vector: [0.2] },
+        { fabFileId: fid('done'), text: 'a', tokenCount: 2, vector: [0.1] },
+        { fabFileId: fid('done'), text: 'b', tokenCount: 2, vector: [0.2] },
       ]);
 
-      expect(await fabFileChunkRepository.findVectorlessChunkIds('done')).toEqual([]);
+      expect(await fabFileChunkRepository.findVectorlessChunkIds(fid('done'))).toEqual([]);
     });
   });
 

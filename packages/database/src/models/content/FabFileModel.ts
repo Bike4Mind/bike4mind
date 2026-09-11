@@ -500,6 +500,17 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
       type: String,
       ref: 'FabFile',
       required: true,
+      // A data constraint, not an optimization: the `ref` above already promises this addresses a
+      // FabFile by `_id`, but the field is a plain String, so anything stringifies into it cleanly.
+      // Rows holding a whole serialized FabFile document got in that way and were invisible to every
+      // `fabFileId` query - retrieval, rollups, and `deleteManyByFabFileId`'s reap alike - so they
+      // were unreachable dead weight that also crashed the embedding-model backfill. Same
+      // `isObjectIdOrHexString` test the read paths use to decide a value can address a row
+      // (`usableObjectIds`, b4m-core/db-core/src/utils/mongo.ts).
+      validate: {
+        validator: (value: string) => mongoose.isObjectIdOrHexString(value),
+        message: 'fabFileId must be a 24-character hex ObjectId string',
+      },
     },
     tokenCount: { type: Number, required: true },
     // Unicode code points of `text` (countCodePoints / $strLenCP); see IFabFileChunk.charLength.
