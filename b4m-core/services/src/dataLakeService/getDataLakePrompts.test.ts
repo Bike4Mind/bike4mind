@@ -328,8 +328,8 @@ describe('getAccessibleDataLakePrompts', () => {
       // A REAL org grant is present on the lake, for an org the caller belongs to - so this fails
       // if the arm ever starts honouring org principals, rather than passing vacuously on an empty
       // fixture. `grantedLakeReachFor` reads org rows only under `includeReaders`, which this site
-      // pins to false permanently (injection must not follow the READ_GRANT_ENFORCEMENT_READY
-      // cutover); the call assertion below is what makes that flip fail loudly here.
+      // pins to false permanently (injection must not follow the read-grant cutover); the call
+      // assertion below is what makes that flip fail loudly here.
       const ctx = makeContext([sharedLake], { id: CURATOR, tags: [] }, [ORG], undefined, [], {
         principalGrants: { [`organization:${ORG}`]: [{ dataLakeId: 'shared', role: 'curator' }] },
       });
