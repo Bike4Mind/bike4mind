@@ -33,8 +33,8 @@ import { readFileSync } from 'node:fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT, FORCED_RETRIEVAL_MAX_SCORED_CHUNKS } from '@bike4mind/common';
-import { PROBE_QUESTIONS } from './corpus';
 import { loadEmbeddingFixture } from './embeddingFixture';
+import { resolveQueries } from './modelComparison';
 import {
   buildFloorSweepRow,
   formatFloorSweepTable,
@@ -72,12 +72,11 @@ if (!Number.isInteger(argv['char-budget']) || argv['char-budget'] < 0) {
 // it, and the id alone cannot say which text was embedded under it.
 const fixture = loadEmbeddingFixture(JSON.parse(readFileSync(argv.fixture, 'utf8')) as unknown);
 
-const supportingById = new Map(PROBE_QUESTIONS.map(q => [q.id, q.supporting]));
-const queries = fixture.queries.map(q => ({
-  id: q.id,
-  vector: q.vector,
-  supporting: supportingById.get(q.id) ?? [],
-}));
+// Reuses the model comparison's resolver rather than looking the ground truth up here, because it
+// makes an id `corpus.ts` does not know an ERROR. Defaulting such an id to an empty supporting set
+// would score it as a deliberate NEGATIVE, quietly inflating the false-positive rate and moving
+// precision's denominator - a complete, confident, wrong table.
+const queries = resolveQueries(fixture);
 
 const chunks: FloorScorableChunk[] = fixture.chunks.map(c => ({
   chunkId: c.chunkId,

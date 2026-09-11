@@ -240,7 +240,10 @@ export function applyFloors(
   }
 
   const absoluteCut = scored.length - aboveAbsolute.length;
-  const relativeCut = ranked.length - accepted.length;
+  // The single definition of "the relative floor bound on this query". `buildFloorSweepRow` reads it
+  // back off `cutRank` rather than recomputing, so the row's `relativeBoundShare` and the outcome's
+  // `binding` cannot disagree about whether the floor did anything.
+  const cutRank = accepted.length < ranked.length ? accepted.length + 1 : null;
   return {
     queryId: query.id,
     scoredCount: scored.length,
@@ -250,15 +253,15 @@ export function applyFloors(
     cappedOut: aboveAbsolute.length - ranked.length,
     accepted: accepted.length,
     acceptedDocIds,
-    cutRank: relativeCut > 0 ? accepted.length + 1 : null,
+    cutRank,
     charsAdmitted,
     budgetStopRank,
     binding:
-      absoluteCut > 0 && relativeCut > 0
+      absoluteCut > 0 && cutRank !== null
         ? 'both'
         : absoluteCut > 0
           ? 'absolute'
-          : relativeCut > 0
+          : cutRank !== null
             ? 'relative'
             : 'none',
   };
