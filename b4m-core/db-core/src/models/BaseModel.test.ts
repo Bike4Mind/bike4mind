@@ -83,14 +83,15 @@ describe('BaseRepository', () => {
     });
 
     // Regression: `update` is last-writer-wins even when the doc carries __v - it does NOT condition
-    // on __v or $inc it. The version guard is opt-in via `updateGuarded`.
-    it('does not version-guard when the doc carries a numeric __v', async () => {
+    // on __v or $inc it. It also strips __v from $set so a stale whole-doc write never rewinds the
+    // version key (which would disarm every `updateGuarded` writer on the collection).
+    it('does not version-guard and strips __v from $set when the doc carries a numeric __v', async () => {
       await repo.update({ id: '507f1f77bcf86cd799439011', name: 'updated', __v: 3 } as Partial<TestDoc>);
 
       const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
       expect(filter.__v).toBeUndefined();
       expect(update.$inc).toBeUndefined();
-      expect(update.$set).toEqual({ name: 'updated', __v: 3 });
+      expect(update.$set).toEqual({ name: 'updated' });
     });
 
     it('should throw if id is missing', async () => {

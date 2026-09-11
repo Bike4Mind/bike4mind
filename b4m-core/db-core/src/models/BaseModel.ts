@@ -82,9 +82,15 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     data: Record<string, unknown>,
     options?: Record<string, unknown>
   ): Promise<D | null> {
+    // Strip `__v` from the `$set`. A whole-doc `update` from a stale in-memory copy would otherwise
+    // write the read-time version straight back, rewinding the monotonic counter `updateGuarded`
+    // conditions on (findOneAndUpdate never auto-bumps `__v`) - a single plain write on the
+    // collection would silently disarm every guarded writer on it. Plain `update` has no business
+    // writing the version key: leave it untouched, neither writing nor bumping it.
+    const { __v: _ignoredVersion, ...setData } = data as { __v?: unknown } & Record<string, unknown>;
     const query = this.model.findOneAndUpdate(
       idFilter as mongoose.FilterQuery<T>,
-      { $set: data } as mongoose.UpdateQuery<T>,
+      { $set: setData } as mongoose.UpdateQuery<T>,
       { new: true, ...options }
     );
     // Only attach an explicit session when one is set. Passing `.session(null)` tells Mongoose "no

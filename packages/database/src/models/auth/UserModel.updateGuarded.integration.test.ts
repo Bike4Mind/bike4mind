@@ -65,6 +65,25 @@ describe('BaseRepository.update vs updateGuarded (via userRepository)', () => {
     expect(after!.name).toBe('winner'); // the racing writer's value is not clobbered
   });
 
+  it('a plain update does not rewind __v, so a racing guarded write still conflicts', async () => {
+    const u = await seed();
+    const id = String(u._id);
+
+    const stale = await userRepository.findById(id); // __v 0
+
+    // A guarded write advances the stored __v to 1.
+    await userRepository.updateGuarded({ ...stale!, name: 'winner' }); // __v 0 -> 1
+
+    // A plain whole-doc write from the __v-0 copy must NOT $set __v back to 0. Before the fix it
+    // rewound the counter, re-arming the stale guarded write below.
+    await userRepository.update({ ...stale!, name: 'plain' }); // carries __v 0
+    const afterPlain = await User.findById(id);
+    expect((afterPlain as unknown as { __v: number }).__v).toBe(1);
+
+    // The stale guarded write (still holding __v 0) therefore loses the race and throws.
+    await expect(userRepository.updateGuarded({ ...stale!, name: 'loser' })).rejects.toThrow(/Concurrent modification/);
+  });
+
   it('updateGuarded succeeds when the caller adopts the returned version-bumped doc', async () => {
     const u = await seed();
     const id = String(u._id);
