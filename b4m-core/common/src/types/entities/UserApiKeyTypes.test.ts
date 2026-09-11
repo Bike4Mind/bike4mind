@@ -30,6 +30,10 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.HEARTH_WRITE,
   ApiKeyScope.OPTIHASHI_READ,
   ApiKeyScope.OPTIHASHI_COMPUTE,
+  ApiKeyScope.DATALAKE_READ,
+  ApiKeyScope.DATALAKE_WRITE,
+  ApiKeyScope.DATALAKE_SHARE,
+  ApiKeyScope.DATALAKE_QUERY,
 ]);
 
 describe('CONFINED_API_KEY_SCOPES', () => {
