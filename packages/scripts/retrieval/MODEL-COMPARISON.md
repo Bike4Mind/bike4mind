@@ -309,9 +309,79 @@ pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
   --floors 0:0,85:75,85:0,90:0,95:0
 ```
 
+### MEASURED: the first sweep off a real capture
+
+Run on the `system-help` lake (51 articles, 452 chunks, 30 `PROBE_QUESTIONS`) captured under both
+arms, 12000-char budget. Read the caveats at the end of this subsection before quoting any number.
+
+Shipped defaults are `forcedRetrievalRelativeFloorPct` 85 and `forcedRetrievalMinSimilarityPct` 75.
+
+| arm | floors | accepted/q | served/q | relative bound | emptied | recall | precision |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ada-002 | 0:0 (baseline) | 256.0 | 15.7 | 0.0% | 0/30 | 100.0% | 3.8% |
+| ada-002 | 0:74 | 13.1 | 9.4 | 0.0% | 0/30 | 90.7% | 36.6% |
+| ada-002 | **85:75** (shipped) | 6.3 | 5.9 | **0.0%** | 2/30 | 65.3% | 39.6% |
+| ada-002 | 0:76 | 2.7 | 2.7 | 0.0% | 9/30 | 39.7% | 56.1% |
+| 3-small | **85:75** (shipped) | **0.0** | **0.0** | 0.0% | **30/30** | **0.0%** | n/a |
+| 3-small | 0:30 | 19.2 | 9.9 | 0.0% | 0/30 | 92.7% | 32.1% |
+| 3-small | 0:35 | 6.8 | 5.9 | 0.0% | 4/30 | 70.0% | 53.5% |
+| 3-small | 85:35 | 3.3 | 3.3 | 40.0% | 4/30 | 62.0% | 71.7% |
+
+`recall` and `precision` are over `accepted/q`, the population the floors gate. `served/q` is what
+the char budget then injects. The baseline row is the reason both columns are printed: its 100.0%
+recall is over 256 accepted chunks of which 15.7 reached the model, so a floor's apparent cost
+between the baseline and a live value is partly a cost the budget was already imposing.
+
+The hand-derivation held up: it predicted 85 rejecting nothing under ada-002 and cutting "around
+rank 5-6" under 3-small, and the sweep measures 0.0% bound and a mean cut rank of 5.2. Three things
+the measurement adds to it.
+
+**1. Where the absolute floor lands inside the band decides everything, and one point is a lot.**
+This corpus's ada-002 band is 0.0918 wide, so one point of the setting moves the gate by ~11% of the
+band. Measured, 74 -> 75 -> 76 is 90.7% -> 65.3% -> 39.7% recall, and 75 is the first value that
+empties a query outright. Here 74 dominates the shipped 75 - 25 points of recall, 0 emptied queries
+instead of 2, for 3 points of precision - though `served/q` says the model-visible difference is the
+narrower 9.4 vs 5.9, since the budget was already trimming 74's wider accepted set. That does NOT make 74 the value to ship: on the production
+lake in `FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT`'s comment the band sat at 0.8025-0.9140 and
+0.75 was below all of it, rejecting nothing. Same setting, same model, one corpus where it is a
+cliff and one where it is a no-op. A single global percent cannot be correct for both, which is the
+case for per-lake floors (#2572, item 3) rather than for a new global number.
+
+**2. The relative floor at 85 is inert on THIS corpus by arithmetic, not by luck.** A candidate
+reaching the relative cutoff has already cleared the absolute one, so the relative floor can only cut
+when `topScore * relativeFloor > minSimilarity`, i.e. when `topScore > minSimilarity /
+relativeFloor`. At 85:75 that is 0.882, and this corpus's ada-002 band max is 0.8110 - no query here
+can reach it. Sweeping 80/85/88/90/92 at absolute 75 changes not one column; the first value that
+binds is 95 (10% of queries). Note this is a statement about the corpus, not the vector space: the
+production lake behind `FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT`'s comment measured a band
+topping out at 0.9140, comfortably past 0.882, so the same default would bind there. Which is the
+point of measuring rather than deriving - "is this gate live" has a per-corpus answer, and a help
+corpus of short articles answers it differently from a lake of long documents.
+
+**3. The relative floor transfers across vector spaces and the absolute floor does not.** On this
+corpus the same 85 is inert under ada-002 and binds on 40% of queries under 3-small, because its
+threshold `0.35/0.85 = 0.412` lands mid-distribution against a measured `posTop` of 0.4269. Holding
+the absolute floor at 35 and adding it is what that buys: 0:35 -> 85:35 is 6.8 -> 3.3 chunks/q, mean
+cut rank 5.2, precision 53.5% -> 71.7% for 8 points of recall. The absolute floor meanwhile goes from "one point past the knee" to "above the entire
+band" - 0.75 exceeds 3-small's band max of 0.5588, so the shipped pair returns nothing on every
+query. That is the silent outage the band paragraph predicts, now measured: not a tuning nicety, a
+total blackout on the forced path. A raw cosine threshold is not comparable across embedding models;
+a fraction of the turn's top score is.
+
+Caveats, all of which bound how far these numbers travel:
+
+- **Not the long-document regime.** Median chunk 638 chars against a prod reference of 2182. Floor
+  values fitted on short help prose are not fitted for a production lake. Recapture before adopting
+  any specific number.
+- **Exact kNN, not the served ANN path.** The 256-chunk pool cap truncated all 30 queries at the low
+  floors, so every `cut @` is a rank within a truncated pool, and prod gates a top-K hit set rather
+  than this full scan (#2526).
+- 30 hand-authored questions, 5 of them negatives. Enough to separate a dead gate from a live one;
+  not enough to pick between two adjacent live values.
+
 Read `bound` before recall. A relative floor showing 0.0% there is the dormant case this section
-describes under ada-002; `cut @` against `budget-bound` is what separates a floor that cuts from one
-cutting past where the char budget already stopped. It shares the served path's arithmetic (see
+describes under ada-002; `cut @` against `budget-bound`, and `accepted/q` against `served/q`, are
+what separate a floor that cuts from one cutting past where the char budget already stopped. It shares the served path's arithmetic (see
 `forcedRetrievalRelativeCutoff`), so the gate it reports is the gate production applies - over a
 deeper candidate pool, since this harness is exact kNN and prod now serves through ANN.
 

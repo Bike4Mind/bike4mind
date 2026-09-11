@@ -20,7 +20,11 @@
  * corpus, which is the failure the relative floor was introduced to fix in the absolute one and is
  * just as possible for the relative one at the wrong value. Then `cut @` against `budget-bound` - a
  * floor cutting past where the char budget already stopped changes nothing that reaches the model.
- * Only then recall and precision, which are the cost of a floor that does bind.
+ * Only then recall and precision, which are the cost of a floor that does bind - and read those
+ * against `accepted/q` vs `served/q`, because they score the accepted set and only `served/q`
+ * reached the model. At a floor low enough to leave hundreds accepted on a corpus of short chunks
+ * the two differ by an order of magnitude, and the baseline row's flattering recall is mostly
+ * chunks no turn ever saw.
  *
  * ONE CAVEAT THE WRITE-UP MUST CARRY, inherited from `scoreDistribution.ts`: this is exact kNN over
  * every captured chunk, where prod now serves through Atlas `$vectorSearch` (ANN, #2526). The

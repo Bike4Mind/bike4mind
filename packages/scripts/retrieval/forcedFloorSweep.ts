@@ -272,6 +272,13 @@ export type FloorSweepRow = FloorConfig & {
   queries: number;
   /** Mean chunks surviving both floors. The pool the char-budget walk then spends. */
   meanAccepted: number;
+  /**
+   * Mean chunks the budget walk actually injects, which is what reaches the model. Reported beside
+   * `meanAccepted` because the two diverge hard at a low floor: on a corpus of short chunks the
+   * budget can stop at a small fraction of an accepted set of hundreds, and reading the accepted
+   * count as the served count overstates a floor's cost by that whole factor.
+   */
+  meanServed: number;
   /** Mean chunks surviving the absolute floor alone, so the relative floor's own cost is visible. */
   meanAboveAbsolute: number;
   /**
@@ -298,7 +305,13 @@ export type FloorSweepRow = FloorConfig & {
    * corpus, so `cut @` is a rank within that pool. The driver warns when it is non-zero.
    */
   cappedQueries: number;
-  /** Recall, precision and MRR of the accepted set against the committed ground truth. */
+  /**
+   * Recall, precision and MRR of the ACCEPTED set against the committed ground truth - the
+   * population the floors gate, deliberately not the shorter prefix the char budget then injects.
+   * A floor has to be judged on what it admits, or lowering the budget would read as a better
+   * floor. The consequence is that a row with a high `budget-bound` share reports quality over a
+   * candidate set wider than the model saw, which is what `budget-bound` is in the table to say.
+   */
   quality: Aggregate;
 };
 
@@ -322,6 +335,9 @@ export function buildFloorSweepRow(args: {
     ...args.config,
     queries: outcomes.length,
     meanAccepted: mean(outcomes.map(o => o.accepted)),
+    // `budgetStopRank` is the rank of the LAST injected candidate (the one that fills or overruns
+    // the remaining budget), so it is the served count itself - not one past it.
+    meanServed: mean(outcomes.map(o => o.budgetStopRank ?? o.accepted)),
     meanAboveAbsolute: mean(outcomes.map(o => o.aboveAbsolute)),
     relativeBoundShare: outcomes.length === 0 ? 0 : outcomes.filter(o => o.cutRank !== null).length / outcomes.length,
     meanCutRank: cutRanks.length === 0 ? null : mean(cutRanks),
@@ -346,12 +362,14 @@ const precisionCell = (a: Aggregate): string =>
  * derivable from recall: a floor can leave recall untouched because it is cutting nothing (inert)
  * or because it is cutting only noise (working), and only the binding columns separate those.
  * `budget-bound` is here because it can make a cut rank irrelevant - the char budget having already
- * stopped shorter than the floor does.
+ * stopped shorter than the floor does. `accepted/q` against `served/q` is the same warning as a
+ * ratio rather than a share: recall and precision are over `accepted`, so the wider that gap, the
+ * more of the measured set never reached the model.
  */
 export function formatFloorSweepTable(rows: readonly FloorSweepRow[]): string {
   const header = [
-    '| relative | absolute | chunks/q | pre-rel | bound | cut @ | budget-bound | emptied | recall | precision | MRR |',
-    '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+    '| relative | absolute | accepted/q | served/q | pre-rel | bound | cut @ | budget-bound | emptied | recall | precision | MRR |',
+    '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
   ];
   const body = rows.map(r =>
     [
@@ -361,6 +379,7 @@ export function formatFloorSweepTable(rows: readonly FloorSweepRow[]): string {
       r.relativeFloorPct === 0 ? 'off' : `${r.relativeFloorPct}%`,
       `${r.minSimilarityPct}%`,
       r.meanAccepted.toFixed(1),
+      r.meanServed.toFixed(1),
       r.meanAboveAbsolute.toFixed(1),
       pct(r.relativeBoundShare),
       r.meanCutRank === null ? 'never' : r.meanCutRank.toFixed(1),

@@ -210,6 +210,23 @@ describe('buildFloorSweepRow', () => {
     expect(row.meanCutRank).toBe(2);
   });
 
+  // The column exists because these two diverge, and the divergence is what stops a reader taking
+  // the baseline row's recall as recall of what the model saw.
+  it('reports served below accepted when the char budget stops the walk short', () => {
+    const wide = [chunkAt(0.9, 'a', 'docA', 400), chunkAt(0.88, 'b', 'docB', 400), chunkAt(0.86, 'c', 'docC', 400)];
+    const row = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks: wide, queries, charBudget: 600 });
+    expect(row.meanAccepted).toBe(3);
+    // 400 fits in 600; the second FILLS the remaining 200 (truncated) and is the last injected.
+    expect(row.meanServed).toBe(2);
+    expect(row.budgetBoundShare).toBe(1);
+  });
+
+  it('reports served equal to accepted when the budget never binds', () => {
+    const row = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks, queries, charBudget: 100_000 });
+    expect(row.meanServed).toBe(row.meanAccepted);
+    expect(row.budgetBoundShare).toBe(0);
+  });
+
   it('blames the pool cap on the cap, not on the absolute floor', () => {
     // Every candidate clears the absolute floor, so the only thing removing any of them is
     // FORCED_RETRIEVAL_MAX_SCORED_CHUNKS. Attributing that to a floor would name the wrong gate and
@@ -257,6 +274,15 @@ describe('formatFloorSweepTable', () => {
     const lines = formatFloorSweepTable([row(ZERO_FLOOR_CONFIG), row(SHIPPED_CONFIG)]).split('\n');
     expect(lines).toHaveLength(4); // header + separator + 2 rows
     expect(lines[0]).toContain('budget-bound');
+  });
+
+  it('prints accepted and served as separate columns', () => {
+    // Recall and precision score the ACCEPTED set, so collapsing these two back into one column
+    // would let the baseline row's recall read as recall of what reached the model.
+    const lines = formatFloorSweepTable([row(ZERO_FLOOR_CONFIG)]).split('\n');
+    expect(lines[0]).toContain('accepted/q');
+    expect(lines[0]).toContain('served/q');
+    expect(lines[0]).not.toContain('chunks/q');
   });
 
   it('prints the relative floor as "off" at 0, but never the absolute one', () => {
