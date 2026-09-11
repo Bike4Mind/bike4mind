@@ -42,12 +42,7 @@ import {
   type IFabFileRepository,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import {
-  EmbeddingFactory,
-  getProviderFromModel,
-  resolveEmbeddingConfig,
-  type EmbeddingKeyTable,
-} from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
 import { chunkByHeadings, stripFrontmatter } from './utils.js';
 import type { HelpIndex, HelpIndexEntry } from './types.js';
 
@@ -68,7 +63,7 @@ const estimateTokens = (text: string): number => Math.max(1, Math.ceil(text.leng
 /**
  * Build the chunk embedder both drivers pass as `deps.embed`.
  *
- * Goes through the shared `resolveEmbeddingConfig` rather than mapping provider to credential
+ * Goes through the shared `resolveEmbeddingWithKeylessFallback` rather than mapping provider to credential
  * itself: a keyless provider (Bedrock) must reach the factory with an empty config, and the
  * hand-rolled mapping this replaced treated an unrecognised provider as needing an OpenAI key.
  * Throws rather than warn-and-skip, because a run that silently embedded nothing would report a
@@ -77,14 +72,18 @@ const estimateTokens = (text: string): number => Math.max(1, Math.ceil(text.leng
 export function createHelpEmbedder(
   embeddingModel: SupportedEmbeddingModel,
   apiKeyTable: EmbeddingKeyTable | null | undefined
-): (text: string) => Promise<number[]> {
-  const provider = getProviderFromModel(embeddingModel);
-  const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+): { embed: (text: string) => Promise<number[]>; model: SupportedEmbeddingModel } {
+  // Returns the model it settled on rather than echoing the caller's: a keyless cloud stage falls
+  // back to Bedrock, and `deps.embeddingModel` is both the corpus stamp and the re-ingest
+  // invalidation key (see `embeddingModel` at the member check below). Passing the requested model
+  // alongside a Bedrock embedder would stamp the corpus with a model it was never embedded with
+  // and re-invalidate every member on each run.
+  const { config, missing, model } = resolveEmbeddingWithKeylessFallback(embeddingModel, apiKeyTable);
   if (missing) {
     throw new Error(`No ${missing} credential resolved for embedding model ${embeddingModel}; cannot embed chunks.`);
   }
-  const service = new EmbeddingFactory(config).createEmbeddingService(embeddingModel);
-  return text => service.generateEmbedding(text);
+  const service = new EmbeddingFactory(config).createEmbeddingService(model);
+  return { embed: text => service.generateEmbedding(text), model };
 }
 
 export interface HelpDatalakeLogger {

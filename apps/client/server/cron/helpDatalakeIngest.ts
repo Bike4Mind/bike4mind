@@ -75,12 +75,16 @@ export async function handler() {
     getSettingsByNames,
   });
 
+  // A keyless cloud stage embeds on Bedrock; take the model back from the embedder so the corpus
+  // is stamped with what it was actually embedded with (see createHelpEmbedder).
+  const { embed, model: resolvedEmbeddingModel } = createHelpEmbedder(embeddingModel, apiKeyTable);
+
   const root = corpusRoot();
   const result = await ingestHelpDatalake(
     {
       db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, dataLakes: dataLakeRepository },
-      embed: createHelpEmbedder(embeddingModel, apiKeyTable),
-      embeddingModel,
+      embed,
+      embeddingModel: resolvedEmbeddingModel,
       logger: {
         info: msg => logger.info(`[helpDatalakeIngest] ${msg}`),
         warn: msg => logger.warn(`[helpDatalakeIngest] ${msg}`),

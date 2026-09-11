@@ -29,6 +29,9 @@ const h = vi.hoisted(() => ({
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
+  // Echoes the requested model, matching the real helper's no-fallback path. The keyless-arm
+  // test overrides this to return a different `model` and asserts the stamp follows.
+  resolveEmbeddingWithKeylessFallback: vi.fn((model: string) => ({ config: {}, missing: null, model })),
   stampChunkEmbeddingModel: vi.fn(),
   indexChunks: vi.fn(),
   selfHostOpenSearchEnabled: vi.fn(() => false),
@@ -148,7 +151,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     }
   },
   getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
   // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   getAtlasIndexForModel: h.getAtlasIndexForModel,
@@ -906,6 +909,32 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
     expect(h.chunkUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('stamps the model it actually embedded with when a keyless stage falls back', async () => {
+    // The corpus-mislabelling hazard: on a stage with no provider key the vectorizer embeds on
+    // Bedrock, and every downstream key - the cache entry, the Atlas width guard, both chunk
+    // stamps - has to follow that model rather than the one the payload asked for. Stamping
+    // ada-002 onto Titan vectors would make them unsearchable and silently wrong.
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({
+      config: {},
+      missing: null,
+      model: 'amazon.titan-embed-text-v2:0',
+    });
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'amazon.titan-embed-text-v2:0' })
+    );
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalledWith(
+      expect.anything(),
+      'amazon.titan-embed-text-v2:0',
+      expect.anything(),
+      expect.anything()
     );
   });
 

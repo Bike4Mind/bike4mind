@@ -38,25 +38,23 @@ export enum OllamaEmbeddingModel {
 }
 
 /**
- * The default embedding model for the current deployment - always one this deployment can
- * actually reach with the credentials it has, so RAG / knowledge search work out of the box.
- * Read by the `defaultEmbeddingModel` admin-setting default and by the query-embedding fallback,
- * so an operator who never opens admin settings still gets a working embedder instead of an
- * unconfigured cloud model that fails with an opaque "security token" error.
+ * The default embedding model this deployment advertises - the `defaultEmbeddingModel` admin-setting
+ * default and the query-embedding fallback, so an operator who never opens admin settings still gets
+ * a sensible model rather than an unconfigured one.
  *
- * Resolution order, mirroring EmbeddingFactory.getDefaultEmbeddingModel (fab-pipeline), which is
- * the same question asked of a resolved config rather than of the environment:
- *   1. a real cloud embedding key -> the OpenAI cloud default;
- *   2. self-host with a local Ollama server -> the local embedder;
- *   3. any other cloud stage -> Bedrock, which needs no API key at all.
+ * Deliberately answers from the ENVIRONMENT only, and deliberately does NOT try to answer "can this
+ * deployment actually reach that model". It cannot: on a hosted stage an SST secret arrives as a
+ * linked Resource, never as process.env (see apps/client/server/modelDiscovery/adapters.ts), so an
+ * absent OPENAI_API_KEY here means "unknown", not "no key" - it is absent on production too. This
+ * function is also bundled into the browser via settingsMap, where every env read is undefined, so
+ * any answer it gives must be one that is safe as a stage-neutral constant.
  *
- * Step 3 exists because preview stages deliberately carry no OPENAI_API_KEY (one shared key
- * across every open PR's preview would burn embedding spend continuously), and the SST secret
- * defaults to the literal 'not-configured'. Without it, every embedding path on a preview throws
- * OPENAI_KEY_MISSING_MESSAGE and data-lake ingestion dies with nothing to fall back on.
+ * Reachability is therefore decided where the resolved credentials are actually in hand, by
+ * `resolveEmbeddingWithKeylessFallback` (fab-pipeline) - that is what lets a keyless cloud stage
+ * embed on Bedrock without changing what any other stage advertises.
  *
- * Must stay in lock-step with `hasKeylessCloudEmbedder` below and with toolAvailability.ts, which
- * gates `search_knowledge_base` on the same question.
+ * The one arm that IS env-decidable: a self-host running Ollama has its base URL in real process.env
+ * on both server and (absent) client, and no cloud credential can arrive by any other route.
  */
 export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
   const selfHost = process.env.B4M_SELF_HOST === 'true';
@@ -70,13 +68,6 @@ export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
   if (selfHost && hasOllama && !hasCloudEmbeddingKey) {
     return OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B;
   }
-  // A keyless self-host keeps the OpenAI default on purpose: it has no AWS credentials to reach
-  // Bedrock with, and OPENAI_KEY_MISSING_MESSAGE names the two things a self-hoster can fix
-  // (OPENAI_API_KEY / OLLAMA_BASE_URL). Swapping in Bedrock there would trade an actionable error
-  // for an opaque credential one.
-  if (!hasCloudEmbeddingKey && hasKeylessCloudEmbedder()) {
-    return BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2;
-  }
   return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
 }
 
@@ -86,6 +77,10 @@ export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
  *
  * Self-host is excluded because it has no such role - its keyless path is the local Ollama
  * embedder (`isLocalEmbedderAvailable` in toolAvailability.ts), not Bedrock.
+ *
+ * Answers "is Bedrock reachable here", NOT "should we use it" - a keyed stage is keyless-capable
+ * too. Only ask this alongside a resolved credential table that came back empty; see
+ * `resolveEmbeddingWithKeylessFallback`, the one place that pairs the two questions.
  */
 export function hasKeylessCloudEmbedder(): boolean {
   return process.env.B4M_SELF_HOST !== 'true';

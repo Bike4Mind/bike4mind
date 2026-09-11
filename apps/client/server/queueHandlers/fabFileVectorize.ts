@@ -21,7 +21,7 @@ import { z } from 'zod';
 import {
   ChunkSchema,
   EmbeddingFactory,
-  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
   isEmbeddingAuthError,
   getAtlasIndexForModel,
   FabFileChunkSearchIndex,
@@ -66,15 +66,15 @@ const VectorizePayload = z.object({
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
   const payload = VectorizePayload.parse(JSON.parse(body));
-  const { userId, fabFileId, embeddingModel } = payload;
+  const { userId, fabFileId, embeddingModel: requestedEmbeddingModel } = payload;
 
   // Support both single chunk (backward compat) and batch processing
   const isBatch = payload.chunkIds && payload.chunkIds.length > 0;
   const chunkIds = isBatch ? payload.chunkIds! : [payload.chunkId!];
 
   // Runtime validation for embedding model
-  if (!embeddingModel || typeof embeddingModel !== 'string') {
-    throw new Error(`Invalid embedding model: ${embeddingModel}`);
+  if (!requestedEmbeddingModel || typeof requestedEmbeddingModel !== 'string') {
+    throw new Error(`Invalid embedding model: ${requestedEmbeddingModel}`);
   }
 
   logger.updateMetadata({
@@ -193,12 +193,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       { logger }
     );
 
-    const requiredProvider = getProviderFromModel(embeddingModel);
-
     // Only pass the credential the chosen provider needs. A missing one is not fatal here:
     // the factory surfaces it when an embed call is made, which is where the batch's
     // failure counters can record it. Bedrock needs none and authenticates via AWS.
-    const { config: embeddingConfig } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
+    //
+    // A keyless cloud stage resolves to Bedrock instead of failing every chunk (see
+    // resolveEmbeddingWithKeylessFallback). Everything downstream keys off `embeddingModel` -
+    // the cache key, the cost estimate, the Atlas width guard and both chunk stamps - so binding
+    // it to the model actually used is what keeps a fallback from mislabelling the corpus.
+    const { config: embeddingConfig, model: embeddingModel } = resolveEmbeddingWithKeylessFallback(
+      requestedEmbeddingModel,
+      apiKeyTable
+    );
+    if (embeddingModel !== requestedEmbeddingModel) {
+      logger.warn(`No credential for ${requestedEmbeddingModel}; embedding with keyless ${embeddingModel} instead`);
+    }
+
+    const requiredProvider = getProviderFromModel(embeddingModel);
 
     const embeddingService = new EmbeddingFactory(embeddingConfig);
 

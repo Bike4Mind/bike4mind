@@ -3401,7 +3401,9 @@ export const settingsMap = {
     userReadable: true,
     name: 'Default Embedding Model',
     // Self-host with a local Ollama server and no cloud key defaults to a local embedder so RAG
-    // works keyless out of the box; cloud deployments keep the OpenAI default. See embedding.ts.
+    // works keyless out of the box; every cloud stage keeps the OpenAI default. Deliberately
+    // stage-neutral on cloud: this value is bundled into the browser too, and a keyless stage's
+    // Bedrock fallback is resolved at the embedding seam instead. See embedding.ts.
     defaultValue: defaultEmbeddingModelForEnv(),
     description: 'The default embedding model to use',
     category: 'AI',

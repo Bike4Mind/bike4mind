@@ -21,6 +21,7 @@ import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   getEmbeddingModelCost,
+  hasKeylessCloudEmbedder,
   ModelBackend,
   isSupportedEmbeddingModel,
   insufficientCreditsError,
@@ -357,6 +358,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // multi-provider table this way.
       const userIdForService = req.user?.id || 'system';
       const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
+      // A cloud stage can always reach Bedrock with its own role, so a missing provider key is
+      // not fatal there - knowledgeBaseSearch's resolveEmbeddingContext falls back rather than
+      // losing semantic search. Preflighting a 500 here would pre-empt that fallback; self-host,
+      // which has no such role, still gets the actionable error below.
+      const keylessFallbackAvailable = hasKeylessCloudEmbedder();
       const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
         userIdForService,
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
@@ -368,18 +374,20 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // which degrades gracefully via semanticDataLakeSearch's own missingCredential skip reason
       // instead. A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats
       // it as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
-      if (embeddingProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
-        return res.status(500).json({
-          error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
-        });
-      } else if (embeddingProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
-        return res.status(500).json({
-          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-        });
-      } else if (embeddingProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
-        return res.status(500).json({
-          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-        });
+      if (!keylessFallbackAvailable) {
+        if (embeddingProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
+          return res.status(500).json({
+            error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
+          });
+        } else if (embeddingProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
+          return res.status(500).json({
+            error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+          });
+        } else if (embeddingProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
+          return res.status(500).json({
+            error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+          });
+        }
       }
 
       const embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {

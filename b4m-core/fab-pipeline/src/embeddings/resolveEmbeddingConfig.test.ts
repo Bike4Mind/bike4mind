@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { ModelBackend } from '@bike4mind/common';
-import { resolveEmbeddingConfig, type EmbeddingKeyTable } from './resolveEmbeddingConfig';
+import {
+  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
+  type EmbeddingKeyTable,
+} from './resolveEmbeddingConfig';
 import { getProviderFromModel } from './getProviderFromModel';
 import { BedrockEmbeddingModel, OllamaEmbeddingModel, OpenAIEmbeddingModel } from '@bike4mind/common';
 
@@ -121,5 +125,67 @@ describe('resolveEmbeddingConfig', () => {
       // Only the keyless provider ends up with nothing to pass the factory.
       expect(Object.keys(config)).toHaveLength(expectKeyless ? 0 : 1);
     });
+  });
+});
+
+describe('resolveEmbeddingWithKeylessFallback', () => {
+  const savedSelfHost = process.env.B4M_SELF_HOST;
+  beforeEach(() => {
+    delete process.env.B4M_SELF_HOST;
+  });
+  afterEach(() => {
+    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+    else process.env.B4M_SELF_HOST = savedSelfHost;
+  });
+
+  it('leaves a satisfied model untouched', () => {
+    const r = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, FULL);
+    expect(r).toEqual({ config: { openaiApiKey: 'sk-test' }, missing: null, model: 'text-embedding-ada-002' });
+  });
+
+  it('falls back to Bedrock on a cloud stage with no cloud credential', () => {
+    // The whole point: a keyless cloud stage embeds rather than failing every chunk. OPENAI_API_KEY
+    // being absent from process.env is NOT what decides this - the empty key table is.
+    const r = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, null);
+    expect(r).toEqual({
+      config: {},
+      missing: null,
+      model: BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2,
+    });
+  });
+
+  it('returns the model it fell back to, not the one it was asked for', () => {
+    // Callers stamp the corpus with the returned model; echoing the requested one would label
+    // Titan vectors as ada-002 and re-invalidate the corpus on every subsequent run.
+    const { model } = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, {
+      openai: null,
+    });
+    expect(model).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
+  });
+
+  it('treats an expired key as no key and still falls back', () => {
+    const { model } = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, {
+      openai: 'expired',
+    });
+    expect(model).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
+  });
+
+  it('never falls back on self-host, which has no AWS role to reach Bedrock with', () => {
+    // Self-host must keep the actionable OPENAI_API_KEY / OLLAMA_BASE_URL error rather than
+    // trading it for an opaque AWS credential failure.
+    process.env.B4M_SELF_HOST = 'true';
+    const r = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, null);
+    expect(r).toEqual({ config: {}, missing: 'openai', model: 'text-embedding-ada-002' });
+  });
+
+  it('never overrides a missing Ollama base URL', () => {
+    const r = resolveEmbeddingWithKeylessFallback(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B, null);
+    expect(r.missing).toBe('ollama');
+    expect(r.model).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  it('is a no-op for a model that already needs no credential', () => {
+    const r = resolveEmbeddingWithKeylessFallback(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2, null);
+    expect(r).toEqual({ config: {}, missing: null, model: BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2 });
   });
 });

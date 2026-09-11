@@ -220,7 +220,8 @@ export async function resolveToolAvailability(
     // A placeholder/dummy key is not a working key: reject it here so this stays in lock-step
     // with embedding.ts defaultEmbeddingModelForEnv (which treats a placeholder as no cloud key
     // and falls back to the local Ollama embedder) - otherwise KB would report a working cloud
-    // embedder that the vectorizer can't actually use.
+    // embedder that the vectorizer can't actually use. NOTE: this rejection only decides the
+    // answer on self-host; a cloud stage is keyless-capable below regardless of this key.
     const hasRealEmbeddingKey = (key: string | null | undefined) => usable(key) && !isPlaceholderApiKey(key);
     const hasEmbeddingKey = hasRealEmbeddingKey(llmKeys?.openai) || hasRealEmbeddingKey(llmKeys?.voyageai);
 
@@ -257,9 +258,11 @@ export async function resolveToolAvailability(
       // is a direct file/keyword lookup that needs no external key, so it isn't gated.
       // Available with a cloud embeddings key OR a keyless embedder: a self-hosted local Ollama
       // server, or Bedrock on a cloud stage (reached with the role's AWS credentials). The last
-      // term is what keeps KB offered on a keyless preview, where defaultEmbeddingModelForEnv
-      // now resolves to Bedrock - without it the tool would stay hidden on exactly the stages
-      // that just gained a working embedder.
+      // term is what keeps KB offered on a keyless cloud stage, where the search path falls back
+      // to Bedrock (resolveEmbeddingWithKeylessFallback) rather than losing semantic search -
+      // without it the tool would stay hidden on exactly the stages that can still answer.
+      // It also makes the two preceding terms non-decisive on cloud, which is correct: they only
+      // settle the answer on self-host.
       search_knowledge_base: maybeFailOpen(
         hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
         taint.llmKeys

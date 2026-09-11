@@ -1,5 +1,11 @@
-import { ModelBackend } from '@bike4mind/common';
+import {
+  BedrockEmbeddingModel,
+  hasKeylessCloudEmbedder,
+  ModelBackend,
+  type SupportedEmbeddingModel,
+} from '@bike4mind/common';
 import type { EmbeddingConfig } from './EmbeddingFactory';
+import { getProviderFromModel } from './getProviderFromModel';
 
 /**
  * Credential fields the embedding providers draw on, as returned by
@@ -89,4 +95,49 @@ export function resolveEmbeddingConfig(
       // empty config IS the ready state. Never report a missing credential here.
       return { config: {}, missing: null };
   }
+}
+
+/**
+ * Resolve a config for `model`, falling back to keyless Bedrock when this deployment holds no
+ * credential for the provider `model` needs but can reach Bedrock with its own AWS role.
+ *
+ * WHY THIS EXISTS HERE and not in `defaultEmbeddingModelForEnv`: "does this deployment have a
+ * cloud embedding key" is unanswerable from process.env on a hosted stage - an SST secret arrives
+ * as a linked Resource, so OPENAI_API_KEY is absent on production exactly as it is on a preview.
+ * The key table passed in here is the first point that actually knows, which is why the decision
+ * belongs at this seam.
+ *
+ * Related to but NOT the same as EmbeddingFactory.getDefaultEmbeddingModel, which ranks providers
+ * from scratch (OpenAI > VoyageAI > Ollama > Bedrock). This keeps the model the admin asked for
+ * whenever it is reachable and only substitutes the keyless one otherwise - so a deployment
+ * holding only a Voyage key still falls back to Bedrock here, where the factory would pick
+ * voyage-3. Deliberate: this is a reachability backstop, not a second opinion on the setting.
+ *
+ * ONLY FOR CALLERS FREE TO CHOOSE THE MODEL - i.e. the model came from the `defaultEmbeddingModel`
+ * admin setting. A caller that must hit one specific vector space MUST keep using
+ * `resolveEmbeddingConfig` and fail, because a fallback there would silently compare or write
+ * across incompatible spaces:
+ *   - mementos are pinned to MEMENTO_EMBEDDING_MODEL at 512 truncated dims (see embedding.ts);
+ *   - alternateModelAnn embeds one query per model bucket to match each chunk's recorded stamp.
+ *
+ * Returns the model actually used, so callers stamp what they embedded with rather than what they
+ * asked for - that is what keeps `fabFileChunk`'s recorded `embeddingModel` honest.
+ *
+ * `missing: 'ollama'` is never overridden: a self-host that set no OLLAMA_BASE_URL has no AWS role
+ * either, and OPENAI_KEY_MISSING_MESSAGE naming OPENAI_API_KEY / OLLAMA_BASE_URL is the actionable
+ * error there. `hasKeylessCloudEmbedder()` already excludes self-host; this is belt-and-braces for
+ * a self-host that somehow reports otherwise.
+ */
+export function resolveEmbeddingWithKeylessFallback(
+  model: SupportedEmbeddingModel,
+  keyTable: EmbeddingKeyTable | null | undefined
+): ResolvedEmbeddingConfig & { model: SupportedEmbeddingModel } {
+  const resolved = resolveEmbeddingConfig(getProviderFromModel(model), keyTable);
+  if (!resolved.missing || resolved.missing === 'ollama' || !hasKeylessCloudEmbedder()) {
+    return { ...resolved, model };
+  }
+  return {
+    ...resolveEmbeddingConfig(ModelBackend.Bedrock, null),
+    model: BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2,
+  };
 }

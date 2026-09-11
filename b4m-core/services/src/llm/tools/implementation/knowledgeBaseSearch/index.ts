@@ -11,7 +11,7 @@ import {
   createTokenizer,
   getProviderFromModel,
   getSettingsByNames,
-  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
   type ITokenizer,
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
@@ -273,11 +273,14 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
     { db: { apiKeys, adminSettings }, getSettingsByNames },
     { logger: context.logger }
   );
-  const provider = getProviderFromModel(embeddingModel);
   // A missing credential means the semantic arm cannot run, so fall back to keyword search.
   // Keyless providers (Bedrock, authenticating through the AWS credential chain) report
-  // nothing missing and proceed.
-  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) {
+  // nothing missing and proceed - including a cloud stage holding no provider key at all, which
+  // resolves to Bedrock here rather than losing semantic search entirely. The RESOLVED model is
+  // what goes downstream, so the query is embedded in the same space the corpus was written in.
+  const { missing, model: resolvedEmbeddingModel } = resolveEmbeddingWithKeylessFallback(embeddingModel, apiKeyTable);
+  const provider = getProviderFromModel(resolvedEmbeddingModel);
+  if (missing) {
     context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
     return null;
   }
@@ -286,7 +289,13 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   const supersessionCollapseEnabled =
     (await adminSettings.getSettingsValue('EnableRetrievalSupersessionCollapse')) ?? false;
 
-  return { embeddingModel, provider, apiKeyTable, vectorSearchEnabled, supersessionCollapseEnabled };
+  return {
+    embeddingModel: resolvedEmbeddingModel,
+    provider,
+    apiKeyTable,
+    vectorSearchEnabled,
+    supersessionCollapseEnabled,
+  };
 }
 
 /**
