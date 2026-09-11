@@ -261,6 +261,15 @@ jobs:
             exit 1
           fi
           echo "skill_file=$DEST" >> "$GITHUB_OUTPUT"
+          # Recorded here, checked in `Redact and upload review transcript`. That step
+          # redacts the skill's own text out of the transcript before publishing it as
+          # a world-downloadable artifact, and it derives the strings to redact by
+          # READING this file - so substituting the file substitutes the redaction
+          # list, and the private skill passes through in the clear. A fold run hands
+          # the agent write tools, and $RUNNER_TEMP is not the checkout, so the file is
+          # not beyond reach. This output belongs to a step that finished before the
+          # agent started, which is what makes it usable as the reference.
+          echo "skill_sha=$(sha256sum "$DEST" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "bot-review skill fetched ($(wc -l < "$DEST") lines) from b4m-devtools@main"
 
       - name: Record review start time
@@ -270,24 +279,6 @@ jobs:
           # Watermark for the "was a review actually posted?" check below. Taken a
           # second early so a review posted in the same second still compares >=.
           echo "at=$(date -u -d '1 second ago' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
-      - name: Stage the transcript redactor out of the working tree
-        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
-        env:
-          REDACTOR: ${{ runner.temp }}/redact-review-transcript.py
-        run: |
-          set -euo pipefail
-          # `Redact and upload review transcript` below EXECUTES this script, and a
-          # fold run hands the agent Edit/Write over the checkout it lives in. Worse,
-          # that step's gate is `posted != 'true'` while the push step's path guard
-          # only runs when `posted == 'true'`, so on exactly the runs that execute
-          # this script the guard never ran at all. Take the copy CI will run from the
-          # commit, before the review step starts, so rewriting the tracked file
-          # changes nothing that runs. The `.github/**` write fence in the fold deny
-          # list is the other half of this; either alone closes the hole.
-          # HEAD is the PR head sha (the checkout above is detached at it), so this
-          # reads the committed bytes and not the tree.
-          git show HEAD:.github/scripts/redact-review-transcript.py > "$REDACTOR"
 
       - name: Install bubblewrap
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
@@ -419,7 +410,7 @@ jobs:
             # the whole point of fold mode is that the agent decides WHAT to change
             # while a plain `run:` step below decides HOW it becomes durable, so the
             # destination ref and the force-push choice are not the agent's to make.
-            --allowedTools "Read,Grep,Glob,Agent,Task,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_reviews,mcp__github__get_pull_request_review_comments,mcp__github__get_issue,mcp__github__get_issue_comments,mcp__github__get_file_contents,mcp__github__list_commits,mcp__github__get_commit,mcp__github__create_pending_pull_request_review,mcp__github__add_comment_to_pending_review,mcp__github__submit_pending_pull_request_review,mcp__github__delete_pending_pull_request_review,mcp__github__create_and_submit_pull_request_review${{ env.FOLD_MODE == 'true' && ',Edit,Write,MultiEdit' || '' }}"
+            --allowedTools "Read,Grep,Glob,Agent,Task,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_reviews,mcp__github__get_pull_request_review_comments,mcp__github__get_issue,mcp__github__get_issue_comments,mcp__github__get_file_contents,mcp__github__list_commits,mcp__github__get_commit,mcp__github__create_pending_pull_request_review,mcp__github__add_comment_to_pending_review,mcp__github__submit_pending_pull_request_review,mcp__github__delete_pending_pull_request_review,mcp__github__create_and_submit_pull_request_review${{ env.FOLD_MODE == 'true' && ',Edit,Write' || '' }}"
             # Deny beats allow, so these hold even if the list above is widened
             # later. Bash and the write tools are what "no general shell" means in
             # practice. The three Read specs fence the two places the GitHub App
@@ -427,29 +418,43 @@ jobs:
             # https://x-access-token:<token>@... in the checkout's .git/config, and
             # the token also lands in the --mcp-config argv, i.e. /proc/<pid>/cmdline.
             # Reads elsewhere on the runner are NOT fenced.
-            # Both branches are spelled out in full rather than composed, so a
-            # diff shows the whole of what each mode can do.
             #
-            # The fold arm keeps the write tools out of two directories rather than
-            # relying on the prompt to ask nicely:
-            #   .github/** - this job runs tracked code from the checkout, so an edit
-            #     there is code execution in THIS run, which the push step's path
-            #     guard cannot reach (it only gates what gets committed, and on a run
-            #     that posts no review it does not run at all). The redactor is also
-            #     staged out of the tree above; this is the second half of that fix.
-            #   .git/** - `git add -u` in the push step would run a `filter.*.clean`
-            #     command from .git/info/attributes, in a step whose env holds the
-            #     push token. Denying Read(.git/**) already blocks writes there today,
-            #     but that is harness behaviour rather than a documented contract, so
-            #     state it.
-            # Both are directories a fold has no legitimate business in: the push
-            # step refuses the whole fixup if either is staged, so an edit there can
-            # only ever cost the author the rest of the fold.
+            # Spelling of the path specs matters and is not obvious. Only `Edit(path)`
+            # is consulted by the file-permission checks - `Write(path)` and
+            # `MultiEdit(path)` specs are IGNORED (the CLI says so on stderr and then
+            # exits 0, so a dead spec looks like a live one) - and an `Edit(path)` rule
+            # covers every file-editing tool, Write included. So each fence below is
+            # written once, as `Edit(...)`, and that one spec is the whole of it.
+            # Bare `MultiEdit` is kept in both arms even though this CLI version does
+            # not know the name: it costs a startup warning and nothing else, and if
+            # the tool returns it should return already denied. It is NOT a fence.
+            #
+            # `$RUNNER_TEMP` is fenced with an absolute spec because a bare write-tool
+            # grant reaches anywhere on the filesystem, not only the working directory
+            # (verified against this CLI). What lives there: the runner's own
+            # `_runner_file_commands` files, so a write to $GITHUB_PATH or $GITHUB_ENV
+            # would be command execution in EVERY later step, including the ones
+            # holding GITHUB_TOKEN with pull-requests and issues write; the bot-review
+            # skill fetched from the private repo; and the action's execution
+            # transcript. The two things there that matter are each also bounded at
+            # their point of use below (hash check, `git show | python3 -`), because a
+            # permission rule is one version bump from a rename.
+            # `.github/**` is fenced for the same reason at the source level: the tree
+            # is what a later `synchronize` run would execute, and the push step's path
+            # guard only gates what gets committed on a run that posted a review.
+            # `.git/**` is fenced because `git add -u` in the push step would otherwise
+            # run a `filter.*.clean` command out of `.git/info/attributes` in the step
+            # holding the push token. Denying Read(.git/**) blocks writes there today
+            # as well, but that is harness behaviour rather than a contract.
+            # NOT fenced, and stated rather than left to be discovered: `$HOME`. The
+            # steps that care are hardened directly instead - see GIT_CONFIG_GLOBAL /
+            # GIT_CONFIG_SYSTEM / GIT_CONFIG_NOSYSTEM on the two steps that run git
+            # after the agent.
             #
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "${{ env.FOLD_MODE == 'true' && 'Bash,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Write(.github/**),Edit(.github/**),MultiEdit(.github/**),Write(.git/**),Edit(.git/**),MultiEdit(.git/**)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)
@@ -570,6 +575,19 @@ jobs:
           REPO: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
           RUN_ID: ${{ github.run_id }}
+          # Load-bearing, not hygiene. Every `git` below reads config, and on a fold
+          # run `$HOME` is agent-writable: it is neither the checkout nor $RUNNER_TEMP,
+          # so no write fence covers it. A global `filter.<x>.clean` plus a working-tree
+          # `.gitattributes` (which need not be tracked, and so never reaches the path
+          # guard) runs an arbitrary command during `git add -u` below - i.e. inside the
+          # step holding PUSH_TOKEN, and UPSTREAM of the path guard, the size bound and
+          # --no-verify. `git add` still exits 0, so `set -e` does not catch it.
+          # Reproduced before this was added. The same file also reaches `http.proxy`
+          # and `url.<base>.insteadOf`, either of which hands PUSH_TOKEN to a chosen
+          # host on the push. Nulling both config files closes all of it at once.
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_CONFIG_NOSYSTEM: '1'
         run: |
           # `-e` is load-bearing, not hygiene: without it a failed `git commit` falls
           # through to the push, which reports `Everything up-to-date` and exits 0, so
@@ -629,8 +647,13 @@ jobs:
           # set. Refuse loudly and push nothing at all rather than committing the
           # acceptable subset: a partial fixup under a commit message that claims the
           # review says what was applied is worse than none.
+          # `-c core.quotePath=false`: with git's default, any path holding a
+          # non-ASCII byte comes out as "\303\251..." - the leading quote defeats the
+          # `^(...)/` anchor and the trailing one defeats `\.(sh|bash|zsh)$`, so the
+          # guard matches nothing at all for such a file. No tracked path in this repo
+          # is non-ASCII today, so this arms the first time one is committed.
           BLOCKED=$(
-            git diff --cached --name-only | grep -E \
+            git -c core.quotePath=false diff --cached --name-only | grep -E \
               -e '^(\.github|\.husky|\.claude|scripts|infra|patches)/' \
               -e '(^|/)package\.json$' \
               -e '(^|/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pnpm-workspace\.yaml|turbo\.json|\.npmrc|Dockerfile)$' \
@@ -639,7 +662,7 @@ jobs:
             # Refused here rather than by the size bound below, which numstat reports
             # as 0 changed lines for a binary however large the rewrite. A fold
             # applies textual review findings, so a staged binary is not one.
-            git diff --cached --numstat | awk '$1 == "-" { print $3 }'
+            git -c core.quotePath=false diff --cached --numstat | awk '$1 == "-" { print $3 }'
           )
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"
@@ -662,28 +685,28 @@ jobs:
             exit 1
           fi
 
-          # Set here and not in an earlier step: configureGitAuth() inside
-          # claude-code-action overwrites user.name/user.email, so anything
-          # configured before the review step is dead by the time it matters.
+          # Identity is passed per-invocation, not written: GIT_CONFIG_GLOBAL is
+          # /dev/null in this step's env, so `git config user.name` would write there
+          # and the commit would come out unattributed. Passed here and not configured
+          # in an earlier step for a second reason - configureGitAuth() inside
+          # claude-code-action overwrites user.name/user.email, so anything set before
+          # the review step is dead by the time it matters.
           # A `*[bot]` identity is what cla.yml's allowlist and main-protection's
-          # unattributed-changes rule both key off.
-          git config user.name 'claude[bot]'
-          # GitHub resolves a `<id>+<login>@users.noreply.github.com` address by the
-          # NUMERIC id and ignores the login text, so a bare address is the only kind
-          # that cannot attribute the commit to some other bot. The sibling workflows
+          # unattributed-changes rule both key off. GitHub resolves a
+          # `<id>+<login>@users.noreply.github.com` address by the NUMERIC id and
+          # ignores the login text, so a bare address is the only kind that cannot
+          # attribute the commit to some other bot; the sibling workflows
           # (auto-changeset.yml, release.yaml) use the bare form for the same reason.
-          git config user.email 'claude[bot]@users.noreply.github.com'
+          #
           # --no-verify on both the commit and the push, and --no-gpg-sign on the
-          # commit. This step holds the push token in its env, so it states rather
-          # than inherits that no repo-supplied code runs here: .husky hooks are inert
-          # (core.hooksPath is unset) and the path guard above will not let a hook file
-          # be staged. Not a complete fence, and named so: --no-verify covers
-          # pre-commit/commit-msg but NOT prepare-commit-msg, so a self-hosted runner
-          # with a global core.hooksPath can still run one. --no-gpg-sign is there for
-          # the same reason - a global commit.gpgsign on such a runner would fail the
-          # commit, and with `set -e` above that now aborts the step instead of
-          # reporting a push that did not happen.
-          git commit --no-verify --no-gpg-sign \
+          # commit. With the global and system config nulled above, a `core.hooksPath`
+          # or `commit.gpgsign` planted in $HOME no longer reaches this commit at all,
+          # and `.husky` hooks are not wired up (no repo-local core.hooksPath); these
+          # flags are the belt to that braces, and cover the prepare-commit-msg hook
+          # --no-verify does not.
+          git -c user.name='claude[bot]' \
+              -c user.email='claude[bot]@users.noreply.github.com' \
+              commit --no-verify --no-gpg-sign \
             -m 'chore(bot-fold): apply review findings from the automated review' \
             -m "Applied by pr-bot-review in fold mode. The review posted on this PR says which findings were applied and which were left." \
             -m "Workflow run: ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
@@ -799,11 +822,14 @@ jobs:
         env:
           EXECUTION_FILE: ${{ steps.bot_review.outputs.execution_file }}
           SKILL_FILE: ${{ steps.skill_fetch.outputs.skill_file }}
+          SKILL_SHA: ${{ steps.skill_fetch.outputs.skill_sha }}
           DEST: ${{ runner.temp }}/review-transcript-redacted.json
-          # Staged from the commit before the review step - NOT the copy in the
-          # checkout, which a fold run's agent can rewrite. Must stay in sync with
-          # `Stage the transcript redactor out of the working tree` above.
-          REDACTOR: ${{ runner.temp }}/redact-review-transcript.py
+          # `git show` below must not read an agent-written global config: this step
+          # runs after the agent, and $HOME is neither the checkout nor $RUNNER_TEMP,
+          # so it is outside every write fence. Same three vars as `Push fold commit`.
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_CONFIG_NOSYSTEM: '1'
         run: |
           set -uo pipefail
           WAKEUP=false
@@ -813,7 +839,27 @@ jobs:
             echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! python3 "$REDACTOR" "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"; then
+          # The redactor reads the skill file to build the strings it strips, so the
+          # file IS the redaction list. Checked against the hash `Fetch bot-review
+          # skill` recorded before the agent ran: a mismatch means the list would be
+          # the wrong one, and this step publishes its output on a public repo, so
+          # refuse to upload rather than upload something redacted against it.
+          if [ -z "$SKILL_SHA" ] || [ "$(sha256sum "$SKILL_FILE" | cut -d' ' -f1)" != "$SKILL_SHA" ]; then
+            echo "::warning::the bot-review skill file changed since it was fetched; not uploading a transcript that cannot be redacted against it"
+            echo "uploadable=false" >> "$GITHUB_OUTPUT"
+            echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The redactor is EXECUTED here, so its bytes are read out of the commit at
+          # the point of use and piped straight into the interpreter. There is no file
+          # for anything to have pre-written: not the tracked copy in the checkout, and
+          # not a staged copy in $RUNNER_TEMP either. HEAD is the PR head sha (the
+          # checkout is detached at it), so these are the committed bytes.
+          # This step's gate is `posted != 'true'` while the push step's path guard
+          # needs `posted == 'true'`, so on every run that reaches this line the guard
+          # never ran at all - the bound has to be here and not there.
+          if ! git show HEAD:.github/scripts/redact-review-transcript.py |
+                 python3 - "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"; then
             echo "::warning::transcript redaction failed; not uploading"
             echo "uploadable=false" >> "$GITHUB_OUTPUT"
             echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
