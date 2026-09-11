@@ -98,6 +98,36 @@ describe('doors that create a new file also gate its prefix-arm tag signal', () 
       source,
       'a door creating a new file with caller-supplied tags must pass a { userId, db } third argument to ' +
         'assertDataLakeTagWriteScope, or a fileTagPrefix content tag can join a lake with no datalake:write scope'
-    ).toMatch(/assertDataLakeTagWriteScope\(\s*req,\s*[\s\S]*?\{\s*userId/);
+    ).toContain('await assertDataLakeTagWriteScope(');
+    // `[^;]*?` bounds the search to the call's own statement (it never spans a `;`), unlike an
+    // unbounded `[\s\S]*?`, which was proven to match past the call onto an unrelated `{ userId }`
+    // literal elsewhere in the file - so deleting this arg silently passed the guard.
+    expect(
+      source,
+      'a door creating a new file with caller-supplied tags must pass a { userId, db } third argument to ' +
+        'assertDataLakeTagWriteScope, or a fileTagPrefix content tag can join a lake with no datalake:write scope'
+    ).toMatch(/assertDataLakeTagWriteScope\(\s*req,\s*[^;]*?\{\s*userId/);
+  });
+});
+
+describe('new-file prefix-arm guard regex', () => {
+  const NEW_FILE_ARG_PATTERN = /assertDataLakeTagWriteScope\(\s*req,\s*[^;]*?\{\s*userId/;
+
+  it('matches a real call site that passes the newFile argument', () => {
+    const source = 'await assertDataLakeTagWriteScope(req, requestedTagNames, { userId, db: { dataLakes } });';
+    expect(NEW_FILE_ARG_PATTERN.test(source)).toBe(true);
+  });
+
+  // Regression for the bug this guard previously had: an unbounded `[\s\S]*?` matched past the
+  // call's own closing paren onto an unrelated `{ userId }` literal elsewhere in the file, so a
+  // door that dropped the newFile argument entirely still passed. Bounding the middle group to
+  // `[^;]*?` confines the search to the call's own statement.
+  it('does not match when the newFile argument is dropped but an unrelated { userId } appears later', () => {
+    const source = [
+      'await assertDataLakeTagWriteScope(req, requestedTagNames);',
+      'const ctx = await toAccessContext(req);',
+      'await someOtherCall(ctx, { userId, extra: true });',
+    ].join('\n');
+    expect(NEW_FILE_ARG_PATTERN.test(source)).toBe(false);
   });
 });

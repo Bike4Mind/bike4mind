@@ -185,6 +185,14 @@ to a question it cannot see.
    re-mint list - enumerate every `requiredScopes`/in-handler assert site for the scope, not just
    the ones under its "home" prefix.
 
+   A prefix-arm gate (see `assertDataLakeTagWriteScope`'s `newFile` argument) can refuse a key
+   that never mentioned a lake at all: any caller-supplied content tag that happens to match one
+   of the caller's OWN lakes' `fileTagPrefix` requires `datalake:write`, with no `datalake:*`
+   meta-tag or `dataLakeSlug` in the request needed to trigger it. A key that only ever uploaded
+   plain files can start 403ing the moment its owner also creates a lake whose prefix collides
+   with a tag name that key happens to use - budget for that when sizing the re-mint list for
+   `datalake:write`, not just the callers that explicitly reference a lake.
+
 3. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
 4. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.
 5. Re-mint the keys from step 2 with their owners. Watch
