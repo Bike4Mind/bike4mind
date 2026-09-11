@@ -1,9 +1,9 @@
-import { settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { AppFile } from '@bike4mind/database/content';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { getAppFilesStorage } from '@server/utils/storage';
 import type { Request, Response } from 'express';
 
@@ -52,9 +52,7 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
       getSettingsValue(
         'MaxFileSize',
         await getSettingsMap({ adminSettings: adminSettingsRepository }),
-        // MaxFileSize's own definition always sets defaultValue; makeNumberSetting's shared param
-        // type widens it to number|undefined for settings that omit one.
-        settingsMap.MaxFileSize.defaultValue!
+        MAX_FILE_SIZE_DEFAULT_MB
       ) *
       1024 *
       1024;
