@@ -28,6 +28,41 @@ function outcomeSeverity(outcome: RetrievalSummary['outcome']): number {
 }
 
 /**
+ * Sum-of-completions for `injected` (see RetrievalSummarySchema): absent + absent stays absent, so
+ * "volume unknown" survives a merge and is never converted into a recorded zero. A one-sided
+ * value passes through unchanged, which is why a `failed` surface writing nothing cannot erase the
+ * volume a successful surface already reported.
+ */
+function mergeInjected(
+  existing: RetrievalSummary['injected'],
+  incoming: RetrievalSummary['injected']
+): RetrievalSummary['injected'] {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  // Max over only the sides that HAVE a score: an absent topScore means "this surface has no
+  // comparable similarity to contribute", not zero.
+  const scores = [existing.topScore, incoming.topScore].filter((v): v is number => v !== undefined);
+  // Sum over only the sides that HAVE a count, same reasoning as topScore: only forced retrieval's
+  // ranked pool has one to report, and an absent side must not turn a real count into a smaller
+  // sum. Returns undefined for absent-on-both, which is DIFFERENT from a summed 0 - a real 0 is
+  // "the pool was empty", and collapsing the two is what a truthy filter here would silently do.
+  const sumDefined = (a: number | undefined, b: number | undefined): number | undefined => {
+    const present = [a, b].filter((v): v is number => v !== undefined);
+    return present.length ? present.reduce((sum, v) => sum + v, 0) : undefined;
+  };
+  // The pre/post pair is written and absent together at every write site, so they merge identically.
+  const preFloor = sumDefined(existing.preRelativeFloorCandidates, incoming.preRelativeFloorCandidates);
+  const postFloor = sumDefined(existing.postRelativeFloorCandidates, incoming.postRelativeFloorCandidates);
+  return {
+    chunks: existing.chunks + incoming.chunks,
+    chars: existing.chars + incoming.chars,
+    ...(scores.length ? { topScore: Math.max(...scores) } : {}),
+    ...(preFloor !== undefined ? { preRelativeFloorCandidates: preFloor } : {}),
+    ...(postFloor !== undefined ? { postRelativeFloorCandidates: postFloor } : {}),
+  };
+}
+
+/**
  * Merges two per-turn retrieval summaries (see RetrievalSummarySchema in promptMeta.ts).
  *
  * Extracted into its own module, with no heavy dependencies, so it can be called from the
@@ -46,8 +81,39 @@ function outcomeSeverity(outcome: RetrievalSummary['outcome']): number {
  *   'optional' must not downgrade a turn the forced arm already claimed. Order-independent.
  * - forcedSkipReason: first defined survives. The forced arm takes exactly one skip per turn, so
  *   a second value would mean two arms disagreeing about the same fact; keeping the earlier one
- *   makes the merge order-independent rather than last-writer-wins.
- * - surfaces / dataLakeTags: union, deduped.
+ *   makes this first-writer-wins under the accumulator convention (`existing` is the earlier
+ *   write), not last-writer-wins. Unlike the fields above it is NOT commutative when both sides
+ *   carry a different reason.
+ * - knowledgeBaseGuidanceInjected: first-writer-wins pass-through. Only the seed writes it, and
+ *   `??` rather than `||` because an explicit `false` is a real value (the A/B control arm) that
+ *   a boolean OR against an absent incoming side would silently discard.
+ * - answerability: existing-wins pass-through, and it is here to PRESERVE rather than to combine.
+ *   Nothing in a turn writes it - the offline replay backfills it straight to Mongo - so a
+ *   two-sided merge is not reachable. What IS reachable is a later runtime write on a quest that
+ *   was already backfilled (a regenerate, an edit), and since this function returns an explicit
+ *   object literal, a field with no case here is DROPPED rather than carried. That silent erase is
+ *   the failure this rule exists to prevent.
+ * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
+ *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
+ *   independently, so a two-sided merge can never leave the two disagreeing.
+ * - injected: chunks and chars SUM, topScore is the max, and the pre/post relative-floor candidate
+ *   counts SUM like chunks (only over the sides that have one - see mergeInjected). NOTE that the
+ *   pair is forced-retrieval-only while chunks/chars sum across every surface, so on a mixed turn
+ *   chunks can exceed preRelativeFloorCandidates - compare the pair to itself, never to chunks.
+ *   See the pair's comment on RetrievalSummarySchema. The only NON-IDEMPOTENT rule
+ *   here, and safe only because every write site emits a delta once per completed search - merging
+ *   the same delta twice would double the volume, so a new writer must not re-emit an accumulated
+ *   value. Summing is what the field means: total volume the model received this turn, across
+ *   surfaces and across repeat knowledge-tool calls. An absent side contributes NOTHING rather than
+ *   a zero, so a surface with no volume to report cannot turn another's real number into a starve,
+ *   and an absent topScore or candidate count never defaults to 0 - that would outrank a real
+ *   negative cosine, or claim a surface with no ranked pool of its own ranked zero candidates.
+ *
+ * The one-sided returns below are a verbatim passthrough, and both injection sites emit a PARTIAL
+ * summary (ids with no count; `attempted` with no `outcome`) meant only as a merge delta. So a
+ * delta survives as-written if it is ever a turn's FIRST retrieval write - reachable only if
+ * nothing seeded `retrieval` first, which every caller of both doors already does. Readers should
+ * still derive the count from the ids rather than assume it is present.
  */
 export function mergeRetrievalSummary(
   existing: RetrievalSummary | undefined,
@@ -60,6 +126,18 @@ export function mergeRetrievalSummary(
     outcomeSeverity(incoming.outcome) > outcomeSeverity(existing.outcome) ? incoming.outcome : existing.outcome;
   const mode = existing.mode === 'forced' || incoming.mode === 'forced' ? 'forced' : (existing.mode ?? incoming.mode);
   const forcedSkipReason = existing.forcedSkipReason ?? incoming.forcedSkipReason;
+  const knowledgeBaseGuidanceInjected =
+    existing.knowledgeBaseGuidanceInjected ?? incoming.knowledgeBaseGuidanceInjected;
+  const answerability = existing.answerability ?? incoming.answerability;
+  const injectedLakePromptIds =
+    existing.injectedLakePromptIds || incoming.injectedLakePromptIds
+      ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
+      : undefined;
+  const injected = mergeInjected(existing.injected, incoming.injected);
+  const preauthorizedLakeIdsUsed =
+    existing.preauthorizedLakeIdsUsed || incoming.preauthorizedLakeIdsUsed
+      ? [...new Set([...(existing.preauthorizedLakeIdsUsed ?? []), ...(incoming.preauthorizedLakeIdsUsed ?? [])])]
+      : undefined;
 
   // Keys are spread in only when defined: the shape is absent-or-fully-present on the Mongoose
   // side, and an explicit `undefined` would persist as a set-but-empty path.
@@ -68,7 +146,12 @@ export function mergeRetrievalSummary(
     ...(outcome !== undefined ? { outcome } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
+    ...(knowledgeBaseGuidanceInjected !== undefined ? { knowledgeBaseGuidanceInjected } : {}),
+    ...(answerability !== undefined ? { answerability } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
+    ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),
+    ...(injected ? { injected } : {}),
+    ...(preauthorizedLakeIdsUsed ? { preauthorizedLakeIdsUsed } : {}),
   };
 }

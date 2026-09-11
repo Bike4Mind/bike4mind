@@ -34,6 +34,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import MermaidChart from './MermaidChart';
+import mermaid from 'mermaid';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 
 vi.mock('mermaid', () => ({
@@ -101,6 +102,14 @@ describe('MermaidChart', () => {
       expect(screen.getByTestId('mermaid-copy-definition-btn')).toBeInTheDocument();
       expect(screen.getByTestId('mermaid-copy-btn')).toBeInTheDocument();
       expect(screen.getByTestId('mermaid-download-btn')).toBeInTheDocument();
+    });
+
+    // 'strict' disables mermaid's click-handler/javascript: link injection; 'loose' must not
+    // creep back (it was previously set with a stale "required for PNG export" note).
+    it('should initialize mermaid with securityLevel strict', () => {
+      render(<MermaidChart chartDefinition={mockChartDefinition} />);
+
+      expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: 'strict' }));
     });
   });
 

@@ -6,7 +6,13 @@
  * catch is the model VOLUNTEERING coverage language on a turn that never asked for it, and that
  * failure is lexical. A phrase list will miss an exotic paraphrase; it will not produce a false
  * "pass" for the blunt phrasings a model actually reaches for.
+ *
+ * Claims are detected per sentence (`sentences` in `../harness`), not per reply: a `BARE_ABSENCE`
+ * phrase is corpus-scoped or speaker-scoped by its own clause, and a whole-reply match would let an
+ * honest hedge in one sentence excuse an overreach in the next.
  */
+
+import { sentences } from '../harness';
 
 export type CoverageClaim = 'notCovered' | 'searchedNothingFound' | 'couldNotConsult';
 
@@ -56,16 +62,6 @@ const CLAIM_PATTERNS: Record<CoverageClaim, RegExp[]> = {
     /\b(?:unable|not\s+able)\s+to\s+(?:consult|search|access|reach)\b/i,
   ],
 };
-
-/**
- * Claims are detected per sentence, not per reply: a `BARE_ABSENCE` phrase is corpus-scoped or
- * speaker-scoped by its own clause, and a whole-reply match would let an honest hedge in one
- * sentence excuse an overreach in the next (or vice versa). A semicolon splits too: it joins two
- * independent clauses, so the scoping must not carry across it.
- */
-function sentences(reply: string): string[] {
-  return reply.split(/[.!?;]+/).filter(s => s.trim().length > 0);
-}
 
 function claimsInSentence(sentence: string): CoverageClaim[] {
   const speakerScoped = SPEAKER_SCOPED.some(pattern => pattern.test(sentence));

@@ -51,6 +51,8 @@ export interface ToolBuilderDeps {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
+  sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   /**
    * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
    * executor wires this to fold nested tool generation into iteration billing (#630);
@@ -293,6 +295,7 @@ export function buildSharedTools(
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
+    sessionPreauthorizedLakeIds,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -310,6 +313,7 @@ export function buildSharedTools(
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,
+      sessionPreauthorizedLakeIds,
       questId: callbacks.questId,
       getAbortSignal,
     },

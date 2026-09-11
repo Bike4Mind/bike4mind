@@ -24,6 +24,8 @@ import {
   CreditHolderType,
   PromptIntentSchema,
   ImageModerationIncident as ImageModerationIncidentInput,
+  AttachmentLakeAccess,
+  materializePromptMetaSession,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -144,6 +146,13 @@ interface IImageGenerationServiceOptions {
   imageProcessorLambdaName?: string;
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
   imageModerationService?: ImageModerationService;
+  /**
+   * Resolves the acting user's owner-wide data-lake access. Threaded to `findAccessibleInIds` so a
+   * lake-only image the workbench admitted still resolves as an image-gen input - parity with the
+   * lake arm that predicate now carries. Optional so existing callers/tests keep compiling; absent
+   * degrades to owner/share/global-read only (today's behaviour).
+   */
+  resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
 async function downloadImage(url: string) {
@@ -183,6 +192,7 @@ export class ImageGenerationService {
   private invokeSummarizeSession: IImageGenerationServiceOptions['invokeSummarizeSession'];
   private imageProcessorLambdaName?: string;
   private imageModerationService?: ImageModerationService;
+  private resolveLakeAccess?: IImageGenerationServiceOptions['resolveLakeAccess'];
 
   constructor(options: IImageGenerationServiceOptions) {
     this.db = options.db;
@@ -197,6 +207,7 @@ export class ImageGenerationService {
     this.invokeSummarizeSession = options.invokeSummarizeSession;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.imageModerationService = options.imageModerationService;
+    this.resolveLakeAccess = options.resolveLakeAccess;
   }
 
   /**
@@ -467,10 +478,8 @@ export class ImageGenerationService {
     return { requiredCredits, usdCost: usdCost * n };
   }
 
-  private addStatusToQuest(quest: IChatHistoryItemDocument, status: string) {
-    if (!quest.promptMeta) {
-      quest.promptMeta = {};
-    }
+  private addStatusToQuest(quest: IChatHistoryItemDocument, status: string, userId: string) {
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, { sessionId: quest.sessionId, userId });
     if (!quest.promptMeta.statusLog) {
       quest.promptMeta.statusLog = [];
     }
@@ -497,6 +506,9 @@ export class ImageGenerationService {
   private async selectInputImage({
     sessionId,
     fabFileIds,
+    userId,
+    userGroups,
+    lakeAccess,
     model,
     modelInfo,
     intent,
@@ -504,6 +516,9 @@ export class ImageGenerationService {
   }: {
     sessionId: string;
     fabFileIds?: string[];
+    userId: string;
+    userGroups?: string[];
+    lakeAccess?: AttachmentLakeAccess;
     model: string;
     modelInfo: ModelInfo;
     intent: z.infer<typeof PromptIntentSchema>;
@@ -512,7 +527,9 @@ export class ImageGenerationService {
     fileImage?: SelectedImage;
     imageSource: 'workbench' | 'message_history' | 'notebook_attachment';
   }> {
-    const fabFiles = await this.db.fabFiles.findAllInIds(fabFileIds || []);
+    // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
+    // never presigned or fed to a provider (owner/share/group/global-read only).
+    const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups }, lakeAccess);
     const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
 
     // An explicit workbench upload must not be fed into generation while it's held (pending
@@ -550,7 +567,11 @@ export class ImageGenerationService {
         const attachedIds = [...new Set(recentMessages.flatMap(msg => msg.fabFileIds ?? []))];
         const attachedById = new Map<string, IFabFileDocument>();
         if (attachedIds.length) {
-          for (const file of await this.db.fabFiles.findAllInIds(attachedIds)) {
+          for (const file of await this.db.fabFiles.findAccessibleInIds(
+            attachedIds,
+            { userId, userGroups },
+            lakeAccess
+          )) {
             if (file.id) attachedById.set(file.id, file);
           }
         }
@@ -648,6 +669,11 @@ export class ImageGenerationService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
+    // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
+    // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
+    // owner/share/global-read only - never widens, never fails the run.
+    const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
+
     const settings = await getSettingsMap(this.db);
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
@@ -716,7 +742,7 @@ export class ImageGenerationService {
       // Encode the prompt to tokens
       const promptTokens = await this.tokenizer.encodeTokens(prompt, model);
 
-      this.addStatusToQuest(quest, 'Preparing to paint...');
+      this.addStatusToQuest(quest, 'Preparing to paint...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -726,7 +752,7 @@ export class ImageGenerationService {
       const settings = await getSettingsMap(this.db);
 
       if (getSettingsValue('ModerationEnabled', settings)) {
-        this.addStatusToQuest(quest, 'Checking prompt...');
+        this.addStatusToQuest(quest, 'Checking prompt...', userId);
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
           action: 'streamed_chat_completion',
           quest: parseQuestToStreamPayload(quest),
@@ -753,7 +779,7 @@ export class ImageGenerationService {
       });
 
       if (truncated) {
-        this.addStatusToQuest(quest, 'Trimming the prompt...');
+        this.addStatusToQuest(quest, 'Trimming the prompt...', userId);
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
           action: 'streamed_chat_completion',
           quest: parseQuestToStreamPayload(quest),
@@ -761,7 +787,7 @@ export class ImageGenerationService {
         });
       }
 
-      this.addStatusToQuest(quest, 'Now painting...');
+      this.addStatusToQuest(quest, 'Now painting...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -771,6 +797,9 @@ export class ImageGenerationService {
       const { fileImage, imageSource } = await this.selectInputImage({
         sessionId,
         fabFileIds,
+        userId,
+        userGroups: user.groups ?? undefined,
+        lakeAccess,
         model,
         modelInfo,
         intent,
@@ -861,6 +890,7 @@ export class ImageGenerationService {
         if (base64Image) {
           const preparedImage = base64Image;
           Logger.globalInstance.debug(`[DEBUG] Gemini edit: using existing image input`, {
+            model,
             n,
             aspect_ratio,
             output_format,
@@ -868,6 +898,7 @@ export class ImageGenerationService {
           });
           const editPromises = Array.from({ length: n }, () =>
             geminiService.edit(preparedImage, truncatedPrompt, {
+              model: model as any,
               aspect_ratio,
               output_format,
               safety_tolerance,
@@ -894,9 +925,7 @@ export class ImageGenerationService {
             quest.status = 'done';
 
             // Store clarification metadata for potential future retry
-            if (!quest.promptMeta) {
-              quest.promptMeta = {};
-            }
+            quest.promptMeta = materializePromptMetaSession(quest.promptMeta, { sessionId, userId });
             (quest.promptMeta as any).imageClarification = {
               clarificationId: clarificationResponse.clarificationId,
               question: clarificationResponse.question,
@@ -904,7 +933,7 @@ export class ImageGenerationService {
               timestamp: new Date(),
             };
 
-            this.addStatusToQuest(quest, 'Clarification requested');
+            this.addStatusToQuest(quest, 'Clarification requested', userId);
             await this.db.quests.update(quest);
             await clientMessageSender.sendToClient(userId, wsEndpoint, {
               action: 'streamed_chat_completion',
@@ -1164,7 +1193,7 @@ export class ImageGenerationService {
       );
 
       // download images and store to s3
-      this.addStatusToQuest(quest, 'Tucking your image into storage...');
+      this.addStatusToQuest(quest, 'Tucking your image into storage...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -1217,7 +1246,7 @@ export class ImageGenerationService {
         })
       );
 
-      this.addStatusToQuest(quest, 'Adding to the notebook...');
+      this.addStatusToQuest(quest, 'Adding to the notebook...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -1249,7 +1278,7 @@ export class ImageGenerationService {
       }
 
       // Add final status
-      this.addStatusToQuest(quest, 'Image generation completed');
+      this.addStatusToQuest(quest, 'Image generation completed', userId);
 
       Logger.globalInstance.debug(`[DEBUG] Quest before update:`, {
         id: quest.id,
@@ -1343,7 +1372,7 @@ export class ImageGenerationService {
       }
     } catch (error) {
       logger.error('Error processing image generation:', error);
-      this.addStatusToQuest(quest, `Error: ${(error as Error).message}`);
+      this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';

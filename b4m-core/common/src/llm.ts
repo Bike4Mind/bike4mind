@@ -3,6 +3,7 @@ import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './s
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
+import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -221,6 +222,31 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * in-app completion wants. See PROMPT_MODE_SOURCES in services/llm/systemPromptSources.
    */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /**
+   * Suppress OUR server-side auto-offers without entering a promptMode. Exists because promptMode
+   * was the only switch for the offer and it also strips every authored prompt, so no caller could
+   * have an arm that went unoffered AND kept the abstention licence.
+   *
+   * Gates the three auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
+   * auto-add, the blog/skill gate), unioned with `Boolean(promptMode)` by
+   * resolveSkipAutoOffers. A force-on, not an override: `false` under a promptMode still suppresses.
+   * Withholding navigate_view also drops the viewRegistry system block, which only describes it.
+   *
+   * Withholds the OFFER, not knowledge: `session.forceKnowledgeRetrieval` is untouched, and an
+   * already-attached corpus is inlined rather than deferred to the tool. An arm that must see no
+   * knowledge at all also needs a session with no attachments and forced retrieval off.
+   */
+  skipAutoOffers: z.boolean().optional(),
+  /**
+   * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
+   * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm.
+   *
+   * This cap is the universal backstop, not a duplicate of a route check: the parse that opens
+   * invoke() runs outside any try and before a quest row is written, so it holds for every caller
+   * including ones that pass through no route schema. Do not drop it on the assumption that
+   * whoever called validated first.
+   */
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */

@@ -6,15 +6,14 @@ import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { embedMementoQuery } from './mementoQueryEmbedding';
 
 /**
- * How many lake beliefs to inject at most - the same k the user-memento recall settled on
- * (recallMementosV2). One merged card across the user's accessible lakes, so this is a shared budget.
- */
-const LAKE_RECALL_K = 8;
-
-/**
  * How far heat (ACT-R activation) may move a belief relative to topicality, matching the user-memento
  * recall. A lake decays far slower (LAKE_ACTIVATION), so months-old reference facts stay warm; the
  * query is still the primary axis and heat the tiebreak.
+ *
+ * Stays a coded constant while the belief budget (`opts.k`) became an admin setting: #2496 was a
+ * volume diagnosis - 8 beliefs is too little grounding for a document corpus - and this weight
+ * changes the ORDER of what fits the budget, not how much fits. Worth exposing once something
+ * measures the ranking as the limiter; nothing has.
  */
 const LAKE_ACTIVATION_WEIGHT = 0.025;
 
@@ -29,6 +28,12 @@ export interface LakeBeliefRecall {
   relevance: number;
   /** Source FabFile ids the fact was extracted from, for citation. Always at least one (reachable). */
   sources: string[];
+  /**
+   * `YYYY-MM-DD` of the source document, when it is known. Absent for a belief whose document has
+   * since been deleted, and for a run with no dates resolver wired - both render as unknown rather
+   * than as a guess.
+   */
+  sourceDate?: string;
 }
 
 export interface RecallLakeMemoryOptions {
@@ -38,6 +43,17 @@ export interface RecallLakeMemoryOptions {
   /** The user's accessible lakes, each paired with its DEK owner. Resolved by the caller. */
   lakes: AccessibleLake[];
   /**
+   * Most beliefs to return, a SHARED budget across `lakes` (one merged card). The
+   * `lakeMemoryRecallK` admin setting, resolved per turn in LakeMemoryFeature with a coded
+   * fallback. Required rather than defaulted: a default here would be a second copy of
+   * LAKE_RECALL_K_DEFAULT that could drift from the setting's own, which is the exact trap the
+   * hardcoded 8 this replaced represented.
+   *
+   * `recall` applies it as a pure cap AFTER the cosine floor (recall.ts: filter, then sort, then
+   * slice), so raising it admits more QUALIFYING beliefs and never a sub-floor one.
+   */
+  k: number;
+  /**
    * Which of these source FabFile ids are currently retrievable for citation. A belief is surfaced
    * only if at least one of its source docs is reachable, so the card never leans on content the
    * knowledge tool would refuse (#1440 reachability - mirrors the corpus defer gate in
@@ -45,6 +61,15 @@ export interface RecallLakeMemoryOptions {
    * Injected because it needs the caller's retrieval filter, embedding-model and FabFile reads.
    */
   resolveReachableSources: (sourceIds: string[]) => Promise<Set<string>>;
+  /**
+   * When each source document was authored, for dating the recalled beliefs (#1501). Resolved AFTER
+   * the budget cut, so it reads only the slice that will actually be rendered rather than every
+   * source the reachability gate scans.
+   *
+   * Optional so a caller that has no FabFile access still recalls (undated) rather than failing; the
+   * production wiring always supplies it.
+   */
+  resolveSourceDates?: (sourceIds: string[]) => Promise<Map<string, string>>;
 }
 
 /**
@@ -116,8 +141,8 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
   const citable = beliefs.filter(b => (b.sources ?? []).some(id => reachable.has(id)));
   if (citable.length === 0) return [];
 
-  return recall(citable, opts.query, {
-    k: LAKE_RECALL_K,
+  const recalled = recall(citable, opts.query, {
+    k: opts.k,
     activationWeight: LAKE_ACTIVATION_WEIGHT,
     // The cosine floor is calibrated for the MEMENTO space, so it only applies when we actually scored
     // with an embedding; a lexical fallback uses an unrelated scale and no floor.
@@ -125,4 +150,24 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
       ? { scorer: embeddingScorer(embedded.vector), minRelevance: MEMENTO_MIN_SIMILARITY }
       : {}),
   }).map(r => ({ fact: r.belief.fact, relevance: r.relevance, sources: r.belief.sources ?? [] }));
+
+  if (!opts.resolveSourceDates || recalled.length === 0) return recalled;
+
+  // Dating is a nicety, not the grounding itself: a failed read costs the dates, never the facts.
+  const dates = await opts.resolveSourceDates([...new Set(recalled.flatMap(r => r.sources))]).catch((err: unknown) => {
+    console.warn(
+      `[lakeMemory] source date read failed; beliefs render undated this turn: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return new Map<string, string>();
+  });
+
+  return recalled.map(r => {
+    // A belief can cite more than one document; date it by the MOST RECENT, which is the claim's
+    // latest restatement and the one a reader would weigh.
+    const dated = r.sources.map(id => dates.get(id)).filter((d): d is string => Boolean(d));
+    const sourceDate = dated.length ? dated.reduce((latest, d) => (d > latest ? d : latest)) : undefined;
+    return sourceDate ? { ...r, sourceDate } : r;
+  });
 }

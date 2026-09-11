@@ -7,6 +7,7 @@ import {
   IUsageEventInput,
   ModelInfo,
   MusicGenerationVendor,
+  materializePromptMetaSession,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -105,6 +106,8 @@ export interface ToolBuilderConfig {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
+  sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -226,11 +229,19 @@ function resolveToolStatus(toolName: string, data: any): string | null {
  *     (or vice versa) would silently erase the other's outcome. See
  *     mergeRetrievalSummary (retrievalSummaryMerge.ts) for the merge policy.
  *
+ * `userId` seeds `promptMeta.session` (via materializePromptMetaSession) on every write that
+ * touches promptMeta, in EITHER branch below - not just the no-existing-meta one - because a quest
+ * read off disk can carry a promptMeta with no session block at all (bike4mind#2004: several
+ * writers used to materialize promptMeta this way, and older rows never got backfilled). Without
+ * this, `PromptMetaSchema.session.id`/`.userId` (required: true) go unenforced forever, since this
+ * write goes through update() (findOneAndUpdate + $set, no validators).
+ *
  * Mutates `quest` in place.
  */
 export function applyQuestStatusChanges(
   quest: IChatHistoryItemDocument,
-  changes: Partial<IChatHistoryItemDocument>
+  changes: Partial<IChatHistoryItemDocument>,
+  userId: string
 ): void {
   const { promptMeta: changedPromptMeta, images: changedImages, ...otherChanges } = changes;
 
@@ -245,19 +256,22 @@ export function applyQuestStatusChanges(
     });
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
-    quest.promptMeta = {
-      ...quest.promptMeta,
-      ...changedPromptMeta,
-      citables: dedupedCitables,
-      // Omit the key entirely when neither side has warnings, so an untouched quest is not
-      // given an empty array it never had.
-      ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
-      // Explicit override, not left to the spread above: an incoming write here must MERGE onto
-      // an existing forced-arm value, never replace it (see the docblock above).
-      ...(mergedRetrieval ? { retrieval: mergedRetrieval } : {}),
-    };
+    quest.promptMeta = materializePromptMetaSession(
+      {
+        ...quest.promptMeta,
+        ...changedPromptMeta,
+        citables: dedupedCitables,
+        // Omit the key entirely when neither side has warnings, so an untouched quest is not
+        // given an empty array it never had.
+        ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
+        // Explicit override, not left to the spread above: an incoming write here must MERGE onto
+        // an existing forced-arm value, never replace it (see the docblock above).
+        ...(mergedRetrieval ? { retrieval: mergedRetrieval } : {}),
+      },
+      { sessionId: quest.sessionId, userId }
+    );
   } else if (changedPromptMeta) {
-    quest.promptMeta = changedPromptMeta;
+    quest.promptMeta = materializePromptMetaSession(changedPromptMeta, { sessionId: quest.sessionId, userId });
   }
 
   if (changedImages) {
@@ -317,6 +331,24 @@ export interface BuildToolPromptArgs {
   hasContentTransform: boolean;
   hasChessEngine: boolean;
   hasCurrentDateTime: boolean;
+  hasWebSearch: boolean;
+  /**
+   * Resolved `WebSearchFreshnessPrompt` setting. Resolved by the caller, which owns the
+   * settings reader, so the injected text and its telemetry cannot disagree.
+   */
+  webSearchGuidance?: string;
+  /**
+   * Whether `search_knowledge_base` survived into the offered tool set. Read from the offered list
+   * rather than the requested one for the same reason `hasWebSearch` is: the tool is auto-offered
+   * server-side from attached documents or an accessible lake, and a session denylist can still
+   * strip it afterwards - so only the post-build list says what the model actually got.
+   */
+  hasKnowledgeBase: boolean;
+  /**
+   * Resolved `KnowledgeBaseRetrievalPrompt` setting. Resolved by the caller, which owns the
+   * settings reader, so the injected text and its telemetry cannot disagree.
+   */
+  knowledgeBaseGuidance?: string;
   /**
    * User's IANA timezone (from the browser) when known, so the current-time
    * nudge can tell the model which timezone to pass to `current_datetime`.
@@ -702,6 +734,7 @@ export class ToolBuilder {
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
+        sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
@@ -718,7 +751,7 @@ export class ToolBuilder {
           // Merge nested fields that accrete across a turn (promptMeta.citables,
           // images) instead of overwriting them wholesale - see
           // applyQuestStatusChanges.
-          applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>);
+          applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>, this.deps.user.id);
           await this.deps.sendStatusUpdate(quest, status ?? null);
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -835,7 +868,10 @@ export class ToolBuilder {
           await saveQuest(quest);
         },
         onArtifactExtracted: artifact => {
-          if (!quest.promptMeta) quest.promptMeta = {} as NonNullable<typeof quest.promptMeta>;
+          quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+            sessionId: quest.sessionId,
+            userId: this.deps.user.id,
+          });
           if (!quest.promptMeta!.artifacts) quest.promptMeta!.artifacts = [];
           quest.promptMeta!.artifacts.push(artifact as (typeof quest.promptMeta.artifacts)[number]);
           // Fire-and-forget save
@@ -918,6 +954,10 @@ export class ToolBuilder {
     hasContentTransform,
     hasChessEngine,
     hasCurrentDateTime,
+    hasWebSearch,
+    webSearchGuidance,
+    hasKnowledgeBase,
+    knowledgeBaseGuidance,
     userTimezone,
     mcpTools,
     sessionId,
@@ -1039,6 +1079,26 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
           `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
       );
+    }
+
+    // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
+    // date context tells the model what today is, but nothing otherwise tells it when its own
+    // knowledge is too old to answer from.
+    if (hasWebSearch && webSearchGuidance) {
+      sections.push(webSearchGuidance);
+    }
+
+    // 3d. Knowledge-base retrieval nudge. Same gate and same reason as 3c: the tool description
+    // says how to search and never when, so on the optional path nothing tells the model that the
+    // user's library is outside its weights.
+    //
+    // Injected on forced-retrieval turns too, rather than gated off them. The section carries its
+    // own "already been searched on this turn" and "from an attached document" clauses for that
+    // case (see KNOWLEDGE_BASE_RETRIEVAL_PROMPT's docblock, which spells out which co-resident
+    // prompt each one is defending against) - prompt-level rather than a second gate here, because
+    // the tool stays callable on those turns and the model needs to know when NOT to call it.
+    if (hasKnowledgeBase && knowledgeBaseGuidance) {
+      sections.push(knowledgeBaseGuidance);
     }
 
     // 4. MCP integration guidance (if MCP tools are available)

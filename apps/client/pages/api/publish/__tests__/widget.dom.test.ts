@@ -411,3 +411,100 @@ describe('publish comment widget - credential path', () => {
     expect(tokenGeneration).toBe(2); // re-exchanged rather than dead-ending
   });
 });
+
+/**
+ * The "Save as PDF" binder. It ships in the same file as the comment overlay because the
+ * Approach-B wrapper CSP admits exactly one script - so the binder must survive the
+ * overlay's early return on an artifact that has comments turned off, which is the case
+ * these cover. It never touches the network, hence no fetch stub here.
+ */
+describe('publish widget - Save as PDF binder', () => {
+  let docListeners: Array<[string, EventListener]> = [];
+  const realDocumentAdd = document.addEventListener.bind(document);
+
+  beforeEach(() => {
+    docListeners = [];
+    document.addEventListener = ((type: string, fn: EventListener, opts?: AddEventListenerOptions) => {
+      docListeners.push([type, fn]);
+      realDocumentAdd(type, fn, opts);
+    }) as typeof document.addEventListener;
+  });
+
+  afterEach(() => {
+    docListeners.forEach(([type, fn]) => document.removeEventListener(type, fn));
+    document.addEventListener = realDocumentAdd as typeof document.addEventListener;
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  /** A wrapper with the print button and NO annotate root - comments off. */
+  function mountWrapper(buttonClass: string): { button: HTMLButtonElement; post: ReturnType<typeof vi.fn> } {
+    document.body.innerHTML = `<button class="${buttonClass}" type="button" hidden>Save as PDF</button><iframe></iframe>`;
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    const post = vi.fn();
+    (frame.contentWindow as Window).postMessage = post as unknown as Window['postMessage'];
+    return { button: document.querySelector(`.${buttonClass}`) as HTMLButtonElement, post };
+  }
+
+  it('reveals the bar button and asks the frame to print itself on click', () => {
+    const { button, post } = mountWrapper('b4m-bar-print');
+
+    eval(widgetSource());
+
+    expect(button.hidden).toBe(false); // server ships it hidden; JS is what makes it real
+    button.click();
+
+    expect(post).toHaveBeenCalledWith({ b4m: 'print' }, '*');
+  });
+
+  it('binds the floating variant the same way', () => {
+    const { button, post } = mountWrapper('b4m-print');
+
+    eval(widgetSource());
+    button.click();
+
+    expect(button.hidden).toBe(false);
+    expect(post).toHaveBeenCalledWith({ b4m: 'print' }, '*');
+  });
+
+  it('claims Cmd+P on the wrapper, which would otherwise print the clipped frame', () => {
+    const { post } = mountWrapper('b4m-bar-print');
+
+    eval(widgetSource());
+    const meta = new KeyboardEvent('keydown', { key: 'p', metaKey: true, bubbles: true, cancelable: true });
+    document.dispatchEvent(meta);
+
+    expect(post).toHaveBeenCalledWith({ b4m: 'print' }, '*');
+    expect(meta.defaultPrevented).toBe(true);
+  });
+
+  it('leaves a plain p keypress alone', () => {
+    const { post } = mountWrapper('b4m-bar-print');
+
+    eval(widgetSource());
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', bubbles: true, cancelable: true }));
+
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('does not hijack the shortcut while typing in the comment box', () => {
+    const { post } = mountWrapper('b4m-bar-print');
+    const box = document.createElement('textarea');
+    document.body.appendChild(box);
+
+    eval(widgetSource());
+    // macOS: Ctrl+P inside a text field is cursor-up, not print.
+    const ctrl = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true, cancelable: true });
+    box.dispatchEvent(ctrl);
+
+    expect(post).not.toHaveBeenCalled();
+    expect(ctrl.defaultPrevented).toBe(false);
+  });
+
+  it('does not throw on a wrapper with no iframe at all', () => {
+    document.body.innerHTML = '<button class="b4m-bar-print" type="button" hidden></button>';
+
+    expect(() => eval(widgetSource())).not.toThrow();
+    expect((document.querySelector('.b4m-bar-print') as HTMLButtonElement).hidden).toBe(true);
+  });
+});

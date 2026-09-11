@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { getSettingsValue, getSettingByName, getSettingsByNames } from './settings';
+import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT } from '@bike4mind/common';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
 
@@ -45,6 +46,20 @@ describe('getSettingsValue - blank string reverts to a provided default', () => 
     // No third arg: a cleared FormatPromptTemplate stays ''. Its only reader,
     // includeHardcodedSystemMessage, substitutes FORMAT_PROMPT_TEMPLATE for the blank itself.
     expect(getSettingsValue('FormatPromptTemplate', { FormatPromptTemplate: '' })).toBe('');
+  });
+
+  // The two tool-prompt sections (web-search freshness, knowledge-base retrieval) are read 2-arg
+  // ON PURPOSE: neither has a companion boolean, so clearing the field is the section's only off
+  // switch, and that off switch is what makes the wording A/B-able with no deploy. Both halves are
+  // pinned here because both are load-bearing and neither is reachable from a ToolBuilder unit
+  // test - that test can only be handed a string, never the resolver that produces it. Hardening
+  // the blank->default guard to fire when no default was passed would make these sections
+  // impossible to turn off, and every other test in the suite would still pass.
+  it('leaves the tool-prompt sections turn-off-able: absent row -> constant, cleared row -> blank', () => {
+    expect(getSettingsValue('KnowledgeBaseRetrievalPrompt', {})).toBe(KNOWLEDGE_BASE_RETRIEVAL_PROMPT);
+    expect(getSettingsValue('KnowledgeBaseRetrievalPrompt', { KnowledgeBaseRetrievalPrompt: '' })).toBe('');
+    expect(getSettingsValue('WebSearchFreshnessPrompt', {})).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
+    expect(getSettingsValue('WebSearchFreshnessPrompt', { WebSearchFreshnessPrompt: '' })).toBe('');
   });
 
   it('does NOT apply blank->default to a non-string setting - a stored boolean false still wins', () => {

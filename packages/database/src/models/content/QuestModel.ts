@@ -1,5 +1,11 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IChatHistoryItem, IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
+import {
+  IChatHistoryItem,
+  IChatHistoryItemRepository,
+  IChatHistoryItemDocument,
+  PromptMeta,
+  IAttachmentDelivery,
+} from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -39,7 +45,42 @@ const MessageTruncationSchema = subSchema({
 // `beliefCount` is required). Absent-or-fully-present, matching how the feature writes it.
 const LakeMemorySchema = subSchema({
   beliefCount: { type: Number, required: false },
+  beliefBudget: { type: Number, required: false },
   dataLakeTags: [{ type: String, required: false }],
+});
+
+// Injected retrieval volume (passages + characters + best similarity). Its own subSchema for a
+// DIFFERENT reason than LakeMemorySchema below: it has no array child, so nothing auto-vivifies
+// here. Declared inline, its `required` children would become unconditional validators, and a
+// quest carrying `retrieval` without a volume - the documented absent case - would throw
+// ValidationError on `promptMeta.retrieval.injected.chunks`. Absent-or-fully-present, and absence
+// is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
+// `default: undefined` on the path below is inert for a single nested subdocument (nothing
+// vivifies it) and kept only for symmetry with the siblings, where it does work.
+//
+// pre/postRelativeFloorCandidates: optional like topScore, and for the same reason - only forced
+// retrieval's ranked pool has a relative floor to trim, so no other surface ever writes them. They
+// are written and absent together, so a rollup over one is a rollup over the same turns as the
+// other. See the pair's own comment in promptMeta.ts for why they are only ever compared to each
+// other and never to `chunks`.
+const InjectedVolumeSchema = subSchema({
+  chunks: { type: Number, required: true },
+  chars: { type: Number, required: true },
+  topScore: { type: Number, required: false },
+  preRelativeFloorCandidates: { type: Number, required: false },
+  postRelativeFloorCandidates: { type: Number, required: false },
+});
+
+// Written by the offline answerability replay, not by the turn - see the field's comment in
+// promptMeta.ts for why the measurement is reconstructed rather than computed live, and for the
+// two drifts that follow from that. Date is stored as a real Date; the Zod side accepts its JSON
+// form too (JsonSafeDate) because promptMeta round-trips through the client.
+const AnswerabilityProbeSchema = subSchema({
+  topScore: { type: Number, required: true },
+  candidatesAboveFloor: { type: Number, required: true },
+  floor: { type: Number, required: true },
+  scanTruncated: { type: Boolean, required: true },
+  probedAt: { type: Date, required: true },
 });
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
@@ -54,9 +95,24 @@ const RetrievalSummarySchema = subSchema({
   // Optional because it is present iff `attempted`: the seeded not-attempted turn has no outcome.
   outcome: { type: String, required: false },
   mode: { type: String, required: false },
+  // Optional, and an explicit `false` is meaningful (the A/B control arm) rather than a blank -
+  // see the field's comment on the Zod side.
+  knowledgeBaseGuidanceInjected: { type: Boolean, required: false },
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // default: undefined for the same auto-vivification reason as dataLakeTags above.
+  injectedLakePromptIds: { type: [String], required: false, default: undefined },
+  injectedLakePromptCount: { type: Number, required: false },
+  // default: undefined for the same auto-vivification reason as the paths above - and here it also
+  // preserves the field's presence contract, since a materialized empty object would report
+  // "unknown volume" as a recorded one.
+  injected: { type: InjectedVolumeSchema, required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as `injected` above - and here it
+  // also preserves the presence contract that absence means NOT PROBED, never "not answerable".
+  answerability: { type: AnswerabilityProbeSchema, required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as injectedLakePromptIds above.
+  preauthorizedLakeIdsUsed: { type: [String], required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
@@ -313,7 +369,9 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
       modelInferenceTime: { type: Number, required: false },
+      // Unset means nothing visible ever streamed - see PromptMetaPerformanceSchema.
       firstTokenTime: { type: Number, required: false },
+      firstChunkTime: { type: Number, required: false },
       // Posted back by the client after it renders the first token (quests/[id]/client-timing).
       clientFirstTokenTime: { type: Number, required: false },
       streamingPerformance: {
@@ -383,7 +441,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     timestamp: { type: Date, required: true },
     type: { type: String, required: true },
     // NOT required, despite the TS type being `prompt: string`. An assistant-side voice turn is
-    // created by upsertBySessionIdAndConversationItemId (a bare upsert - no validators) which sets
+    // created by upsertVoiceTranscriptTurn (a bare upsert - no validators) which sets
     // only replies/status/type/timestamp, so prompt-less quests are normal on disk. `required: true`
     // could therefore never protect the write that omits it; it only fired on create(), the copy
     // path, turning someone else's prompt-less turn into a failed fork/snip/clone of a whole
@@ -570,6 +628,20 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // Per-file attachment delivery problems, shown under the reply. Must stay in the
     // findPageBySessionId projection below or the banner vanishes on reload.
     attachmentNotices: { type: [String], required: false },
+    // The affirmative half of the same report: written even when every attachment succeeded and
+    // there are no notices, which is the case nothing else on the quest records. Same projection
+    // requirement as attachmentNotices.
+    attachmentDelivery: {
+      type: {
+        requested: { type: Number, required: true },
+        delivered: { type: Number, required: true },
+        fullyDelivered: { type: Number, required: true },
+        dropped: { type: Number, required: true },
+        droppedIds: { type: [String], required: true },
+      },
+      required: false,
+      _id: false,
+    },
     // Generalized UI side-effects extracted from tool __uiSideEffect sentinels
     uiSideEffects: {
       type: [
@@ -673,7 +745,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
@@ -742,12 +814,32 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return { ...result.toObject(), id: result._id.toString() } as Pick<IChatHistoryItemDocument, 'id' | 'status'>;
   }
 
-  async upsertBySessionIdAndConversationItemId(
+  /**
+   * Upsert the quest row for one voice-transcript turn.
+   *
+   * Keyed on (sessionId, conversationItemId, OWNER) - not on the first two alone. The
+   * conversationItemId is minted by the voice client, so on a session shared with write access a
+   * second user could otherwise reuse another user's item id and overwrite their turn in place.
+   * With the owner in the key a reused id creates that caller's own row instead of taking one
+   * over.
+   *
+   * `promptMeta.session.id` is written on insert because Mongo seeds an upserted document only
+   * from the equality filter, which supplies the owner but not the session id its sub-schema
+   * also requires. Rows written before this owner binding existed carry no promptMeta at all and
+   * so will no longer be matched - a voice session live across the deploy inserts a fresh row
+   * rather than updating its earlier one.
+   */
+  async upsertVoiceTranscriptTurn(
     sessionId: string,
     conversationItemId: string,
+    ownerUserId: string,
     data: Partial<IChatHistoryItemDocument>
   ) {
-    return this.model.findOneAndUpdate({ sessionId, conversationItemId }, { $set: data }, { upsert: true, new: true });
+    return this.model.findOneAndUpdate(
+      { sessionId, conversationItemId, 'promptMeta.session.userId': ownerUserId },
+      { $set: data, $setOnInsert: { 'promptMeta.session.id': sessionId } },
+      { upsert: true, new: true }
+    );
   }
 
   // Flag a quest as stopped so an in-flight ChatCompletionProcess cancellation
@@ -809,6 +901,33 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Record one agent run's attachment outcome on the quest it is linked to.
+   *
+   * The agent path builds the same notices the chat path does but had nowhere to put them, so an
+   * agent run's attachment failures left no durable record at all. Keyed on `agentExecutionId`
+   * because the executor knows its execution, not its quest; a run with no linked quest matches
+   * nothing and is a no-op, which is the correct outcome rather than an error.
+   *
+   * `notices` is only written when non-empty so a clean run cannot blank a value another writer
+   * set; `delivery` is written unconditionally, since the all-succeeded case is the one it exists
+   * to record.
+   */
+  async recordAttachmentOutcomeByAgentExecutionId(
+    agentExecutionId: string,
+    outcome: { notices: string[]; delivery: IAttachmentDelivery }
+  ) {
+    await this.model.updateOne(
+      { agentExecutionId },
+      {
+        $set: {
+          ...(outcome.notices.length > 0 ? { attachmentNotices: outcome.notices } : {}),
+          attachmentDelivery: outcome.delivery,
+        },
+      }
+    );
+  }
+
+  /**
    * Append generated-file names to a Quest's `images` array, keyed by the agent execution
    * that produced them. Uses `$addToSet` so concurrent writers - the parent run and any
    * subagents, each in its own Lambda - accumulate into the same array instead of clobbering
@@ -826,6 +945,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   // session has been used before, so it should not count as brand-new.
   async existsBySessionId(sessionId: string): Promise<boolean> {
     return !!(await this.model.exists({ sessionId }));
+  }
+
+  // Session ids of every quest whose `images` array references this generated-file key. Generated
+  // images are stored under owner-less keys, so this is the only server-side link from a key back
+  // to the chat (and thus the owner) that produced it - see userCanAccessGeneratedImage. Includes
+  // soft-deleted quests: a key from a deleted turn still belongs to that session's owner.
+  async findSessionIdsByImage(image: string): Promise<string[]> {
+    if (!image) return [];
+    const docs = await this.model.find({ images: image }, { sessionId: 1 }).setOptions({ includeDeleted: true });
+    return [...new Set(docs.map(d => d.sessionId))];
   }
 
   /**
@@ -910,6 +1039,11 @@ function initializeQuestModel() {
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
+
+    // Multikey index backing findSessionIdsByImage: the generated-image authz lookup runs on every
+    // serve/copy of a generated image, so this key -> session resolution must not be a collection
+    // scan. Sparse: most quests carry no images.
+    ChatHistoryItemSchema.index({ images: 1 }, { name: 'images', sparse: true });
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });

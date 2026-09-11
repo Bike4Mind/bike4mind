@@ -12,7 +12,7 @@ import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 /** How long a removal's restore record stays live - see `lakeMembershipRemovals` below. */
 const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
 
-interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
+export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
   // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared
   // rather than merely spread at the route because the type is the only place the requirement is
   // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`
@@ -103,7 +103,7 @@ export const removeFileFromDataLake = async (
   dataLakeId: string,
   fabFileId: string,
   { db, logger }: RemoveFileFromDataLakeAdapters
-): Promise<{ success: true; fileCount: number; totalSizeBytes: number }> => {
+): Promise<{ success: true; fileCount: number; totalSizeBytes: number; restoreTokenMinted: boolean }> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
     throw new NotFoundError('Data lake not found');
@@ -117,6 +117,10 @@ export const removeFileFromDataLake = async (
   // fail-quiet: by the time this runs the removal has already committed and is uncompensated, so
   // throwing would 500 a removal that in fact happened, and the client's retry would then hit this
   // same door's `!inLake` 404. The honest failure surface is downstream, at a real Undo click.
+  // Reported rather than only logged (#2245): a BULK caller removes N files sharing one 30-minute
+  // undo window, so "which of these can still be re-added" is the difference between an accurate
+  // undo affordance and one that silently does nothing. A single-file caller can ignore it.
+  let restoreTokenMinted = false;
   try {
     const removedAt = new Date();
     await db.lakeMembershipRemovals.upsertRemoval({
@@ -127,6 +131,7 @@ export const removeFileFromDataLake = async (
       removedAt,
       expiresAt: new Date(removedAt.getTime() + REMOVAL_RECORD_TTL_MS),
     });
+    restoreTokenMinted = true;
   } catch (err) {
     logger?.warn?.('[dataLakes] file removed from lake but its restore record failed to write', {
       dataLakeId: lake.id,
@@ -138,5 +143,5 @@ export const removeFileFromDataLake = async (
   // `actor` threaded so the draft -> active flip a removal can trigger names the person who
   // removed the file rather than `system`. The rung stays `system` - nothing authorized the flip.
   const stats = await recomputeLakeStats(lake, { db, logger }, { actor });
-  return { success: true, ...stats };
+  return { success: true, ...stats, restoreTokenMinted };
 };

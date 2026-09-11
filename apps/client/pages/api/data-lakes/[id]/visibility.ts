@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
@@ -26,7 +27,7 @@ const VisibilityInput = z.object({
  * target; it is ignored for private/public (both org-less). Access-gated first (not-found-style
  * denial), then the service enforces owner-only exposure and the no-gated-public guardrail.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;

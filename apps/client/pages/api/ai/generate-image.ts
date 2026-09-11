@@ -5,6 +5,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { GenerateImageRequestBodySchema, GenerateImageIvokeParams, ApiKeyScope } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 
@@ -46,11 +47,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
   });
 
   try {
-    // organizationId: null means personal account (no org), undefined means not sent (fall back to user's org)
-    const effectiveOrgId =
-      invokeParams.organizationId !== undefined
-        ? invokeParams.organizationId
-        : (req.user.organizationId?.toString() ?? null);
+    // Resolve the billing org from the client-supplied value, rejecting any org the caller is
+    // not a member of. null = personal account, undefined = fall back to the caller's own org.
+    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
     const originalPrompt = req.body?.prompt;
 

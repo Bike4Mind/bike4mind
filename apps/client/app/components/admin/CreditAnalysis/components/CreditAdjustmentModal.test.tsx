@@ -49,7 +49,9 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Credits/i }));
 
     await waitFor(() => expect(onCreditAdjustment).toHaveBeenCalledTimes(1));
-    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', 100, 100, 'Compensation for outage');
+    // (userId, signed adjustment, note) - the stale currentCredits arg was removed; the
+    // server applies the signed delta atomically.
+    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', 100, 'Compensation for outage');
   });
 
   it('passes an undefined reason (not an empty string) when the note is blank on removal', async () => {
@@ -68,7 +70,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     fireEvent.click(screen.getByRole('button', { name: /Remove Credits/i }));
 
     await waitFor(() => expect(onCreditAdjustment).toHaveBeenCalledTimes(1));
-    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', 100, -100, undefined);
+    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', -100, undefined);
   });
 
   it('renders the audit trail of recent adjustments', async () => {

@@ -11,7 +11,8 @@ import {
   StopQueryCommand,
 } from '@aws-sdk/client-cloudwatch-logs';
 import { WAFV2Client, GetLoggingConfigurationCommand } from '@aws-sdk/client-wafv2';
-import { getWafLogsInsightsOverview } from '../wafLogsInsights';
+import { getWafBlockedRequests, getWafLogsInsightsOverview } from '../wafLogsInsights';
+import { WAF_MASKED_HEADER_VALUE } from '../wafHeaderRedaction';
 import { wafQueryCache } from '../wafQueryCache';
 import type { WafCustomRange } from '../wafSharedHelpers';
 
@@ -328,6 +329,75 @@ describe('wafLogsInsights', () => {
       // WAF calls should use us-east-1 for CloudFront-scope WebACLs
       const wafCalls = wafMock.calls();
       expect(wafCalls.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('getWafBlockedRequests', () => {
+    const blockedLogRecord = (headers: Array<{ name: string; value: string }>) =>
+      JSON.stringify({
+        action: 'BLOCK',
+        terminatingRuleId: 'ai-route-rate-limit',
+        httpRequest: {
+          clientIp: '203.0.113.7',
+          country: 'US',
+          uri: '/api/chat',
+          args: '',
+          httpVersion: 'HTTP/2.0',
+          httpMethod: 'POST',
+          requestId: 'req-abc123',
+          headers,
+        },
+      });
+
+    function mockBlockedRequest(headers: Array<{ name: string; value: string }>) {
+      cloudWatchLogsMock.on(GetQueryResultsCommand).resolves({
+        status: 'Complete',
+        results: [
+          [
+            { field: '@timestamp', value: '2026-09-03 01:02:03.000' },
+            { field: '@message', value: blockedLogRecord(headers) },
+          ],
+        ],
+      });
+    }
+
+    it('masks credential header values that a pre-redaction log record still holds', async () => {
+      mockBlockedRequest([
+        { name: 'X-Api-Key', value: 'b4m_live_the_secret_value' },
+        { name: 'X-Security-Ingest-Token', value: 'ingest-the_secret_value' },
+        { name: 'X-E2E-Cleanup-Secret', value: 'cleanup-the_secret_value' },
+        { name: 'Authorization', value: 'Bearer the_secret_value' },
+        { name: 'Cookie', value: 'session=the_secret_value' },
+      ]);
+
+      const result = await getWafBlockedRequests({ stage: 'dev', range: '24h' });
+
+      expect(result.requests).toHaveLength(1);
+      expect(result.requests[0].headers.map(h => h.value)).toEqual([
+        WAF_MASKED_HEADER_VALUE,
+        WAF_MASKED_HEADER_VALUE,
+        WAF_MASKED_HEADER_VALUE,
+        WAF_MASKED_HEADER_VALUE,
+        WAF_MASKED_HEADER_VALUE,
+      ]);
+      expect(JSON.stringify(result)).not.toContain('the_secret_value');
+    });
+
+    it('still serves the diagnostic headers needed to triage the block', async () => {
+      mockBlockedRequest([
+        { name: 'Host', value: 'app.example.com' },
+        { name: 'User-Agent', value: 'python-requests/2.32.0' },
+        { name: 'X-Api-Key', value: 'b4m_live_the_secret_value' },
+      ]);
+
+      const result = await getWafBlockedRequests({ stage: 'dev', range: '24h' });
+
+      const headers = result.requests[0].headers;
+      expect(headers.find(h => h.name === 'Host')?.value).toBe('app.example.com');
+      expect(headers.find(h => h.name === 'User-Agent')?.value).toBe('python-requests/2.32.0');
+      expect(headers.find(h => h.name === 'X-Api-Key')?.value).toBe(WAF_MASKED_HEADER_VALUE);
+      expect(result.requests[0].clientIp).toBe('203.0.113.7');
+      expect(result.requests[0].terminatingRuleId).toBe('ai-route-rate-limit');
     });
   });
 

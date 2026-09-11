@@ -18,8 +18,9 @@ import { fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
 import { z } from 'zod';
 
 const copyGeneratedImageSchema = z.object({
@@ -40,6 +41,13 @@ const handler = baseApi()
     asyncHandler<unknown, unknown, CopyGeneratedImageInput>(async (req, res) => {
       const { user } = req;
       const { imageS3Key, fileName } = copyGeneratedImageSchema.parse(req.body);
+
+      // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
+      // any user's image into their own files by supplying its key. Only copy an image the caller
+      // created (or one shared with them via the source chat).
+      if (!(await userCanAccessGeneratedImage(imageS3Key, user.id))) {
+        throw new ForbiddenError('You do not have access to this image');
+      }
 
       const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
 

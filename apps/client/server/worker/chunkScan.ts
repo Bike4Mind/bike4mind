@@ -72,18 +72,31 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * `noExtractableTextAt`. Query must stay in sync with isAudioMimeType and
  * SmartChunker.chunkImage / chunkFile's default branch.
  *
- * ONE exception, and it is why the exclusion is an `$or` arm rather than a flat key: a media file
- * carrying `chunkRebuildRequestedAt` (#1939) is swept anyway. That stamp means a reset took the
- * file's state away and the enqueue that should have followed never landed - and this sweep is the
- * only door that reaches a file outside every data lake, so excluding it by mimeType would leave
- * the stamp with no automatic exit at all. `partitionByIndexAvailability` withholds a stamped file,
- * so the cost of no exit is a search that reports the file as "being re-indexed, returns on its
- * own" forever: a permanently false partial-results warning, which is the cries-wolf failure this
- * whole feature is built to avoid, reached from the other side.
+ * TWO exceptions, and they are why the exclusion is an `$or` arm rather than a flat key.
  *
- * Bounded to one pass per file: the sweep enqueues, the chunker returns 0 chunks as it always would,
- * and `commitFabFileChunks` clears the stamp and writes the rollups - after which the handler's own
- * `noExtractableTextAt` stamp excludes the file here again.
+ * FIRST, a media file carrying `chunkRebuildRequestedAt` (#1939) is swept anyway. That stamp means a
+ * reset took the file's state away and the enqueue that should have followed never landed - and this
+ * sweep is the only door that reaches a file outside every data lake, so excluding it by mimeType
+ * would leave the stamp with no automatic exit at all. `partitionByIndexAvailability` withholds a
+ * stamped file, so the cost of no exit is a search that reports the file as "being re-indexed,
+ * returns on its own" forever: a permanently false partial-results warning, which is the cries-wolf
+ * failure this whole feature is built to avoid, reached from the other side.
+ *
+ * SECOND, a media file whose stall reason is `rechunkPaused` is swept once the pause clears. The
+ * halt write records that reason and nulls `chunkRebuildRequestedAt` in the same statement - correct
+ * in itself, since a file must never read as both "paused, needs an administrator" and "rebuilding,
+ * returns on its own", but for media that stamp was the only door above, so the halt stranded the
+ * file permanently. `rechunkPaused` is the durable record of the same fact the stamp carried:
+ * `markConvergencePaused` picks that reason precisely WHEN the stamp was set. Reading the reason
+ * instead recovers the file without reintroducing the ambiguous double state. Scoped to that reason
+ * alone - `unchunkedPaused` means the file arrived empty, so there is no rebuild to resume and
+ * admitting it would sweep every paused image in the install on every pass.
+ *
+ * Bounded to one pass per file, by either exit. The sweep enqueues, the chunker returns 0 chunks as
+ * it always would, and `commitFabFileChunks` clears BOTH the stamp and `chunkStallReason` and writes
+ * the rollups - after which the handler's own `noExtractableTextAt` stamp excludes the file here
+ * again. While the switch is still on, the pause exclusion above drops the file regardless, so the
+ * second exception cannot re-enqueue work an operator is trying to stop.
  */
 /**
  * A lake-membership predicate, built by the caller from `buildDataLakeMembershipFilter`
@@ -204,8 +217,40 @@ export const buildFabFileChunkScanFilter = (
     // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key
     // wins), which here would drop either the media exclusion or the in-flight exclusion entirely.
     $and: [
-      // Media exclusion, with the stamped-file exception - see the doc comment above.
-      { $or: [{ mimeType: { $not: /^(audio|image|video)\// } }, { chunkRebuildRequestedAt: { $ne: null } }] },
+      // Media exclusion, with two exceptions - see the doc comment above.
+      //
+      // The second arm is the halt-survivor. `markConvergencePaused` nulls `chunkRebuildRequestedAt`
+      // in the same statement that records the stall reason, and that clear is correct: a file must
+      // never read as both "paused, needs an administrator" and "rebuilding, returns on its own".
+      // But for MEDIA that stamp is the only door into this sweep (0 chunks by design), so the halt
+      // used to strand the file permanently - clearing the switch did not bring it back and only a
+      // second manual reprocess did. `rechunkPaused` is the durable record of the same fact the
+      // stamp carried: that write chooses it precisely WHEN `chunkRebuildRequestedAt` was set, so a
+      // rebuild really was requested. Reading the reason instead of the stamp recovers the file
+      // without reintroducing the ambiguous double state.
+      //
+      // It terminates by two independent doors. Once the switch clears, one run commits and clears
+      // `chunkStallReason` unconditionally (fabFileService/chunk.ts), and a zero-chunk commit also
+      // stamps `noExtractableTextAt`, which this filter requires to be null.
+      //
+      // While the switch is on the pause exclusion above usually drops the file (`rechunkPaused` is
+      // in CHUNK_STALL_REASONS) - but NOT unconditionally, and the exception is worth knowing before
+      // trusting this as a guarantee. That exclusion is "stalled AND not in a running lake", so a
+      // file in a lake overriding back to running is still selected. That is normally
+      // self-terminating: pickScopedLake stamps the running lake's id, the handler reads OFF and
+      // rebuilds. It loops only when an UNGRADED lake also holds the file, because pickScopedLake
+      // then deliberately stamps no id (so a running lake cannot rewrite a paused lake's passages),
+      // the handler falls back to the platform value and re-halts to a byte-identical state. Cost is
+      // one rescue-cap slot per pass until the switch lifts, and it is not new as a mechanism - a
+      // non-media `rechunkPaused` file in that same configuration has always looped this way, so
+      // this arm makes media consistent with it rather than introducing a class of bug.
+      {
+        $or: [
+          { mimeType: { $not: /^(audio|image|video)\// } },
+          { chunkRebuildRequestedAt: { $ne: null } },
+          { chunkStallReason: 'rechunkPaused' },
+        ],
+      },
       // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
       // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
       // so without this the file stays claimed and invisible forever. The `chunkClaimedAt:null` arm is
@@ -233,3 +278,60 @@ export const buildFabFileChunkScanFilter = (
     ],
   };
 };
+
+/** Grace period before the stranded-vectorize sweep touches a file, so it cannot race the chunk
+ * handler's own SQS retries of the same failed enqueue. */
+export const VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS = 15 * 60_000;
+
+/**
+ * Mongo filter selecting files whose chunks were committed but whose vectorize fan-out failed -
+ * fabFileChunk.ts stamps `vectorizeEnqueueFailedAt` when its enqueue throws.
+ *
+ * These files are invisible to buildFabFileChunkScanFilter above: that one requires
+ * chunkCount: 0, and these files HAVE chunks. Without this sweep the state is terminal by
+ * construction - the chunk handler's idempotency guard skips a redelivery and no other filter
+ * selects it - leaving a file with chunks, no vectors and nothing looking at it.
+ *
+ * Rescue is a chunk-queue re-enqueue, like the un-chunked sweep, and is non-destructive: the
+ * chunk handler refuses to re-chunk an already-chunked file and only re-sends the fan-out for
+ * chunks that still lack a vector, clearing the stamp when it succeeds. Deliberately NOT gated on
+ * enableAutoChunk (unlike the un-chunked sweep): that setting governs whether new uploads get
+ * chunked, and this only finishes handing off work that was already chunked.
+ *
+ * `staleClaimBefore` carries the same three-arm stale-claim semantics as
+ * buildFabFileChunkScanFilter, and for the same reason: resumeVectorizeEnqueue does real work under
+ * the claim (a vectorless-chunk read plus N sends), so a worker hard-killed inside that window never
+ * runs the finally that clears isChunking. Without the arm every automatic door is shut on that file
+ * - the un-chunked sweep needs chunkCount: 0, findConvergencePausedFilesByScope excludes in-flight,
+ * and the reprocess endpoint refuses a file being chunked - leaving only SQS redelivery and, past
+ * the retry ladder, a manual DLQ replay.
+ */
+export const buildStrandedVectorizeScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
+  // $type is load-bearing, not decoration, but not for narrowing: `$lt` is type-bracketed, so a bare
+  // `$lt: cutoff` already excludes the null default and a missing field. $type is here because it
+  // matches the partial index's own predicate (FabFileModel.ts) and is therefore what lets the
+  // planner use that index - drop it and this sweep becomes a full scan of the largest collection in
+  // the system. The IXSCAN assertion in fabFileVectorizeStranded.test.ts is what holds that.
+  vectorizeEnqueueFailedAt: { $type: 'date', $lt: cutoff },
+  // Redundant against the marker in practice, but it makes this sweep's domain disjoint from
+  // buildFabFileChunkScanFilter's (which requires chunkCount: 0) by construction rather than by
+  // whichever writer happens to have cleared the marker: an un-chunked file is the other sweep's
+  // business whatever stamps it carries.
+  chunked: true,
+  deletedAt: null,
+  // Normally exclude in-flight files. When a stale-claim cutoff is supplied, ALSO rescue a claim
+  // older than it, including the `chunkClaimedAt: null` backfill arm for files stuck claimed from
+  // before that stamp existed - see buildFabFileChunkScanFilter, whose arms these mirror exactly.
+  // Kept as a residual `$or` beside the stamp predicate rather than folded into it, so the partial
+  // vectorizeEnqueueFailedAt index still leads the plan (fabFileVectorizeStranded.test.ts asserts
+  // the IXSCAN).
+  ...(staleClaimBefore
+    ? {
+        $or: [
+          { isChunking: { $ne: true } },
+          { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+          { isChunking: true, chunkClaimedAt: null },
+        ],
+      }
+    : { isChunking: { $ne: true } }),
+});

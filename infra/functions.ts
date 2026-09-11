@@ -8,6 +8,7 @@ import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
+import { toolRuntimeAssets } from './toolRuntimeAssets';
 
 // Re-export imageProcessor for other files that import from functions.ts
 export { imageProcessor };
@@ -26,13 +27,10 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
   timeout: '15 minutes',
   memory: '2048 MB',
   vpc: lambdaVpc,
-  versioning: true,
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        provisioned: $app.stage === 'production' ? 2 : 1,
-        reserved: 10,
-      }
-    : undefined,
+  // See the note on AgentExecutor in infra/agentExecutor.ts: provisioned concurrency never served
+  // this function either (no alias, and every invoke is unqualified), and its orphaned configs
+  // saturate `reserved` and then fail the next deploy at the concurrency step.
+  concurrency: ['production', 'dev'].includes($app.stage) ? { reserved: 10 } : undefined,
   link: [
     ...allSecrets,
     fabFileBucket,
@@ -77,10 +75,5 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     },
     { actions: ['events:PutEvents'], resources: ['*'] },
   ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
+  copyFiles: toolRuntimeAssets(),
 });

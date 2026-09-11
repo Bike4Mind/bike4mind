@@ -1,15 +1,17 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ReactMarkdown from 'react-markdown';
+import type { HelpAccessLevel } from '@bike4mind/scripts/help/types';
 
 vi.mock('@client/app/hooks/useHelpContent');
 vi.mock('./HelpFeedbackWidget', () => ({ default: () => null }));
 
 import { useHelpContent } from '@client/app/hooks/useHelpContent';
 import { useHelpPanel } from '@client/app/hooks/useHelpPanel';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import HelpContent, {
   remarkPlugins,
   rehypePlugins,
@@ -25,9 +27,9 @@ import HelpContent, {
  * pipeline exported by HelpContent.tsx.
  */
 
-const renderMarkdown = (md: string, filePath = 'features/projects.md') =>
+const renderMarkdown = (md: string, filePath = 'features/projects.md', accessLevel?: HelpAccessLevel) =>
   render(
-    <HelpArticleFilePathContext.Provider value={filePath}>
+    <HelpArticleFilePathContext.Provider value={{ filePath, accessLevel }}>
       <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
         {md}
       </ReactMarkdown>
@@ -74,9 +76,25 @@ describe('resolveHelpMediaSrc', () => {
     expect(resolveHelpMediaSrc('https://example.com/x.gif', 'features/a.md')).toBe('https://example.com/x.gif');
     expect(resolveHelpMediaSrc(undefined, 'features/a.md')).toBeUndefined();
   });
+
+  it('routes admin-article media through the authenticated content API instead of /help-content/', () => {
+    expect(resolveHelpMediaSrc('./media/x.gif', 'admin/settings.md', 'admin')).toBe(
+      '/api/help/content?path=admin%2Fmedia%2Fx.gif'
+    );
+  });
+
+  it('url-encodes the resolved path for the admin content API', () => {
+    expect(resolveHelpMediaSrc('/admin/media/setup guide.png', 'admin/a.md', 'admin')).toBe(
+      '/api/help/content?path=admin%2Fmedia%2Fsetup%20guide.png'
+    );
+  });
+
+  it('still passes external URLs through untouched for admin articles', () => {
+    expect(resolveHelpMediaSrc('https://example.com/x.gif', 'admin/a.md', 'admin')).toBe('https://example.com/x.gif');
+  });
 });
 
-describe('help media rendering', () => {
+describe('help media rendering (public)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     MockIntersectionObserver.reset();
@@ -152,6 +170,97 @@ describe('help media rendering', () => {
   });
 });
 
+/**
+ * Admin media: a bare <img>/<video src> can't carry the Authorization Bearer
+ * header /api/help/content requires (server/auth/auth.ts registers only
+ * ExtractJwt.fromAuthHeaderAsBearerToken - no cookie extractor), so the
+ * renderer must fetch the bytes itself and hand the element an object URL.
+ * These tests stub fetch and URL.createObjectURL/revokeObjectURL (jsdom does
+ * not implement either) to verify that flow end-to-end.
+ */
+describe('help media rendering (admin)', () => {
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let createObjectURLMock: ReturnType<typeof vi.fn>;
+  let revokeObjectURLMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    useAccessToken.setState({ accessToken: 'test-access-token' });
+    fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['fake-bytes'])),
+    });
+    createObjectURLMock = vi.fn(() => 'blob:mock-admin-media');
+    revokeObjectURLMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    URL.createObjectURL = createObjectURLMock;
+    URL.revokeObjectURL = revokeObjectURLMock;
+  });
+
+  afterEach(() => {
+    useAccessToken.setState({ accessToken: null });
+    vi.unstubAllGlobals();
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    MockIntersectionObserver.reset();
+  });
+
+  it('fetches admin image media from the authenticated route and renders the resulting object URL', async () => {
+    renderMarkdown('![Setup demo](./media/setup.gif)', 'admin/settings.md', 'admin');
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/help/content?path=admin%2Fmedia%2Fsetup.gif', {
+        credentials: 'include',
+        headers: { Authorization: 'Bearer test-access-token' },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Setup demo').getAttribute('src')).toBe('blob:mock-admin-media');
+    });
+  });
+
+  it('fetches admin video media only once the clip scrolls into view, not up front', async () => {
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    renderMarkdown('![Admin demo](./media/admin-demo.webm)', 'admin/settings.md', 'admin');
+
+    expect(screen.getByTestId('help-video-placeholder')).toBeDefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const observer = MockIntersectionObserver.instances[0];
+    act(() => {
+      observer.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        observer as unknown as IntersectionObserver
+      );
+    });
+
+    const video = await screen.findByTestId('help-video-player');
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/help/content?path=admin%2Fmedia%2Fadmin-demo.webm', {
+        credentials: 'include',
+        headers: { Authorization: 'Bearer test-access-token' },
+      });
+    });
+    await waitFor(() => {
+      expect(video.getAttribute('src')).toBe('blob:mock-admin-media');
+    });
+  });
+
+  it('revokes the object URL on unmount to avoid leaking memory', async () => {
+    const { unmount } = renderMarkdown('![Setup demo](./media/setup.gif)', 'admin/settings.md', 'admin');
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Setup demo').getAttribute('src')).toBe('blob:mock-admin-media');
+    });
+
+    unmount();
+    expect(revokeObjectURLMock).toHaveBeenCalledWith('blob:mock-admin-media');
+  });
+});
+
 describe('media path resolution through HelpContent', () => {
   const mockUseHelpContent = vi.mocked(useHelpContent);
   const appTheme = extendTheme({ ...getThemeConfig() });
@@ -163,28 +272,83 @@ describe('media path resolution through HelpContent', () => {
     mockUseHelpContent.mockReset();
   });
 
-  it('resolves media against the displayed article even when the store still points at the previous one', async () => {
-    // Cached-content navigation: useHelpContent returns the new article's data
-    // synchronously (no loading phase) while useHelpPanel.currentFilePath still
-    // holds the PREVIOUS article's path - the store is only synced from a
-    // post-commit effect. Media must resolve from the article's own filePath,
-    // not the store, or this first render computes a 404 URL that sticks.
-    useHelpPanel.getState().setCurrentFilePath('features/notebooks.md');
+  it('renders public article media unchanged when routed through the full HelpContent component', async () => {
     mockUseHelpContent.mockReturnValue({
       data: '![Setup demo](./media/setup.gif)',
       isLoading: false,
       error: null,
-      filePath: 'admin/settings.md',
+      filePath: 'features/notebooks.md',
+      accessLevel: 'public',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
     render(
       <TestWrapper>
-        <HelpContent slug="admin/settings" />
+        <HelpContent slug="features/notebooks" />
       </TestWrapper>
     );
 
     const img = await screen.findByAltText('Setup demo');
-    expect(img.getAttribute('src')).toBe('/help-content/admin/media/setup.gif');
+    expect(img.getAttribute('src')).toBe('/help-content/features/media/setup.gif');
+  });
+
+  describe('admin article', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let fetchMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      useAccessToken.setState({ accessToken: 'test-access-token' });
+      fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        blob: () => Promise.resolve(new Blob(['fake-bytes'])),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      URL.createObjectURL = vi.fn(() => 'blob:mock-admin-media');
+      URL.revokeObjectURL = vi.fn();
+    });
+
+    afterEach(() => {
+      useAccessToken.setState({ accessToken: null });
+      vi.unstubAllGlobals();
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    });
+
+    it('resolves media against the displayed article even when the store still points at the previous one, via the authenticated route', async () => {
+      // Cached-content navigation: useHelpContent returns the new article's data
+      // synchronously (no loading phase) while useHelpPanel.currentFilePath still
+      // holds the PREVIOUS article's path - the store is only synced from a
+      // post-commit effect. Media must resolve from the article's own filePath,
+      // not the store, or this first render computes a 404 URL that sticks.
+      useHelpPanel.getState().setCurrentFilePath('features/notebooks.md');
+      mockUseHelpContent.mockReturnValue({
+        data: '![Setup demo](./media/setup.gif)',
+        isLoading: false,
+        error: null,
+        filePath: 'admin/settings.md',
+        accessLevel: 'admin',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      render(
+        <TestWrapper>
+          <HelpContent slug="admin/settings" />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith('/api/help/content?path=admin%2Fmedia%2Fsetup.gif', {
+          credentials: 'include',
+          headers: { Authorization: 'Bearer test-access-token' },
+        });
+      });
+
+      const img = await screen.findByAltText('Setup demo');
+      await waitFor(() => {
+        expect(img.getAttribute('src')).toBe('blob:mock-admin-media');
+      });
+    });
   });
 });

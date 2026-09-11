@@ -27,6 +27,7 @@ import {
   IMcpServerRepository,
   IMcpServerDocument,
   IQuestMasterPlanRepository,
+  IQuestMasterPlanDocument,
   IPromptDocument,
   ICacheRepository,
   ICreditTransactionRepository,
@@ -40,6 +41,7 @@ import {
   GenerateImageToolCallSchema,
   AudioGenerationToolCallSchema,
   ILatticeModel,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
   CitableSource,
@@ -52,9 +54,14 @@ import {
   resolveHistoryFetchLimit,
   buildMemoryContext,
   buildLakeMemoryContext,
+  lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
-  FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
+  PROMPT_TEXT_MAX,
+  materializePromptMetaSession,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -67,23 +74,32 @@ import {
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
-import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
+import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
+import { resolveScopedSettingValues, scopeForCaller } from '../settings/resolveScopedSetting';
 import {
   classifyLoadedChunk,
   partitionFilesByEmbeddingModel,
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
+import {
+  buildSupersessionReport,
+  formatSupersededSample,
+  partitionBySupersession,
+  type SupersessionReport,
+} from '../dataLakeService/supersession';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
-import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
+import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
   documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
+import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
@@ -114,6 +130,7 @@ import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } 
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
+import { isObjectIdShaped } from './tools/base/objectId';
 
 interface DatabaseAdapters {
   sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'>;
@@ -183,10 +200,23 @@ interface DatabaseAdapters {
     findById: (id: string) => Promise<ILatticeModel | null>;
     update: (data: any) => Promise<ILatticeModel | null>;
   };
+  // 'find' is forwarded to ToolContext.db.dataLakes -> createFabFile (persistGeneratedFileAsFabFile),
+  // for its fallback tagger's prefix-overlap check.
   dataLakes?: Pick<
     IDataLakeRepository,
-    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
   >;
+  /**
+   * Access-grant lookup shared by two independent optional features:
+   * - the retrieval resolver's grant arm (getDynamicDataLakeAccess / `listByPrincipal`), so a
+   *   lake reached only by an owner/curator grant grounds a turn as it browses;
+   * - the per-turn manage re-check on a session's `preauthorizedLakeIds`
+   *   (filterStillManagedLakes / `listActiveByLakes`). REQUIRED in practice on any host that
+   *   creates pre-authorized sessions: without it the curator / org-grant / transferred-owner
+   *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+   * Optional here - absent means both features resolve lake access with no grant arm.
+   */
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
@@ -299,7 +329,21 @@ export interface IChatCompletionServiceOptions {
     query: string;
     dataLakeTags: string[];
     retrievalFilter?: RetrievalExclusionOptions;
-  }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
+    /**
+     * Most beliefs to return, across all of `dataLakeTags`: the `lakeMemoryRecallK` admin setting,
+     * resolved per turn by the caller with a coded fallback.
+     *
+     * Required rather than optional so the in-repo chain (recallLakeMemoryForSession ->
+     * recallLakeMemory) is typechecked end to end - each hop re-declares it required, so dropping
+     * it anywhere along the way fails the build. That does NOT extend to an out-of-repo host:
+     * parameters are bivariant, so an implementation whose own signature omits `k` still satisfies
+     * this type and would silently keep whatever budget it hardcodes. No such host exists today
+     * (this is the only in-tree injection slot), but an added one needs forwarding by hand.
+     */
+    k: number;
+    // `sourceDate` (YYYY-MM-DD of the originating document) is optional for the same bivariance
+    // reason called out above: a host that does not supply it renders undated rather than failing.
+  }) => Promise<{ fact: string; relevance: number; sources: string[]; sourceDate?: string }[]>;
   /**
    * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
    * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
@@ -399,6 +443,10 @@ export const QuestStartBodySchema = z.object({
   enableArtifacts: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  /** See ChatCompletionInvokeParamsSchema.skipAutoOffers - must stay in sync with it. */
+  skipAutoOffers: z.boolean().optional(),
+  /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
+  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   enableAgents: z.boolean().optional(),
   enableLattice: z.boolean().optional(),
   promptMeta: PromptMetaZodSchema,
@@ -712,11 +760,23 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     // NonNullable, not RetrievalSummary['outcome']: the latter now includes undefined, so an
     // explicit `outcome: undefined` would type-check here and merge through verbatim, breaking
     // the present-iff-`attempted` contract. Same guard recordForcedSkip uses for forcedSkipReason.
-    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
-      quest.promptMeta = quest.promptMeta ?? {};
+    // `injected` is passed only by the exits that COMPLETED a search, so an exit that broke or
+    // never searched leaves the volume absent (unknown) rather than recording a zero - see the
+    // presence contract on RetrievalSummarySchema.injected. No topScore from this surface: belief
+    // `relevance` is a different scale from the cosine similarities the other surfaces report.
+    const recordRetrieval = (
+      outcome: NonNullable<RetrievalSummary['outcome']>,
+      dataLakeTags: string[],
+      injected?: NonNullable<RetrievalSummary['injected']>
+    ) => {
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: this.user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        ...(injected ? { injected } : {}),
         // Both recorders run only under forced retrieval, so they can label the turn themselves.
         // Redundant with the seed in ChatCompletionProcess, which every path that constructs this
         // feature also reaches - the redundancy is for ORDERING, not for a second entry point: a
@@ -756,31 +816,61 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         return [];
       }
 
+      // Resolved AFTER the no-lakes exit above, so a turn with nothing in scope spends no settings
+      // read on a budget it will never use.
+      const beliefBudget = await this.resolveLakeRecallK();
       const beliefs = await this.chatCompletion.recallLakeMemory({
         userId: this.user.id,
         query,
         dataLakeTags,
         retrievalFilter: this.retrievalFilter,
+        k: beliefBudget,
       });
       if (beliefs.length === 0) {
         // A legitimate zero: recall ran to completion and found nothing. This is the case the
         // whole feature exists to make distinguishable from "never asked".
-        recordRetrieval('ok', dataLakeTags);
+        recordRetrieval('ok', dataLakeTags, { chunks: 0, chars: 0 });
         return [];
       }
 
       // Telemetry: record that the card fired and from which lakes, so an eval row shows lake grounding
       // independent of whether the model then also called the knowledge tools.
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: this.user.id,
+      });
       quest.promptMeta.context = quest.promptMeta.context ?? {};
-      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
-      recordRetrieval('ok', dataLakeTags);
+      // beliefBudget rides along so `beliefCount` is readable on its own: below the budget means that
+      // is all that qualified, AT the budget means the turn saturated it. Saturation is not proof the
+      // cap excluded anything - a lake holding exactly `k` qualifying beliefs reads identically, and
+      // nothing overfetches k+1 to tell those apart - but it is the signal that raising the budget is
+      // worth trying, which is the diagnosis behind #2496.
+      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, beliefBudget, dataLakeTags };
 
       this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
       // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
       // sanitizes + length-bounds each fact (uploaded-doc content is untrusted). Distinct from the
       // memento framing used above.
-      const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
+      // Sanitized once, up front, so the volume below counts the facts the render actually emits.
+      // `beliefs.length` would overcount (a fact that sanitizes to empty is dropped) and
+      // `context.length` would overcount `chars` by the framing preamble and the `- ` bullets -
+      // and `chars` is specified as retrieved CONTENT only, so it means the same thing here as on
+      // the cosine surfaces, which is what makes the merge's SUM meaningful.
+      // Sanitized one belief at a time rather than as a bare list, because a fact that sanitizes to
+      // empty is DROPPED - sanitizing the texts en masse would shift the indices and silently re-pair
+      // facts with the wrong document's date. Still `lakeMemoryFacts`, so the same helper decides what
+      // renders and what is counted.
+      const injectedFacts = beliefs.flatMap(belief => {
+        const [fact] = lakeMemoryFacts([belief.fact]);
+        return fact ? [{ fact, sourceDate: belief.sourceDate }] : [];
+      });
+      const context = buildLakeMemoryContext(injectedFacts);
+      recordRetrieval('ok', dataLakeTags, {
+        // Still the facts' own chars: the date suffix is framing, like the preamble and the bullets,
+        // and `chars` means retrieved CONTENT so its sum stays comparable across surfaces.
+        chunks: injectedFacts.length,
+        chars: injectedFacts.reduce((total, belief) => total + belief.fact.length, 0),
+      });
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
       // A retrieval that threw must not be byte-identical to one never attempted - record it
@@ -792,6 +882,34 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
           (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
       );
       return [];
+    }
+  }
+
+  /**
+   * The admin's configured `lakeMemoryRecallK`, or the coded default on anything unusable. Mirrors
+   * `resolveForcedRetrievalCharBudget` in KnowledgeRetrievalFeature below: same try/catch shape,
+   * same loud-fallback policy, resolved once per turn.
+   *
+   * `positiveIntOr`'s unusable-value branch is defense-in-depth, not a production-reachable path:
+   * `getSettingsValue` runs the setting's own schema (`.min(1)`, `.max(LAKE_RECALL_K_MAX)`) via
+   * `safeParse` before this sees the value, whatever wrote it. The genuinely reachable branch is
+   * the outer catch (a settings-read failure or outage), which must not cost the turn its card.
+   */
+  private async resolveLakeRecallK(): Promise<number> {
+    try {
+      const configured = await this.chatCompletion.db.adminSettings.getSettingsValue('lakeMemoryRecallK');
+      return positiveIntOr(
+        configured as string | number | null | undefined,
+        LAKE_RECALL_K_DEFAULT,
+        'lakeMemoryRecallK',
+        this.logger
+      );
+    } catch (err) {
+      this.logger.warn(
+        `🌊 Lake memory: failed to read lakeMemoryRecallK; falling back to ${LAKE_RECALL_K_DEFAULT}`,
+        err
+      );
+      return LAKE_RECALL_K_DEFAULT;
     }
   }
 }
@@ -1047,6 +1165,28 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     }
   }
 
+  /**
+   * Guard mutations of a QuestMaster plan. The plan/quest/sub-quest ids arrive from
+   * client-supplied `questMaster` params, so a bare findById would let one user drive
+   * status changes on another user's plan. Access = plan owner or explicit sharee;
+   * legacy plans without a userId bind to their owning notebook's owner.
+   *
+   * Must stay in sync with apps/client/server/utils/questMasterPlanAccess.ts, which is the same
+   * predicate on the HTTP side (it also guards the notebook lookup on ObjectId shape below).
+   */
+  private async callerCanWritePlan(plan: IQuestMasterPlanDocument): Promise<boolean> {
+    const userId = this.user.id;
+    if (plan.userId) {
+      return plan.userId === userId || (plan.sharedWith?.includes(userId) ?? false);
+    }
+    // notebookId is a schema String: placeholder plans carry `direct-<uuid>` / `clone-<uuid>`, so
+    // guard on ObjectId shape before findById to keep a non-id from casting into a CastError.
+    const session = isObjectIdShaped(plan.notebookId)
+      ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
+      : null;
+    return session?.userId === userId;
+  }
+
   async onComplete({
     quest,
     questMaster,
@@ -1059,6 +1199,13 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
     if (!questMasterPlan) {
       this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
+      return;
+    }
+
+    if (!(await this.callerCanWritePlan(questMasterPlan))) {
+      this.logger.warn(
+        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
+      );
       return;
     }
 
@@ -1085,6 +1232,13 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
     if (!questMasterPlan) {
       this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
+      return;
+    }
+
+    if (!(await this.callerCanWritePlan(questMasterPlan))) {
+      this.logger.warn(
+        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
+      );
       return;
     }
 
@@ -1509,7 +1663,11 @@ export class SessionPromptFeature implements ChatCompletionFeature {
     return [
       {
         role: 'system' as const,
-        content: systemPrompt,
+        // Session prompts are author-set (session settings), not model-generated, but this
+        // text still reaches the model unvetted at request time - defang line-initial markers
+        // so it can't forge a header/footer for another block. No deference header is added
+        // here: this channel's precedence relative to other sources is unchanged by this fix.
+        content: defangBlockMarkers(systemPrompt),
       },
     ];
   }
@@ -1531,21 +1689,65 @@ const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
 const FORCED_RETRIEVAL_BATCH_CHUNK_CAP = 1000;
 // Hard ceiling on chunks scored in one turn, so a few huge documents cannot stall a turn.
 const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
-// Above-floor candidates retained for the char-budget walk, so resident chunk text stays bounded.
+// Candidates above the ABSOLUTE floor retained for the char-budget walk, so resident chunk text
+// stays bounded. The relative floor narrows this pool further, after the scan (it needs the turn's
+// final top score), so this cap bounds memory on its own and does not depend on either floor.
 // The budget can only fit this many sections while the mean retained chunk exceeds
 // (configured char budget)/256 chars - ~47 at the 12,000-char default, which real chunking always
 // clears. Since the char budget became a setting (see `forcedRetrievalCharBudget` below), a very
 // large configured value could in principle admit more sections than this caps; a corpus of very
 // short chunks could inject fewer than expected regardless of budget.
 const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
-// Minimum cosine similarity (ada-002) for a chunk to count as relevant. Below this,
-// no chunk is injected and the turn falls back to forcedRetrievalNoContextPrompt. Not itself a
-// lever - shares its default with the settings schema (`forcedRetrievalCharBudget`'s sibling
-// constant) so the two cannot drift.
-const FORCED_RETRIEVAL_MIN_SIMILARITY = FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT;
+// Both relevance floors are levers now (`forcedRetrievalRelativeFloorPct` and
+// `forcedRetrievalMinSimilarityPct`, resolved once per turn by resolveForcedRetrievalFloors below),
+// so neither is a module constant - every former FORCED_RETRIEVAL_MIN_SIMILARITY reference is a
+// resolved local instead. When nothing clears them, no chunk is injected and the turn falls back to
+// forcedRetrievalNoContextPrompt.
 // The char budget is now a lever (`forcedRetrievalCharBudget` setting, resolved once per turn by
 // resolveForcedRetrievalCharBudget below) rather than a module constant - every former reference to
 // a FORCED_RETRIEVAL_CHAR_BUDGET constant is a resolved local variable instead.
+
+/**
+ * One of the two floor settings as a 0-1 cosine fraction, or `fallback` when the stored value is
+ * unusable or outside 0-100.
+ *
+ * The range check is defense-in-depth, not a path normal operation reaches: BOTH read paths run the
+ * setting's own schema (`max: 100`) before this sees a value - `getSettingsValue` safeParses, and the
+ * scoped resolver parses the platform base and skips unparseable overrides - so even a hand-edited
+ * row arrives sanitized. It is here because the failure it prevents is silent and total: both floors
+ * are DIVIDED by 100 and then compared against a cosine, so a 2000 that ever did get through becomes
+ * a floor of 20.0, which no similarity can clear, starving every Data-Lake turn with nothing in the
+ * output to say why. Cheap guard, unbounded downside.
+ *
+ * Falls back rather than clamping to 100, which is where this deliberately diverges from
+ * `resolveRelevancePct`'s handling of the same hazard: clamping a fat-fingered value to "admit only
+ * a perfect match" is itself the retrieval starvation this floor exists to prevent, so the coded
+ * default - known-good, behavior-preserving - is the safer landing place.
+ */
+function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
+  const pct = nonNegativeIntOr(raw as string | number | null | undefined, fallbackPct, label, logger);
+  if (pct > 100) {
+    logger.warn(`\u{1F512} Forced retrieval: ${label} ${pct} exceeds 100; using ${fallbackPct} instead`);
+    return fallbackPct / 100;
+  }
+  return pct / 100;
+}
+
+/**
+ * The two relevance floors a forced-retrieval turn grades candidates against, as raw cosine
+ * fractions (the settings store whole-number percents; the conversion happens once, in the
+ * resolver). Resolved together because they are read in one query and are only meaningful as a
+ * pair: the relative one ranks, the absolute one rejects.
+ */
+interface ForcedRetrievalFloors {
+  /**
+   * Fraction of the turn's best score a candidate must reach. `0` disables the relative floor,
+   * leaving the absolute one as the only gate - the behavior before this was configurable.
+   */
+  relativeFloor: number;
+  /** Absolute cosine floor a candidate must clear regardless of how the turn's band sits. */
+  minSimilarity: number;
+}
 
 /** An above-floor candidate. The vector is dropped so each batch can be freed after scoring. */
 interface ForcedRetrievalCandidate {
@@ -1569,6 +1771,14 @@ interface ForcedRetrievalCoverage {
    * failure mode this whole feature exists to prevent.
    */
   filesWithheldReindexing: number;
+  /**
+   * Older generations of a document this lake also holds a newer generation of, dropped before the
+   * chunk scan (see dataLakeService/supersession.ts). Reported with ids and the matching tier, not
+   * just a count: the weakest identity tier is a bare file name, so a wrong collapse has to be
+   * diagnosable from the transcript. Always zero unless the admin setting is on.
+   */
+  filesSupersededCollapsed: number;
+  superseded: SupersessionReport['sample'];
   chunksScanned: number;
   chunksSkippedDimMismatch: number;
   filesWithDimMismatch: number;
@@ -1628,18 +1838,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private citationStyle: 'named' | 'indexed';
   /** Generic retrieval exclusion applied to the candidate file listing (see RetrievalExclusionOptions). */
   private retrievalFilter: RetrievalExclusionOptions;
+  /**
+   * Lake ids this session was pre-authorized for (manager-but-not-member admission), already
+   * vetted against the authenticated principal by the caller - see ToolContext.sessionPreauthorizedLakeIds
+   * for the full contract. Absent/empty = no widening.
+   */
+  private preauthorizedLakeIds: string[];
 
   constructor(
     chatCompletion: ChatCompletionContext,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    preauthorizedLakeIds?: string[]
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
     this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
     this.citationStyle = citationStyle === 'indexed' ? 'indexed' : 'named';
     this.retrievalFilter = retrievalFilter ?? {};
+    this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -1661,7 +1879,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-    return getDynamicDataLakeAccess({ db, user, entitlementKeys });
+    // `logger` is not optional in practice: getDynamicDataLakeAccess degrades closed on a failed
+    // grants or lakes read and reports it ONLY through this logger (setting lakeViewComplete false
+    // as the machine-readable half). Omitting it made every one of those catches silent on the main
+    // chat path, so "this user reaches no lakes" and "the grant read just failed" looked identical.
+    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys, logger: this.logger });
+    // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
+    // reaches this process after vetPreauthorizedLakeIds has established the two are the same
+    // principal, and an unvetted path leaves the field unset.
+    return unionPreauthorizedLakeAccess(resolved, this.preauthorizedLakeIds, String(user.id), db);
   }
 
   /**
@@ -1691,7 +1917,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       coverage.stoppedByChunkBudget ||
       coverage.stoppedByCursorStall ||
       anyMismatch ||
-      coverage.filesWithheldReindexing > 0;
+      coverage.filesWithheldReindexing > 0 ||
+      coverage.filesSupersededCollapsed > 0;
     if (!partial) return false;
 
     const reasons: string[] = [];
@@ -1726,6 +1953,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           'their passages are being replaced and the replacements are not searchable yet; they return on their own'
       );
     }
+    if (coverage.filesSupersededCollapsed > 0) {
+      // Names the ids and the tier, and says the suppression is recoverable - the same contract
+      // describeSupersession states, for the same reason: this collapse can be wrong on the bare
+      // file-name tier and the reader is the only one who can tell.
+      const named = formatSupersededSample(coverage.superseded, coverage.filesSupersededCollapsed);
+      reasons.push(
+        `${coverage.filesSupersededCollapsed} older document version(s) were not ranked because this lake holds a ` +
+          `newer version of the same source document (${named}) - they are still retrievable by id or name`
+      );
+    }
     if (coverage.chunksSkippedDimMismatch > 0) {
       const allScannedMismatched =
         coverage.chunksScanned > 0 && coverage.chunksSkippedDimMismatch === coverage.chunksScanned;
@@ -1738,7 +1975,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
     );
 
-    quest.promptMeta = quest.promptMeta || {};
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
     quest.promptMeta.warnings = [
       ...(quest.promptMeta.warnings ?? []),
       `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
@@ -1759,6 +1999,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * a lake-prompt failure must not drop the retrieved grounding this feature exists to provide.
    */
   private async resolveRetrievedLakePromptMessage(
+    quest: IChatHistoryItemDocument,
     sourceFileIds: string[],
     fileById: ReadonlyMap<string, { tags?: Array<{ name: string }> }>
   ): Promise<IMessage | null> {
@@ -1771,8 +2012,23 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
       const prompts = await getAccessibleDataLakePrompts(
         { db, user, entitlementKeys, logger: this.logger },
-        { restrictToDatalakeTags: datalakeTags }
+        { restrictToDatalakeTags: datalakeTags, preauthorizedLakeIds: this.preauthorizedLakeIds }
       );
+      const preauthorizedSet = new Set(this.preauthorizedLakeIds);
+      const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
+      // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
+      // is distinct from absent - see the field's own comment in promptMeta.ts).
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
+      quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+        attempted: true,
+        surfaces: [],
+        dataLakeTags: [],
+        injectedLakePromptIds: prompts.map(p => p.id),
+        ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
+      });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;
 
@@ -1783,6 +2039,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     } catch (err) {
       this.logger.warn('📋 Forced retrieval: lake-prompt resolution failed; injecting no lake prompt', err);
       return null;
+    }
+  }
+
+  /**
+   * Fails CLOSED and never throws, including on a host with no adminSettings adapter wired: a
+   * settings outage must not change which documents ground a turn, and this is an opt-in narrowing,
+   * so the safe answer under uncertainty is "do not collapse". `=== true` rather than a truthiness
+   * check so a legacy string value cannot switch a default-off feature on.
+   */
+  private async readSupersessionCollapseSetting(): Promise<boolean> {
+    try {
+      return (
+        (await this.chatCompletion.db.adminSettings?.getSettingsValue('EnableRetrievalSupersessionCollapse')) === true
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -1849,6 +2121,108 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
   }
 
+  /**
+   * Both relevance floors for this turn, on the CALLER's org/owner scope.
+   *
+   * Read via readForcedRetrievalFloorPcts below, which prefers the scoped-settings resolver over the
+   * plain `getSettingsValue` that resolveForcedRetrievalCharBudget uses: these two declare a
+   * `settableAt` block, and that metadata is only honored on the scoped path - a scoped setting read
+   * directly would silently ignore every override. No Lake rung, deliberately: one turn scans an
+   * uncapped SET of lakes into a single pool with a single top score, so there is no lake for a
+   * narrower rung to key on, the same reason `kbSearchMinRelevancePct` stops at owner (see
+   * `scopeForCaller`).
+   *
+   * Percent-to-fraction conversion happens here, once, so every comparison below is against a raw
+   * cosine. `nonNegativeIntOr` rather than `positiveIntOr` because `0` is meaningful for the
+   * RELATIVE floor (a disabled floor) and both floors share this helper. `0` is not meaningful for
+   * the absolute floor, and what keeps it out is the READ path, not the write boundary - scripts
+   * and migrations write this collection raw, but both readers re-parse through the setting's own
+   * schema (`min: 1`) and substitute the coded default on failure. Same mechanism
+   * `forcedRetrievalFloorFraction` relies on for its range check.
+   *
+   * Never throws, and the catch reaches wider than "no adminSettings adapter": the platform-only
+   * path calls `getSettingsValue` unguarded, so a settings or DB outage on an overlay-less host
+   * lands here too. (On the scoped path a missing adapter is swallowed inside the resolver and
+   * never reaches this catch.) Same fail-open posture as the char budget, and the defaults it
+   * falls back to are behavior-preserving.
+   */
+  private async resolveForcedRetrievalFloors(): Promise<ForcedRetrievalFloors> {
+    const coded: ForcedRetrievalFloors = {
+      relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
+      minSimilarity: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100,
+    };
+    try {
+      const { relative, absolute } = await this.readForcedRetrievalFloorPcts();
+      return {
+        relativeFloor: forcedRetrievalFloorFraction(
+          relative,
+          FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+          'forcedRetrievalRelativeFloorPct',
+          this.logger
+        ),
+        minSimilarity: forcedRetrievalFloorFraction(
+          absolute,
+          FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+          'forcedRetrievalMinSimilarityPct',
+          this.logger
+        ),
+      };
+    } catch (err) {
+      this.logger.warn(
+        `\u{1F512} Forced retrieval: failed to read the relevance floors; falling back to ` +
+          `${FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT}% relative / ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% absolute`,
+        err
+      );
+      return coded;
+    }
+  }
+
+  /**
+   * The two floor settings as stored (whole-number percents), by whichever read path this host has.
+   *
+   * A `settableAt` block is only honored by the scoped resolver, so that is the path whenever the
+   * scoped overlay is wired. When it is absent there is no override to find and the platform read is
+   * byte-identical, so this takes the plain `getSettingsValue` route rather than requiring every host
+   * to carry the overlay - the same optionality `scopedSettings` is already documented with on the
+   * db contract above, and the same two-path shape `resolveSearchBudgets` uses.
+   *
+   * The scoped branch is wrapped defensively, NOT because production takes the fallback:
+   * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
+   * the only thing the catch can realistically see is an argument-evaluation error. The corollary is
+   * worth knowing rather than assuming away - when the resolver's OWN platform read fails it
+   * resolves the coded default internally and returns normally, so a settings outage lands on coded
+   * defaults whether or not this guard is here.
+   */
+  private async readForcedRetrievalFloorPcts(): Promise<{ relative: unknown; absolute: unknown }> {
+    const { db, user } = this.chatCompletion;
+    if (db.scopedSettings) {
+      try {
+        const values = await resolveScopedSettingValues(
+          ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'],
+          scopeForCaller({ userId: user.id, organizationId: normalizeId(user.organizationId) }),
+          { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
+          { logger: this.logger }
+        );
+        return {
+          relative: values.forcedRetrievalRelativeFloorPct,
+          absolute: values.forcedRetrievalMinSimilarityPct,
+        };
+      } catch (err) {
+        // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
+        // discard a platform-wide override for the duration of a transient scoped-read failure.
+        this.logger.warn(
+          '\u{1F512} Forced retrieval: scoped floor read failed; falling back to the platform values',
+          err
+        );
+      }
+    }
+    const [relative, absolute] = await Promise.all([
+      db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
+      db.adminSettings.getSettingsValue('forcedRetrievalMinSimilarityPct'),
+    ]);
+    return { relative, absolute };
+  }
+
   private noContextMessages(finding: ForcedRetrievalNoContextFinding): IMessage[] {
     return [{ role: 'system' as const, content: forcedRetrievalNoContextPrompt(finding) }];
   }
@@ -1866,7 +2240,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument,
     forcedSkipReason: NonNullable<RetrievalSummary['forcedSkipReason']>
   ): void {
-    quest.promptMeta = quest.promptMeta ?? {};
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
     quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
       attempted: false,
       mode: 'forced',
@@ -1917,12 +2294,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // the audit spine and the per-turn summary name this surface identically.
     // Outer-scoped so the catch can report whichever lakes were resolved even when the scan threw.
     let attemptedDataLakeTags: string[] = [];
-    // NonNullable for the same reason as LakeMemoryFeature's recorder above.
-    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
-      quest.promptMeta = quest.promptMeta ?? {};
+    // NonNullable for the same reason as LakeMemoryFeature's recorder above. `injected` follows the
+    // same presence contract as LakeMemoryFeature's recorder: supplied only by an exit that ran a
+    // search to completion, so a broken or never-searched exit leaves the volume unknown.
+    const recordRetrieval = (
+      outcome: NonNullable<RetrievalSummary['outcome']>,
+      dataLakeTags: string[],
+      injected?: NonNullable<RetrievalSummary['injected']>
+    ) => {
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        ...(injected ? { injected } : {}),
         mode: 'forced',
         surfaces: ['forced-retrieval'],
         dataLakeTags,
@@ -1981,8 +2368,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         return this.noContextMessages('unavailable');
       }
 
-      // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
-      const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
+      // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop
+      // below. In parallel because they are independent reads and this is on every lake-mode turn.
+      const [forcedRetrievalCharBudget, floors] = await Promise.all([
+        this.resolveForcedRetrievalCharBudget(),
+        this.resolveForcedRetrievalFloors(),
+      ]);
 
       // Only a non-lake tag survives: a `datalake:` entry (the shape a lake-created session sets
       // `retrievalTags` to) names the SESSION's lake, which is already applied above via
@@ -2079,10 +2470,29 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // core: their vectors never enter memory and never spend the per-turn chunk budget below,
       // which one large re-embedded file sorting early could otherwise exhaust on its own,
       // reporting a budget cap when the real cause was the mismatch.
-      const { rankable: scanCandidates, foreign: excludedForeignFiles } = partitionFilesByEmbeddingModel(
+      const { rankable: modelMatchedFiles, foreign: excludedForeignFiles } = partitionFilesByEmbeddingModel(
         indexedFiles,
         embeddingModel
       );
+
+      // Collapse superseded generations LAST, after both partitions above. Order is load-bearing:
+      // a withheld or foreign-model member can never rank, so letting one win a key would suppress
+      // the servable older generation and leave the lake contributing nothing for that document.
+      // Off unless the admin setting says otherwise - the weakest identity tier is a bare file
+      // name, so this ships default-off (see EnableRetrievalSupersessionCollapse).
+      const supersessionCollapseEnabled = await this.readSupersessionCollapseSetting();
+      const collapse =
+        supersessionCollapseEnabled && lakes.length > 0
+          ? partitionBySupersession(
+              modelMatchedFiles.map(f => ({ ...f, fileTags: f.tags?.map(t => t.name) ?? [] })),
+              { lakes }
+            )
+          : { servable: modelMatchedFiles, superseded: [] };
+      const scanCandidates = collapse.servable;
+      const supersession = buildSupersessionReport(collapse.superseded);
+      if (supersession.count > 0) {
+        this.logger.warn(`🔒 Forced retrieval: suppressed ${supersession.count} superseded document(s) before ranking`);
+      }
 
       // 3. Score the candidate files' chunks in batches, keeping only above-floor candidates.
       //    Batched + projected rather than one unbounded read per file: the whole point is that
@@ -2096,6 +2506,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         moreFilesBeyondCap: fileResults.hasMore === true,
         filesExcludedForeignModel: excludedForeignFiles.length,
         filesWithheldReindexing: reindexingFiles.length,
+        filesSupersededCollapsed: supersession.count,
+        superseded: supersession.sample,
         chunksScanned: 0,
         chunksSkippedDimMismatch: 0,
         filesWithDimMismatch: 0,
@@ -2158,7 +2570,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             if (!Number.isFinite(score)) continue;
             scoredCount++;
             if (score > topScore) topScore = score;
-            if (score < FORCED_RETRIEVAL_MIN_SIMILARITY) continue;
+            if (score < floors.minSimilarity) continue;
             pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
             if (pool.length > FORCED_RETRIEVAL_MAX_SCORED_CHUNKS) {
               pool.sort(compareForcedRetrievalCandidates);
@@ -2200,20 +2612,62 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // 'not_indexed' rather than 'ok' because reporting that as a topical zero would claim the
         // library was searched and came up empty, and rather than 'failed' because nothing threw:
         // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
-        recordRetrieval('not_indexed', dataLakeTags);
+        // No topScore: nothing was scored, so `topScore` is still its -1 sentinel and persisting
+        // that would read as a real (very poor) similarity rather than as an absent one.
+        // Both counts are 0 here (scoredCount === 0 means nothing ever cleared into the pool, and
+        // a relative floor over an empty pool leaves it empty), but read off pool rather than
+        // hardcoded so this stays true if the guard above it ever moves. Written as a PAIR even
+        // though `scored` does not exist yet, because the two must be present on the same turns:
+        // a rollup over one has to cover the same population as a rollup over the other.
+        recordRetrieval('not_indexed', dataLakeTags, {
+          chunks: 0,
+          chars: 0,
+          preRelativeFloorCandidates: pool.length,
+          postRelativeFloorCandidates: pool.length,
+        });
         return this.noContextMessages('unavailable');
       }
-      const scored = pool.sort(compareForcedRetrievalCandidates);
+      const ranked = pool.sort(compareForcedRetrievalCandidates);
+      // The relative floor runs HERE rather than inside the scan above: it is a fraction of the
+      // turn's FINAL top score, which is not known until the last batch has been scored. This is
+      // the floor that ranks - it moves with the turn, so it keeps discriminating whichever band a
+      // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
+      // everything or nothing.
+      //
+      // Skipped when the top score is not positive. `topScore` is not derived from `pool` - it is
+      // updated one line BEFORE the absolute-floor `continue`, so it tracks every finite scored
+      // candidate while `pool` holds only those that cleared the floor, and can therefore be
+      // negative here. The guard is inert either way: a non-positive `topScore` makes the product
+      // non-positive, so the `> 0` test below takes the unfiltered branch with or without it. Kept
+      // as documentation that a multiplicative floor inverts across zero (0.85 * -0.2 = -0.17,
+      // ABOVE the score it came from), which would matter if a future absolute floor admitted
+      // negatives.
+      //
+      // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
+      // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the
+      // absolute floor if anything does, and the in-scan trim retains the highest scores - so the
+      // best candidate always survives its own cutoff. No new empty-handed exit is introduced.
+      const relativeCutoff = floors.relativeFloor > 0 && topScore > 0 ? topScore * floors.relativeFloor : 0;
+      const scored = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
+      if (scored.length < ranked.length) {
+        this.logger.log(
+          `\u{1F512} Forced retrieval: relative floor kept ${scored.length}/${ranked.length} candidates ` +
+            `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${topScore.toFixed(3)})`
+        );
+      }
 
-      // 4. Inject the most-similar chunks (above the relevance floor) up to the budget.
+      // 4. Inject the most-similar chunks (above both relevance floors) up to the budget.
       //    If nothing clears the floor, inject the abstention block instead of off-topic
       //    content, hedged by whether the scan was complete.
       let used = 0;
       const sections: string[] = [];
+      // Fed the budget-sliced text below, so detection sees exactly what is injected.
+      const conflictPassages: RetrievalPassage[] = [];
       const sourceFileIds: string[] = [];
       const injectedChunkIds: string[] = [];
       const injectedScores: number[] = [];
-      // `scored` is already floor-filtered during the scan, so the walk only enforces the budget.
+      // `scored` has cleared the absolute floor (in the scan) and the relative floor (just above),
+      // so the walk only enforces the budget.
       for (const candidate of scored) {
         if (used >= forcedRetrievalCharBudget) break;
         injectedChunkIds.push(candidate.id);
@@ -2249,6 +2703,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})${datedClause}`
             : `### ${safeName} (ID: ${candidate.fabFileId})${datedClause}`;
         sections.push(`${heading}\n${text}`);
+        conflictPassages.push({ fabFileId: candidate.fabFileId, text });
         used += text.length;
       }
 
@@ -2260,14 +2715,49 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // The legitimate zero: the corpus WAS scanned and compared, nothing was similar enough.
         // 'ok' per RetrievalSummarySchema - this is the case the field exists to distinguish from
         // "never asked". Partial-scan hedging rides on promptMeta.warnings via reportCoverage above.
-        recordRetrieval('ok', dataLakeTags);
+        // The starve this field exists to record. `topScore` is the diagnostic that says how close
+        // the best candidate came to the floor; guarded on scoredCount because an unscored scan
+        // leaves the -1 sentinel. Not guarded on `topScore >= 0`, which would discard a genuinely
+        // negative cosine - a real near-miss, and the very diagnostic this exit is here to carry.
+        //
+        // This zero is true OF THIS SURFACE and can still be a grounded turn: the model may be offered
+        // the knowledge tools alongside forced retrieval and ground through retrieve_knowledge_content,
+        // which reports no volume to oppose it. Documented as a known hole on
+        // RetrievalSummarySchema.injected - do not resolve it by suppressing the zero here, which
+        // would erase the starve this exit exists to record; the fix is to instrument that tool.
+        recordRetrieval('ok', dataLakeTags, {
+          chunks: 0,
+          chars: 0,
+          ...(scoredCount > 0 ? { topScore } : {}),
+          // Necessarily 0, both of them - this is a recorded zero, NOT the trimmed-pool case the
+          // pair exists to expose. The exit is reached only when `sections` came out empty. The
+          // walk above skips a candidate only via its budget `break`, and `used` starts at 0
+          // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
+          // an empty `sections` means an empty `scored`. And the top candidate always survives its
+          // own relative cutoff (`>=` against `topScore * fraction`, fraction <= 1), so an empty
+          // `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE floor, which is exactly
+          // what the `chunks: 0` beside it says. If that budget ever admits 0, this breaks.
+          preRelativeFloorCandidates: ranked.length,
+          postRelativeFloorCandidates: scored.length,
+        });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
       }
       const partialCoverage = this.reportCoverage(quest, coverage, embeddingModel);
       // Recorded here, before the remaining awaits, so the success outcome is stamped the moment
       // grounding is decided rather than depending on the lake-prompt and audit steps below.
-      recordRetrieval('ok', dataLakeTags);
+      // `used` counts the injected chunk text only, never the headings, so `chars` means the same
+      // thing here as on the knowledge tools (see RetrievalSummarySchema.injected).
+      recordRetrieval('ok', dataLakeTags, {
+        chunks: sections.length,
+        chars: used,
+        ...(scoredCount > 0 ? { topScore } : {}),
+        // `pre - post` is the relative floor's own effect and nothing else. Do NOT read
+        // `pre - chunks` as the floor: the char budget trims the same walk, so that gap is the two
+        // trimmers summed - and `chunks` sums across surfaces while this pair is forced-only.
+        preRelativeFloorCandidates: ranked.length,
+        postRelativeFloorCandidates: scored.length,
+      });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {
@@ -2291,7 +2781,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           },
         };
       });
-      quest.promptMeta = quest.promptMeta || {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       const existingCitables = quest.promptMeta.citables || [];
       const citableKey = (c: CitableSource) => c.id || c.url || c.title;
       if (this.citationStyle === 'indexed') {
@@ -2360,6 +2853,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         'one is available to you, and otherwise say plainly that you can search this library but cannot count it, ' +
         'and that the total is shown on its page in the product. Never guess a number, and never suggest queries, ' +
         'consoles or other infrastructure steps for counting it.\n\n';
+      // Last of the column-0 notes, nearest the content it describes: the injected passages
+      // contradict each other, so the model must surface that rather than pick the top-ranked side.
+      const conflictNote = buildRetrievalConflictNote(conflictPassages);
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +
@@ -2371,7 +2867,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
-      // The header, capability and coverage notes are ours and stay OUTSIDE the block at column 0;
+      // The header, capability, coverage and conflict notes are ours and stay OUTSIDE the block at column 0;
       // only the retrieved sections go inside it. renderRetrievedContentBlock owns the same
       // `\n\n---\n\n` join this used to do inline, so the separator is unchanged.
       const retrievedContext: IMessage = {
@@ -2381,6 +2877,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           `${GROUNDED_NO_INVENTION_RULE}\n\n` +
           capabilityNote +
           coverageNote +
+          conflictNote +
           renderRetrievedContentBlock(sections),
       };
 
@@ -2389,7 +2886,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // provenance tags on the injected source files. A turn that grounds on no lake injects no lake
       // prompt. Ahead of the retrieved content so it frames how to use it. Fail-safe: any failure
       // here degrades to no lake prompt and never drops the retrieved context.
-      const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(sourceFileIds, fileById);
+      const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(quest, sourceFileIds, fileById);
 
       // Best-effort audit write, attributed via the tags on the files this turn actually
       // grounded on (sourceFileIds), not the wider scanned candidate pool. The candidate search
