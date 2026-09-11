@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -42,6 +42,13 @@ const summary = (over: Partial<OptionalPathRetrievalRate> = {}): OptionalPathRet
   },
   forcedTurns: 12,
   unclassifiedTurns: 7,
+  answerability: {
+    cutoff: 0.75,
+    answerable: { turns: 18, retrievedTurns: 10, rate: 0.556 },
+    notAnswerable: { turns: 15, retrievedTurns: 2, rate: 0.133 },
+    unknown: { turns: 7, retrievedTurns: 0, rate: 0 },
+    inconclusiveTurns: 0,
+  },
   ...over,
 });
 
@@ -142,5 +149,28 @@ describe('RetrievalRateTab', () => {
     mockGet.mockRejectedValue(new Error('boom'));
     renderTab();
     await waitFor(() => expect(screen.getByTestId('retrieval-rate-error').textContent).toContain('boom'));
+  });
+
+  it('renders the answerability split with the miss/waste figures the routing decision needs', async () => {
+    renderTab();
+    // Miss rate is hand-computed in the component (not read off the fold), so this pins the
+    // arithmetic directly: 8 of 18 answerable turns went unsearched. Scoped to the section since
+    // a bare '7' also matches the unrelated Unclassified card in this fixture.
+    const section = await screen.findByTestId('retrieval-rate-answerability');
+    expect(within(section).getByText('44.4%')).toBeTruthy();
+    expect(within(section).getByText('8 of 18 answerable turns where the model did not search')).toBeTruthy();
+    expect(within(section).getByText('13.3%')).toBeTruthy();
+    expect(within(section).getByText('2 of 15 turns with nothing to find where it searched anyway')).toBeTruthy();
+    expect(within(section).getByText('7')).toBeTruthy();
+  });
+
+  it('renders the rest of the panel when the response predates the answerability field', async () => {
+    // A real shape, not a hypothetical: an API pod one deploy behind the client bundle returns
+    // exactly this - the fold gained the field, but the response this request actually got did
+    // not. The panel must degrade by omitting the section, not by crashing the whole tab.
+    mockGet.mockResolvedValue(response({ summary: summary({ answerability: undefined }) }));
+    renderTab();
+    expect(await screen.findByText('25.0%')).toBeTruthy();
+    expect(screen.queryByTestId('retrieval-rate-answerability')).toBeNull();
   });
 });
