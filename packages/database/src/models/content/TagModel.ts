@@ -70,10 +70,10 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     return this.fileTagModel.create(data);
   }
 
-  // Strips the `type` discriminator key. Version-guarded by default (see BaseRepository.update):
-  // _versionedUpdate applies the __v CAS when the doc carries one.
+  // Strips the `type` discriminator key. Last-writer-wins like BaseRepository.update. Returns the
+  // post-update doc (`_plainUpdate` uses `new: true`); the sole caller (tagService/update) discards it.
   async update({ type: _, ...data }: Partial<IFileTag>, options?: Record<string, unknown>) {
-    return this._versionedUpdate<IFileTag>({ _id: data.id }, data as Record<string, unknown>, options);
+    return this._plainUpdate<IFileTag>({ _id: data.id }, data as Record<string, unknown>, options);
   }
 
   async updateMany(

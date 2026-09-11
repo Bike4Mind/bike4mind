@@ -262,13 +262,13 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     super(model);
   }
 
-  // Override update to key on the custom `id` field, not MongoDB `_id`. Version-guarded by default
-  // (see BaseRepository.update): _versionedUpdate applies the __v CAS when the doc carries one.
+  // Override update to key on the custom `id` field, not MongoDB `_id`. Last-writer-wins like
+  // BaseRepository.update; no guarded variant is exposed (no artifact caller opts in).
   async update(data: Partial<IArtifactDocument>, options?: Record<string, unknown>): Promise<IArtifactDocument | null> {
     if (!data.id) {
       throw new Error('id is required');
     }
-    return this._versionedUpdate<IArtifactDocument>({ id: data.id }, data as Record<string, unknown>, options);
+    return this._plainUpdate<IArtifactDocument>({ id: data.id }, data as Record<string, unknown>, options);
   }
 
   // Implement artifact-specific methods

@@ -82,6 +82,17 @@ describe('BaseRepository', () => {
       expect(update.$set).not.toHaveProperty('id');
     });
 
+    // Regression: `update` is last-writer-wins even when the doc carries __v - it does NOT condition
+    // on __v or $inc it. The version guard is opt-in via `updateGuarded`.
+    it('does not version-guard when the doc carries a numeric __v', async () => {
+      await repo.update({ id: '507f1f77bcf86cd799439011', name: 'updated', __v: 3 } as Partial<TestDoc>);
+
+      const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(filter.__v).toBeUndefined();
+      expect(update.$inc).toBeUndefined();
+      expect(update.$set).toEqual({ name: 'updated', __v: 3 });
+    });
+
     it('should throw if id is missing', async () => {
       await expect(repo.update({ name: 'no-id' } as Partial<TestDoc>)).rejects.toThrow('id is required');
     });
@@ -103,7 +114,7 @@ describe('BaseRepository', () => {
     });
   });
 
-  describe('update (version guard)', () => {
+  describe('updateGuarded (version guard)', () => {
     const ID = '507f1f77bcf86cd799439011';
     let mockFindOneAndUpdate: ReturnType<typeof vi.fn>;
     let mockExists: ReturnType<typeof vi.fn>;
@@ -122,7 +133,7 @@ describe('BaseRepository', () => {
 
     it('conditions the write on __v and bumps it, stripping __v from $set', async () => {
       setup({ id: ID, name: 'updated', __v: 4 });
-      await repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
+      await repo.updateGuarded({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
 
       const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
       expect(filter._id).toBeDefined();
@@ -133,7 +144,7 @@ describe('BaseRepository', () => {
 
     it('degrades to a plain $set when the doc carries no numeric __v', async () => {
       setup({ id: ID, name: 'updated' });
-      await repo.update({ id: ID, name: 'updated' } as Partial<TestDoc>);
+      await repo.updateGuarded({ id: ID, name: 'updated' } as Partial<TestDoc>);
 
       const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
       expect(filter.__v).toBeUndefined();
@@ -143,34 +154,34 @@ describe('BaseRepository', () => {
 
     it('throws ConcurrencyConflictError when a versioned write misses but the row still exists', async () => {
       setup(null, { _id: ID }); // findOneAndUpdate matched nothing, but the doc is present -> lost race
-      await expect(repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>)).rejects.toThrow(
+      await expect(repo.updateGuarded({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>)).rejects.toThrow(
         /Concurrent modification/
       );
     });
 
     it('returns null (not a conflict) when a versioned write misses and the row is gone', async () => {
       setup(null, null);
-      const result = await repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
+      const result = await repo.updateGuarded({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
       expect(result).toBeNull();
     });
 
     it('does not probe existence on an unversioned miss', async () => {
       setup(null, null);
-      const result = await repo.update({ id: ID, name: 'updated' } as Partial<TestDoc>);
+      const result = await repo.updateGuarded({ id: ID, name: 'updated' } as Partial<TestDoc>);
       expect(result).toBeNull();
       expect(mockExists).not.toHaveBeenCalled();
     });
 
     it('throws if id is missing', async () => {
       setup({ id: ID });
-      await expect(repo.update({ name: 'no-id' } as Partial<TestDoc>)).rejects.toThrow('id is required');
+      await expect(repo.updateGuarded({ name: 'no-id' } as Partial<TestDoc>)).rejects.toThrow('id is required');
     });
 
     it('attaches the explicit session when a transaction is set', async () => {
       setup({ id: ID, name: 'updated', __v: 4 });
       const session = { id: 'session' } as unknown as mongoose.mongo.ClientSession;
       repo.txn = session;
-      await repo.update({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
+      await repo.updateGuarded({ id: ID, name: 'updated', __v: 3 } as Partial<TestDoc>);
       const query = mockFindOneAndUpdate.mock.results[0].value as ThenableQuery;
       expect(query.session).toHaveBeenCalledWith(session);
     });

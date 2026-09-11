@@ -109,8 +109,8 @@ export class ArtifactVersionRepository extends BaseRepository<IArtifactVersionDo
     super(model);
   }
 
-  // Override update to accept `id` or `_id`. Version-guarded by default (see BaseRepository.update):
-  // _versionedUpdate applies the __v CAS when the doc carries one.
+  // Override update to accept `id` or `_id`. Last-writer-wins like BaseRepository.update; no guarded
+  // variant is exposed (no artifact-version caller opts in).
   async update(
     data: Partial<IArtifactVersionDocument>,
     options?: Record<string, unknown>
@@ -118,7 +118,7 @@ export class ArtifactVersionRepository extends BaseRepository<IArtifactVersionDo
     if (!data.id && !data._id) {
       throw new Error('id or _id is required');
     }
-    return this._versionedUpdate<IArtifactVersionDocument>(
+    return this._plainUpdate<IArtifactVersionDocument>(
       { _id: data.id || data._id },
       data as Record<string, unknown>,
       options

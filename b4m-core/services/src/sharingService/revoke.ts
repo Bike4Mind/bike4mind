@@ -72,11 +72,14 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
   }
 
-  // This filters `document.users` in memory and writes the whole doc back. Because the doc carries
-  // `__v`, the version-guarded `update` (see BaseRepository.update) conditions the write on it, so a
-  // concurrent grant to the same doc racing this revoke throws ConcurrencyConflictError (409) instead
-  // of being silently clobbered (last-writer-wins) - the revoke fails loud rather than resurrecting access.
-  await dbModel.update(document);
+  // This filters `document.users` in memory and writes the whole doc back - a lost-update-sensitive
+  // grant path, so it opts in to the version guard (`updateGuarded`). Because the doc carries `__v`, a
+  // concurrent grant to the same doc racing this revoke throws ConcurrencyConflictError (409, surfaced
+  // by the shared errorHandler) instead of being silently clobbered - the revoke fails loud rather than
+  // resurrecting access. The route wraps this in `withTransaction`, so a conflict also rolls back the
+  // `revokeFromProject` side effects above. (Access *widening* via updateDocumentSharing is a targeted
+  // `$set` of isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
+  await dbModel.updateGuarded(document);
 
   return document;
 };
