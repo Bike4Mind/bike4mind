@@ -50,11 +50,19 @@ import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useNavigate } from '@tanstack/react-router';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
+import { unsavedFieldKeys } from '../unsavedFieldLabels';
+import { stageFieldEdit } from '../stageFieldEdit';
 
 interface UsersViewProps {
   user: AdminUserListItem;
   index: number;
   inModal?: boolean;
+  /**
+   * Reports which fields are staged-but-unsaved, so a host that can navigate away
+   * from the card (FullUserViewModal) can warn before the edits are lost. Must be
+   * referentially stable - it is an effect dependency.
+   */
+  onUnsavedFieldsChange?: (fieldKeys: string[]) => void;
 }
 
 // Keyed by IUserDocument, not the narrower list-projection row: admins edit fields the
@@ -64,7 +72,7 @@ export type EditedFieldsState = {
   [key in keyof Partial<IUserDocument>]: boolean;
 };
 
-export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }) => {
+export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, onUnsavedFieldsChange }) => {
   const deleteUser = useDeleteUser();
   const updateUser = useUpdateUser();
   const loginAsUser = useLoginAsUser();
@@ -96,9 +104,17 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
     setCreditReason('');
   }, [user]);
 
+  useEffect(() => {
+    if (!onUnsavedFieldsChange) return;
+    onUnsavedFieldsChange(unsavedFieldKeys(editedFields));
+    // Unmounting means the card is gone and so are its staged edits, so the host
+    // must not keep guarding against them.
+    return () => onUnsavedFieldsChange([]);
+  }, [editedFields, onUnsavedFieldsChange]);
+
   const handleFormFieldChange = (key: keyof IUserDocument, value: unknown) => {
     setFormState(prev => ({ ...prev, [key]: value }));
-    setEditedFields(prev => ({ ...prev, [key]: true }));
+    setEditedFields(prev => stageFieldEdit(prev, key, value, user));
   };
 
   const handleDeleteUser = async (userId: string) => {
