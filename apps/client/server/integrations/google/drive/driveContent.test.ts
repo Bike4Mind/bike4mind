@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { walkFolder, fetchDriveFileContent } from './driveContent';
@@ -40,6 +40,9 @@ describe('walkFolder', () => {
 });
 
 describe('fetchDriveFileContent', () => {
+  // Several cases drive the in-process throttle retry, which sleeps for real.
+  afterEach(() => vi.useRealTimers());
+
   const bufOf = (s: string) => new TextEncoder().encode(s).buffer;
 
   it('exports a Google Doc to plain text', async () => {
@@ -109,6 +112,7 @@ describe('fetchDriveFileContent', () => {
   // The whole point of the separate reason: `error` is permanent to the caller, so a throttle
   // landing there drops the file from the lake and still finalizes the batch clean.
   it('reports rate_limited (not error) when Drive throttles a native download', async () => {
+    vi.useFakeTimers();
     const getFn = vi.fn(async () => {
       throw Object.assign(new Error('Rate Limit Exceeded'), {
         code: 429,
@@ -117,11 +121,29 @@ describe('fetchDriveFileContent', () => {
     });
     const drive = { files: { export: vi.fn(), get: getFn } } as unknown as drive_v3.Drive;
 
-    const res = await fetchDriveFileContent(drive, file('n', 'notes.txt', 'text/plain'));
-    expect(res).toMatchObject({ ok: false, reason: 'rate_limited' });
+    const pending = fetchDriveFileContent(drive, file('n', 'notes.txt', 'text/plain'));
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ ok: false, reason: 'rate_limited' });
+    // Only a throttle that outlives the in-process retries reaches the caller as rate_limited.
+    expect(getFn.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('retries a throttled download in-process and succeeds without ever reporting rate_limited', async () => {
+    vi.useFakeTimers();
+    const getFn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('Rate Limit Exceeded'), { code: 429, response: { status: 429 } }))
+      .mockResolvedValue({ data: new TextEncoder().encode('hi').buffer });
+    const drive = { files: { export: vi.fn(), get: getFn } } as unknown as drive_v3.Drive;
+
+    const pending = fetchDriveFileContent(drive, file('n', 'notes.txt', 'text/plain'));
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ ok: true, mimeType: 'text/plain' });
+    expect(getFn).toHaveBeenCalledTimes(2);
   });
 
   it('reports rate_limited for a 403 whose reason is a quota, not a permission denial', async () => {
+    vi.useFakeTimers();
     const exportFn = vi.fn(async () => {
       throw Object.assign(new Error('The user has exceeded their rate limit.'), {
         code: 403,
@@ -130,8 +152,9 @@ describe('fetchDriveFileContent', () => {
     });
     const drive = { files: { export: exportFn, get: vi.fn() } } as unknown as drive_v3.Drive;
 
-    const res = await fetchDriveFileContent(drive, file('d', 'Doc', 'application/vnd.google-apps.document'));
-    expect(res).toMatchObject({ ok: false, reason: 'rate_limited' });
+    const pending = fetchDriveFileContent(drive, file('d', 'Doc', 'application/vnd.google-apps.document'));
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ ok: false, reason: 'rate_limited' });
   });
 
   it('still reports a permanent error for a non-throttle failure', async () => {

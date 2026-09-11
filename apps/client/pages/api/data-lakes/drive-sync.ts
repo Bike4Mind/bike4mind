@@ -11,7 +11,13 @@ import {
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { isEncrypted } from '@server/security/secretEncryption';
-import { BadRequestError, ForbiddenError, InternalServerError, NotFoundError } from '@server/utils/errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  InternalServerError,
+  NotFoundError,
+  TooManyRequestsError,
+} from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -102,6 +108,14 @@ const handler = baseApi()
       createDriveClient(await getValidUserDriveAccessToken(req.user.id)),
       driveFolderId
     );
+    // A throttle is not an access verdict: without this, Drive rate-limiting the probe would tell the
+    // user they have no access to a folder they own, and they would go hunting a permission problem
+    // that does not exist (#2395).
+    if (!folderAccess.ok) {
+      throw new TooManyRequestsError(
+        'Google Drive is rate-limiting us right now, so we could not check that folder. Try connecting it again in a minute.'
+      );
+    }
     if (!folderAccess.exists) {
       throw new ForbiddenError('That Google Drive folder does not exist or you do not have access to it.');
     }

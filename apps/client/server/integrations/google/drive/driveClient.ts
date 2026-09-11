@@ -52,6 +52,72 @@ export function isDriveRateLimitError(e: unknown): boolean {
   return false;
 }
 
+const isTransientDriveStatus = (status: number) => status === 408 || (status >= 500 && status < 600);
+
+/**
+ * Worth one more attempt: a throttle, or a Drive hiccup/timeout. Deliberately WIDER than
+ * isDriveRateLimitError, which stays the narrow "shed load" signal - a Drive outage retried here
+ * and still failing must end at the DLQ where an operator sees it, not be deferred quietly as
+ * though it were a quota problem that will pass on its own.
+ */
+function isRetryableDriveError(e: unknown): boolean {
+  if (isDriveRateLimitError(e)) return true;
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  for (const raw of [err.code, err.status, response?.status]) {
+    const status = typeof raw === 'string' ? Number(raw) : raw;
+    if (typeof status === 'number' && isTransientDriveStatus(status)) return true;
+  }
+  return false;
+}
+
+// In-process retry budget for a failed Drive call. Deliberately small: this absorbs the
+// second-scale blip (a burst against Drive's per-user 100-second bucket), and a throttle that
+// outlives it is a sustained quota problem the CALLER has to shed by deferring its work - not
+// something to keep sleeping on inside a Lambda with a 10-minute ceiling. Windows of 1s/2s/4s put
+// the worst case at 7s of sleep per call; raising the retry count is a budget decision, not a
+// tuning one, because the folder walk pays this per THROTTLED folder.
+const DRIVE_RETRY_MAX_RETRIES = 3;
+const DRIVE_RETRY_BASE_DELAY_MS = 1_000;
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/**
+ * Run one Drive call, retrying a transient failure with exponential backoff and jitter.
+ *
+ * This is the ONLY retry layer on the Drive path - createDriveClient turns the googleapis one off
+ * (see there for why). It covers the same classes that layer did, plus the 403-with-quota-reason
+ * shape it did not retry at all.
+ *
+ * The jitter is half the window, not a wobble around a fixed delay: several connections sync
+ * against ONE Drive project quota, so a fixed backoff just re-collides the same callers at the
+ * same new instant and the throttle repeats.
+ *
+ * A permanent failure (404, a genuine permission denial) rethrows on the first attempt, and an
+ * error that outlives the budget rethrows the ORIGINAL, so `isDriveRateLimitError` still identifies
+ * a throttle upstream and the caller can defer rather than record a permanent failure (#2395).
+ */
+export async function withDriveRetry<T>(operation: string, call: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await call();
+    } catch (e) {
+      if (attempt >= DRIVE_RETRY_MAX_RETRIES || !isRetryableDriveError(e)) throw e;
+      const window = DRIVE_RETRY_BASE_DELAY_MS * 2 ** attempt;
+      const delayMs = Math.floor(window / 2 + Math.random() * (window / 2));
+      Logger.globalInstance.warn('[withDriveRetry] transient Drive failure; backing off', {
+        operation,
+        attempt: attempt + 1,
+        maxRetries: DRIVE_RETRY_MAX_RETRIES,
+        rateLimited: isDriveRateLimitError(e),
+        delayMs,
+      });
+      await sleep(delayMs);
+    }
+  }
+}
+
 // Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
 // length bound (real ids are ~33-44 chars) stops ~1MB of legal characters being interpolated into
 // the `q` string and sent outbound. Validate before interpolating so a crafted id can't break out.
@@ -72,40 +138,61 @@ const MAX_LIST_PAGES = 100;
  * IMPORTANT: constructs a FRESH OAuth2 client every call. Never reuse the module-level
  * singleton in common.ts - its credentials are mutable shared state (`setCredentials`), so
  * concurrent multi-tenant syncs on one process would race and bleed tokens across tenants.
+ *
+ * `retry: false` is load-bearing, not a disabling of resilience. googleapis-common opts every
+ * request into its own retry layer by default (3 retries over 408/429/5xx), which is
+ * DETERMINISTIC - no jitter, so several connections sharing one Drive project quota all come back
+ * at the same instant - silent, and blind to the 403-with-quota-reason shape Drive uses as often as
+ * a 429. Left on it would also compose with withDriveRetry into ~16 HTTP attempts per call with an
+ * unknowable total sleep, inside a handler that has a 10-minute ceiling. One layer, ours, so the
+ * budget is knowable and a throttle is visible (#2395).
  */
 export function createDriveClient(accessToken: string): drive_v3.Drive {
   const auth = new googleAuth.OAuth2();
   auth.setCredentials({ access_token: accessToken });
-  return driveApi({ version: 'v3', auth });
+  return driveApi({ version: 'v3', auth, retry: false });
 }
+
+/**
+ * `ok: false` means Drive never gave an access ANSWER - it throttled us. Modelled as its own arm
+ * rather than a flag on the success shape so a caller cannot read `exists: false` off a throttle
+ * and tell the user they lost access to their own folder (#2395).
+ */
+export type FolderAccess =
+  | { ok: true; exists: boolean; isFolder: boolean; canRead: boolean }
+  | { ok: false; reason: 'rate_limited'; detail?: string };
 
 /**
  * Read-access probe for a single folder, using the CALLER's own Drive credential. Drive returns 404
  * (not 403) for a file the caller can't see, so a successful `files.get` is itself proof the caller
  * can read the folder - that is the signal drive-sync uses to gate the global folder claim (a user
- * must be able to read a folder before they can claim it for a lake). Never throws: any error (no
- * access, bad id, transient) resolves to `exists: false` so the caller fails closed.
+ * must be able to read a folder before they can claim it for a lake). Never throws: a permanent
+ * error (no access, bad id) resolves to `exists: false` so the caller fails closed, and a throttle
+ * that outlives the retry budget comes back as `ok: false` so the caller can say so instead.
  */
-export async function getFolderAccess(
-  drive: drive_v3.Drive,
-  folderId: string
-): Promise<{ exists: boolean; isFolder: boolean; canRead: boolean }> {
-  if (!isValidDriveFolderId(folderId)) return { exists: false, isFolder: false, canRead: false };
+export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): Promise<FolderAccess> {
+  if (!isValidDriveFolderId(folderId)) return { ok: true, exists: false, isFolder: false, canRead: false };
   try {
-    const res = await drive.files.get({
-      fileId: folderId,
-      fields: 'id, mimeType, capabilities/canDownload',
-      supportsAllDrives: true,
-    });
+    const res = await withDriveRetry('files.get(folder)', () =>
+      drive.files.get({
+        fileId: folderId,
+        fields: 'id, mimeType, capabilities/canDownload',
+        supportsAllDrives: true,
+      })
+    );
     const file = res.data;
     return {
+      ok: true,
       exists: true,
       isFolder: file.mimeType === FOLDER_MIME_TYPE,
       // canDownload is often absent for folders; only an EXPLICIT false denies read.
       canRead: file.capabilities?.canDownload !== false,
     };
-  } catch {
-    return { exists: false, isFolder: false, canRead: false };
+  } catch (e) {
+    if (isDriveRateLimitError(e)) {
+      return { ok: false, reason: 'rate_limited', detail: e instanceof Error ? e.message : String(e) };
+    }
+    return { ok: true, exists: false, isFolder: false, canRead: false };
   }
 }
 
@@ -129,14 +216,16 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
   let pages = 0;
 
   do {
-    const res = await drive.files.list({
-      q: `'${folderId}' in parents and trashed = false`,
-      fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, md5Checksum, size)',
-      pageSize: 1000,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-      pageToken,
-    });
+    const res = await withDriveRetry('files.list', () =>
+      drive.files.list({
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, md5Checksum, size)',
+        pageSize: 1000,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        pageToken,
+      })
+    );
 
     for (const f of res.data.files ?? []) {
       // Skip anything missing an id/name/mimeType - it isn't a usable ingest candidate. Logged

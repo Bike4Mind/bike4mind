@@ -1,7 +1,7 @@
 import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
-import { listFolderChildren, isFolder, isDriveRateLimitError, type DriveFile } from './driveClient';
+import { listFolderChildren, isFolder, isDriveRateLimitError, withDriveRetry, type DriveFile } from './driveClient';
 
 const GOOGLE_DOC = 'application/vnd.google-apps.document';
 const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
@@ -22,6 +22,11 @@ export type WalkedDriveFile = DriveFile & { relativePath: string };
  * Recursively walk a Drive folder tree, returning every non-folder file with its relativePath.
  * A `visited` set guards against cycles - a Drive folder graph can contain shortcuts/loops, and
  * an unguarded walk would recurse forever. Reuses the one-level `listFolderChildren` primitive.
+ *
+ * Throws on any listing failure, throttles included (each page is retried in-process first). A
+ * caller that can shed load MUST test the thrown error with `isDriveRateLimitError` and defer:
+ * re-running a failed walk costs a fresh listing of every page it already fetched, which adds to
+ * the very quota that is exhausted (#2395).
  */
 export async function walkFolder(drive: drive_v3.Drive, rootFolderId: string): Promise<WalkedDriveFile[]> {
   const files: WalkedDriveFile[] = [];
@@ -73,7 +78,9 @@ export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFi
       if (!exportMime) {
         return { ok: false, reason: 'unsupported', detail: file.mimeType };
       }
-      const res = await drive.files.export({ fileId: file.id, mimeType: exportMime }, { responseType: 'arraybuffer' });
+      const res = await withDriveRetry('files.export', () =>
+        drive.files.export({ fileId: file.id, mimeType: exportMime }, { responseType: 'arraybuffer' })
+      );
       return { ok: true, bytes: Buffer.from(res.data as ArrayBuffer), mimeType: exportMime };
     }
 
@@ -82,9 +89,8 @@ export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFi
     if (!supported) {
       return { ok: false, reason: 'unsupported', detail: file.mimeType };
     }
-    const res = await drive.files.get(
-      { fileId: file.id, alt: 'media', supportsAllDrives: true },
-      { responseType: 'arraybuffer' }
+    const res = await withDriveRetry('files.get(media)', () =>
+      drive.files.get({ fileId: file.id, alt: 'media', supportsAllDrives: true }, { responseType: 'arraybuffer' })
     );
     return { ok: true, bytes: Buffer.from(res.data as ArrayBuffer), mimeType };
   } catch (e) {
@@ -94,7 +100,9 @@ export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFi
       return { ok: false, reason: 'export_too_large', detail };
     }
     // Transient, and reported apart from `error` because the caller treats `error` as a permanent
-    // per-file skip - which for a throttle silently drops the file from the lake (#2394).
+    // per-file skip - which for a throttle silently drops the file from the lake (#2394). Reaching
+    // here means the in-process retries above were already spent, so the caller must defer rather
+    // than retry this file again immediately.
     if (isDriveRateLimitError(e)) {
       return { ok: false, reason: 'rate_limited', detail };
     }
