@@ -5,14 +5,20 @@ import { issueSessionForRequest } from '@server/auth/issueSession';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { PREDEFINED_USER_TAGS, CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { E2E_USERNAME_SUFFIX_PATTERN } from '@server/utils/e2eCleanupScope';
 import { Resource } from 'sst';
 import { Request } from 'express';
 
 interface CreateTestUserBody {
   username: string;
-  email: string;
+  // Omit (or pass null) to mint an EMAILLESS account: the shape an OAuth signup with no
+  // provider-verified email produces (see verifyCallback's create path). It cannot receive a
+  // login one-time code; enter it via the returned tokens or Admin -> Login as User. The
+  // username must then carry the `-e2e` marker so cleanup can still find it.
+  email?: string | null;
   name: string;
-  password: string;
+  // Optional so an emailless account can be minted passwordless, like the OAuth shape it mimics.
+  password?: string;
   isAdmin?: boolean;
   emailVerified?: boolean;
   tags?: string[];
@@ -47,16 +53,20 @@ const handler = baseApi({ auth: false }).post(
     const { username, email, name, password, isAdmin, emailVerified, tags, acceptedPolicies, initialCredits } =
       req.body;
 
-    // Guard 3: Only allow creating users with the E2E email pattern
+    // Guard 3: Only allow creating users the cleanup sweep can find - by the E2E email
+    // pattern, or, for an emailless account, by the E2E username suffix.
     const E2E_EMAIL_PATTERN = /-e2e@test\.com$/i;
-    if (!E2E_EMAIL_PATTERN.test(email)) {
+    if (email && !E2E_EMAIL_PATTERN.test(email)) {
       return res.status(400).json({ error: 'Test users must use the -e2e@test.com email pattern' });
+    }
+    if (!email && !E2E_USERNAME_SUFFIX_PATTERN.test(username)) {
+      return res.status(400).json({ error: 'Emailless test users must use the -e2e username suffix' });
     }
 
     const newUser = await userService.createUser(
       {
         username,
-        email,
+        email: email ?? null,
         name,
         record: {
           password,
@@ -68,7 +78,8 @@ const handler = baseApi({ auth: false }).post(
           ...((acceptedPolicies ?? true) ? { aupAcceptedVersion: CURRENT_POLICY_VERSION } : {}),
         },
         isAdmin: isAdmin ?? false,
-        emailVerified: emailVerified ?? true,
+        // No address means nothing to have verified.
+        emailVerified: email ? (emailVerified ?? true) : false,
         tags: [...PREDEFINED_USER_TAGS, ...(tags ?? [])],
         initialCredits: initialCredits ?? DEFAULT_E2E_INITIAL_CREDITS,
       },

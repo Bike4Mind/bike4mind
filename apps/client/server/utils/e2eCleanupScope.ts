@@ -12,6 +12,13 @@
 // otherwise every Playwright/CI run would wipe the accounts QA logs in with.
 export const BASE_E2E_EMAIL_PATTERN = /-\d+-e2e@test\.com$/i;
 
+// Emailless test users (create-user.ts with no `email`) carry the marker on the USERNAME
+// instead, since there is no email for the sweep to key on. Same two-tier rule as email:
+// creation only requires the `-e2e` suffix, the sweep requires the timestamp segment too,
+// so a standing `qa-emailless-e2e` survives while `qa-emailless-12345678-e2e` is reclaimed.
+export const E2E_USERNAME_SUFFIX_PATTERN = /-e2e$/i;
+export const BASE_E2E_USERNAME_PATTERN = /-\d+-e2e$/i;
+
 // Floor for the aged sweep. Must stay well above the longest allowed run (ai-latency
 // matrix cells get 90 min) so an in-flight suite's users can never fall in range.
 // Age comes from the User doc's createdAt, NOT from the email: the digits in the email
@@ -31,6 +38,11 @@ export function sanitizeTestId(raw: unknown): string {
  */
 export function buildE2EEmailPattern(testId: string): RegExp {
   return testId ? new RegExp(`-${testId}-[0-9]+-e2e@test\\.com$`, 'i') : BASE_E2E_EMAIL_PATTERN;
+}
+
+/** Username counterpart of buildE2EEmailPattern, for emailless test users. */
+export function buildE2EUsernamePattern(testId: string): RegExp {
+  return testId ? new RegExp(`-${testId}-[0-9]+-e2e$`, 'i') : BASE_E2E_USERNAME_PATTERN;
 }
 
 /**
