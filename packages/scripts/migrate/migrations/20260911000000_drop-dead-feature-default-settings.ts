@@ -9,8 +9,11 @@ import { type MigrationFile } from './index';
  * Dropping the keys already hides the rows from every read - a `settingName` with no
  * `settingsMap` entry is skipped by the settings projection and treated as sensitive by the
  * broadcast redaction - but the documents linger in `adminsettings` on any deployment where an
- * admin ever flipped either toggle. Delete them so nothing stale is left behind, matching the
- * `prReportSlackChannel` cleanup in 20260814000000.
+ * admin ever flipped either toggle. Delete them so nothing stale is left behind.
+ *
+ * Hard delete, for the reason spelled out on the call below. Note that 20260814000000, the
+ * `prReportSlackChannel` cleanup this was first modelled on, omits that option and so tombstones
+ * its row rather than removing it; the idiom to copy is 20251008130737 instead.
  *
  * Idempotent: a second run deletes nothing.
  */
@@ -24,9 +27,17 @@ const migration: MigrationFile = {
   name: 'drop-dead-feature-default-settings',
 
   up: async () => {
-    const removed = await AdminSettings.deleteMany({ settingName: { $in: DEAD_SETTING_NAMES } });
+    // AdminSettings carries softDeletePlugin, which replaces `deleteMany` with an updateMany
+    // that stamps `deletedAt` unless `hardDelete` is passed - and then reports modifiedCount as
+    // `deletedCount`, so a soft delete reads like a real one. A tombstone is worse than the live
+    // row here: `settingName` is a plain unique index with no partialFilterExpression, and the
+    // admin upsert does not clear `deletedAt`, so the key would become permanently unsettable.
+    // The option is absent from mongoose's DeleteOptions, hence the cast.
+    const removed = await AdminSettings.deleteMany({ settingName: { $in: DEAD_SETTING_NAMES } }, {
+      hardDelete: true,
+    } as Record<string, unknown>);
     console.log(
-      `[drop-dead-feature-default-settings] removed ${removed.deletedCount ?? 0} orphaned row(s): ${DEAD_SETTING_NAMES.join(', ')}`
+      `[drop-dead-feature-default-settings] hard-deleted ${removed.deletedCount ?? 0} orphaned row(s): ${DEAD_SETTING_NAMES.join(', ')}`
     );
   },
 
