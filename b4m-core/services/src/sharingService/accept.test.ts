@@ -514,15 +514,15 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
     expect(adapters.db.sessions.update).toHaveBeenCalled();
   });
 
-  it("caps the propagated grant at the inviter's held permissions on the file", async () => {
+  it('propagates nothing when the inviter cannot share the file, even if they can read it', async () => {
     const adapters = makeAdapters();
     adapters.db.invites.findById.mockResolvedValue(makeInvite());
     adapters.db.sessions.findById.mockResolvedValue(makeSession(['file-shared']));
     adapters.db.users.findById.mockImplementation(async (id: string) =>
       id === inviterId ? { id: inviterId, groups: [] } : { id: userId, email: 'accepter@x.com', username: 'accepter' }
     );
-    // Inviter holds only `read` on this file (e.g. via a users[] share), well below the
-    // invite's face-value permissions (read/update/share).
+    // Inviter holds only `read` on this file. Passing that read on is still a re-share of a file
+    // they were never given authority to share, so nothing propagates.
     adapters.db.fabFiles.findById.mockResolvedValue({
       id: 'file-shared',
       userId: 'owner',
@@ -532,11 +532,30 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
 
     await acceptInvite(userId, { id: inviteId }, adapters as any);
 
-    expect(adapters.db.fabFiles.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        users: expect.arrayContaining([expect.objectContaining({ userId, permissions: [Permission.read] })]),
-      })
+    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+
+  it("caps the propagated grant at the inviter's held permissions once the share gate passes", async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById.mockResolvedValue(makeInvite());
+    adapters.db.sessions.findById.mockResolvedValue(makeSession(['file-shared']));
+    adapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === inviterId ? { id: inviterId, groups: [] } : { id: userId, email: 'accepter@x.com', username: 'accepter' }
     );
+    // Inviter holds read and share, so the gate opens, but not update - the invite's face-value
+    // permissions (read/update/share) must still be trimmed to what they actually hold.
+    adapters.db.fabFiles.findById.mockResolvedValue({
+      id: 'file-shared',
+      userId: 'owner',
+      users: [{ userId: inviterId, permissions: [Permission.read, Permission.share] }],
+      groups: [],
+    });
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    const written = adapters.db.fabFiles.update.mock.calls[0][0];
+    const entry = written.users.find((u: { userId: string }) => u.userId === userId);
+    expect(entry.permissions).toEqual([Permission.read, Permission.share]);
   });
 
   it('propagates the invite permissions when the inviter owns the file', async () => {

@@ -1,5 +1,5 @@
 import { IInviteDocument, IInviteRepository, IUserDocument } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { authorizeByInviteType, InviteTypeAuthAdapters } from './authorizeByInviteType';
 
@@ -35,6 +35,11 @@ export const refuseWholeInvite = async (
 
   const invite = await db.invites.findById(id);
   if (!invite) throw new NotFoundError('Invite not found');
+
+  // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
+  if (invite.expiresAt && invite.expiresAt < new Date()) {
+    throw new UnprocessableEntityError('Invite has expired');
+  }
 
   const pending = invite.recipients?.pending ?? [];
   const isPendingRecipient = !!user.email && pending.includes(user.email);

@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { canShowConversation } from './userPermission';
+import { Permission } from '@bike4mind/common';
+import type { IUserDocument } from '@bike4mind/common';
+import {
+  canShowConversation,
+  userCanDeleteDoc,
+  userCanReadDoc,
+  userCanShareDoc,
+  userCanUpdateDoc,
+  type ShareableDocWithUserId,
+} from './userPermission';
 
 /**
  * The notebook message list used to be gated solely on `canRead`, which is
@@ -25,5 +34,54 @@ describe('canShowConversation', () => {
 
   it('withholds the conversation only when the user cannot read AND there is no content', () => {
     expect(canShowConversation(false, false)).toBe(false);
+  });
+});
+
+/**
+ * pushShareable keys users[] on (userId, projectId), so one user can legitimately hold several
+ * rows on the same document: a direct share plus one per project that materialized access.
+ * Reading only the first match would hide a permission the user genuinely holds.
+ */
+describe('userCan*Doc across multiple share rows', () => {
+  const user = { id: 'u1' } as IUserDocument;
+  const doc = (users: ShareableDocWithUserId['users']): ShareableDocWithUserId =>
+    ({
+      id: 'doc-1',
+      userId: 'owner',
+      users,
+      groups: [],
+      isGlobalRead: false,
+      isGlobalWrite: false,
+    }) as ShareableDocWithUserId;
+
+  const multiRow = doc([
+    { userId: 'u1', permissions: [Permission.read], projectId: 'project-a' },
+    { userId: 'u1', permissions: [Permission.update, Permission.delete, Permission.share], projectId: 'project-b' },
+  ]);
+
+  it('unions a permission held only on a later row', () => {
+    expect(userCanUpdateDoc(user, multiRow)).toBe(true);
+    expect(userCanDeleteDoc(user, multiRow)).toBe(true);
+    expect(userCanShareDoc(user, multiRow)).toBe(true);
+  });
+
+  it('still honours a permission held only on the first row', () => {
+    expect(userCanReadDoc(user, multiRow)).toBe(true);
+  });
+
+  it('does not invent a permission no row carries', () => {
+    const readOnly = doc([
+      { userId: 'u1', permissions: [Permission.read], projectId: 'project-a' },
+      { userId: 'u1', permissions: [Permission.read] },
+    ]);
+    expect(userCanUpdateDoc(user, readOnly)).toBe(false);
+    expect(userCanDeleteDoc(user, readOnly)).toBe(false);
+    expect(userCanShareDoc(user, readOnly)).toBe(false);
+  });
+
+  it('does not read another user rows', () => {
+    const someoneElse = doc([{ userId: 'u2', permissions: [Permission.read, Permission.update] }]);
+    expect(userCanReadDoc(user, someoneElse)).toBe(false);
+    expect(userCanUpdateDoc(user, someoneElse)).toBe(false);
   });
 });

@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { UnauthorizedError, NotFoundError } from '@bike4mind/utils';
+import { Permission } from '@bike4mind/common';
 import { revoke } from './revoke';
+import { pushShareable } from './accept';
 
 describe('sharingService - revoke', () => {
   const ownerId = 'owner-123';
@@ -223,5 +225,120 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     );
     // A grant tied to a different project is left untouched, and the file is never even written.
     expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalledWith(expect.objectContaining({ id: projectFileId }));
+  });
+});
+
+/**
+ * pushShareable keys users[] entries on (userId, projectId), so a file reached through two
+ * projects carries one entry per project and revoke's projectId-keyed filter lines up with them.
+ * These cover the cross-project case that previously collapsed to a single last-write-wins entry.
+ */
+describe('sharingService - revoke (cross-project grants)', () => {
+  const ownerId = 'owner-123';
+  const sharedUserId = 'shared-456';
+  const fileId = 'file-001';
+  const projectAId = 'project-A';
+  const projectBId = 'project-B';
+
+  let mockAdapters: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAdapters = {
+      db: {
+        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        users: { findById: vi.fn() },
+      },
+    };
+  });
+
+  const materializeTwoProjectGrants = () => {
+    const file = {
+      id: fileId,
+      userId: ownerId,
+      users: [] as { userId: string; permissions: Permission[]; projectId?: string }[],
+    };
+    // Mirrors acceptProject's per-project pushShareable call for this file, in the order
+    // project A then project B were accepted.
+    pushShareable(file, { userId: sharedUserId, permissions: [Permission.read], projectId: projectAId });
+    pushShareable(file, { userId: sharedUserId, permissions: [Permission.read], projectId: projectBId });
+    return file;
+  };
+
+  it('records one entry per project rather than collapsing them onto the last one', () => {
+    expect(materializeTwoProjectGrants().users).toEqual([
+      { userId: sharedUserId, permissions: [Permission.read], projectId: projectAId },
+      { userId: sharedUserId, permissions: [Permission.read], projectId: projectBId },
+    ]);
+  });
+
+  it('keeps a direct share separate from a project-derived one', () => {
+    const file = { id: fileId, userId: ownerId, users: [] as any[] };
+    pushShareable(file, { userId: sharedUserId, permissions: [Permission.read], projectId: projectAId });
+    pushShareable(file, { userId: sharedUserId, permissions: [Permission.read] });
+    expect(file.users).toEqual([
+      { userId: sharedUserId, permissions: [Permission.read], projectId: projectAId },
+      { userId: sharedUserId, permissions: [Permission.read], projectId: undefined },
+    ]);
+  });
+
+  it('still merges permissions into the existing entry when the same project grants again', () => {
+    const file = { id: fileId, userId: ownerId, users: [] as any[] };
+    pushShareable(file, { userId: sharedUserId, permissions: [Permission.read], projectId: projectAId });
+    pushShareable(file, { userId: sharedUserId, permissions: [Permission.update], projectId: projectAId });
+    expect(file.users).toEqual([
+      { userId: sharedUserId, permissions: [Permission.read, Permission.update], projectId: projectAId },
+    ]);
+  });
+
+  it('revoking project A drops only A, leaving project B access live', async () => {
+    const file = materializeTwoProjectGrants();
+    mockAdapters.db.users.findById.mockResolvedValue({ id: sharedUserId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(file);
+
+    await revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId, projectId: projectAId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        users: [{ userId: sharedUserId, permissions: [Permission.read], projectId: projectBId }],
+      })
+    );
+  });
+
+  it('revoking project B drops only B, leaving project A access live', async () => {
+    const file = materializeTwoProjectGrants();
+    mockAdapters.db.users.findById.mockResolvedValue({ id: sharedUserId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(file);
+
+    await revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId, projectId: projectBId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        users: [{ userId: sharedUserId, permissions: [Permission.read], projectId: projectAId }],
+      })
+    );
+  });
+
+  it('revoking without a project scope clears every entry the user holds', async () => {
+    const file = materializeTwoProjectGrants();
+    mockAdapters.db.users.findById.mockResolvedValue({ id: sharedUserId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(file);
+
+    await revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+  });
+
+  it('reports a scoped revoke that matches no grant instead of silently removing nothing', async () => {
+    const file = materializeTwoProjectGrants();
+    mockAdapters.db.users.findById.mockResolvedValue({ id: sharedUserId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(file);
+
+    await expect(
+      revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId, projectId: 'project-C' }, mockAdapters)
+    ).rejects.toThrow(NotFoundError);
+    expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalled();
   });
 });

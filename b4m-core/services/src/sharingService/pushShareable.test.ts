@@ -16,15 +16,19 @@ describe('sharingService - pushShareable', () => {
     ]);
   });
 
-  it('preserves an existing projectId when the new grant does not carry one', () => {
+  it('leaves an existing project entry alone and records a direct grant as its own row', () => {
     // A user with project-cascaded access (accept.ts's acceptProject arm) later accepts a
     // direct FabFile/Session invite for the same document (accept.ts's `update` has no
-    // projectId) -- that must not silently disassociate them from the project.
+    // projectId) -- that must not silently disassociate them from the project, and the direct
+    // grant has to survive a later revoke of the project on its own row.
     const entity = asEntity([{ userId: 'user-1', permissions: [Permission.read], projectId: 'project-9' }]);
 
     pushShareable(entity, { userId: 'user-1', permissions: [Permission.read, Permission.share] });
 
-    expect(entity.users[0].projectId).toBe('project-9');
+    expect(entity.users).toEqual([
+      { userId: 'user-1', permissions: [Permission.read], projectId: 'project-9' },
+      { userId: 'user-1', permissions: [Permission.read, Permission.share], projectId: undefined },
+    ]);
   });
 
   it('unions permissions instead of narrowing them on a re-share', () => {
@@ -41,11 +45,28 @@ describe('sharingService - pushShareable', () => {
     );
   });
 
-  it('carries a new projectId forward when one is provided', () => {
+  it('does not retag a direct share when a project later grants the same document', () => {
+    // Retagging in place is what made revoke's scoped arm unable to keep its promise: once the
+    // untagged row carried project-42, revoking that project deleted the direct share with it.
     const entity = asEntity([{ userId: 'user-1', permissions: [Permission.read] }]);
 
     pushShareable(entity, { userId: 'user-1', permissions: [Permission.read], projectId: 'project-42' });
 
-    expect(entity.users[0].projectId).toBe('project-42');
+    expect(entity.users).toEqual([
+      { userId: 'user-1', permissions: [Permission.read] },
+      { userId: 'user-1', permissions: [Permission.read], projectId: 'project-42' },
+    ]);
+  });
+
+  it('keeps each project on its own row when two projects reach the same document', () => {
+    const entity = asEntity();
+
+    pushShareable(entity, { userId: 'user-1', permissions: [Permission.read], projectId: 'project-a' });
+    pushShareable(entity, { userId: 'user-1', permissions: [Permission.update], projectId: 'project-b' });
+
+    expect(entity.users).toEqual([
+      { userId: 'user-1', permissions: [Permission.read], projectId: 'project-a' },
+      { userId: 'user-1', permissions: [Permission.update], projectId: 'project-b' },
+    ]);
   });
 });

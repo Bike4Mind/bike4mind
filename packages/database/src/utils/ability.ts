@@ -11,6 +11,7 @@ import {
   FeedbackModel,
   Invite,
   Prompt,
+  Project,
   UserActivityCounter,
 } from '../models';
 import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
@@ -69,7 +70,7 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
     //  -- Users can manage their own stuff (ownDocumentPermission)
     //  -- Users can do anything shared with their userId
     //  -- If user is in groups, we check group permissions as well
-    [Session, FabFile, Organization].forEach(resource => {
+    [Session, FabFile, Organization, Project].forEach(resource => {
       allow(Permission.create, resource);
 
       // Support globals for all document types:

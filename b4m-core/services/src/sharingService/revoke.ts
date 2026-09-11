@@ -5,6 +5,7 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserRepository,
+  IUserShare,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -59,30 +60,30 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     throw new UnauthorizedError('Only the document owner or the shared user themselves can revoke sharing');
   }
 
-  const userIndex = document.users.findIndex(user => user.userId.toString() === userIdToRevoke);
-  if (userIndex === -1) throw new NotFoundError(`User not found in document`);
-
-  // Every arm removes the TARGET user's entry and nobody else's. The project-scoped arm used
+  // Matches the TARGET user's entries and nobody else's. The project-scoped arm used
   // `userId !== target && projectId !== scope`, which also deleted every co-member's
   // project-derived grant, so one member leaving stripped the whole project's access.
-  if (type === 'projects') {
-    document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
-    await revokeFromProject({ project: document as IProjectDocument, userIdToRevoke }, adapters);
-  } else if (projectId) {
-    // Scoped: drop only the grant this project materialized, leaving any direct share intact.
-    document.users = document.users.filter(
-      user => !(user.userId.toString() === userIdToRevoke && user.projectId === projectId)
-    );
-  } else {
-    document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
+  // Scoped, it matches on the (userId, projectId) pair pushShareable keys entries by: dropping
+  // only the grant this project materialized, leaving a direct share or another project's intact.
+  const isRevoked = (user: IUserShare) =>
+    user.userId.toString() === userIdToRevoke && (type === 'projects' || !projectId || user.projectId === projectId);
 
+  // Scope-aware, so a scoped revoke that matches no entry says so instead of removing nothing and
+  // returning the document as if it had succeeded. Entries written before pushShareable keyed on
+  // the pair carry only the last project's tag, so a scoped revoke against an earlier project can
+  // land here; revoking without a projectId still clears every entry the user holds.
+  if (!document.users.some(isRevoked)) throw new NotFoundError(`User not found in document`);
+
+  document.users = document.users.filter(user => !isRevoked(user));
+
+  if (type === 'projects') {
+    await revokeFromProject({ project: document as IProjectDocument, userIdToRevoke }, adapters);
+  } else if (!projectId && type === 'sessions') {
     // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
     // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
     // grants live. A projectId-tagged entry is independently governed by that project, so it is
-    // left alone here exactly as the project-scoped branch above leaves other grants alone.
-    if (type === 'sessions') {
-      await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
-    }
+    // left alone here exactly as the scoped branch leaves other grants alone.
+    await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
   }
 
   await dbModel.update(document);
@@ -99,6 +100,13 @@ const revokeSessionKnowledgeFileGrants = async (
 
   const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
   for (const file of files) {
+    // knowledgeIds is client-writable with only shape validation (sessionService/update.ts), and
+    // this function is authorized against the SESSION, not each file. Without this ownership
+    // check anyone could point their own session at a stranger's file and strip a third party's
+    // grant on it. Under-revoking is the safe direction: a grant on a file the session owner does
+    // not own is not one this session's acceptance was entitled to create.
+    if (file.userId !== session.userId) continue;
+
     const remaining = file.users.filter(user => !(user.userId.toString() === userIdToRevoke && !user.projectId));
     if (remaining.length === file.users.length) continue;
     file.users = remaining;
@@ -139,7 +147,11 @@ export const revokeFromProject = async (
         );
       }
     } catch (e) {
-      if (e instanceof NotFoundError && e.message !== 'User not found in document') throw e;
+      // Every NotFoundError, not just the 'not in document' one: a member holding update/share
+      // but not read is invisible to findAccessibleById's ['read','write'] predicate and lands on
+      // a different message. This cascade is best-effort, so a row it cannot reach is a row with
+      // nothing to revoke, never a reason to abort the whole revoke.
+      if (!(e instanceof NotFoundError)) throw e;
     }
   }
 
@@ -166,7 +178,11 @@ export const revokeFromProject = async (
         );
       }
     } catch (e) {
-      if (e instanceof NotFoundError && e.message !== 'User not found in document') throw e;
+      // Every NotFoundError, not just the 'not in document' one: a member holding update/share
+      // but not read is invisible to findAccessibleById's ['read','write'] predicate and lands on
+      // a different message. This cascade is best-effort, so a row it cannot reach is a row with
+      // nothing to revoke, never a reason to abort the whole revoke.
+      if (!(e instanceof NotFoundError)) throw e;
     }
   }
 };

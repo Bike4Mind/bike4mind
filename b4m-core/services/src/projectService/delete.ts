@@ -36,8 +36,16 @@ export const deleteProject = async (
   // sharingService/accept.ts); once the project is gone that grant must go too, or a former
   // member keeps reading the owner's notebooks and files. Reuses the same per-member cascade
   // leaveProject.ts uses, just for every member instead of one.
+  // Best-effort and deliberately non-fatal: this runs before deletedAt is set and is not
+  // transactional, so letting one member's cascade throw would abort the loop and leave the
+  // project undeletable on every retry, with earlier members' file writes already persisted.
+  // A member the cascade cannot resolve is a member with nothing left to revoke.
   for (const member of project.users) {
-    await revokeFromProject({ project, userIdToRevoke: member.userId }, adapters);
+    try {
+      await revokeFromProject({ project, userIdToRevoke: member.userId }, adapters);
+    } catch (e) {
+      if (!(e instanceof NotFoundError)) throw e;
+    }
   }
 
   project.deletedAt = new Date();

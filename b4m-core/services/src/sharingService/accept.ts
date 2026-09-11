@@ -165,7 +165,11 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
 
             let grantPermissions: Permission[];
             if (inviter) {
+              // Gate THEN cap. Propagating a file grant is a re-share of that file, so the inviter
+              // must hold share on it, not merely hold the permission being passed on; without the
+              // gate a read-only sharee could launder read onto everyone they invite to a session.
               const held = grantablePermissions(fabfile as ShareableAccessShape, inviter.id, inviter.groups ?? []);
+              if (!held.has(Permission.share)) return;
               grantPermissions = update.permissions.filter(permission => held.has(permission));
               if (grantPermissions.length === 0) return;
             } else if (fabfile.userId === session.userId) {
@@ -309,7 +313,15 @@ export const pushShareable = (
   data: { userId: string; permissions: Permission[]; projectId?: string }
 ) => {
   entity.users ||= [];
-  const userIndex = entity.users.findIndex(user => user.userId === data.userId);
+  // Keyed on (userId, projectId), not userId alone: an entry records a grant's SOURCE, and revoke
+  // filters on that tag. Merging on the user alone collapsed two projects' grants into one entry
+  // carrying whichever projectId was written last, so revoking via the earlier project matched
+  // nothing and reported success while access stayed live, and revoking via the later one tore out
+  // the other project's grant with it. A direct (untagged) share is its own row for the same
+  // reason - that is what lets an untagged revoke drop it without touching project-derived access.
+  const userIndex = entity.users.findIndex(
+    user => user.userId === data.userId && (user.projectId ?? undefined) === (data.projectId ?? undefined)
+  );
   if (userIndex === -1) {
     entity.users.push({ userId: data.userId, permissions: data.permissions, projectId: data.projectId });
   } else {
@@ -317,12 +329,12 @@ export const pushShareable = (
     // projectService's addFiles/addSessions/addSystemPrompts (propagating a member's current
     // project access onto a newly-added file/session) - every one of them grants or refreshes
     // access, none narrows it, so an update here must never silently drop the existing entry's
-    // projectId/extraData or narrow permissions it already carries down to just this grant.
+    // extraData or narrow permissions it already carries down to just this grant.
     const existing = entity.users[userIndex];
     entity.users[userIndex] = {
       ...existing,
       userId: data.userId,
-      projectId: data.projectId ?? existing.projectId,
+      projectId: data.projectId,
       permissions: Array.from(new Set([...(existing.permissions ?? []), ...data.permissions])),
     };
   }

@@ -9,7 +9,10 @@ entity that derives grants cleans them up when it goes away.
 
 Re-sharing is capped and gated. An invite can no longer carry a permission its minter does not
 hold, so a sharee with `share` alone cannot mint `update`/`delete` and redeem the link on their own
-account; `@bike4mind/common` exports `heldPermissions` for that check. Flipping `isGlobalRead`/
+account; `@bike4mind/common` exports `heldPermissions` and `grantablePermissions` for that check.
+The cap uses the latter, which treats `share` as conveying `read`: minting an invite already
+requires share authority, and a collaborator granted share alone still has to be able to pass on
+the read that share implies. Flipping `isGlobalRead`/
 `isGlobalWrite` publishes a document to the whole instance, so it moves from the update predicate
 to the share predicate. Project invite listing moves to the share predicate too, since it exposes
 link-invite ids and pending invitees' email addresses. Accepting a session invite propagates a
@@ -23,6 +26,25 @@ co-member's access. Deleting a project strips the grants it left on its files an
 Revoking a session share also removes the file grants acceptance materialized. Deleting a session
 hard-deletes only the owner's own files; an attached file owned by someone else loses the derived
 grant instead of being destroyed.
+
+A shared entry now records the grant's source. `pushShareable` keyed `users[]` on `userId` alone,
+so a file reached through two projects collapsed into one entry tagged with whichever project
+wrote last, while `revoke` filters on that tag: revoking via the earlier project matched nothing
+and returned the document as if it had succeeded, leaving access live, and revoking via the later
+one tore out the other project's grant as well. Entries are keyed on `(userId, projectId)`, so each
+project's grant and any direct share are separate rows, and a scoped revoke that matches no row now
+raises `NotFoundError` instead of reporting a success that removed nothing. Rows written before
+this change carry only the last project's tag; a scoped revoke against an earlier project hits the
+new not-found path, and revoking without a `projectId` still clears every row the user holds. A
+user may now legitimately hold several rows on one document, so the client-side permission helpers
+in `apps/client/app/utils/userPermission.ts` union across them instead of reading the first match,
+matching the `$elemMatch` predicates and `heldPermissions` server-side.
+
+The db-core CASL ability was missing `Project` from its shared user/group permission arm while the
+HTTP copy carried it, so a project shared with a user was unreachable through every caller that
+builds an ability from `@bike4mind/database` rather than `@server/auth/ability` (the quest,
+slack-quest, image-edit, image-generation and video-generation queue handlers). Both copies now
+grant the same resource set, and a structural test reads the two files and fails if they drift.
 
 Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
 decliner's own slot: one recipient declining used to zero the invite for every other recipient, and

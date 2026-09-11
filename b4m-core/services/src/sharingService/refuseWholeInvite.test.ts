@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { NotFoundError, UnauthorizedError } from '@bike4mind/utils';
+import { NotFoundError, UnauthorizedError, UnprocessableEntityError } from '@bike4mind/utils';
 import { InviteType } from '@bike4mind/common';
 import { refuseWholeInvite } from './refuseWholeInvite';
 
@@ -127,5 +127,19 @@ describe('sharingService - refuseWholeInvite', () => {
   it('throws NotFoundError when the invite does not exist', async () => {
     db.invites.findById.mockResolvedValue(null);
     await expect(refuseWholeInvite(user, { id: 'missing' }, { db } as any)).rejects.toThrow(NotFoundError);
+  });
+
+  it('rejects an expired invite even for a named pending recipient', async () => {
+    db.invites.findById.mockResolvedValue({
+      id: 'inv-1',
+      type: InviteType.FabFile,
+      documentId: 'doc-1',
+      remaining: 1,
+      expiresAt: new Date(Date.now() - 1000),
+      recipients: { pending: ['me@example.com'], accepted: [], refused: [] },
+    });
+
+    await expect(refuseWholeInvite(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(UnprocessableEntityError);
+    expect(db.invites.update).not.toHaveBeenCalled();
   });
 });
