@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import {
   adminSettingsRepository,
@@ -23,7 +24,7 @@ const HASH_QUERY_CHUNK = 500;
  * to determine which files need uploading, updating, or can be skipped - honoring
  * the per-request conflict-resolution policy (skip | update | duplicate).
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
     const data = ComputeSyncDeltaRequestInput.parse(req.body);

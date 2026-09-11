@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { resolveAccessibleLakes, queryDataLakeTagCounts } from '@server/dataLakes';
 
 /**
@@ -10,7 +11,7 @@ import { resolveAccessibleLakes, queryDataLakeTagCounts } from '@server/dataLake
  * `resolveAccessibleLakes` - same rationale as `articles.ts`: the
  * `EnableDataLakes` flag stays on the lake-management/ingestion surface only.
  */
-const handler = baseApi().get(async (req: Request, res) => {
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(async (req: Request, res) => {
   const lakes = await resolveAccessibleLakes(req);
   const result = await queryDataLakeTagCounts(req, lakes);
   return res.json(result);

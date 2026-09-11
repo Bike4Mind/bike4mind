@@ -92,6 +92,12 @@ describe('outputFileTracingExcludes floor', () => {
     const excludes = /outputFileTracingExcludes:\s*\{[\s\S]*?\n {2}\},/.exec(config);
     expect(excludes, 'outputFileTracingExcludes block not found').not.toBeNull();
     expect(excludes![0]).not.toContain('public');
-    expect(read('apps/client/server/help/retrieval.ts')).toContain("'public/help-content'");
+    // The literal moved to its definition: retrieval.ts now imports PUBLIC_HELP_CONTENT_DIR and
+    // interpolates it, deliberately, so that no root reaches a path.* call the tracer would try
+    // to fold. Assert the constant's value where it is declared plus the import at the read site,
+    // which is the same invariant this always meant - that something still reads that directory
+    // at request time - without pinning a literal that is now in the wrong file.
+    expect(read('packages/scripts/help/utils.ts')).toContain("PUBLIC_HELP_CONTENT_DIR = 'public/help-content'");
+    expect(read('apps/client/server/help/retrieval.ts')).toContain('PUBLIC_HELP_CONTENT_DIR');
   });
 });

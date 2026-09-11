@@ -22,7 +22,7 @@ import path from 'node:path';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const GUARD = path.join(REPO_ROOT, 'apps', 'client', 'scripts', 'check-standalone-tree.mjs');
 
-const HEALTHY_ENTRIES = ['.next', 'app', 'node_modules', 'package.json', 'server.js'];
+const HEALTHY_ENTRIES = ['.next', 'app', 'node_modules', 'package.json', 'public', 'server.js'];
 
 let tmpRoot: string;
 let appDir: string;
@@ -38,6 +38,10 @@ function makeHealthyTree(): void {
   // resolves against cwd on each request.
   fs.mkdirSync(path.join(appDir, 'app', 'generated'));
   fs.writeFileSync(path.join(appDir, 'app', 'generated', 'help-index.json'), '{}');
+  // Likewise the only thing under public/: the public help content, which is in the standalone
+  // tree only because next.config.mjs declares it in outputFileTracingIncludes.
+  fs.mkdirSync(path.join(appDir, 'public', 'help-content'));
+  fs.writeFileSync(path.join(appDir, 'public', 'help-content', 'overview.md'), '');
 }
 
 /** Run the guard, returning its exit status and combined output. */
@@ -100,6 +104,33 @@ describe('check-standalone-tree', () => {
     expect(output).toContain('2 unexpected entries');
     expect(output).toContain('app/components');
     expect(output).toContain('app/router.tsx');
+  });
+
+  it('rejects a sweep that lands inside public/, which a top-level allowlist would miss', () => {
+    makeHealthyTree();
+    // public/ holds the pdf worker, images and every other static asset, none of which the
+    // server function needs - so allowlisting the directory wholesale to admit help-content
+    // would re-open the exact hole the top-level allowlist closes.
+    fs.mkdirSync(path.join(appDir, 'public', 'images'));
+    fs.writeFileSync(path.join(appDir, 'public', 'pdf.worker.min.mjs'), '');
+
+    const { status, output } = runGuard(appDir);
+    expect(status).toBe(1);
+    expect(output).toContain('2 unexpected entries');
+    expect(output).toContain('public/images');
+    expect(output).toContain('public/pdf.worker.min.mjs');
+  });
+
+  it('fails when the help content root is missing, which is how a dropped tracing include shows up', () => {
+    // ALLOWED doubles as the REQUIRED set, so this is the container-build half of the
+    // outputFileTracingIncludes pair invariant: drop the declaration in next.config.mjs and
+    // public/ stops being emitted at all, which has to fail here rather than 404 at runtime.
+    makeHealthyTree();
+    fs.rmSync(path.join(appDir, 'public'), { recursive: true });
+
+    const { status, output } = runGuard(appDir);
+    expect(status).toBe(1);
+    expect(output).toContain('missing public');
   });
 
   it('is an allowlist, so it rejects an entry nobody thought to name', () => {

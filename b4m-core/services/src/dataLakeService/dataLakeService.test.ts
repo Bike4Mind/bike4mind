@@ -1454,7 +1454,7 @@ describe("management views - an org grant on another org's lake discloses nothin
     orgGrant:
       'not modeled, deliberately - the management views under test pass includePublic:false and no ' +
       'orgGrantedLakes, so the real query drops this arm too. That suppression is the property these ' +
-      'cases assert: an org grant on another org\'s lake must not name it in a restore/cleanup list',
+      "cases assert: an org grant on another org's lake must not name it in a restore/cleanup list",
   };
 
   it('accounts for every arm of the real findAccessible', () => {

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { getVideoGeneration } from '@server/queueHandlers/videoGeneration';
 import { Request } from 'express';
 import { z } from 'zod';
-import { GenerateVideoRequestBodySchema, GenerateVideoInvokeParams } from '@bike4mind/common';
+import { GenerateVideoRequestBodySchema, GenerateVideoInvokeParams, ApiKeyScope } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 
@@ -10,7 +10,10 @@ type GenerateVideoRequestBody = z.infer<typeof GenerateVideoRequestBodySchema>;
 
 type GenerateVideoRequest = Request<unknown, unknown, GenerateVideoRequestBody>;
 
-const handler = baseApi().post(async (req: GenerateVideoRequest, res) => {
+// Gate API-key callers on `ai:generate` so this billable action is auditable, mirroring
+// generate-image.ts. Scope checks apply only to API-key requests; browser/JWT sessions fall
+// through untouched (see apiKeyAuth).
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(async (req: GenerateVideoRequest, res) => {
   req.logger.updateMetadata({
     userId: req.user?.id,
     userEmail: req.user?.email,

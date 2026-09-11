@@ -3,12 +3,14 @@ import {
   useCreateUserApiKey,
   useRotateUserApiKey,
   useRevokeUserApiKey,
+  useDeleteUserApiKey,
   useBillingOrganizations,
   CreateUserApiKeyRequest,
 } from '@client/app/hooks/data/userApiKeys';
 import { useTheme } from '@mui/joy';
 import {
   Box,
+  Checkbox,
   CircularProgress,
   Table,
   Typography,
@@ -43,6 +45,7 @@ import { cardSurfaceSx, hairlineBorderColor, tableHeaderSx } from '@client/app/c
 import AddIcon from '@mui/icons-material/Add';
 import RotateLeftIcon from '@mui/icons-material/RotateLeft';
 import BlockIcon from '@mui/icons-material/Block';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import CopyIcon from '@mui/icons-material/ContentCopy';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -51,6 +54,8 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
 import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
+import { toast } from 'sonner';
 import { useState } from 'react';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import dayjs from 'dayjs';
@@ -1709,6 +1714,14 @@ ai_response = response.json()`,
   );
 }
 
+/**
+ * `disabled` is the only state any revoke path writes (revokeUserApiKey, the
+ * bulk deactivation, the cc-bridge device revoke all stamp revokedAt with it),
+ * so it reads as "revoked" everywhere - and it is the only state the delete
+ * route accepts.
+ */
+const isRevoked = (key: IUserApiKeyDocument) => key.status === 'disabled';
+
 export default function UserApiKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
   const { data: billingOrgs } = useBillingOrganizations();
@@ -1717,6 +1730,11 @@ export default function UserApiKeysTab() {
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
   const [mainTab, setMainTab] = useState(0);
+  // Off by default: revoked rows accumulate forever (scopes are write-once, so
+  // every scope change mints a replacement and leaves one behind) and their
+  // audit value is served by the toggle, not by permanent screen space.
+  const [showRevoked, setShowRevoked] = useState(false);
+  const [keyPendingDelete, setKeyPendingDelete] = useState<IUserApiKeyDocument | null>(null);
 
   const rotateMutation = useRotateUserApiKey({
     onSuccess: result => {
@@ -1725,7 +1743,16 @@ export default function UserApiKeysTab() {
     },
   });
 
-  const revokeMutation = useRevokeUserApiKey();
+  // With revoked rows hidden, revoking makes the row leave the list - so say so,
+  // rather than leaving a silent disappearance as the only feedback.
+  const revokeMutation = useRevokeUserApiKey({ onSuccess: () => toast.success('API key revoked') });
+
+  const deleteMutation = useDeleteUserApiKey({
+    onSuccess: () => {
+      toast.success('API key deleted');
+      setKeyPendingDelete(null);
+    },
+  });
 
   const handleNewKeySuccess = (key: string) => {
     setNewlyCreatedKey(key);
@@ -1733,16 +1760,20 @@ export default function UserApiKeysTab() {
   };
 
   const getStatusColor = (key: IUserApiKeyDocument) => {
-    if (key.status === 'disabled') return 'danger';
+    if (isRevoked(key)) return 'danger';
     if (key.expiresAt && dayjs(key.expiresAt).isBefore(dayjs())) return 'warning';
     return 'success';
   };
 
   const getStatusText = (key: IUserApiKeyDocument) => {
-    if (key.status === 'disabled') return 'Disabled';
+    if (isRevoked(key)) return 'Revoked';
     if (key.expiresAt && dayjs(key.expiresAt).isBefore(dayjs())) return 'Expired';
     return 'Active';
   };
+
+  const keys = data ?? [];
+  const revokedCount = keys.filter(isRevoked).length;
+  const visibleKeys = showRevoked ? keys : keys.filter(key => !isRevoked(key));
 
   return (
     <Box
@@ -1767,7 +1798,17 @@ export default function UserApiKeysTab() {
             <Typography level="title-md" sx={{ color: 'text.primary' }}>
               Manage Your API Keys
             </Typography>
-            <Box display="flex" gap={1} flexShrink={0}>
+            <Box display="flex" gap={1} flexShrink={0} alignItems="center">
+              {revokedCount > 0 && (
+                <Checkbox
+                  size="sm"
+                  label={`Show revoked (${revokedCount})`}
+                  checked={showRevoked}
+                  onChange={event => setShowRevoked(event.target.checked)}
+                  slotProps={{ input: { 'data-testid': 'api-keys-show-revoked' } }}
+                  sx={{ mr: 1, whiteSpace: 'nowrap' }}
+                />
+              )}
               <Tooltip title="Refresh">
                 <IconButton onClick={() => refetch()} variant="outlined">
                   <RefreshIcon />
@@ -1790,11 +1831,17 @@ export default function UserApiKeysTab() {
                 Retry
               </Button>
             </Box>
-          ) : data?.length === 0 ? (
+          ) : keys.length === 0 ? (
             <Alert color="neutral" startDecorator={<InfoOutlinedIcon />}>
               <Typography>
                 You don&apos;t have any API keys yet. Create one to get started with programmatic access to your
                 account.
+              </Typography>
+            </Alert>
+          ) : visibleKeys.length === 0 ? (
+            <Alert color="neutral" startDecorator={<InfoOutlinedIcon />}>
+              <Typography data-testid="api-keys-all-revoked">
+                All of your API keys are revoked. Turn on Show revoked to see or delete them.
               </Typography>
             </Alert>
           ) : (
@@ -1823,7 +1870,7 @@ export default function UserApiKeysTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data?.map(key => (
+                  {visibleKeys.map(key => (
                     <tr key={key.id}>
                       <td>
                         <Typography fontWeight="lg">{key.name}</Typography>
@@ -1895,7 +1942,7 @@ export default function UserApiKeysTab() {
                               variant="outlined"
                               onClick={() => rotateMutation.mutate(key.id)}
                               loading={rotateMutation.isPending}
-                              disabled={key.status === 'disabled'}
+                              disabled={isRevoked(key)}
                             >
                               <RotateLeftIcon />
                             </IconButton>
@@ -1907,10 +1954,31 @@ export default function UserApiKeysTab() {
                               color="danger"
                               onClick={() => revokeMutation.mutate({ keyId: key.id, reason: 'Revoked by user' })}
                               loading={revokeMutation.isPending}
-                              disabled={key.status === 'disabled'}
+                              disabled={isRevoked(key)}
                             >
                               <BlockIcon />
                             </IconButton>
+                          </Tooltip>
+                          {/* span wrapper: a disabled button emits no pointer events, and the
+                              disabled-state tooltip is the one carrying the instruction. */}
+                          {/* Must stay identical to the ConflictError in userApiKeyService/delete.ts,
+                              which is what surfaces if this guard is ever bypassed. */}
+                          <Tooltip
+                            title={isRevoked(key) ? 'Delete permanently' : 'Revoke this API key before deleting it'}
+                          >
+                            <span>
+                              <IconButton
+                                size="sm"
+                                variant="outlined"
+                                color="danger"
+                                onClick={() => setKeyPendingDelete(key)}
+                                disabled={!isRevoked(key)}
+                                aria-label={`Delete ${key.name}`}
+                                data-testid={`api-key-delete-${key.id}`}
+                              >
+                                <DeleteOutlineIcon />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                         </Box>
                       </td>
@@ -1933,6 +2001,20 @@ export default function UserApiKeysTab() {
         open={showKeyCreatedModal}
         onClose={() => setShowKeyCreatedModal(false)}
         apiKey={newlyCreatedKey}
+      />
+
+      <ConfirmationModal
+        open={keyPendingDelete !== null}
+        onClose={() => setKeyPendingDelete(null)}
+        onConfirm={() => {
+          if (keyPendingDelete) deleteMutation.mutate(keyPendingDelete.id);
+        }}
+        loading={deleteMutation.isPending}
+        title="Delete API key"
+        description={`Remove "${keyPendingDelete?.name}" from your list for good. It is already revoked, so nothing can authenticate with it either way - but usage recorded while it was active will no longer show its name.`}
+        confirmText="Delete"
+        confirmColor="danger"
+        showWarningIcon
       />
     </Box>
   );

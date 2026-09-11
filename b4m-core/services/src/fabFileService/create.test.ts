@@ -356,7 +356,7 @@ describe('createFabFile - lake-tag gate at create time', () => {
   // This is exactly the call shape packages/scripts/datalake/ingest-pdf-datalake.ts makes to seed
   // a STATIC REGISTRY lake (datalake:opti-knowledge, no owning DB document) - the only supported
   // way to populate one. Centralizing assertCanWriteDataLakeTags here must not break it.
-  it('allows an admin to create a file tagged into a static-registry lake with no DB lookup', async () => {
+  it('allows an admin to create a file tagged into a static-registry lake, minting no fallback stamp', async () => {
     findByDatalakeTag.mockClear();
     const result = await createFabFile(
       'u1',
@@ -369,7 +369,11 @@ describe('createFabFile - lake-tag gate at create time', () => {
       mockAdaptersFor(true)
     );
     expect(result.id).toBe('fab-1');
-    expect(findByDatalakeTag).not.toHaveBeenCalled();
+    // assertCanWriteDataLakeTags' static-registry arm does no DB lookup (line 231-235 above), but
+    // the fallback tagger (#2397) still resolves the meta-tag - a static-registry lake has no
+    // owning document, so this returns null and mints no stamp, same as a stale/orphaned tag would.
+    expect(findByDatalakeTag).toHaveBeenCalledTimes(1);
+    expect(result.tags).toEqual([{ name: 'datalake:opti-knowledge', strength: 1 }]);
   });
 
   it('refuses a non-admin creating a file tagged into a static-registry lake', async () => {
@@ -385,5 +389,85 @@ describe('createFabFile - lake-tag gate at create time', () => {
         mockAdaptersFor(false)
       )
     ).rejects.toThrow(/only an admin can change this data lake/i);
+  });
+});
+
+// #2397: createFabFile used to persist a lake meta-tag with no content-prefix stamp, unlike
+// updateFabFile (which runs every whole-array tag write through reconcileLakeTags). A file
+// created this way sat in its lake contributing nothing to tag-counts and appearing under no
+// category in the Explorer tree until some later edit happened to trigger the stamp.
+describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () => {
+  const lake = {
+    id: 'lake1',
+    name: 'Project Docs',
+    fileTagPrefix: 'proj:',
+    datalakeTag: 'datalake:project-docs',
+    createdByUserId: 'u1',
+  };
+
+  const mockAdapters = (): CreateFabFileAdapters =>
+    ({
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1', isAdmin: false }) },
+        dataLakes: {
+          findByDatalakeTag: vi.fn().mockResolvedValue(lake),
+          // No colliding lakes in scope, so decideStampPrefix's overlap check clears.
+          find: vi.fn().mockResolvedValue([]),
+        },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('url'), upload: vi.fn() },
+    }) as unknown as CreateFabFileAdapters;
+
+  it('stamps <prefix>uncategorized on a file created with only the lake meta-tag', async () => {
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [{ name: 'datalake:project-docs', strength: 1 }],
+      },
+      mockAdapters()
+    );
+
+    // Same tag-counts/Explorer-tree signal reconcileLakeTags stamps on the update path - this is
+    // the parity the acceptance criteria ask for.
+    expect(result.tags).toEqual(
+      expect.arrayContaining([
+        { name: 'datalake:project-docs', strength: 1 },
+        { name: 'proj:uncategorized', strength: 1 },
+      ])
+    );
+  });
+
+  it('mints no stamp when the file already carries a tag under the lake prefix', async () => {
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [
+          { name: 'datalake:project-docs', strength: 1 },
+          { name: 'proj:onboarding', strength: 1 },
+        ],
+      },
+      mockAdapters()
+    );
+
+    expect(result.tags).toEqual([
+      { name: 'datalake:project-docs', strength: 1 },
+      { name: 'proj:onboarding', strength: 1 },
+    ]);
+  });
+
+  it('leaves a create with no tags at all untouched (no dataLakes round trip)', async () => {
+    const adapters = mockAdapters();
+    const result = await createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain' }, adapters);
+
+    expect(result.tags).toBeUndefined();
+    expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 });

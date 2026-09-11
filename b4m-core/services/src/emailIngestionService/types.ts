@@ -107,7 +107,8 @@ export interface EmailIngestionAdapters {
     ingestedEmails: IIngestedEmailRepository;
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
   };
   storage: IStorageAdapter;
   /**

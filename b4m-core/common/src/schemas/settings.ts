@@ -274,7 +274,6 @@ export const SettingKeySchema = z.enum([
   'EnableLattice',
   'EnableLatticeDefault',
   'EnableDataLakes',
-  'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
@@ -482,7 +481,6 @@ export const SettingKeySchema = z.enum([
 
   // OPTIHASHI SETTINGS
   'EnableOptiHashi',
-  'EnableOptiHashiDefault',
   'EnableComputeSubmission',
   'EnableFamilyCompute',
   'EnableHybridCompute',
@@ -1738,7 +1736,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableOllamaDefault', order: 71 },
       { key: 'ollamaBackend', order: 72 },
       { key: 'EnableOptiHashi', order: 80 },
-      { key: 'EnableOptiHashiDefault', order: 81 },
       { key: 'EnableComputeSubmission', order: 82 },
       { key: 'EnableFamilyCompute', order: 83 },
       { key: 'optiMaxToolCalls', order: 84 },
@@ -2033,16 +2030,6 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 88,
-  }),
-  EnableDataLakesDefault: makeBooleanSetting({
-    key: 'EnableDataLakesDefault',
-    name: 'Data Lakes: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, Data Lakes is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 89,
-    dependsOn: 'EnableDataLakes',
   }),
   EnableDataLakeSlackAdd: makeBooleanSetting({
     key: 'EnableDataLakeSlackAdd',
@@ -4271,16 +4258,6 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 80,
-  }),
-  EnableOptiHashiDefault: makeBooleanSetting({
-    key: 'EnableOptiHashiDefault',
-    name: 'OptiHashi: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, OptiHashi is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 81,
-    dependsOn: 'EnableOptiHashi',
   }),
   // [DELETION-FOOTPRINT] LibreOncology launch gate (removed when the product is
   // extracted). When off, the LibreOncology upgrade page shows "coming soon" and

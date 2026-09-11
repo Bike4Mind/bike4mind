@@ -92,7 +92,7 @@ const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) } as never, json };
 };
-const call = (body: unknown, res: unknown, apiKeyInfo?: { keyId: string }) =>
+const call = (body: unknown, res: unknown, apiKeyInfo?: { keyId: string; scopes?: string[] }) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(
     {
       method: 'POST',
@@ -170,7 +170,9 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
     h.activateIfDraft.mockResolvedValue(true);
     const { res } = makeRes();
 
-    await call({ ids: ['f1'], tags: [META] }, res, { keyId: 'key-abc' });
+    // A real API key always carries scopes; this test is about the auto-activate audit record,
+    // not the scope gate, so it holds the write scope the meta-tag toggle requires.
+    await call({ ids: ['f1'], tags: [META] }, res, { keyId: 'key-abc', scopes: ['datalake:write'] });
 
     expect(h.recordConfigChange).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import {
   adminSettingsRepository,
@@ -37,7 +38,7 @@ interface ArticlesQuery {
  * Returns all files belonging to a specific data lake.
  * Verifies access via the shared gate (owner/org/required-tag-or-entitlement).
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request<{}, unknown, unknown, ArticlesQuery>, res) => {
     const userId = req.user.id;

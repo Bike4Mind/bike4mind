@@ -33,7 +33,7 @@ const handler = baseApi({ auth: true })
       const body = updateBodySchema.parse(req.body);
       const result = await researchAgentService.update(
         req.user as any,
-        { id, ...body },
+        { ...body, id },
         {
           db: {
             researchAgents: researchAgentRepository,
@@ -50,7 +50,7 @@ const handler = baseApi({ auth: true })
       const body = updateBodySchema.parse(req.body);
       const result = await researchAgentService.update(
         req.user as any,
-        { id, ...body },
+        { ...body, id },
         {
           db: {
             researchAgents: researchAgentRepository,
