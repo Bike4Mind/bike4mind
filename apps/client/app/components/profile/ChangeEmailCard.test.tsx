@@ -151,4 +151,49 @@ describe('ChangeEmailCard', () => {
     // The dialog must NOT auto-open for the just-created change.
     expect(screen.queryByTestId('profile-cancel-email-confirm-btn')).not.toBeInTheDocument();
   });
+
+  // An account created via OAuth without a provider-verified email has no address on
+  // file. The card used to return null for exactly that account, hiding the only
+  // self-service route to fixing it.
+  describe('account with no email on file', () => {
+    beforeEach(() => {
+      mockCurrentUser = { email: null, emailVerified: false, pendingEmail: null };
+    });
+
+    it('renders an add-an-email card instead of nothing', () => {
+      renderCard();
+      expect(screen.getByTestId('profile-email-value')).toHaveTextContent('No email on file');
+      expect(screen.getByTestId('profile-add-email-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('profile-change-email-btn')).not.toBeInTheDocument();
+    });
+
+    it('offers no Verify button, since there is no address to resend to', () => {
+      renderCard();
+      expect(screen.queryByTestId('profile-resend-verification-btn')).not.toBeInTheDocument();
+    });
+
+    it('submits the first address through the same change endpoint', async () => {
+      renderCard();
+      fireEvent.click(screen.getByTestId('profile-add-email-btn'));
+
+      expect(screen.getByText('Add Email Address')).toBeInTheDocument();
+      expect(screen.queryByText('Current Email')).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByTestId('profile-email-input').querySelector('input')!, {
+        target: { value: 'first@example.com' },
+      });
+      fireEvent.click(screen.getByTestId('profile-email-submit-btn'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/email/change', { newEmail: 'first@example.com' })
+      );
+    });
+
+    it('still shows the pending banner once a first address is awaiting verification', () => {
+      mockCurrentUser = { email: null, emailVerified: false, pendingEmail: 'first@example.com' };
+      renderCard();
+      expect(screen.getByTestId('profile-pending-email-alert')).toHaveTextContent('first@example.com');
+      expect(screen.getByTestId('profile-cancel-email-change-btn')).toBeInTheDocument();
+    });
+  });
 });

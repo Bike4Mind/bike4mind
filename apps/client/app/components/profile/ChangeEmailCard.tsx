@@ -69,7 +69,9 @@ const useCancelEmailChange = () => {
 interface ChangeEmailModalProps {
   open: boolean;
   onClose: () => void;
-  currentEmail: string;
+  // Absent for an account created via OAuth without a provider-verified email, which
+  // uses this same flow to add its first address (see requestEmailChange).
+  currentEmail?: string | null;
 }
 
 const ChangeEmailModal = ({ open, onClose, currentEmail }: ChangeEmailModalProps) => {
@@ -77,6 +79,7 @@ const ChangeEmailModal = ({ open, onClose, currentEmail }: ChangeEmailModalProps
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const { t } = useTranslation();
+  const isAddingEmail = !currentEmail;
 
   const requestChange = useRequestEmailChange();
 
@@ -86,18 +89,22 @@ const ChangeEmailModal = ({ open, onClose, currentEmail }: ChangeEmailModalProps
     setSuccess(null);
 
     if (!newEmail) {
-      setError('Please enter a new email address');
+      setError(isAddingEmail ? 'Please enter an email address' : 'Please enter a new email address');
       return;
     }
 
-    if (newEmail === currentEmail) {
+    if (!isAddingEmail && newEmail === currentEmail) {
       setError('New email must be different from current email');
       return;
     }
 
     try {
       await requestChange.mutateAsync({ newEmail });
-      setSuccess('Verification email sent! Please check your new email address.');
+      setSuccess(
+        isAddingEmail
+          ? 'Verification email sent! Please check your inbox.'
+          : 'Verification email sent! Please check your new email address.'
+      );
       setNewEmail('');
 
       setTimeout(() => {
@@ -132,31 +139,35 @@ const ChangeEmailModal = ({ open, onClose, currentEmail }: ChangeEmailModalProps
       <ModalDialog size="md" sx={{ maxWidth: 500 }}>
         <ModalClose />
         <Typography level="h4" mb={2}>
-          Change Email Address
+          {isAddingEmail ? 'Add Email Address' : 'Change Email Address'}
         </Typography>
 
         <form onSubmit={handleSubmit}>
           <Stack spacing={2}>
             <Alert color="primary" variant="soft">
               <Typography level="body-sm">
-                You&apos;ll receive a verification email at your new address. Your email won&apos;t change until you
-                click the verification link.
+                {isAddingEmail
+                  ? "You'll receive a verification email at this address. It won't be added to your account until you click the verification link."
+                  : "You'll receive a verification email at your new address. Your email won't change until you click the verification link."}
               </Typography>
             </Alert>
 
-            <FormControl>
-              <FormLabel>Current Email</FormLabel>
-              <Input value={currentEmail} disabled />
-            </FormControl>
+            {!isAddingEmail && (
+              <FormControl>
+                <FormLabel>Current Email</FormLabel>
+                <Input value={currentEmail ?? ''} disabled />
+              </FormControl>
+            )}
 
             <FormControl required>
-              <FormLabel>New Email</FormLabel>
+              <FormLabel>{isAddingEmail ? 'Email Address' : 'New Email'}</FormLabel>
               <Input
                 type="email"
                 value={newEmail}
                 onChange={e => setNewEmail(e.target.value)}
-                placeholder="Enter new email address"
+                placeholder={isAddingEmail ? 'Enter your email address' : 'Enter new email address'}
                 autoComplete="email"
+                data-testid="profile-email-input"
               />
             </FormControl>
 
@@ -171,8 +182,15 @@ const ChangeEmailModal = ({ open, onClose, currentEmail }: ChangeEmailModalProps
               <Button variant="outlined" onClick={handleClose} disabled={requestChange.isPending || !!success}>
                 Cancel
               </Button>
-              <Button type="submit" loading={requestChange.isPending} disabled={requestChange.isPending || !!success}>
-                {t('profile.request_change', { defaultValue: 'Request Change' })}
+              <Button
+                type="submit"
+                loading={requestChange.isPending}
+                disabled={requestChange.isPending || !!success}
+                data-testid="profile-email-submit-btn"
+              >
+                {isAddingEmail
+                  ? t('profile.add_email', { defaultValue: 'Add Email' })
+                  : t('profile.request_change', { defaultValue: 'Request Change' })}
               </Button>
             </Stack>
           </Stack>
@@ -248,10 +266,14 @@ const ChangeEmailCard = () => {
     navigate({ to: '/profile', search: rest, replace: true });
   }, [search, currentUser, navigate]);
 
-  if (!currentUser?.email) {
+  if (!currentUser) {
     return null;
   }
 
+  // An account created via OAuth without a provider-verified email has no address on
+  // file (see verifyCallback's create path). That is exactly the account that needs
+  // this card, so render an add-an-email mode rather than hiding the control.
+  const hasEmail = !!currentUser.email;
   const hasPendingChange = !!currentUser.pendingEmail;
 
   const handleCancelClick = () => {
@@ -289,10 +311,18 @@ const ChangeEmailCard = () => {
               {t('profile.email_address', { defaultValue: 'Email Address' })}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-              <Typography level="body-sm" sx={{ color: 'text.secondary', wordBreak: 'break-word' }}>
-                {currentUser.email}
+              <Typography
+                level="body-sm"
+                sx={{ color: 'text.secondary', wordBreak: 'break-word' }}
+                data-testid="profile-email-value"
+              >
+                {hasEmail ? currentUser.email : 'No email on file'}
               </Typography>
-              {currentUser.emailVerified ? (
+              {!hasEmail ? (
+                <Chip size="sm" color="neutral" variant="soft">
+                  Not Set
+                </Chip>
+              ) : currentUser.emailVerified ? (
                 <Chip size="sm" color="success" variant="soft">
                   Verified
                 </Chip>
@@ -302,6 +332,12 @@ const ChangeEmailCard = () => {
                 </Chip>
               )}
             </Box>
+
+            {!hasEmail && !hasPendingChange && (
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                Add an email address to receive account notifications and to sign in with a one-time code.
+              </Typography>
+            )}
 
             {hasPendingChange && (
               <Alert color="warning" variant="soft" sx={{ mt: 1 }} data-testid="profile-pending-email-alert">
@@ -328,7 +364,8 @@ const ChangeEmailCard = () => {
               </Button>
             ) : (
               <>
-                {!currentUser.emailVerified && (
+                {/* Nothing to resend to when no address is on file - the add flow is the only action. */}
+                {hasEmail && !currentUser.emailVerified && (
                   <Button
                     size="sm"
                     variant="soft"
@@ -346,15 +383,28 @@ const ChangeEmailCard = () => {
                     {cooldownSeconds > 0 ? `Resend in ${cooldownSeconds}s` : 'Verify'}
                   </Button>
                 )}
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  startDecorator={<EditIcon />}
-                  onClick={() => setModalOpen(true)}
-                  data-testid="profile-change-email-btn"
-                >
-                  {t('profile.change_email', { defaultValue: 'Change' })}
-                </Button>
+                {hasEmail ? (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    startDecorator={<EditIcon />}
+                    onClick={() => setModalOpen(true)}
+                    data-testid="profile-change-email-btn"
+                  >
+                    {t('profile.change_email', { defaultValue: 'Change' })}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="solid"
+                    color="primary"
+                    startDecorator={<EmailIcon />}
+                    onClick={() => setModalOpen(true)}
+                    data-testid="profile-add-email-btn"
+                  >
+                    {t('profile.add_email', { defaultValue: 'Add Email' })}
+                  </Button>
+                )}
               </>
             )}
           </Stack>
