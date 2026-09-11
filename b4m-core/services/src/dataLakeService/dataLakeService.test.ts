@@ -400,6 +400,36 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
     );
     expect(resolved.id).toBe('real-db-id');
   });
+
+  // #2510 follow-up (human review): a slug colliding with a DATA_LAKES id/slug must not degrade on
+  // a grants-query failure the way every other slug does - degrading would return null here and let
+  // resolveLakeAccessWithGrants's ?? chain fall through to resolveFallbackLake, silently swapping the
+  // caller's own grant-held lake for the generic registry fallback (a 200 with the wrong content,
+  // not an error).
+  it('rethrows the grants-query failure instead of degrading when the slug collides with a fallback lake', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockRejectedValue(new Error('grants collection unavailable')),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const logger = { warn: vi.fn() };
+
+    // The Opti tag is held on purpose: it is what would make the fallback resolve and mask the bug
+    // if the failure were degraded instead of rethrown.
+    await expect(
+      assertLakeAccess('opti-knowledge', ctx({ userId: 'grantee', organizationIds: ['orgB'], userTags: ['opti'] }), {
+        db,
+        logger,
+      })
+    ).rejects.toThrow('grants collection unavailable');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
 });
 
 /**
