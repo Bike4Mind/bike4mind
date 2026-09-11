@@ -1,3 +1,4 @@
+import { settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { AppFile } from '@bike4mind/database/content';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -24,7 +25,6 @@ import type { Request, Response } from 'express';
  * Self-host only (404 otherwise).
  */
 
-const DEFAULT_MAX_FILE_SIZE_MB = 20; // mirror pages/api/files/[id]/upload.ts
 /** Coarse Content-Length pre-check ceiling; the exact MaxFileSize cap is enforced mid-stream. */
 const BODY_CEILING_BYTES = 512 * 1024 * 1024;
 
@@ -52,7 +52,9 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
       getSettingsValue(
         'MaxFileSize',
         await getSettingsMap({ adminSettings: adminSettingsRepository }),
-        DEFAULT_MAX_FILE_SIZE_MB
+        // MaxFileSize's own definition always sets defaultValue; makeNumberSetting's shared param
+        // type widens it to number|undefined for settings that omit one.
+        settingsMap.MaxFileSize.defaultValue!
       ) *
       1024 *
       1024;
