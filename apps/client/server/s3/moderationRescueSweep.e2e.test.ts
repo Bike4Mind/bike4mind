@@ -110,67 +110,103 @@ async function seedScanning(filePath: string, mimeType: string) {
 }
 
 describe('runModerationRescueSweep (DB integration)', () => {
-  it('retires never-uploaded orphans terminally and does not starve a genuinely-stranded row', async () => {
-    // 3 orphans: rows whose presigned upload was abandoned, so the S3 object was never written.
-    // Seeded first (oldest), so an unsorted OR oldest-first bounded window fills entirely with
-    // orphans - exactly the head-of-line block that, without a terminal give-up, is released and
-    // re-selected every run, starving the stranded row forever. Keys absent -> download NoSuchKey.
-    const orphanKeys = ['orphan-a.png', 'orphan-b.png', 'orphan-c.png'];
+  it('soft-deletes never-landed import orphans (not a content block) and does not starve a stranded row', async () => {
+    // 3 import orphans: knowledge rows whose bytes never landed, so the S3 object was never written.
+    // Seeded first (oldest), so a bounded window fills entirely with orphans - the head-of-line block
+    // that, without a terminal give-up, is released and re-selected every run, starving the stranded
+    // row forever. Keys absent -> download NoSuchKey.
+    const orphanKeys = ['knowledge/user1/orphan-a', 'knowledge/user1/orphan-b', 'knowledge/user1/orphan-c'];
     for (const filePath of orphanKeys) await seedPending(filePath, 'image/png');
 
-    // 1 genuinely-stranded row: a real (non-image) upload whose scan never completed. Its object
+    // 1 genuinely-stranded row: a real (non-image) import whose scan never completed. Its object
     // EXISTS, so the download succeeds and it moderates to clean - the row the orphans must not starve.
-    store.objects.set('stranded.txt', Buffer.from('just some plain text, definitely not an image'));
-    await seedPending('stranded.txt', 'text/plain');
+    store.objects.set('knowledge/user1/stranded', Buffer.from('just some plain text, definitely not an image'));
+    await seedPending('knowledge/user1/stranded', 'text/plain');
 
-    // limit == orphan count, so run 1's window can be entirely orphans. Two runs converge on the
-    // same terminal state regardless of natural selection order (asserted below).
+    // limit == orphan count, so run 1's window can be entirely orphans. Two runs converge on the same
+    // terminal state regardless of natural selection order (asserted below).
     await runModerationRescueSweep({ enabled: true, limit: 3, logger });
     await runModerationRescueSweep({ enabled: true, limit: 3, logger });
 
-    // No recurrence: every orphan left 'pending' terminally (blocked / missing_object), so it is no
-    // longer a sweep candidate. Under the old release-on-missing behavior these would still be
-    // 'pending' and re-selected every run - this test would fail there.
+    // No recurrence AND no un-appealable block: every orphan is soft-deleted (a storage-cleanup
+    // outcome), so it drops out of every default query (the softDeletePlugin's find hook injects
+    // deletedAt:null) - serving and this sweep's own re-selection alike - and carries no content-policy
+    // 'blocked' verdict. Old release-on-missing would leave it 'pending' and re-selected every run;
+    // old terminal-blocked would leave a permanent false content block - this test fails on both.
     for (const filePath of orphanKeys) {
-      const row = await FabFile.findOne({ filePath }).lean();
-      expect(row?.moderationStatus).toBe('blocked');
-      expect(row?.blockReason).toBe('missing_object');
+      // Hidden from default queries (proves it is soft-deleted, not just re-labelled).
+      expect(await FabFile.findOne({ filePath }).lean()).toBeNull();
+      // With the soft-delete opt-in: deletedAt is stamped, and it is NOT a content-policy 'blocked'.
+      const row = await FabFile.findOne({ filePath }).setOptions({ includeDeleted: true }).lean();
+      expect(row?.deletedAt).toBeInstanceOf(Date);
+      expect(row?.moderationStatus).not.toBe('blocked');
     }
 
     // No starvation: the stranded row was reached and scanned to a terminal clean, not left pending.
-    const stranded = await FabFile.findOne({ filePath: 'stranded.txt' }).lean();
+    const stranded = await FabFile.findOne({ filePath: 'knowledge/user1/stranded' }).lean();
     expect(stranded?.moderationStatus).toBe('clean');
 
-    // Explicit non-recurrence: nothing pending remains, so a further run selects nothing.
+    // Explicit non-recurrence: nothing selectable remains, so a further run selects nothing.
     const third = await runModerationRescueSweep({ enabled: true, limit: 3, logger });
     expect(third).toEqual({ rescanned: 0 });
+  });
+
+  it('never touches an ordinary (non-knowledge) presign orphan - no terminal verdict on arbitrary uploads', async () => {
+    // An abandoned ordinary upload: a bare-key presign row past the staleness floor whose bytes never
+    // landed. It is NOT an import (no knowledge/ prefix), so the sweep must leave it entirely alone -
+    // no soft-delete, no 'blocked'. Stamping it would be an un-appealable false content block on a
+    // storage-cleanup concern (Blocker 2). Key absent -> would NoSuchKey if it were ever downloaded.
+    await seedPending('9f2c-abandoned.png', 'image/png');
+
+    const res = await runModerationRescueSweep({ enabled: true, limit: 5, logger });
+    expect(res).toEqual({ rescanned: 0 });
+
+    const row = await FabFile.findOne({ filePath: '9f2c-abandoned.png' }).lean();
+    expect(row?.moderationStatus).toBe('pending'); // untouched, not selected
+    expect(row?.deletedAt ?? null).toBe(null);
+    expect(row?.blockReason).toBeFalsy();
+  });
+
+  it('with moderation disabled, leaves the held pending backlog held rather than whitewashing it clean', async () => {
+    // A row held 'pending' while moderation was ON. Turning moderation OFF must not let the sweep
+    // stamp it terminally 'clean' (which the disabled scan path would do) - it stays held and
+    // recoverable when moderation is turned back on (Blocker 1).
+    store.objects.set('knowledge/user1/held', Buffer.from('some bytes'));
+    await seedPending('knowledge/user1/held', 'image/png');
+
+    const res = await runModerationRescueSweep({ enabled: false, limit: 5, logger });
+    expect(res).toEqual({ rescanned: 0 });
+
+    const row = await FabFile.findOne({ filePath: 'knowledge/user1/held' }).lean();
+    expect(row?.moderationStatus).toBe('pending'); // still held, not 'clean'
+    expect(row?.deletedAt ?? null).toBe(null);
   });
 
   it('releases (keeps pending) a transient download failure rather than retiring it', async () => {
     // Object "exists" but the read throws a non-NoSuchKey (5xx/throttle) error: the row must stay
     // recoverable ('pending'), never terminal, even though the sweep sets terminalOnMissingObject.
-    store.transient.add('flaky.txt');
-    await seedPending('flaky.txt', 'text/plain');
+    store.transient.add('knowledge/user1/flaky');
+    await seedPending('knowledge/user1/flaky', 'text/plain');
 
     const { rescanned } = await runModerationRescueSweep({ enabled: true, limit: 5, logger });
     expect(rescanned).toBe(0); // released (transient), so NOT counted as resolved/scanned
     expect(logger.warn).toHaveBeenCalled(); // but it WAS processed (released with a warning), not skipped
 
-    const row = await FabFile.findOne({ filePath: 'flaky.txt' }).lean();
+    const row = await FabFile.findOne({ filePath: 'knowledge/user1/flaky' }).lean();
     expect(row?.moderationStatus).toBe('pending');
-    expect(row?.blockReason).toBeFalsy();
+    expect(row?.deletedAt ?? null).toBe(null);
   });
 
   it('reclaims a crashed scanning row by claim age (not updatedAt) and rescans it', async () => {
     // A claim whose scan crashed before releasing it: stuck 'scanning' with an OLD claim stamp but a
     // FRESH updatedAt. Only a moderationClaimedAt-gated reclaim frees it; an updatedAt-gated one would
     // leave it stuck forever. Object exists (non-image), so once reclaimed it resolves clean.
-    store.objects.set('crashed.txt', Buffer.from('recovered plain text, not an image'));
-    await seedScanning('crashed.txt', 'text/plain');
+    store.objects.set('knowledge/user1/crashed', Buffer.from('recovered plain text, not an image'));
+    await seedScanning('knowledge/user1/crashed', 'text/plain');
 
     await runModerationRescueSweep({ enabled: true, limit: 5, logger });
 
-    const row = await FabFile.findOne({ filePath: 'crashed.txt' }).lean();
+    const row = await FabFile.findOne({ filePath: 'knowledge/user1/crashed' }).lean();
     expect(row?.moderationStatus).toBe('clean');
   });
 });

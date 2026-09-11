@@ -45,6 +45,13 @@ export function buildKnowledgeModerationDeps(
         { $set: { moderationStatus: 'pending' } }
       );
     },
+    // A missing-object orphan (see moderateImportedKnowledgeFiles.terminalOnMissingObject): the row's
+    // bytes never landed, so soft-delete it rather than write a content-policy verdict. deleteOne is
+    // the softDeletePlugin's soft-delete (stamps deletedAt), so the row then drops out of every
+    // default find - serving and this sweep's own re-selection alike.
+    retireMissingObject: async _id => {
+      await FabFile.deleteOne({ _id: _id as Types.ObjectId });
+    },
     downloadBytes: filePath => storage.download(filePath),
     downloadPartialBytes: (filePath, length) => storage.downloadRange(filePath, length),
   };

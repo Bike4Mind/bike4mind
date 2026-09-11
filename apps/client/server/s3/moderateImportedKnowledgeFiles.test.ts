@@ -26,6 +26,7 @@ function buildArgs(overrides: Partial<ModerateImportedKnowledgeFilesArgs> = {}):
     claim: vi.fn(async () => ({ _id: 'oid', id: 'f1', mimeType: 'text/plain' })),
     persist: vi.fn(async () => undefined),
     release: vi.fn(async () => undefined),
+    retireMissingObject: vi.fn(async () => undefined),
     downloadBytes: vi.fn(async () => Buffer.from('x')),
     downloadPartialBytes: vi.fn(async () => Buffer.from('x')),
     ...overrides,
@@ -75,15 +76,33 @@ describe('moderateImportedKnowledgeFiles', () => {
 
   const noSuchKey = () => Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' });
 
-  it('retires an orphan terminally (blocked/missing_object) when the object is gone and terminalOnMissingObject is set', async () => {
-    // A never-uploaded presign row: the object was never written, so the download throws NoSuchKey.
+  it('soft-deletes an orphan (not a content-policy block) when the object is gone and terminalOnMissingObject is set', async () => {
+    // A never-landed import row: the object was never written, so the download throws NoSuchKey. It is
+    // retired via a soft-delete, NOT a terminal 'blocked' verdict - a missing object is a
+    // storage-cleanup fact, not an un-appealable content-policy match.
     const moderate = vi.fn(async () => {
       throw noSuchKey();
     }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
     const args = buildArgs({ moderate, terminalOnMissingObject: true });
-    await moderateImportedKnowledgeFiles(args);
-    expect(args.persist).toHaveBeenCalledWith('oid', { moderationStatus: 'blocked', blockReason: 'missing_object' });
-    // Must NOT release - releasing back to pending is exactly the poison loop this fixes.
+    const { scanned } = await moderateImportedKnowledgeFiles(args);
+    expect(scanned).toBe(1);
+    expect(args.retireMissingObject).toHaveBeenCalledWith('oid');
+    // No 'blocked' verdict written, and no release - releasing back to pending is the poison loop this fixes.
+    expect(args.persist).not.toHaveBeenCalled();
+    expect(args.release).not.toHaveBeenCalled();
+  });
+
+  it('does not count a missing-object retire whose soft-delete write itself fails', async () => {
+    // A failed retire must not be reported as resolved: the row stays selectable for a later sweep.
+    const moderate = vi.fn(async () => {
+      throw noSuchKey();
+    }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
+    const retireMissingObject = vi.fn(async () => {
+      throw new Error('db write failed');
+    });
+    const args = buildArgs({ moderate, terminalOnMissingObject: true, retireMissingObject });
+    const { scanned } = await moderateImportedKnowledgeFiles(args);
+    expect(scanned).toBe(0);
     expect(args.release).not.toHaveBeenCalled();
   });
 

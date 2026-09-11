@@ -38,14 +38,19 @@ describe('runModerationRescueSweep', () => {
     expect(update.$set.moderationStatus).toBe('pending');
   });
 
-  it('selects only stranded pending files (stale, with a real filePath)', async () => {
+  it('selects only stranded, imported-knowledge pending files (stale, knowledge/ prefix)', async () => {
     h.lean.mockResolvedValue([]);
     await runModerationRescueSweep({ enabled: true, limit: 50, logger });
     const filter = h.find.mock.calls[0][0];
     expect(filter.moderationStatus).toBe('pending');
     expect(filter.deletedAt).toBe(null);
     expect(filter.createdAt.$lt).toBeInstanceOf(Date);
-    expect(filter.filePath.$exists).toBe(true);
+    // Scoped to import keys so the sweep never writes a terminal verdict on an ordinary presign upload.
+    expect(filter.filePath).toBeInstanceOf(RegExp);
+    expect(filter.filePath.test('knowledge/u1/abc')).toBe(true);
+    expect(filter.filePath.test('9f2c-abc.png')).toBe(false);
+    // Same scope on the stale-scanning reclaim.
+    expect(h.updateMany.mock.calls[0][0].filePath).toBeInstanceOf(RegExp);
   });
 
   it('re-scans each stranded file with its own owner and forwards the enabled flag', async () => {
@@ -65,14 +70,19 @@ describe('runModerationRescueSweep', () => {
 
   it('does not scan when nothing is stranded', async () => {
     h.lean.mockResolvedValue([]);
-    const res = await runModerationRescueSweep({ enabled: false, limit: 50, logger });
+    const res = await runModerationRescueSweep({ enabled: true, limit: 50, logger });
     expect(res).toEqual({ rescanned: 0 });
     expect(h.moderate).not.toHaveBeenCalled();
   });
 
-  it('forwards enabled=false so a disabled scan resolves clean rather than skipping the file', async () => {
-    h.lean.mockResolvedValue([{ filePath: 'k', userId: 'u' }]);
-    await runModerationRescueSweep({ enabled: false, limit: 50, logger });
-    expect(h.moderate).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+  it('no-ops entirely when moderation is disabled, so the held backlog is never whitewashed', async () => {
+    // A disabled scan resolves 'clean' terminally, so running the sweep with moderation off would
+    // permanently un-gate every row held while moderation was on. The sweep must not even query.
+    h.lean.mockResolvedValue([{ filePath: 'knowledge/u/a', userId: 'u' }]);
+    const res = await runModerationRescueSweep({ enabled: false, limit: 50, logger });
+    expect(res).toEqual({ rescanned: 0 });
+    expect(h.updateMany).not.toHaveBeenCalled();
+    expect(h.find).not.toHaveBeenCalled();
+    expect(h.moderate).not.toHaveBeenCalled();
   });
 });

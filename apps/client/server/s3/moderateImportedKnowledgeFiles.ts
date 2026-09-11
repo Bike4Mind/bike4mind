@@ -38,14 +38,20 @@ export interface ModerateImportedKnowledgeFilesArgs {
   release(_id: unknown): Promise<void>;
   /**
    * When true, a scan that fails because the object does not exist in storage (NoSuchKey/404)
-   * moves the row to a terminal `blocked` (blockReason `missing_object`) instead of releasing it
-   * back to `pending`. Only the rescue sweep sets this: it selects only rows already past the
-   * staleness age floor, where a never-created object is a permanent orphan (an abandoned
-   * presigned upload), so releasing would re-select the same orphan every run - a poison batch
-   * that starves genuinely-stranded rows. The fresh-import path leaves it unset, so a young row's
-   * missing object is treated as transient and released for the sweep to retry later.
+   * SOFT-DELETES the row (via `retireMissingObject`) instead of releasing it back to `pending`. Only
+   * the rescue sweep sets this, and it selects only imported-knowledge rows already past the staleness
+   * age floor, where a never-created object is a permanent orphan (an import whose bytes never
+   * landed); releasing would re-select the same orphan every run - a poison batch that starves
+   * genuinely-stranded rows. Soft-delete (a storage-cleanup outcome, not a content-policy `blocked`
+   * verdict) drains it without an un-appealable false block. The fresh-import path leaves it unset,
+   * so a young row's missing object is treated as transient and released for the sweep to retry later.
    */
   terminalOnMissingObject?: boolean;
+  /**
+   * Soft-delete a missing-object orphan (see `terminalOnMissingObject`). Distinct from `persist`
+   * because a never-landed file is not a moderation verdict - it is retired, not blocked.
+   */
+  retireMissingObject(_id: unknown): Promise<void>;
   downloadBytes(filePath: string): Promise<Buffer>;
   downloadPartialBytes(filePath: string, length: number): Promise<Buffer>;
 }
@@ -74,9 +80,9 @@ function isMissingObjectError(err: unknown): boolean {
  * verdict is never re-scanned and a held file stays unservable 'pending' - but serializes via its
  * own atomic pending|null -> scanning claim, which is a different mechanism from objectCreated's
  * (that path never writes the interim 'scanning' state). Never throws - a failed scan leaves the
- * file held. Returns the count of files resolved to a terminal verdict this run (scanned
- * clean/blocked, or retired as a missing-object orphan); files skipped (claim lost) or released
- * (transient failure) are not counted.
+ * file held. Returns the count of files resolved this run (scanned clean/blocked, or soft-deleted as
+ * a missing-object orphan); files skipped (claim lost) or released (transient failure) are not
+ * counted.
  */
 export async function moderateImportedKnowledgeFiles(
   args: ModerateImportedKnowledgeFilesArgs
@@ -94,6 +100,7 @@ export async function moderateImportedKnowledgeFiles(
     persist,
     release,
     terminalOnMissingObject,
+    retireMissingObject,
     downloadBytes,
     downloadPartialBytes,
   } = args;
@@ -128,17 +135,26 @@ export async function moderateImportedKnowledgeFiles(
       scanned++;
     } catch (err) {
       if (claimed && terminalOnMissingObject && isMissingObjectError(err)) {
-        // The object was never written to storage - an abandoned presigned upload leaves a
+        // The object was never written to storage - an import whose bytes never landed leaves a
         // 'pending' row whose filePath points at a key that will never exist. Releasing it back to
         // 'pending' would re-select the same orphan on every sweep (a poison batch that can starve
-        // genuinely-stranded rows), so give up terminally. Mirrors the unsupported-format terminal
-        // in moderateUploadedFile: a deterministic failure resolves to 'blocked' (already
-        // non-serveable) rather than an endless retryable release.
-        await persist(claimed._id, { moderationStatus: 'blocked', blockReason: 'missing_object' }).catch(
-          () => undefined
-        );
-        scanned++;
-        logger.warn(`Imported knowledge file ${filePath} has no stored object; marking terminal (missing_object)`);
+        // genuinely-stranded rows), so retire it terminally. Soft-delete, NOT a 'blocked' verdict: a
+        // missing object is a storage-cleanup fact, not a content-policy match, and a 'blocked' row is
+        // un-appealable (no CAS re-claims it, no admin unblock route). A soft-deleted row drops out of
+        // every deletedAt:null query, including this sweep, so it never recirculates.
+        try {
+          await retireMissingObject(claimed._id);
+          scanned++; // count only a successful retire; a failed one leaves the row pending for a later sweep
+          logger.warn(
+            `Imported knowledge file ${filePath} has no stored object; soft-deleting (missing_object orphan)`
+          );
+        } catch (retireErr) {
+          logger.warn(
+            `Failed to retire missing-object orphan ${filePath}: ${
+              retireErr instanceof Error ? retireErr.message : String(retireErr)
+            }`
+          );
+        }
         continue;
       }
       // Transient failure (Rekognition throttle/5xx, download error): release the claim so the
