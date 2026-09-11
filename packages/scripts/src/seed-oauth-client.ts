@@ -29,6 +29,14 @@ const OAuthClientSchema = new mongoose.Schema(
     redirectUris: [{ type: String }],
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
     pkceRequired: { type: Boolean, default: true },
+    // This script always mints a client_secret, so every client it registers is confidential.
+    // Must be persisted, or the token endpoint treats the client as public and rejects it for
+    // not presenting PKCE (it keys the decision on this field, not on the secret's presence).
+    tokenEndpointAuthMethod: {
+      type: String,
+      enum: ['none', 'client_secret_post'],
+      default: 'client_secret_post',
+    },
     isActive: { type: Boolean, default: true },
     federatedIdp: {
       type: new mongoose.Schema(
@@ -105,6 +113,7 @@ async function main() {
     redirectUris,
     allowedScopes: ['openid', 'email', 'profile'],
     pkceRequired: true,
+    tokenEndpointAuthMethod: 'client_secret_post',
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
   });
