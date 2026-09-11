@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { FabFile, safeDropIndex } from '@bike4mind/database';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 // Mirrors the sibling ensure-fabfile-userid-tagname-index test's guard: a core migration imported
 // transitively via '@bike4mind/database' need not evaluate SST config, but this keeps it robust if
@@ -9,6 +9,10 @@ import { createMongoServer } from '../../../database/src/__test__/createMongoSer
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260907000000_ensure-fabfile-tagname-filename-index';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const INDEX_NAME = 'tags.name_1_fileName_1_deletedAt_1';
 
@@ -47,7 +51,7 @@ describe('ensure-fabfile-tagname-filename-index migration (real DB)', () => {
     // Key ORDER is the point, not just presence: `fileName` after `tags.name` is what lets one
     // lake's tag bound the scan before the name equality applies.
     expect(idx?.key).toEqual({ 'tags.name': 1, fileName: 1, deletedAt: 1 });
-  }, 30000);
+  });
 
   it('is idempotent on re-run', async () => {
     await migration.up();
@@ -55,5 +59,5 @@ describe('ensure-fabfile-tagname-filename-index migration (real DB)', () => {
 
     const idx = (await FabFile.collection.indexes()).find(i => i.name === INDEX_NAME);
     expect(idx).toBeDefined();
-  }, 30000);
+  });
 });
