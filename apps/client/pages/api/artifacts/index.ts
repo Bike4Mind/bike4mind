@@ -104,7 +104,11 @@ const handler = baseApi()
           parentArtifactId: validatedData.parentArtifactId,
         },
         {
-          canUpdateSession: async id => !!(await sessionRepository.shareable.findUpdateAccessById(req.user!, id)),
+          // Include the global-write share arm: a global-write sharee may write into the session
+          // graph (stamp an artifact with its id), matching the CASL update ability. Owner and
+          // update/group-update shares still pass; read-only sharees and strangers still 403.
+          canUpdateSession: async id =>
+            !!(await sessionRepository.shareable.findUpdateAccessById(req.user!, id, { includeGlobalWrite: true })),
           getQuestSessionId: async id => (await questRepository.findById(id))?.sessionId ?? null,
           getArtifactOwner: async id => (await artifactRepository.findOne({ id }))?.userId ?? null,
         }

@@ -16,8 +16,8 @@ export interface ArtifactSourceRefs {
  * owner's `sessionId` (the artifact-persistence paths write the active session's id); an owner-only
  * check would wrongly 403 that flow, and a read-only sharee should not be able to reference the
  * session either. `canUpdateSession` therefore mirrors the session repo's update-access predicate
- * (owner OR update share OR group update share) - the same idiom used elsewhere for writing into a
- * shared object - and closes over the caller in the route.
+ * (owner OR update share OR group update share OR global-write share) - the same idiom used
+ * elsewhere for writing into a shared object - and closes over the caller in the route.
  *
  * A quest carries no user of its own, so its access is transitive through the session it belongs
  * to (top-level `sessionId`): resolve the quest's session, then apply the same update-access check.
