@@ -87,6 +87,12 @@ function mergeInjected(
  * - knowledgeBaseGuidanceInjected: first-writer-wins pass-through. Only the seed writes it, and
  *   `??` rather than `||` because an explicit `false` is a real value (the A/B control arm) that
  *   a boolean OR against an absent incoming side would silently discard.
+ * - answerability: existing-wins pass-through, and it is here to PRESERVE rather than to combine.
+ *   Nothing in a turn writes it - the offline replay backfills it straight to Mongo - so a
+ *   two-sided merge is not reachable. What IS reachable is a later runtime write on a quest that
+ *   was already backfilled (a regenerate, an edit), and since this function returns an explicit
+ *   object literal, a field with no case here is DROPPED rather than carried. That silent erase is
+ *   the failure this rule exists to prevent.
  * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
@@ -122,6 +128,7 @@ export function mergeRetrievalSummary(
   const forcedSkipReason = existing.forcedSkipReason ?? incoming.forcedSkipReason;
   const knowledgeBaseGuidanceInjected =
     existing.knowledgeBaseGuidanceInjected ?? incoming.knowledgeBaseGuidanceInjected;
+  const answerability = existing.answerability ?? incoming.answerability;
   const injectedLakePromptIds =
     existing.injectedLakePromptIds || incoming.injectedLakePromptIds
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
@@ -140,6 +147,7 @@ export function mergeRetrievalSummary(
     ...(mode !== undefined ? { mode } : {}),
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
     ...(knowledgeBaseGuidanceInjected !== undefined ? { knowledgeBaseGuidanceInjected } : {}),
+    ...(answerability !== undefined ? { answerability } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),

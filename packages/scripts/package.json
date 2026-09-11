@@ -57,6 +57,7 @@
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
     "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts",
     "retrieval:capture-embeddings": "tsx retrieval/capture-embeddings.ts",
+    "retrieval:answerability-replay": "tsx retrieval/answerability-replay.ts",
     "retrieval:model-comparison": "tsx retrieval/model-comparison.ts"
   },
   "dependencies": {

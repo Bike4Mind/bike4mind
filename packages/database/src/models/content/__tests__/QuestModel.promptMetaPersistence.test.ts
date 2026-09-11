@@ -126,6 +126,16 @@ const FULL_PROMPT_META = {
     // Deliberately `false`, not `true`: a falsy leaf is where a Mongoose/Zod mismatch silently
     // drops a value, and `false` is this field's load-bearing case (the A/B's control arm).
     knowledgeBaseGuidanceInjected: false,
+    // The offline replay's probe. A Date against Zod's JsonSafeDate is the likeliest type slip in
+    // the block, and it is invisible to the parity test, which compares path names only. Falsy
+    // leaves again on the two that have one.
+    answerability: {
+      topScore: 0.42,
+      candidatesAboveFloor: 0,
+      floor: 0.75,
+      scanTruncated: false,
+      probedAt: new Date('2026-09-11T00:00:00.000Z'),
+    },
   },
   // Top-level for the same reason as `retrieval` above. The chat coverage banner keys on this
   // field surviving the round-trip, so a shape that persists but fails the Zod re-parse would
