@@ -66,19 +66,54 @@ export function lakeMemoryFacts(facts: readonly string[]): string[] {
 }
 
 /**
+ * A lake fact as the caller holds it: bare text, or text with the date of the document it came from.
+ * The union keeps ONE framing function rather than a dated twin that could drift from it.
+ */
+export type LakeFactInput = string | { fact: string; sourceDate?: string };
+
+const factText = (fact: LakeFactInput): string => (typeof fact === 'string' ? fact : fact.fact);
+const factDate = (fact: LakeFactInput): string | undefined => (typeof fact === 'string' ? undefined : fact.sourceDate);
+
+/**
  * Framing for LAKE reference facts (#1440) - a deliberate sibling of `buildMemoryContext`, kept HERE so
  * all memory framing still lives in one auditable place. It differs on purpose: lake facts are reference
  * material extracted from curated documents, NOT things the assistant knows about the person, so they
  * are framed as background knowledge and attribution is NOT suppressed (the model may say a fact came
  * from the knowledge base). Each fact is sanitized + length-bounded first (see sanitizeLakeFact) because
  * the content is untrusted uploaded text.
+ *
+ * DATES, and why they are an instruction rather than a detector (#1501 item 4). Two documents in one
+ * lake can state different figures for the same thing, and the write path now keeps both rather than
+ * letting the later extraction destroy the earlier claim. Deciding which of them is actually a
+ * contradiction was measured and rejected: over short, context-stripped facts a genuine disagreement
+ * can embed LOWER than an unrelated pair ("Price is $10"/"Price is $20" at 0.76 against "Q1 revenue
+ * 100M"/"Q2 revenue 150M" at 0.79), so no threshold separates them and any asserted "these conflict"
+ * note would be wrong a good share of the time. Dating every fact and asking the model to surface
+ * disagreements costs a few tokens, cannot produce a false accusation, and leaves the judgement with
+ * the only reader that still has the context to make it.
+ *
+ * A date is `YYYY-MM-DD`, machine-formatted from the document's own timestamp, so unlike the fact text
+ * it is not attacker-influenced. An unknown date is stated rather than omitted: silence would let the
+ * model read an undated claim as the older or the newer one, which is exactly the wrong inference on
+ * the turn this matters.
  */
-export function buildLakeMemoryContext(facts: readonly string[]): string {
-  const clean = lakeMemoryFacts(facts);
+export function buildLakeMemoryContext(facts: readonly LakeFactInput[]): string {
+  const clean = facts
+    .map(fact => ({ text: sanitizeLakeFact(factText(fact)), date: factDate(fact) }))
+    .filter(fact => Boolean(fact.text));
   if (clean.length === 0) return '';
-  return (
+
+  const dated = clean.some(fact => fact.date);
+  const preamble =
     `Background reference facts from the user's knowledge base. Use them to ground your answer where ` +
-    `relevant; you may attribute or cite them.\n\n` +
-    `Reference facts:\n${clean.map(f => `- ${f}`).join('\n')}`
-  );
+    `relevant; you may attribute or cite them.` +
+    (dated
+      ? ` Each fact is dated by the document it came from; where two of them disagree, say so and give ` +
+        `both with their dates rather than silently choosing one.`
+      : '');
+  const bullets = clean
+    .map(fact => (dated ? `- ${fact.text} (document dated ${fact.date ?? 'unknown'})` : `- ${fact.text}`))
+    .join('\n');
+
+  return `${preamble}\n\nReference facts:\n${bullets}`;
 }

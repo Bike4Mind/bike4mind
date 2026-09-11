@@ -2966,6 +2966,63 @@ describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
     expect(reads('lakeMemoryRecallK', noLakes)).toHaveLength(0);
     expect(noLakes.recallLakeMemory).not.toHaveBeenCalled();
   });
+
+  /**
+   * Dating the injected facts (#1501 item 4). The write path keeps two documents' disagreeing
+   * claims rather than letting the later one destroy the earlier, so the card owes the model each
+   * claim's document date - and must pair each date with the fact it actually came from.
+   */
+  describe('document dates', () => {
+    const withBeliefs = (
+      beliefs: Array<{ fact: string; relevance: number; sources: string[]; sourceDate?: string }>
+    ) => {
+      const ctx = makeCtx();
+      ctx.recallLakeMemory = vi.fn().mockResolvedValue(beliefs);
+      return ctx;
+    };
+
+    it('renders each belief with the date of the document it came from', async () => {
+      const ctx = withBeliefs([
+        { fact: 'Uptime is 99.9%', relevance: 0.9, sources: ['f1'], sourceDate: '2026-03-14' },
+        { fact: 'Uptime is 99.5%', relevance: 0.8, sources: ['f2'], sourceDate: '2025-01-02' },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.9% (document dated 2026-03-14)');
+      expect(messages[0].content).toContain('- Uptime is 99.5% (document dated 2025-01-02)');
+      expect(messages[0].content).toMatch(/disagree/i);
+    });
+
+    it('does not shift a date onto the wrong fact when an earlier one sanitizes away', async () => {
+      // The trap the per-belief sanitize exists for: sanitizing the texts en masse DROPS the empty
+      // one, which shifts every later index and silently re-pairs each surviving fact with the
+      // previous belief's date - wrong on exactly the turn this feature exists for.
+      const ctx = withBeliefs([
+        { fact: '   ', relevance: 0.9, sources: ['f0'], sourceDate: '1999-01-01' },
+        { fact: 'Uptime is 99.9%', relevance: 0.8, sources: ['f1'], sourceDate: '2026-03-14' },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.9% (document dated 2026-03-14)');
+      expect(messages[0].content).not.toContain('1999-01-01');
+      expect((String(messages[0].content).match(/^- /gm) ?? []).length).toBe(1);
+    });
+
+    it('says a date is unknown rather than omitting it', async () => {
+      // Silence would let the model read the undated claim as the older or the newer one.
+      const ctx = withBeliefs([
+        { fact: 'Uptime is 99.9%', relevance: 0.9, sources: ['f1'], sourceDate: '2026-03-14' },
+        { fact: 'Uptime is 99.5%', relevance: 0.8, sources: ['f2'] },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.5% (document dated unknown)');
+    });
+
+    it('renders exactly as before when the recall supplies no dates at all', async () => {
+      const ctx = withBeliefs([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).not.toMatch(/dated/i);
+      expect(messages[0].content).not.toMatch(/disagree/i);
+    });
+  });
 });
 
 /**

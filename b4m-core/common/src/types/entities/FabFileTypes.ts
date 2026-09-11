@@ -731,10 +731,16 @@ export interface LakeMembershipMemberRow {
  * Defines the database methods that are available on the FabFile model.
  */
 /**
- * The FabFile fields the lake-memory citability predicate reads, and nothing else. Exists so the
- * read can be projected: the predicate needs eight scalars, while a FabFile document carries a
- * `tags` array of arbitrary objects, a `versions` subdocument array and a Mixed `sourceMetadata` of
- * no fixed size - all of it hydrated per id by the unprojected reader this replaces.
+ * The FabFile fields the lake-memory read projects, and nothing else. Exists so the read can be
+ * projected: these are a handful of scalars, while a FabFile document carries a `tags` array of
+ * arbitrary objects, a `versions` subdocument array and a Mixed `sourceMetadata` of no fixed size -
+ * all of it hydrated per id by the unprojected reader this replaces.
+ *
+ * `createdAt` is the one field the citability predicate does NOT read: lake memory dates a recalled
+ * belief by the document it came from, so the model can weigh two sources that disagree (#1501). It
+ * is optional here because a projected row is not a hydrated document - a caller building one of
+ * these to test the predicate owes nothing about a field the predicate ignores, and the dating
+ * resolver already treats a missing date as unknown.
  */
 export type CitableFabFileFields = Pick<
   IFabFileDocument,
@@ -746,7 +752,8 @@ export type CitableFabFileFields = Pick<
   | 'embeddingModel'
   | 'fileName'
   | 'vectorized'
->;
+> &
+  Partial<Pick<IFabFileDocument, 'createdAt'>>;
 
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
@@ -874,7 +881,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Mixed `sourceMetadata` included) to answer a question about existence.
    */
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
-  /** Just the fields the citability predicate reads - see `CitableFabFileFields`. */
+  /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */

@@ -822,7 +822,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
     const docs = await this.fabFileModel
       .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsByIds') } })
-      .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized')
+      .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt')
       .lean<({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]>();
     // `.lean()` skips the `id` virtual, so map it explicitly rather than leaning on toJSON (which
     // would defeat the projection by hydrating the document first).
