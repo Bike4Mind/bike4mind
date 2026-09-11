@@ -45,14 +45,15 @@ const updateApiKeyRateLimit = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateApiKeyRateLimit } }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
-const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import '@pages/api/user-api-keys/[id]/rate-limit';
 
 function patch(id: string | undefined, body: unknown) {
   const { req, res } = createMocks({ method: 'PATCH', query: id === undefined ? {} : { id }, body });
   (req as any).user = { id: 'u1', isAdmin: false };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -84,10 +85,11 @@ describe('PATCH /api/user-api-keys/[id]/rate-limit', () => {
     const { req, res } = patch('key-1', { requestsPerDay: 5000 });
     await mockRefs.patchHandler!(req, res);
 
-    expect(logEvent).toHaveBeenCalledWith(
+    expect(logEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({ updatedFields: ['rateLimit.requestsPerDay'] }),
       }),
+      expect.anything(),
       expect.anything()
     );
   });
@@ -101,5 +103,19 @@ describe('PATCH /api/user-api-keys/[id]/rate-limit', () => {
   it('registers PATCH only, so next-connect 405s every other verb', () => {
     expect(mockRefs.patchHandler).not.toBeNull();
     expect(mockRefs.otherVerbs).toEqual([]);
+  });
+});
+
+/**
+ * The analytics write happens after the key change has committed, so it goes
+ * through the best-effort wrapper with the request logger attached: a failed
+ * counter write gets recorded, not turned into a 5xx the client will retry.
+ */
+describe('PATCH /api/user-api-keys/[id]/rate-limit - analytics is best effort', () => {
+  it('logs the update through logEventSafe with the request logger', async () => {
+    const { req, res } = patch('key-1', { requestsPerMinute: 600 });
+    await mockRefs.patchHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });
