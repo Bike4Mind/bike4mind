@@ -62,6 +62,7 @@ import {
   DATALAKE_TAG_PREFIX,
   PROMPT_TEXT_MAX,
   materializePromptMetaSession,
+  ModelBackend,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -108,6 +109,7 @@ import {
   computeVerbatimTokenBudget,
   EmbeddingFactory,
   fetchAndProcessPreviousMessages,
+  getProviderFromModel,
   IQueueService,
   ITokenizer,
   normalizeId,
@@ -2056,24 +2058,49 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * every correctly-labeled file. Falls back further to the factory default, with a warn, only
    * when the setting is unset, unsupported, or unreadable - the symptom there is an empty result,
    * not an error, so a silent fallback would be a support ticket.
+   *
+   * ONE exception to preferring the setting: a deployment that resolved no provider credential at
+   * all. The factory is built through `resolveEmbeddingWithKeylessFallback` (ChatCompletionProcess),
+   * so a Bedrock-defaulting factory is this deployment saying it holds no key - and ingestion
+   * resolved through that same seam, meaning the corpus was WRITTEN with the keyless model too. The
+   * setting still reads ada-002 there and is simply stale; handing it back threw
+   * OPENAI_KEY_MISSING_MESSAGE on any lake whose files had not voted yet (newly created, or still
+   * mid-ingest). Deliberately narrow: on a KEYED deployment the configured model is returned even
+   * when it names a different provider than the factory holds, because there it really is the space
+   * the corpus was written in, and quietly querying a different one would turn a loud credential
+   * error into a silent zero-result.
    */
   private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingFactory): Promise<SupportedEmbeddingModel> {
     const factoryDefault = embeddingFactory.getDefaultEmbeddingModel?.() ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+    let configured: unknown;
+    // Scoped to the settings READ alone. Widening it to cover the decision below would let a
+    // programming error there be swallowed as "could not read the setting" and silently answer
+    // with the factory default - which is a plausible-looking wrong answer, not a visible failure.
     try {
-      const configured = await this.chatCompletion.db.adminSettings.getSettingsValue('defaultEmbeddingModel');
-      if (typeof configured === 'string' && isSupportedEmbeddingModel(configured)) {
-        return configured;
-      }
-      if (configured !== undefined && configured !== null && configured !== '') {
-        this.logger.warn(
-          `🔒 Forced retrieval: defaultEmbeddingModel "${String(configured)}" is not a supported embedding ` +
-            `model; falling back to ${factoryDefault}`
-        );
-      }
+      configured = await this.chatCompletion.db.adminSettings.getSettingsValue('defaultEmbeddingModel');
     } catch (err) {
       this.logger.warn(
         `🔒 Forced retrieval: failed to read defaultEmbeddingModel; falling back to ${factoryDefault}`,
         err
+      );
+      return factoryDefault;
+    }
+
+    if (typeof configured === 'string' && isSupportedEmbeddingModel(configured)) {
+      const deploymentIsKeyless = getProviderFromModel(factoryDefault) === ModelBackend.Bedrock;
+      if (deploymentIsKeyless && getProviderFromModel(configured) !== ModelBackend.Bedrock) {
+        this.logger.warn(
+          `🔒 Forced retrieval: no credential resolved for defaultEmbeddingModel "${configured}"; ` +
+            `embedding the query with keyless ${factoryDefault}, which is what this stage ingested with`
+        );
+        return factoryDefault;
+      }
+      return configured;
+    }
+    if (configured !== undefined && configured !== null && configured !== '') {
+      this.logger.warn(
+        `🔒 Forced retrieval: defaultEmbeddingModel "${String(configured)}" is not a supported embedding ` +
+          `model; falling back to ${factoryDefault}`
       );
     }
     return factoryDefault;

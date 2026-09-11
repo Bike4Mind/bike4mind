@@ -315,39 +315,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
       }
 
-      // Gate on the USD cost, not on usdToCredits' 1-credit floor: a zero-cost embedder
-      // (Ollama runs on the operator's own hardware) and any model missing from the price
-      // table both settle 0 credits, so there is nothing to be eligible for - flooring first
-      // would turn a free search into a 422. See the pricing-table contract in
-      // b4m-core/common/src/schemas/embedding.ts.
-      const embeddingCostUsd = getEmbeddingModelCost(embedding_model, queryTokens);
-
-      if (shouldBill && billingUser && embeddingCostUsd > 0) {
-        // Deterministic round-up, never the stochastic settlement rounding: eligibility must
-        // not turn on a coin flip. Scoped to the primary model only: the mixed-embeddingModel
-        // ANN cutover can also embed up to MAX_ALTERNATE_ANN_MODELS alternates, which are not
-        // known until the search runs, so settlement below can exceed this by a few credits on
-        // a mixed-embedding-space corpus.
-        const requiredCredits = usdToCredits(embeddingCostUsd);
-
-        // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
-        // rejected even when the org pool is flush.
-        if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, req.user.id, requiredCredits)) {
-          throw insufficientCreditsError(
-            'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
-          );
-        }
-
-        const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
-        if (availableCredits < requiredCredits) {
-          throw insufficientCreditsError(
-            billingOrg
-              ? `Your organization does not have enough credits for semantic search. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
-              : `You do not have enough credits for semantic search. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
-          );
-        }
-      }
-
       // --- Get the embedding-provider API keys, for every provider we have one, not just the
       // requested model's own provider ---
       // The mixed-embeddingModel ANN cutover (semanticDataLakeSearch) can attempt an ALTERNATE
@@ -360,12 +327,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       const requestedEmbeddingModel = embedding_model as SupportedEmbeddingModel;
       // A cloud stage reaches Bedrock with its own role, so a missing provider key is not fatal
       // there: the vectorizer already fell back to Bedrock when it wrote this corpus, and the
-      // query has to be embedded in the space the corpus actually occupies. Two carve-outs keep
+      // query has to be embedded in the space the corpus actually occupies. Three carve-outs keep
       // the loud error where it is still the right answer:
       //   - self-host has no AWS role, so there is nothing to fall back TO;
       //   - a caller who NAMED embedding_model gets the error rather than a silent answer out of
-      //     a different vector space than the one they asked about.
-      const mayFallBack = parsed.data.embedding_model === undefined && hasKeylessCloudEmbedder();
+      //     a different vector space than the one they asked about;
+      //   - an Ollama default with no base URL. resolveEmbeddingWithKeylessFallback never
+      //     overrides `missing: 'ollama'`, so gating the block below on mayFallBack alone would
+      //     skip THIS route's crafted 500 naming OLLAMA_BASE_URL and let the request fail one
+      //     layer down in semanticDataLakeSearch with a vaguer message instead.
+      const mayFallBack =
+        parsed.data.embedding_model === undefined &&
+        getProviderFromModel(requestedEmbeddingModel) !== ModelBackend.Ollama &&
+        hasKeylessCloudEmbedder();
       const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
         userIdForService,
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
@@ -403,9 +377,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // Bind the query's model ONCE, here: the resolved key table is the first thing that can
       // answer "is that model reachable from this deployment" (an SST secret never lands in
       // process.env, so no env read can). Everything below keys off the resolved model, so a
-      // substitution is never billed or reported as the model it stood in for. The credit
-      // pre-flight above priced the REQUESTED model, which stays conservative: Titan is cheaper
-      // per token than every cloud model it can stand in for.
+      // substitution is never billed or reported as the model it stood in for.
       const { model: searchEmbeddingModel } = mayFallBack
         ? resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable)
         : { model: requestedEmbeddingModel };
@@ -415,6 +387,51 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         );
       }
       const embeddingProvider = getProviderFromModel(searchEmbeddingModel);
+      // Counted under the model that will actually run, and reused by the settlement below so the
+      // pre-flight and the charge can never disagree about the token basis either.
+      const searchQueryTokens =
+        searchEmbeddingModel === embedding_model ? queryTokens : await countQueryTokens(searchEmbeddingModel);
+
+      // --- Credit pre-flight: per-member cap, then the pool the charge would land on ---
+      // Runs AFTER the model is bound, and prices the model that will actually be embedded with.
+      // Pricing the requested one instead leaves a hole rather than a conservative margin: Titan is
+      // only cheaper than SOME of what it stands in for (it ties text-embedding-3-small and
+      // voyage-3-lite), and voyage-finance-3 / voyage-law-3 are offered in the admin dropdown with
+      // no entry in the price table at all - so a request under one of those priced at $0, skipped
+      // the gate entirely, and then settled at Titan's real rate.
+      //
+      // Gate on the USD cost, not on usdToCredits' 1-credit floor: a zero-cost embedder
+      // (Ollama runs on the operator's own hardware) and any model missing from the price
+      // table both settle 0 credits, so there is nothing to be eligible for - flooring first
+      // would turn a free search into a 422. See the pricing-table contract in
+      // b4m-core/common/src/schemas/embedding.ts.
+      const embeddingCostUsd = getEmbeddingModelCost(searchEmbeddingModel, searchQueryTokens);
+
+      if (shouldBill && billingUser && embeddingCostUsd > 0) {
+        // Deterministic round-up, never the stochastic settlement rounding: eligibility must
+        // not turn on a coin flip. Scoped to the primary model only: the mixed-embeddingModel
+        // ANN cutover can also embed up to MAX_ALTERNATE_ANN_MODELS alternates, which are not
+        // known until the search runs, so settlement below can exceed this by a few credits on
+        // a mixed-embedding-space corpus.
+        const requiredCredits = usdToCredits(embeddingCostUsd);
+
+        // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
+        // rejected even when the org pool is flush.
+        if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, req.user.id, requiredCredits)) {
+          throw insufficientCreditsError(
+            'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
+          );
+        }
+
+        const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
+        if (availableCredits < requiredCredits) {
+          throw insufficientCreditsError(
+            billingOrg
+              ? `Your organization does not have enough credits for semantic search. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+              : `You do not have enough credits for semantic search. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+          );
+        }
+      }
 
       if (isAborted()) return res.end();
 
@@ -496,7 +513,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         if (billingUser) {
           const recordEmbeddingUsage = async (model: string, provider: string): Promise<void> => {
             try {
-              const tokens = model === embedding_model ? queryTokens : await countQueryTokens(model);
+              const tokens = model === searchEmbeddingModel ? searchQueryTokens : await countQueryTokens(model);
               await recordOperationalUsage(
                 {
                   requestId: req.user.id,

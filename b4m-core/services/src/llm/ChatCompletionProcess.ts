@@ -9,6 +9,7 @@ import {
   Permission,
   SettingKey,
   defaultEmbeddingModelForEnv,
+  isSupportedEmbeddingModel,
   QueryComplexityType,
   getTextModelCost,
   CACHE_READ_MULTIPLIER,
@@ -40,7 +41,7 @@ import {
   calculateTotalTokenLength,
   ClientMessageSender,
   EmbeddingFactory,
-  getProviderFromModel,
+  resolveEmbeddingWithKeylessFallback,
   fetchAndConvertFabFiles,
   fetchAndProcessPreviousMessages,
   getLlmWithFallback,
@@ -2221,16 +2222,17 @@ export class ChatCompletionProcess {
       const historyStartTime = Date.now();
       this.sendStatusUpdate(quest, 'Reviewing previous messages...', { statusAt: new Date() });
 
-      const finalEmbeddingModel = embeddingModel || defaultEmbeddingModelForEnv();
-
-      // Give the factory only the credential the chosen model's provider needs.
+      // Give the factory only the credential the chosen model's provider needs - which the
+      // resolver already returns, keyed to the model it settled on. A keyless cloud stage lands on
+      // Bedrock here instead of building an OpenAI-shaped factory around an undefined key, which
+      // threw on the first embed; this is the same credential-table seam the ingest and search
+      // paths resolve at, so forced retrieval cannot disagree with the corpus it reads.
       // apiKeyTable.ollama carries the Ollama base URL (self-host); no secret.
-      const embeddingProvider = getProviderFromModel(finalEmbeddingModel);
-      const embeddingFactory = new EmbeddingFactory({
-        ...(embeddingProvider === 'openai' && { openaiApiKey: apiKeyTable?.openai }),
-        ...(embeddingProvider === 'voyageai' && { voyageApiKey: apiKeyTable?.voyageai }),
-        ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
-      });
+      const { config: embeddingConfig } = resolveEmbeddingWithKeylessFallback(
+        embeddingModel && isSupportedEmbeddingModel(embeddingModel) ? embeddingModel : defaultEmbeddingModelForEnv(),
+        apiKeyTable
+      );
+      const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
       // Fetch previous messages. Token-bound the verbatim window to a fraction of
       // the model's context so older turns fall outside it and get folded into

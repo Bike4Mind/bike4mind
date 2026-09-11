@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const { mockGetEffectiveLLMApiKeys, mockGetSettingsValue, mockGetProviderFromModel, mockGenerateEmbedding } =
@@ -78,12 +78,21 @@ const makeRes = () => {
 // even though the admin dropdown offers Bedrock embedders and the vectorize pipeline accepts
 // them, so a corpus that ingested fine failed on every session search.
 describe('POST /api/sessions/semantic-search embedding provider resolution', () => {
+  const savedLambdaName = process.env.AWS_LAMBDA_FUNCTION_NAME;
   beforeEach(() => {
     vi.clearAllMocks();
     mockGenerateEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
     mockGetSettingsValue.mockResolvedValue(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
     mockGetProviderFromModel.mockReturnValue(ModelBackend.Bedrock);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({});
+    // This route runs in the Next server Lambda. hasKeylessCloudEmbedder wants positive evidence
+    // of an execution role, so the hosted runtime is stated rather than inherited from the test
+    // process - which has none, and would otherwise read as "cannot reach Bedrock".
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-frontendServer';
+  });
+  afterEach(() => {
+    if (savedLambdaName === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+    else process.env.AWS_LAMBDA_FUNCTION_NAME = savedLambdaName;
   });
 
   it('accepts a Bedrock model on an environment holding no provider key at all', async () => {

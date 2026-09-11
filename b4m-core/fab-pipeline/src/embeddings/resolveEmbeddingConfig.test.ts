@@ -6,7 +6,12 @@ import {
   type EmbeddingKeyTable,
 } from './resolveEmbeddingConfig';
 import { getProviderFromModel } from './getProviderFromModel';
-import { BedrockEmbeddingModel, OllamaEmbeddingModel, OpenAIEmbeddingModel } from '@bike4mind/common';
+import {
+  BedrockEmbeddingModel,
+  OllamaEmbeddingModel,
+  OpenAIEmbeddingModel,
+  VoyageAIEmbeddingModel,
+} from '@bike4mind/common';
 
 const FULL: EmbeddingKeyTable = { openai: 'sk-test', voyageai: 'pa-test', ollama: 'http://localhost:11434' };
 
@@ -129,13 +134,22 @@ describe('resolveEmbeddingConfig', () => {
 });
 
 describe('resolveEmbeddingWithKeylessFallback', () => {
-  const savedSelfHost = process.env.B4M_SELF_HOST;
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+  };
   beforeEach(() => {
     delete process.env.B4M_SELF_HOST;
+    // hasKeylessCloudEmbedder wants positive evidence of an execution role, which the test runner
+    // has none of. Every case here is about a HOSTED stage, so state that once rather than let
+    // each assertion inherit whichever runtime the suite happens to run on.
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-fabFileVectorize';
   });
   afterEach(() => {
-    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
-    else process.env.B4M_SELF_HOST = savedSelfHost;
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   });
 
   it('leaves a satisfied model untouched', () => {
@@ -163,9 +177,30 @@ describe('resolveEmbeddingWithKeylessFallback', () => {
     expect(model).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
   });
 
-  it('treats an expired key as no key and still falls back', () => {
-    const { model } = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, {
+  it("keeps the requested model when it is THIS CALLER's key that expired, not the deployment's", () => {
+    // getEffectiveLLMApiKeys deliberately returns the 'expired' sentinel rather than falling
+    // through to the platform demo key, so the user is told their key expired instead of being
+    // moved onto the platform's. Reading that as "this deployment is keyless" would substitute
+    // Titan for one caller on keyed production and query a space the corpus was never written in.
+    const r = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, {
       openai: 'expired',
+    });
+    expect(r.model).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(r.missing).toBe('openai');
+  });
+
+  it('applies the same expired-key rule to VoyageAI', () => {
+    const r = resolveEmbeddingWithKeylessFallback(VoyageAIEmbeddingModel.VOYAGE_3, { voyageai: 'expired' });
+    expect(r.model).toBe(VoyageAIEmbeddingModel.VOYAGE_3);
+    expect(r.missing).toBe('voyageai');
+  });
+
+  it('still falls back when the slot is genuinely empty rather than expired', () => {
+    // The distinction is the whole point: absent means the deployment holds no credential and
+    // Bedrock is the only way to answer at all; 'expired' means one caller's key lapsed.
+    const { model } = resolveEmbeddingWithKeylessFallback(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, {
+      openai: null,
+      voyageai: 'expired',
     });
     expect(model).toBe(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
   });

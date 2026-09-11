@@ -47,12 +47,15 @@ describe('defaultEmbeddingModelForEnv', () => {
     OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
+    // hasKeylessCloudEmbedder reads these: the test runner itself holds no AWS role, so each
+    // case has to state the runtime it means rather than inherit the harness's.
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+    AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI,
+    AWS_CONTAINER_CREDENTIALS_FULL_URI: process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI,
+    SST_RESOURCE_App: process.env.SST_RESOURCE_App,
   };
   beforeEach(() => {
-    delete process.env.B4M_SELF_HOST;
-    delete process.env.OLLAMA_BASE_URL;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.VOYAGE_API_KEY;
+    for (const k of Object.keys(saved)) delete process.env[k];
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(saved)) {
@@ -89,10 +92,42 @@ describe('defaultEmbeddingModelForEnv', () => {
   it('reports Bedrock reachable on cloud and unreachable on self-host', () => {
     // hasKeylessCloudEmbedder answers "can Bedrock be reached", not "should it be used" - a keyed
     // stage is keyless-capable too. Self-host has no AWS role, so its keyless path is Ollama.
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-fabFileVectorize';
     expect(hasKeylessCloudEmbedder()).toBe(true);
     process.env.B4M_SELF_HOST = 'true';
     expect(hasKeylessCloudEmbedder()).toBe(false);
     expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('reports Bedrock reachable from the Fargate chat container, not just from Lambda', () => {
+    // ChatCompletion (and so knowledgeBaseSearch) is an ECS service, which carries the task-role
+    // URI instead of AWS_LAMBDA_FUNCTION_NAME. A Lambda-only predicate would leave chat
+    // knowledge-base search failing on precisely the keyless stages the fallback is for.
+    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI = '/v2/credentials/abc123';
+    expect(hasKeylessCloudEmbedder()).toBe(true);
+  });
+
+  it('accepts the SST linked-resource marker, which both runtimes carry', () => {
+    // The arm this repo can prove rather than infer: SST sets SST_RESOURCE_* on everything it
+    // links, Function and Service alike, so it covers the Fargate task without depending on
+    // which ECS credential variable AWS injects.
+    process.env.SST_RESOURCE_App = '{"name":"bike4mind","stage":"pr1234"}';
+    expect(hasKeylessCloudEmbedder()).toBe(true);
+  });
+
+  it('reports Bedrock unreachable in local dev and CI, which hold no AWS role', () => {
+    // Neither sets B4M_SELF_HOST, so an "absence of the self-host flag" test would claim a
+    // keyless Bedrock embedder here and trade the actionable missing-key message for an opaque
+    // CredentialsProviderError out of the AWS SDK.
+    for (const k of [
+      'B4M_SELF_HOST',
+      'AWS_LAMBDA_FUNCTION_NAME',
+      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+      'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+    ]) {
+      delete process.env[k];
+    }
+    expect(hasKeylessCloudEmbedder()).toBe(false);
   });
 
   it('returns a local embedder on keyless self-host with Ollama', () => {

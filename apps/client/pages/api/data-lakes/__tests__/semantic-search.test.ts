@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const {
@@ -672,6 +672,7 @@ describe('POST /api/data-lakes/semantic-search embedding-mismatch reporting', ()
 // did not recognise needed an OpenAI or VoyageAI key. Bedrock authenticates through the AWS
 // credential chain and has no key to find, so a corpus that ingested fine failed on every query.
 describe('POST /api/data-lakes/semantic-search keyless embedding providers', () => {
+  const savedLambdaName = process.env.AWS_LAMBDA_FUNCTION_NAME;
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
@@ -680,6 +681,14 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     mockGetSettingsValue.mockResolvedValue(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
     mockGetProviderFromModel.mockReturnValue(ModelBackend.Bedrock);
     mockFindUserById.mockResolvedValue(null);
+    // This route runs in the Next server Lambda. hasKeylessCloudEmbedder wants positive evidence
+    // of an execution role, so the hosted runtime is stated here rather than inherited from the
+    // test process - which has none, and would read as "cannot reach Bedrock".
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-frontendServer';
+  });
+  afterEach(() => {
+    if (savedLambdaName === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+    else process.env.AWS_LAMBDA_FUNCTION_NAME = savedLambdaName;
   });
 
   it('searches with a Bedrock model on an environment holding no provider key at all', async () => {

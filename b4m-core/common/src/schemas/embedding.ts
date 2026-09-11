@@ -73,17 +73,42 @@ export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
 
 /**
  * True when this deployment can embed with no provider API key at all: a cloud stage reaches
- * Bedrock through its task/execution role's AWS credentials, which every stage has.
+ * Bedrock through its task/execution role's AWS credentials.
  *
- * Self-host is excluded because it has no such role - its keyless path is the local Ollama
- * embedder (`isLocalEmbedderAvailable` in toolAvailability.ts), not Bedrock.
+ * Requires POSITIVE evidence of an execution role rather than merely "not self-host". A plain
+ * `next dev` session and a CI job both leave B4M_SELF_HOST unset while holding no AWS credentials
+ * at all, so an absence test would send them to the Bedrock SDK for an opaque `CredentialsProvider
+ * Error` in place of the actionable OPENAI_KEY_MISSING_MESSAGE naming the key to set - the same
+ * actionable-to-opaque trade this fallback exists to avoid, just in a different keyless place.
+ *
+ * BOTH runtimes must be covered, and they carry different markers. The Lambdas (vectorize
+ * subscriber, the crons, the Next API routes) get AWS_LAMBDA_FUNCTION_NAME; ChatCompletion is a
+ * Fargate service (infra/chatCompletion.ts) and gets the ECS task-role URI instead. Since
+ * knowledgeBaseSearch runs inside that container, keying on the Lambda marker alone would leave
+ * chat knowledge-base search failing on exactly the keyless stages this fallback is for.
+ *
+ * SST_RESOURCE_App is the third arm and the one this repo can prove: SST sets it on anything it
+ * links, Lambda and Service alike (infra/chatCompletion.ts:129 and infra/agentExecutor.ts:54 both
+ * note that linking alone exposes SST_RESOURCE_*). It covers the Fargate task whether or not the
+ * ECS credential URI is present, and it is absent from a plain `next dev` and from CI, which is
+ * the case that matters. `sst dev` does set it - correctly, since that session runs against real
+ * AWS credentials.
+ *
+ * Self-host is excluded outright because it has no such role - its keyless path is the local
+ * Ollama embedder (`isLocalEmbedderAvailable` in toolAvailability.ts), not Bedrock.
  *
  * Answers "is Bedrock reachable here", NOT "should we use it" - a keyed stage is keyless-capable
  * too. Only ask this alongside a resolved credential table that came back empty; see
  * `resolveEmbeddingWithKeylessFallback`, the one place that pairs the two questions.
  */
 export function hasKeylessCloudEmbedder(): boolean {
-  return process.env.B4M_SELF_HOST !== 'true';
+  if (process.env.B4M_SELF_HOST === 'true') return false;
+  return !!(
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
+    process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI ||
+    process.env.SST_RESOURCE_App
+  );
 }
 
 export const SupportedEmbeddingModelSchema = z.union([

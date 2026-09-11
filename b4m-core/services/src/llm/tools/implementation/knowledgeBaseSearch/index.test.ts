@@ -249,16 +249,22 @@ describe('search_knowledge_base semantic fallback logging', () => {
     });
   }
 
-  const savedSelfHost = process.env.B4M_SELF_HOST;
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+  };
   beforeEach(() => {
     (logger.warn as ReturnType<typeof vi.fn>).mockClear();
-    // Default to a cloud stage; the self-host case sets this explicitly. Stated rather than
-    // inherited, because whether Bedrock is reachable is now what decides the keyword fallback.
-    delete process.env.B4M_SELF_HOST;
+    // Neither a cloud stage nor self-host by default; the cases that mean one say so. Stated
+    // rather than inherited, because whether Bedrock is reachable is now what decides the keyword
+    // fallback, and "not self-host" is no longer enough to claim it.
+    for (const k of Object.keys(saved)) delete process.env[k];
   });
   afterEach(() => {
-    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
-    else process.env.B4M_SELF_HOST = savedSelfHost;
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   });
 
   it('warns naming the missing adapter when adminSettings/apiKeys are not wired', async () => {
@@ -291,7 +297,10 @@ describe('search_knowledge_base semantic fallback logging', () => {
   it('keeps semantic search on a keyless CLOUD stage instead of degrading to keyword', async () => {
     // A cloud stage reaches Bedrock with its own role, so holding no provider key is not a reason
     // to lose semantic search: resolveEmbeddingWithKeylessFallback swaps the model rather than
-    // returning null. This is the case every preview is in.
+    // returning null. This is the case every preview is in. The execution role is stated rather
+    // than inherited - hasKeylessCloudEmbedder requires positive evidence of one, and the test
+    // runner (like a plain `next dev`) has none.
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-chatCompletion';
     getEffectiveLLMApiKeysMock.mockResolvedValueOnce({});
     const context = makeSemanticContext({
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },

@@ -51,6 +51,18 @@ const usableKey = (value: string | null | undefined): string | null =>
   value && value !== EXPIRED_KEY_SENTINEL ? value : null;
 
 /**
+ * The slot is missing because THIS CALLER's key expired, not because the deployment holds none.
+ * Bedrock has no credential and Ollama's base URL carries no expiry, so only the two keyed cloud
+ * providers can be in this state. See the keyless-fallback doc comment for why it matters.
+ */
+const isExpiredCallerKey = (
+  missing: EmbeddingCredential | null,
+  keyTable: EmbeddingKeyTable | null | undefined
+): boolean =>
+  (missing === 'openai' && keyTable?.openai === EXPIRED_KEY_SENTINEL) ||
+  (missing === 'voyageai' && keyTable?.voyageai === EXPIRED_KEY_SENTINEL);
+
+/**
  * Map an embedding provider plus the caller's resolved key table to the config
  * `EmbeddingFactory` expects, and report which credential is missing if any.
  *
@@ -117,23 +129,42 @@ export function resolveEmbeddingConfig(
  * admin setting. A caller that must hit one specific vector space MUST keep using
  * `resolveEmbeddingConfig` and fail, because a fallback there would silently compare or write
  * across incompatible spaces:
- *   - mementos are pinned to MEMENTO_EMBEDDING_MODEL at 512 truncated dims (see embedding.ts);
+ *   - V2 mementos are pinned to MEMENTO_EMBEDDING_MODEL at 512 truncated dims (see embedding.ts);
+ *   - V1 mementos (mementoEmbedding.ts, getRelevantMementos.ts) read the admin default and so LOOK
+ *     free to choose, but neither live write path stamps `Memento.embeddingModel` - only the
+ *     reembedMementos backfill does. Their vectors are ranked by in-process cosine with no width
+ *     guard and no Atlas index, so a substitution here would drop 1024-dim vectors into a field
+ *     holding 1536-dim ones with nothing recording which is which, and nothing able to tell them
+ *     apart afterwards. Stamping V1 is the prerequisite for including it, not this helper.
  *   - alternateModelAnn embeds one query per model bucket to match each chunk's recorded stamp.
  *
  * Returns the model actually used, so callers stamp what they embedded with rather than what they
  * asked for - that is what keeps `fabFileChunk`'s recorded `embeddingModel` honest.
  *
- * `missing: 'ollama'` is never overridden: a self-host that set no OLLAMA_BASE_URL has no AWS role
- * either, and OPENAI_KEY_MISSING_MESSAGE naming OPENAI_API_KEY / OLLAMA_BASE_URL is the actionable
- * error there. `hasKeylessCloudEmbedder()` already excludes self-host; this is belt-and-braces for
- * a self-host that somehow reports otherwise.
+ * TWO credential states are deliberately NOT treated as "this deployment is keyless":
+ *   - `missing: 'ollama'` - a self-host that set no OLLAMA_BASE_URL has no AWS role either, and
+ *     OPENAI_KEY_MISSING_MESSAGE naming OPENAI_API_KEY / OLLAMA_BASE_URL is the actionable error
+ *     there. `hasKeylessCloudEmbedder()` already excludes self-host; this is belt-and-braces.
+ *   - an EXPIRED caller key. `getEffectiveLLMApiKeys` returns the `'expired'` sentinel instead of
+ *     falling through to the platform demo key, deliberately, so the user is told their key
+ *     expired rather than silently moved onto the platform's (see the reasoning in the
+ *     reactivate-collateral-deactivated-api-keys migration). `usableKey` normalizes that to null
+ *     for the CREDENTIAL check, which is right - but read as "this deployment holds no key" it
+ *     would substitute Titan for that one caller on keyed production, querying a vector space the
+ *     corpus was never written in. The deployment's own key state is unchanged by one expiry, so
+ *     the requested model is returned and the actionable expired-key error stands.
  */
 export function resolveEmbeddingWithKeylessFallback(
   model: SupportedEmbeddingModel,
   keyTable: EmbeddingKeyTable | null | undefined
 ): ResolvedEmbeddingConfig & { model: SupportedEmbeddingModel } {
   const resolved = resolveEmbeddingConfig(getProviderFromModel(model), keyTable);
-  if (!resolved.missing || resolved.missing === 'ollama' || !hasKeylessCloudEmbedder()) {
+  if (
+    !resolved.missing ||
+    resolved.missing === 'ollama' ||
+    isExpiredCallerKey(resolved.missing, keyTable) ||
+    !hasKeylessCloudEmbedder()
+  ) {
     return { ...resolved, model };
   }
   return {
