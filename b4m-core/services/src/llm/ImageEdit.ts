@@ -228,8 +228,8 @@ export class ImageEditService {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      // Targeted write, not the whole stale quest: this catch can run after the success-path update
-      // above already bumped __v, so a guarded whole-doc write here would throw and mask the real error.
+      // Write only the fields this error path sets, not the whole stale quest: this catch can run
+      // after the success-path update above, and a whole-doc write would clobber that update.
       await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
     }
 

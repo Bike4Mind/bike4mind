@@ -345,8 +345,8 @@ export const processDiscoveredLinks = async (
       researchTask.status = ResearchTaskStatus.FAILED;
       researchTask.statusFailedMessage = e.message;
       researchTask.statusFailedAt = new Date();
-      // Targeted write, not the whole stale researchTask (see process.ts): avoids a guarded conflict
-      // masking the real failure on this error path.
+      // Write only the fields this error path sets, not the whole stale researchTask (see process.ts):
+      // a whole-doc write would clobber a concurrent update.
       db.researchTasks.update({
         id: researchTask.id,
         status: researchTask.status,

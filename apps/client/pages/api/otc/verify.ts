@@ -149,8 +149,8 @@ const handler = baseApi({ auth: false })
         existingUser.emailVerified = true;
         existingUser.emailVerifiedAt = new Date();
         try {
-          // Targeted write: a later loginRecords update below writes the same doc, and a guarded
-          // whole-doc write on either would carry a stale __v and throw. Write only the fields set here.
+          // Write only the fields set here: a later loginRecords update below writes the same doc,
+          // and a whole-doc write on either would clobber the other's change.
           await userRepository.update({
             id: existingUser.id,
             emailVerified: existingUser.emailVerified,
