@@ -181,12 +181,24 @@ async function resolveFallbackLake(
  * here, but `canManageLake` in the caller still gates what the grant actually admits the caller
  * to do with it. Extracted so the miss-only laziness is visible at the call site (an `??` on two
  * awaited calls) rather than hidden inside a thunk passed into the repository method.
+ *
+ * The reach read degrades to no reach rather than propagating, like every other optional-adapter
+ * read in this file (see `resolveFallbackLake`): this arm sits behind two already-caught lookups,
+ * so a transient grants-collection failure must not newly 500 a request path that had no prior
+ * dependency on that collection. Degrading to EMPTY can only narrow what resolves, never widen it.
+ *
+ * Deliberately NOT short-circuited on a registry slug, tempting as it looks: a slug matching a
+ * DATA_LAKES id does not mean the registry lake is what the caller is after. `disambiguateSlug`
+ * only reserves the org-less meta-tag, so an ORG-SCOPED lake may legitimately carry a registry
+ * slug - exactly the foreign-org shape this arm serves - and skipping the query there resolves the
+ * synthetic registry lake in place of the caller's own grant-held lake.
  */
 const resolveGrantHeldLakeBySlug = async (
   slug: string,
   ctx: AccessContext,
   dataLakeAccessGrants: AssertLakeAccessAdapters['db']['dataLakeAccessGrants'],
-  dataLakes: Pick<IDataLakeRepository, 'findBySlugAmongIds'>
+  dataLakes: Pick<IDataLakeRepository, 'findBySlugAmongIds'>,
+  logger?: LakeAccessLogger
 ): Promise<IDataLakeDocument | null> => {
   if (!dataLakeAccessGrants) return null;
   // Owner/curator only (includeReaders=false), so the reach's org half is always empty here - the
@@ -196,7 +208,10 @@ const resolveGrantHeldLakeBySlug = async (
     ctx.organizationIds ?? [],
     dataLakeAccessGrants,
     false
-  );
+  ).catch(err => {
+    logger?.warn?.('[dataLakes] grant-held slug fallback query failed; resolving with no grant reach', err);
+    return { grantedLakeIds: [], orgGrantedLakes: {} };
+  });
   if (grantedLakeIds.length === 0) return null;
   return dataLakes.findBySlugAmongIds(slug, grantedLakeIds);
 };
@@ -234,7 +249,7 @@ const resolveLakeAccessWithGrants = async (
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
     (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds)) ??
-    (await resolveGrantHeldLakeBySlug(lakeIdOrSlug, ctx, db.dataLakeAccessGrants, db.dataLakes));
+    (await resolveGrantHeldLakeBySlug(lakeIdOrSlug, ctx, db.dataLakeAccessGrants, db.dataLakes, logger));
   if (lake) {
     // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
     // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.
