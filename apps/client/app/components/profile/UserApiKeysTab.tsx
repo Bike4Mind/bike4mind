@@ -53,7 +53,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
 import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
-import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
 import { toast } from 'sonner';
 import { useState } from 'react';
@@ -1713,14 +1713,6 @@ ai_response = response.json()`,
     </Box>
   );
 }
-
-/**
- * `disabled` is the only state any revoke path writes (revokeUserApiKey, the
- * bulk deactivation, the cc-bridge device revoke all stamp revokedAt with it),
- * so it reads as "revoked" everywhere - and it is the only state the delete
- * route accepts.
- */
-const isRevoked = (key: IUserApiKeyDocument) => key.status === 'disabled';
 
 export default function UserApiKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
