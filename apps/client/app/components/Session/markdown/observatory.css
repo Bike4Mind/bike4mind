@@ -1,0 +1,559 @@
+/* =========================================================================
+   Chat markdown - "Observatory" reading treatment.
+
+   Scope: every rule below is a descendant of `.b4m-md`, the class on the
+   assistant reply body in PromptReplies.tsx. Nothing here is global.
+
+   Light/dark keys off `[data-joy-color-scheme]`, which MUI Joy's
+   InitColorSchemeScript writes on <html> before hydration. Do NOT switch this
+   to `[data-color-mode]` - that is the unrelated attribute the @uiw editor
+   packages use, and it is never set on this app's <html>.
+
+   Non-ASCII is deliberate in this file: .css is outside the repo's ASCII
+   guards (which cover .ts/.tsx/.mts/.cts only), and the typography here wants
+   real characters.
+   ========================================================================= */
+
+/* -- tokens --------------------------------------------------------------
+   The bare `.b4m-md` selector carries the light values so the body still
+   renders if the color-scheme attribute is missing (SSR, tests). Joy's own
+   default light scheme is 'light', so this is the same answer, not a guess. */
+.b4m-md,
+[data-joy-color-scheme='light'] .b4m-md {
+  --b4m-md-bg: #eceff3;
+  --b4m-md-bg-2: #ffffff;
+  --b4m-md-surface: #f6f9fb;
+  --b4m-md-surface-2: #edf2f6;
+  --b4m-md-line: rgba(16, 38, 56, 0.11);
+  --b4m-md-line-2: rgba(16, 38, 56, 0.22);
+  --b4m-md-ink: #141f28;
+  --b4m-md-ink-2: #425663;
+  --b4m-md-ink-3: #768895;
+  --b4m-md-accent: #0b6bcb;
+  --b4m-md-accent-soft: rgba(11, 107, 203, 0.07);
+  --b4m-md-accent-line: rgba(11, 107, 203, 0.32);
+  --b4m-md-warn: #9a6410;
+  --b4m-md-warn-soft: rgba(232, 163, 61, 0.14);
+  --b4m-md-danger: #c41c1c;
+  --b4m-md-ok: #167230;
+  --b4m-md-lift: rgba(255, 255, 255, 0.9);
+}
+
+[data-joy-color-scheme='dark'] .b4m-md {
+  --b4m-md-bg: #080b0e;
+  --b4m-md-bg-2: #0b1014;
+  --b4m-md-surface: #0f161d;
+  --b4m-md-surface-2: #0c1218;
+  --b4m-md-line: rgba(190, 215, 235, 0.085);
+  --b4m-md-line-2: rgba(190, 215, 235, 0.17);
+  --b4m-md-ink: #e8edf2;
+  --b4m-md-ink-2: #a6b5c1;
+  --b4m-md-ink-3: #6c7d8b;
+  --b4m-md-accent: #5aaaea;
+  --b4m-md-accent-soft: rgba(90, 170, 234, 0.11);
+  --b4m-md-accent-line: rgba(90, 170, 234, 0.34);
+  --b4m-md-warn: #e8a33d;
+  --b4m-md-warn-soft: rgba(232, 163, 61, 0.1);
+  --b4m-md-danger: #e5555a;
+  --b4m-md-ok: #43d08c;
+  --b4m-md-lift: rgba(255, 255, 255, 0.055);
+}
+
+/* -- shape, fonts, measure -----------------------------------------------
+   No webfont is loaded. The body face is a system serif stack; the UI face
+   inherits whatever the app already set (Poppins today); mono defers to Joy's
+   own code family, which is what the rest of globals.css already does.
+
+   `.b4m-md` is a plain <div> that wraps the markdown and nothing else. It
+   deliberately does NOT sit on the reply bubble: the bubble is a Joy
+   <Typography>, whose emitted class would tie this one on specificity and win
+   on injection order, and its children include banners and media grids that
+   must not inherit reading typography or match the `> *` measure rules below.
+   Because of that placement this file needs no specificity bumps and no
+   !important anywhere. */
+.b4m-md {
+  --b4m-md-r: 10px;
+  --b4m-md-r-sm: 6px;
+
+  --b4m-md-font-body: Georgia, 'Iowan Old Style', 'Source Serif 4', serif;
+
+  /* Must be a real stack, not `inherit`. This element sets font-family to the
+     body serif, so an inheriting UI font would resolve to that serif and
+     collapse the whole point: serif for reading, sans for chrome (headings
+     below h2, table heads, labels), mono for data. */
+  --b4m-md-font-ui: var(
+    --joy-fontFamily-body,
+    'Poppins',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif
+  );
+  --b4m-md-font-mono: var(
+    --joy-fontFamily-code,
+    ui-monospace,
+    'Monaco',
+    'Menlo',
+    'Ubuntu Mono',
+    'Consolas',
+    'source-code-pro',
+    monospace
+  );
+
+  /* Cap the reading measure on the flow children rather than on `.b4m-md`
+     itself: the element is the reply bubble, and narrowing it would shrink its
+     background and padding along with the text. */
+  --b4m-md-measure: min(100%, 68ch);
+  --b4m-md-measure-wide: min(100%, 76ch);
+
+  /* Container plumbing for the later rail work. The only thing that reads it
+     today is the measure widening at the bottom of this file. */
+  container-type: inline-size;
+  container-name: b4m-md;
+
+  font-family: var(--b4m-md-font-body);
+  line-height: 1.68;
+  color: var(--b4m-md-ink-2);
+  hanging-punctuation: first last;
+  text-wrap: pretty;
+}
+
+.b4m-md > :where(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: var(--b4m-md-measure);
+}
+
+.b4m-md > :first-child {
+  margin-top: 0;
+}
+
+.b4m-md > :last-child {
+  margin-bottom: 0;
+}
+
+/* -- prose ---------------------------------------------------------------- */
+.b4m-md p {
+  margin: 0 0 1.05em;
+  text-wrap: pretty;
+}
+
+/* An image-only paragraph, unwrapped to a <div> by markdownComponents.tsx
+   because <div> inside <p> is invalid nesting. It keeps the paragraph rhythm. */
+.b4m-md .b4m-md-figure {
+  margin: 0 0 1.05em;
+}
+
+.b4m-md strong {
+  color: var(--b4m-md-ink);
+  font-weight: 620;
+}
+
+.b4m-md em {
+  font-style: italic;
+}
+
+.b4m-md a {
+  color: var(--b4m-md-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--b4m-md-accent-line);
+}
+
+.b4m-md a:hover {
+  border-bottom-color: var(--b4m-md-accent);
+}
+
+.b4m-md del {
+  color: var(--b4m-md-ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--b4m-md-line-2);
+  text-decoration-thickness: 1px;
+}
+
+.b4m-md mark {
+  background: var(--b4m-md-warn-soft);
+  color: inherit;
+  border-radius: var(--b4m-md-r-sm);
+  padding: 0 0.15em;
+}
+
+.b4m-md sup,
+.b4m-md sub {
+  font-size: 0.72em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+  font-family: var(--b4m-md-font-ui);
+}
+
+.b4m-md sup {
+  top: -0.5em;
+}
+
+.b4m-md sub {
+  bottom: -0.25em;
+}
+
+.b4m-md hr {
+  border: 0;
+  border-top: 1px solid var(--b4m-md-line);
+  margin: 2em 0;
+}
+
+/* -- headings -------------------------------------------------------------
+   h1-h3 come straight from the comp. h4-h6 extend the same idea: the scale
+   stops growing and starts receding, so a deep outline reads as structure
+   rather than as ever-smaller shouting. */
+.b4m-md :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--b4m-md-ink);
+  letter-spacing: -0.015em;
+  line-height: 1.22;
+  text-wrap: balance;
+}
+
+.b4m-md h1 {
+  font-family: var(--b4m-md-font-body);
+  font-size: 1.42em;
+  font-weight: 600;
+  font-variation-settings: 'opsz' 44;
+  margin: 2em 0 0.62em;
+}
+
+.b4m-md h2 {
+  font-family: var(--b4m-md-font-body);
+  font-size: 1.2em;
+  font-weight: 600;
+  font-variation-settings: 'opsz' 30;
+  letter-spacing: -0.018em;
+  margin: 1.85em 0 0.6em;
+  padding-top: 0.72em;
+  border-top: 1px solid var(--b4m-md-line);
+}
+
+.b4m-md h3 {
+  font-family: var(--b4m-md-font-ui);
+  font-size: 0.86em;
+  font-weight: 660;
+  letter-spacing: 0.02em;
+  margin: 1.5em 0 0.5em;
+}
+
+.b4m-md h4 {
+  font-family: var(--b4m-md-font-ui);
+  font-size: 0.8em;
+  font-weight: 640;
+  letter-spacing: 0.03em;
+  margin: 1.35em 0 0.45em;
+}
+
+.b4m-md h5 {
+  font-family: var(--b4m-md-font-ui);
+  font-size: 0.72em;
+  font-weight: 640;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--b4m-md-ink-2);
+  margin: 1.25em 0 0.4em;
+}
+
+.b4m-md h6 {
+  font-family: var(--b4m-md-font-ui);
+  font-size: 0.68em;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--b4m-md-ink-3);
+  margin: 1.2em 0 0.4em;
+}
+
+/* -- lists ----------------------------------------------------------------
+   Unordered markers are a hairline dash, not a bullet: at reading size a dot
+   is a blob and a dash is a rule, which is the language the rest of this
+   treatment speaks. Ordered markers recede to tertiary ink, because the
+   number is an index, not a claim. */
+.b4m-md ul,
+.b4m-md ol {
+  margin: 0 0 1.1em;
+  padding-left: 1.1em;
+}
+
+.b4m-md ul {
+  list-style: none;
+  padding-left: 1.25em;
+}
+
+.b4m-md ul > li {
+  position: relative;
+  margin-bottom: 0.5em;
+  text-wrap: pretty;
+}
+
+.b4m-md ul > li::before {
+  content: '';
+  position: absolute;
+  left: -1.05em;
+  top: 0.66em;
+  width: 5px;
+  height: 1px;
+  background: var(--b4m-md-ink-3);
+}
+
+.b4m-md ol > li {
+  margin-bottom: 0.5em;
+  padding-left: 0.25em;
+  text-wrap: pretty;
+}
+
+.b4m-md ol > li::marker {
+  color: var(--b4m-md-ink-3);
+  font-family: var(--b4m-md-font-mono);
+  font-size: 0.85em;
+}
+
+.b4m-md li > :last-child {
+  margin-bottom: 0;
+}
+
+.b4m-md li > ul,
+.b4m-md li > ol {
+  margin-top: 0.5em;
+}
+
+/* Task lists: GFM renders `- [x] done` as a checkbox inside the <li>. The
+   checkbox replaces the dash, so suppress the marker on exactly those rows. */
+.b4m-md li:has(> input[type='checkbox']) {
+  list-style: none;
+  padding-left: 0.1em;
+}
+
+.b4m-md li:has(> input[type='checkbox'])::before {
+  content: none;
+}
+
+.b4m-md li > input[type='checkbox'] {
+  appearance: none;
+  position: absolute;
+  left: -1.35em;
+  top: 0.42em;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  border: 1px solid var(--b4m-md-line-2);
+  border-radius: 3px;
+  background: transparent;
+}
+
+.b4m-md li > input[type='checkbox']:checked {
+  border-color: var(--b4m-md-accent-line);
+  background: var(--b4m-md-accent-soft);
+}
+
+.b4m-md li > input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 3px;
+  height: 7px;
+  border: solid var(--b4m-md-accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(42deg);
+}
+
+.b4m-md li:has(> input[type='checkbox']:checked) {
+  color: var(--b4m-md-ink-3);
+}
+
+/* -- blockquote -----------------------------------------------------------
+   A rule and a shift of register, not a tinted box: the quote is a different
+   voice, not a different importance. */
+.b4m-md blockquote {
+  margin: 0 0 1.3em;
+  padding: 0.1em 0 0.1em 1.15em;
+  border-left: 1px solid var(--b4m-md-line-2);
+  color: var(--b4m-md-ink-3);
+  font-style: italic;
+}
+
+.b4m-md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.b4m-md blockquote strong {
+  color: var(--b4m-md-ink-2);
+}
+
+/* -- inline code ---------------------------------------------------------- */
+.b4m-md :not(pre) > code {
+  font-family: var(--b4m-md-font-mono);
+  font-size: 0.83em;
+  color: var(--b4m-md-ink);
+  background: var(--b4m-md-surface-2);
+  border: 1px solid var(--b4m-md-line);
+  padding: 0.08em 0.38em;
+  border-radius: var(--b4m-md-r-sm);
+  font-style: normal;
+}
+
+/* -- tables ---------------------------------------------------------------
+   Ruled above and below, never boxed: verticals fight the eye's left-to-right
+   scan, and a horizontal rule per row is all the separation a reader needs.
+   The per-column classes are set in markdownComponents.tsx, which is where the
+   numeric analysis has to live (CSS cannot look across rows). */
+.b4m-md .b4m-md-table-wrap {
+  margin: 0 0 1.5em;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.b4m-md table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 0;
+  font-family: var(--b4m-md-font-ui);
+  font-size: 0.84em;
+  line-height: 1.45;
+}
+
+.b4m-md thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.68em;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--b4m-md-ink-3);
+  padding: 0 14px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--b4m-md-line-2);
+  white-space: nowrap;
+}
+
+.b4m-md tbody td {
+  padding: 10px 14px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--b4m-md-line);
+  color: var(--b4m-md-ink-2);
+  vertical-align: top;
+}
+
+.b4m-md tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.b4m-md tbody tr:hover td {
+  background: var(--b4m-md-surface-2);
+}
+
+/* A column every body cell of which parses to exactly one number: right-align,
+   tabular figures, and a magnitude bar under the value. */
+.b4m-md .b4m-md-num {
+  font-family: var(--b4m-md-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--b4m-md-ink);
+}
+
+.b4m-md tbody td.b4m-md-num {
+  position: relative;
+}
+
+.b4m-md tbody td.b4m-md-num[style*='--b4m-md-bar']::after {
+  content: '';
+  position: absolute;
+  right: 14px;
+  bottom: 5px;
+  width: calc(var(--b4m-md-bar) * 62px);
+  height: 2px;
+  border-radius: 2px;
+  background: var(--b4m-md-accent);
+  opacity: 0.42;
+}
+
+/* Numeric but long enough to be read as prose (the >24-character guard): keep
+   the mono face and the tabular figures, drop the right-alignment and the bar
+   so a wrapped cell does not ladder away from its neighbours. */
+.b4m-md .b4m-md-numtext {
+  font-family: var(--b4m-md-font-mono);
+  font-size: 0.93em;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  white-space: normal;
+  color: var(--b4m-md-ink-2);
+}
+
+/* The total row is ruled, not filled: a fill reads as a highlight, and a total
+   is a boundary. */
+.b4m-md tbody tr[data-b4m-md-total] td {
+  background: transparent;
+  border-top: 1px solid var(--b4m-md-line-2);
+  color: var(--b4m-md-ink);
+}
+
+.b4m-md tbody tr[data-b4m-md-total] strong {
+  color: var(--b4m-md-ink);
+}
+
+.b4m-md tbody tr[data-b4m-md-total] td.b4m-md-num {
+  color: var(--b4m-md-accent);
+}
+
+/* -- footnotes ------------------------------------------------------------
+   remark-gfm emits <section data-footnotes> with an <ol> of definitions and an
+   <hr> just above it. The whole block is apparatus, so it drops a size and a
+   step of ink rather than carrying body weight. */
+.b4m-md section[data-footnotes] {
+  margin-top: 2em;
+  padding-top: 1.1em;
+  border-top: 1px solid var(--b4m-md-line);
+  font-size: 0.86em;
+  color: var(--b4m-md-ink-3);
+}
+
+.b4m-md section[data-footnotes] > h2 {
+  font-family: var(--b4m-md-font-ui);
+  font-size: 0.72em;
+  font-weight: 640;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--b4m-md-ink-3);
+  border-top: 0;
+  padding-top: 0;
+  margin: 0 0 0.8em;
+}
+
+.b4m-md section[data-footnotes] ol {
+  padding-left: 1.4em;
+}
+
+.b4m-md section[data-footnotes] li {
+  margin-bottom: 0.35em;
+}
+
+.b4m-md section[data-footnotes] p {
+  margin-bottom: 0.4em;
+}
+
+/* The <hr> remark-gfm inserts immediately before the footnote section would
+   double the section's own top rule. */
+.b4m-md hr + section[data-footnotes] {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.b4m-md .data-footnote-backref {
+  border-bottom: 0;
+}
+
+/* -- container plumbing ---------------------------------------------------
+   One query, one effect: when the reply column itself (not the viewport) is
+   wide, the measure relaxes. This exists to prove the container is wired so a
+   later branch can hang the margin rail off the same context. */
+@container b4m-md (min-width: 720px) {
+  .b4m-md > :where(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6) {
+    max-width: var(--b4m-md-measure-wide);
+  }
+}

@@ -2,22 +2,13 @@ import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
-import React, {
-  FC,
-  useCallback,
-  useState,
-  useRef,
-  useEffect,
-  HTMLAttributes,
-  DetailedHTMLProps,
-  FunctionComponent,
-  ReactNode,
-  useMemo,
-  ComponentProps,
-} from 'react';
+import React, { FC, useCallback, useState, useRef, useEffect, ReactNode, useMemo, ComponentProps } from 'react';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { useTheme } from '@mui/joy/styles';
+import { createMarkdownComponents } from './markdown/markdownComponents';
+import { getMarkdownSyntaxTheme, type PrismStyle } from './markdown/syntaxTheme';
+import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { highlightTextSearch } from '@client/app/components/GenAI/highlight';
@@ -102,338 +93,334 @@ function simpleHash(str: string): string {
   return Math.abs(hash).toString(36).slice(0, 8);
 }
 
-// Markdown `code` component: handles inline artifacts in code blocks
+// Markdown `code` component: handles inline artifacts in code blocks. The
+// Prism theme is closed over rather than read from a hook here, because the
+// caller already resolves the color scheme and this function deliberately
+// stays a plain render helper.
+const createCodeComponent = (syntaxTheme: PrismStyle) => {
+  const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
+    const match = /language-(\w+)/.exec(className || '');
+    const language = match ? match[1] : 'text';
+    const codeContent = String(children).replace(/\n$/, '');
+    const lineCount = codeContent.split('\n').length;
+    const inline =
+      node?.position?.start.line === node?.position?.end.line &&
+      node?.position?.start.column !== node?.position?.end.column;
 
-const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
-  const match = /language-(\w+)/.exec(className || '');
-  const language = match ? match[1] : 'text';
-  const codeContent = String(children).replace(/\n$/, '');
-  const lineCount = codeContent.split('\n').length;
-  const inline =
-    node?.position?.start.line === node?.position?.end.line &&
-    node?.position?.start.column !== node?.position?.end.column;
+    // Generate a stable yet unique ID for this code block
+    const position = node?.position?.start.line || '';
+    const firstChars = codeContent.slice(0, 100).replace(/\s/g, '');
+    const baseId = `code-${language}-${position}-${firstChars}`;
+    const contentHash = simpleHash(codeContent);
 
-  // Generate a stable yet unique ID for this code block
-  const position = node?.position?.start.line || '';
-  const firstChars = codeContent.slice(0, 100).replace(/\s/g, '');
-  const baseId = `code-${language}-${position}-${firstChars}`;
-  const contentHash = simpleHash(codeContent);
-
-  let artifactId: string;
-  if (!codeBlockRegistry.has(baseId)) {
-    codeBlockRegistry.set(baseId, new Set([contentHash]));
-    artifactId = baseId;
-  } else {
-    const hashSet = codeBlockRegistry.get(baseId)!;
-    if (!hashSet.has(contentHash)) {
-      hashSet.add(contentHash);
+    let artifactId: string;
+    if (!codeBlockRegistry.has(baseId)) {
+      codeBlockRegistry.set(baseId, new Set([contentHash]));
+      artifactId = baseId;
+    } else {
+      const hashSet = codeBlockRegistry.get(baseId)!;
+      if (!hashSet.has(contentHash)) {
+        hashSet.add(contentHash);
+      }
+      artifactId = `${baseId}-${contentHash}`;
     }
-    artifactId = `${baseId}-${contentHash}`;
-  }
 
-  // Legacy blog-draft JSON detection - fallback for drafts persisted before the
-  // <artifact> path; the artifact handler is now the primary route. Kept for
-  // backward compatibility; silently no-ops on non-matching JSON.
-  if (language === 'json') {
-    try {
-      const parsed = JSON.parse(codeContent);
-      if (
-        parsed.title &&
-        parsed.content &&
-        typeof parsed.title === 'string' &&
-        typeof parsed.content === 'string' &&
-        parsed.suggestedTags &&
-        Array.isArray(parsed.suggestedTags)
-      ) {
+    // Legacy blog-draft JSON detection - fallback for drafts persisted before the
+    // <artifact> path; the artifact handler is now the primary route. Kept for
+    // backward compatibility; silently no-ops on non-matching JSON.
+    if (language === 'json') {
+      try {
+        const parsed = JSON.parse(codeContent);
+        if (
+          parsed.title &&
+          parsed.content &&
+          typeof parsed.title === 'string' &&
+          typeof parsed.content === 'string' &&
+          parsed.suggestedTags &&
+          Array.isArray(parsed.suggestedTags)
+        ) {
+          return (
+            <Box sx={{ my: 2 }}>
+              <ContentTransformPreviewCard
+                data={{
+                  title: parsed.title,
+                  content: parsed.content,
+                  summary: parsed.summary || '',
+                  suggestedTags: parsed.suggestedTags,
+                }}
+              />
+            </Box>
+          );
+        }
+      } catch {
+        // Not a blog-draft JSON block - fall through to normal code rendering.
+      }
+    }
+
+    // Recharts inline rendering
+    if (language === 'recharts') {
+      try {
+        const rechartsConfig = parseChartJSON(codeContent);
         return (
-          <Box sx={{ my: 2 }}>
-            <ContentTransformPreviewCard
-              data={{
-                title: parsed.title,
-                content: parsed.content,
-                summary: parsed.summary || '',
-                suggestedTags: parsed.suggestedTags,
+          <RechartsRenderer
+            config={rechartsConfig}
+            title={rechartsConfig.title}
+            description={rechartsConfig.description}
+            forceMode="inline"
+          />
+        );
+      } catch (error) {
+        const errorMessage =
+          error instanceof ChartParseError ? getChartErrorMessage(error) : 'Invalid chart configuration';
+        return (
+          <Box sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}>
+            <Typography level="body-sm" color="danger">
+              Error rendering chart: {errorMessage}
+            </Typography>
+            <Box
+              component="pre"
+              sx={{
+                mt: 1,
+                p: 1,
+                bgcolor: 'background.level1',
+                borderRadius: 'sm',
+                fontSize: '0.875rem',
+                fontFamily: 'monospace',
+                overflow: 'auto',
+                maxHeight: '200px',
               }}
-            />
+            >
+              {codeContent}
+            </Box>
           </Box>
         );
       }
-    } catch {
-      // Not a blog-draft JSON block - fall through to normal code rendering.
     }
-  }
 
-  // Recharts inline rendering
-  if (language === 'recharts') {
-    try {
-      const rechartsConfig = parseChartJSON(codeContent);
-      return (
-        <RechartsRenderer
-          config={rechartsConfig}
-          title={rechartsConfig.title}
-          description={rechartsConfig.description}
-          forceMode="inline"
-        />
-      );
-    } catch (error) {
-      const errorMessage =
-        error instanceof ChartParseError ? getChartErrorMessage(error) : 'Invalid chart configuration';
-      return (
-        <Box sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}>
-          <Typography level="body-sm" color="danger">
-            Error rendering chart: {errorMessage}
-          </Typography>
-          <Box
-            component="pre"
-            sx={{
-              mt: 1,
-              p: 1,
-              bgcolor: 'background.level1',
-              borderRadius: 'sm',
-              fontSize: '0.875rem',
-              fontFamily: 'monospace',
-              overflow: 'auto',
-              maxHeight: '200px',
-            }}
-          >
-            {codeContent}
-          </Box>
-        </Box>
-      );
-    }
-  }
+    // Chess inline rendering
+    if (language === 'chess') {
+      try {
+        const jsonStr = extractChessJson(codeContent);
+        if (!jsonStr) throw new Error('No JSON in chess data');
+        const chessData = JSON.parse(jsonStr);
+        const fen = chessData.fen || chessData.resultingFen;
+        if (!fen) throw new Error('No FEN in chess data');
 
-  // Chess inline rendering
-  if (language === 'chess') {
-    try {
-      const jsonStr = extractChessJson(codeContent);
-      if (!jsonStr) throw new Error('No JSON in chess data');
-      const chessData = JSON.parse(jsonStr);
-      const fen = chessData.fen || chessData.resultingFen;
-      if (!fen) throw new Error('No FEN in chess data');
+        const turnLabel = chessData.turn === 'w' ? 'White' : 'Black';
+        let statusText = `${turnLabel} to move`;
+        if (chessData.isCheckmate) statusText = `Checkmate! ${chessData.turn === 'w' ? 'Black' : 'White'} wins`;
+        else if (chessData.isStalemate) statusText = 'Stalemate \u2014 draw';
+        else if (chessData.isDraw) statusText = 'Draw';
+        else if (chessData.isCheck) statusText = `${turnLabel} to move \u2014 Check!`;
 
-      const turnLabel = chessData.turn === 'w' ? 'White' : 'Black';
-      let statusText = `${turnLabel} to move`;
-      if (chessData.isCheckmate) statusText = `Checkmate! ${chessData.turn === 'w' ? 'Black' : 'White'} wins`;
-      else if (chessData.isStalemate) statusText = 'Stalemate — draw';
-      else if (chessData.isDraw) statusText = 'Draw';
-      else if (chessData.isCheck) statusText = `${turnLabel} to move — Check!`;
-
-      const openChessInSidePanelFromCode = () => {
-        const urlSessionId =
-          typeof window !== 'undefined' ? window.location.pathname.match(/\/notebooks\/([^/]+)/)?.[1] : undefined;
-        let latest: LatestChessState | undefined;
-        if (urlSessionId) {
-          latest = latestChessStateMap.get(urlSessionId);
-        }
-        if (!latest) {
-          for (const entry of latestChessStateMap.values()) {
-            if (!latest || (entry.moveNumber ?? 0) >= (latest.moveNumber ?? 0)) {
-              latest = entry;
+        const openChessInSidePanelFromCode = () => {
+          const urlSessionId =
+            typeof window !== 'undefined' ? window.location.pathname.match(/\/notebooks\/([^/]+)/)?.[1] : undefined;
+          let latest: LatestChessState | undefined;
+          if (urlSessionId) {
+            latest = latestChessStateMap.get(urlSessionId);
+          }
+          if (!latest) {
+            for (const entry of latestChessStateMap.values()) {
+              if (!latest || (entry.moveNumber ?? 0) >= (latest.moveNumber ?? 0)) {
+                latest = entry;
+              }
             }
           }
-        }
-        const useFen = latest?.fen || fen;
-        const useJsonStr = latest?.jsonStr || jsonStr;
-        const useData = latest || chessData;
-        const now = new Date();
-        const chessArtifact: ChessArtifact = {
-          id: `chess-${useFen.replace(/\s+/g, '-').slice(0, 20)}-${Date.now()}`,
-          type: 'chess',
-          title: 'Chess Game',
-          content: useJsonStr,
-          createdAt: now,
-          updatedAt: now,
-          metadata: {
-            fen: useFen,
-            turn: useData.turn as 'w' | 'b' | undefined,
-            lastMove: useData.move ? { from: useData.move.from, to: useData.move.to } : undefined,
-            isCheck: useData.isCheck,
-            isCheckmate: useData.isCheckmate,
-            isDraw: useData.isDraw,
-            isGameOver: useData.isGameOver,
-            moveNumber: useData.moveNumber,
-          },
-        };
-        setSessionLayout({
-          layout: 'vertical',
-          artifactData: {
+          const useFen = latest?.fen || fen;
+          const useJsonStr = latest?.jsonStr || jsonStr;
+          const useData = latest || chessData;
+          const now = new Date();
+          const chessArtifact: ChessArtifact = {
+            id: `chess-${useFen.replace(/\s+/g, '-').slice(0, 20)}-${Date.now()}`,
             type: 'chess',
-            content: chessArtifact,
-            mimeType: 'application/vnd.ant.chess',
-            id: chessArtifact.id,
-          },
-        });
-      };
-
-      return (
-        <Box
-          onClick={openChessInSidePanelFromCode}
-          sx={{
-            my: 2,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 1,
-            cursor: 'pointer',
-            '&:hover': { opacity: 0.85 },
-          }}
-        >
-          <ChessBoard
-            fen={fen}
-            lastMove={chessData.move ? { from: chessData.move.from, to: chessData.move.to } : undefined}
-          />
-          <Typography level="body-sm" sx={{ fontWeight: 500 }}>
-            {statusText}
-            {chessData.moveNumber ? ` — Move ${chessData.moveNumber}` : ''}
-          </Typography>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            Click to open interactive board
-          </Typography>
-        </Box>
-      );
-    } catch (err) {
-      console.warn('[Chess] Failed to parse chess data:', err, 'Content:', codeContent.slice(0, 200));
-      return (
-        <Box sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}>
-          <Typography level="body-sm" color="danger">
-            Error rendering chess board: {err instanceof Error ? err.message : 'Invalid data'}
-          </Typography>
-          <Box
-            component="pre"
-            sx={{
-              mt: 1,
-              p: 1,
-              bgcolor: 'background.level1',
-              borderRadius: 'sm',
-              fontSize: '0.875rem',
-              fontFamily: 'monospace',
-              overflow: 'auto',
-              maxHeight: '200px',
-            }}
-          >
-            {codeContent}
-          </Box>
-        </Box>
-      );
-    }
-  }
-
-  // Mermaid preview
-  if (language === 'mermaid') {
-    const validation = validateMermaidSyntax(codeContent);
-    const displayContent = validation.cleanedContent || codeContent;
-
-    return (
-      <Box
-        sx={{
-          my: 2,
-          cursor: 'pointer',
-          border: '1px solid',
-          borderColor: 'divider',
-          borderRadius: 'sm',
-          p: 2,
-          '&:hover': {
-            bgcolor: 'background.level1',
-          },
-        }}
-        onClick={() => {
-          const mermaidArtifact: MermaidArtifact = {
-            id: `mermaid-${Math.random().toString(36).substring(2, 11)}`,
-            type: 'mermaid',
-            title: 'Mermaid Diagram',
-            content: displayContent,
+            title: 'Chess Game',
+            content: useJsonStr,
+            createdAt: now,
+            updatedAt: now,
             metadata: {
-              chartType: 'flowchart',
-              description: 'Generated Mermaid diagram',
+              fen: useFen,
+              turn: useData.turn as 'w' | 'b' | undefined,
+              lastMove: useData.move ? { from: useData.move.from, to: useData.move.to } : undefined,
+              isCheck: useData.isCheck,
+              isCheckmate: useData.isCheckmate,
+              isDraw: useData.isDraw,
+              isGameOver: useData.isGameOver,
+              moveNumber: useData.moveNumber,
             },
-            createdAt: new Date(),
-            updatedAt: new Date(),
           };
-
           setSessionLayout({
             layout: 'vertical',
             artifactData: {
-              type: 'mermaid',
-              content: mermaidArtifact,
-              mimeType: 'text/plain',
-              id: mermaidArtifact.id,
+              type: 'chess',
+              content: chessArtifact,
+              mimeType: 'application/vnd.ant.chess',
+              id: chessArtifact.id,
             },
           });
-        }}
-      >
-        <Stack direction="row" spacing={1} alignItems="center" mb={1}>
-          <MermaidIcon sx={{ color: 'neutral.300', fontSize: '1.25rem' }} />
-          <Typography level="body-sm">Click to view Mermaid diagram</Typography>
-        </Stack>
+        };
+
+        return (
+          <Box
+            onClick={openChessInSidePanelFromCode}
+            sx={{
+              my: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 1,
+              cursor: 'pointer',
+              '&:hover': { opacity: 0.85 },
+            }}
+          >
+            <ChessBoard
+              fen={fen}
+              lastMove={chessData.move ? { from: chessData.move.from, to: chessData.move.to } : undefined}
+            />
+            <Typography level="body-sm" sx={{ fontWeight: 500 }}>
+              {statusText}
+              {chessData.moveNumber ? ` \u2014 Move ${chessData.moveNumber}` : ''}
+            </Typography>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              Click to open interactive board
+            </Typography>
+          </Box>
+        );
+      } catch (err) {
+        console.warn('[Chess] Failed to parse chess data:', err, 'Content:', codeContent.slice(0, 200));
+        return (
+          <Box sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}>
+            <Typography level="body-sm" color="danger">
+              Error rendering chess board: {err instanceof Error ? err.message : 'Invalid data'}
+            </Typography>
+            <Box
+              component="pre"
+              sx={{
+                mt: 1,
+                p: 1,
+                bgcolor: 'background.level1',
+                borderRadius: 'sm',
+                fontSize: '0.875rem',
+                fontFamily: 'monospace',
+                overflow: 'auto',
+                maxHeight: '200px',
+              }}
+            >
+              {codeContent}
+            </Box>
+          </Box>
+        );
+      }
+    }
+
+    // Mermaid preview
+    if (language === 'mermaid') {
+      const validation = validateMermaidSyntax(codeContent);
+      const displayContent = validation.cleanedContent || codeContent;
+
+      return (
         <Box
-          component="pre"
           sx={{
-            p: 2,
+            my: 2,
+            cursor: 'pointer',
+            border: '1px solid',
+            borderColor: 'divider',
             borderRadius: 'sm',
-            bgcolor: 'background.level1',
-            overflow: 'auto',
-            fontSize: '0.875rem',
-            fontFamily: 'monospace',
-            whiteSpace: 'pre-wrap',
-            maxHeight: '100px',
+            p: 2,
+            '&:hover': {
+              bgcolor: 'background.level1',
+            },
+          }}
+          onClick={() => {
+            const mermaidArtifact: MermaidArtifact = {
+              id: `mermaid-${Math.random().toString(36).substring(2, 11)}`,
+              type: 'mermaid',
+              title: 'Mermaid Diagram',
+              content: displayContent,
+              metadata: {
+                chartType: 'flowchart',
+                description: 'Generated Mermaid diagram',
+              },
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+
+            setSessionLayout({
+              layout: 'vertical',
+              artifactData: {
+                type: 'mermaid',
+                content: mermaidArtifact,
+                mimeType: 'text/plain',
+                id: mermaidArtifact.id,
+              },
+            });
           }}
         >
-          {displayContent}
+          <Stack direction="row" spacing={1} alignItems="center" mb={1}>
+            <MermaidIcon sx={{ color: 'neutral.300', fontSize: '1.25rem' }} />
+            <Typography level="body-sm">Click to view Mermaid diagram</Typography>
+          </Stack>
+          <Box
+            component="pre"
+            sx={{
+              p: 2,
+              borderRadius: 'sm',
+              bgcolor: 'background.level1',
+              overflow: 'auto',
+              fontSize: '0.875rem',
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              maxHeight: '100px',
+            }}
+          >
+            {displayContent}
+          </Box>
         </Box>
+      );
+    }
+
+    // Inline code or short snippet
+    if (inline || lineCount <= 10) {
+      return !inline ? (
+        <Box sx={{ position: 'relative' }}>
+          <CopyCodeButton code={codeContent} language={language} />
+          <SyntaxHighlighter
+            // @ts-ignore - ignoring style prop type issue
+            style={syntaxTheme}
+            customStyle={{ paddingTop: '32px' }}
+            language={language}
+            PreTag="div"
+            {...props}
+          >
+            {codeContent}
+          </SyntaxHighlighter>
+        </Box>
+      ) : (
+        // Bare <code>: observatory.css owns the inline-code skin, and a hardcoded
+        // sx here would only lose to it on specificity while reading as live.
+        <code {...props}>{children}</code>
+      );
+    }
+
+    // Longer code blocks -> CodeArtifact preview card
+    const extractedTitle = extractCodeBlockTitle(codeContent, language);
+
+    const codeArtifact = {
+      title: extractedTitle,
+      description: codeContent.split('\n').slice(0, 2).join('\n') + '...',
+      language,
+      code: codeContent,
+      lineCount,
+    };
+
+    return (
+      <Box sx={{ my: 2 }}>
+        <CodeArtifactPreviewCard data={codeArtifact} artifactId={artifactId} />
       </Box>
     );
-  }
-
-  // Inline code or short snippet
-  if (inline || lineCount <= 10) {
-    return !inline ? (
-      <Box sx={{ position: 'relative' }}>
-        <CopyCodeButton code={codeContent} language={language} />
-        <SyntaxHighlighter
-          // @ts-ignore - ignoring style prop type issue
-          style={oneDark}
-          customStyle={{ paddingTop: '32px' }}
-          language={language}
-          PreTag="div"
-          {...props}
-        >
-          {codeContent}
-        </SyntaxHighlighter>
-      </Box>
-    ) : (
-      <Box
-        component="code"
-        sx={{
-          padding: '3px 6px',
-          backgroundColor: 'neutral.700',
-          borderRadius: '.235rem',
-          color: 'neutral.50',
-          textWrap: 'balance',
-        }}
-        {...props}
-      >
-        {children}
-      </Box>
-    );
-  }
-
-  // Longer code blocks -> CodeArtifact preview card
-  const extractedTitle = extractCodeBlockTitle(codeContent, language);
-
-  const codeArtifact = {
-    title: extractedTitle,
-    description: codeContent.split('\n').slice(0, 2).join('\n') + '...',
-    language,
-    code: codeContent,
-    lineCount,
   };
 
-  return (
-    <Box sx={{ my: 2 }}>
-      <CodeArtifactPreviewCard data={codeArtifact} artifactId={artifactId} />
-    </Box>
-  );
+  return code;
 };
 
 // Other markdown components
@@ -1220,132 +1207,14 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     [search]
   );
 
-  const p: FunctionComponent<
-    Omit<DetailedHTMLProps<HTMLAttributes<HTMLParagraphElement>, HTMLParagraphElement>, 'ref'> & ExtraProps
-  > = useCallback(
-    ({ node, children, color, ...props }) => {
-      const nodeWithParent = node as typeof node & { parent?: { children?: unknown[] } };
-      const isLast =
-        node &&
-        nodeWithParent.parent &&
-        Array.isArray(nodeWithParent.parent.children) &&
-        nodeWithParent.parent.children[nodeWithParent.parent.children.length - 1] === node;
+  // The reply's react-markdown override map. Everything not listed there renders
+  // as a bare semantic tag and is styled by observatory.css.
+  const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
-      const childArray = React.Children.toArray(children);
-      const hasOnlyImage =
-        childArray.length === 1 &&
-        React.isValidElement(childArray[0]) &&
-        (childArray[0].type === ImageContainer ||
-          (typeof childArray[0].type === 'function' && childArray[0].type.name === 'img'));
-
-      if (hasOnlyImage) {
-        return <Box sx={{ mb: isLast ? '0 !important' : '8px !important' }}>{children}</Box>;
-      }
-
-      const processedChildren = React.Children.map(children, child => {
-        if (typeof child === 'string') {
-          return highlightText(child);
-        }
-        return child;
-      });
-
-      return (
-        <Typography
-          level={isMobile ? 'body-sm' : 'body-md'}
-          component="p"
-          gutterBottom={false}
-          sx={{ display: 'block', color: 'text.primary', mb: isLast ? '0 !important' : '8px !important' }}
-          {...props}
-          data-testid="ai-response"
-        >
-          {processedChildren}
-        </Typography>
-      );
-    },
-    [highlightText, isMobile]
-  );
-
-  const tableComponents = {
-    // Wide tables scroll horizontally inside their own wrapper. The reply body is
-    // no longer a scroll container (that caused Android to snap text selection to
-    // whole-block boundaries), so each element that can exceed the width owns its
-    // own overflow.
-    table: ({ node, children, ref, ...props }: ComponentProps<'table'> & ExtraProps) => (
-      <Box sx={{ overflowX: 'auto', maxWidth: '100%', margin: '1rem 0' }}>
-        <Box
-          component="table"
-          sx={{
-            width: '100%',
-            borderCollapse: 'collapse',
-            border: '1px solid',
-            borderColor: 'neutral.300',
-            borderRadius: '8px',
-            overflow: 'hidden',
-            color: 'text.primary',
-            '& th, & td': {
-              padding: '0.75rem',
-              border: '1px solid',
-              borderColor: 'divider',
-              color: 'text.primary',
-            },
-            '& th': {
-              backgroundColor: 'background.level1',
-              fontWeight: 'bold',
-              borderBottom: '2px solid',
-              borderBottomColor: 'divider',
-              color: 'text.primary',
-            },
-            '& tr:nth-of-type(even)': {
-              backgroundColor: 'background.level1',
-              color: 'text.primary',
-            },
-          }}
-          {...props}
-        >
-          {children}
-        </Box>
-      </Box>
-    ),
-    thead: ({ node, children, ref, ...props }: ComponentProps<'thead'> & ExtraProps) => (
-      <Box component="thead" {...props}>
-        {children}
-      </Box>
-    ),
-    tbody: ({ node, children, ref, ...props }: ComponentProps<'tbody'> & ExtraProps) => (
-      <Box component="tbody" {...props}>
-        {children}
-      </Box>
-    ),
-    tr: ({ children }: ComponentProps<'tr'> & ExtraProps) => <Box component="tr">{children}</Box>,
-    th: ({ children }: ComponentProps<'th'> & ExtraProps) => {
-      const processedChildren = React.Children.map(children, child => {
-        if (typeof child === 'string') {
-          return highlightText(child);
-        }
-        return child;
-      });
-
-      return (
-        <Box component="th" sx={{ color: 'text.primary' }}>
-          {processedChildren}
-        </Box>
-      );
-    },
-    td: ({ children }: ComponentProps<'td'> & ExtraProps) => {
-      const processedChildren = React.Children.map(children, child => {
-        if (typeof child === 'string') {
-          return highlightText(child);
-        }
-        return child;
-      });
-
-      return (
-        <Box component="td" sx={{ color: 'text.primary' }}>
-          {processedChildren}
-        </Box>
-      );
-    },
-  };
+  // palette.mode rather than useColorScheme(), which can report 'system'.
+  const replyTheme = useTheme();
+  const syntaxTheme = useMemo(() => getMarkdownSyntaxTheme(replyTheme.palette.mode), [replyTheme.palette.mode]);
+  const codeComponent = useMemo(() => createCodeComponent(syntaxTheme), [syntaxTheme]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1601,7 +1470,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       {showSyntaxHighlight ? (
-        <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>
+        <SyntaxHighlighter style={syntaxTheme}>{processedContent || cleanReply}</SyntaxHighlighter>
       ) : (
         <>
           <ThoughtBubbles content={thought || ''} isStreaming={!completed} defaultFolded={isExpandable} />
@@ -1811,63 +1680,50 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                         )}
 
                         {displayContent && (
-                          <ReactMarkdown
-                            components={{
-                              p,
-                              code,
-                              h1: ({ children }) => (
-                                <Typography
-                                  level="h3"
-                                  component="h1"
-                                  sx={{ color: 'text.primary', mb: 2, mt: 2, display: 'block', width: '100%' }}
-                                >
-                                  {children}
-                                </Typography>
-                              ),
-                              h2: ({ children }) => (
-                                <Typography
-                                  level="h4"
-                                  component="h2"
-                                  sx={{ color: 'text.primary', mb: 1.5, mt: 1.5, display: 'block', width: '100%' }}
-                                >
-                                  {children}
-                                </Typography>
-                              ),
-                              img: ({ alt, src, title }) => {
-                                if (!src) {
-                                  return null;
-                                }
+                          // Root scope for observatory.css. It wraps the markdown
+                          // and nothing else: the banners, media grids and artifact
+                          // chrome are siblings above, and must not inherit the
+                          // reading typography or land in the `> *` measure rules.
+                          <div className="b4m-md">
+                            <ReactMarkdown
+                              components={{
+                                ...markdownComponents,
+                                code: codeComponent,
+                                img: ({ alt, src, title }) => {
+                                  if (!src) {
+                                    return null;
+                                  }
 
-                                const srcStr = typeof src === 'string' ? src : '';
-                                if (
-                                  srcStr.startsWith('/mnt/') ||
-                                  srcStr.startsWith('/tmp/') ||
-                                  srcStr.startsWith('file://') ||
-                                  srcStr.startsWith('sandbox:') ||
-                                  srcStr.includes('/mnt/data/')
-                                ) {
-                                  return null;
-                                }
+                                  const srcStr = typeof src === 'string' ? src : '';
+                                  if (
+                                    srcStr.startsWith('/mnt/') ||
+                                    srcStr.startsWith('/tmp/') ||
+                                    srcStr.startsWith('file://') ||
+                                    srcStr.startsWith('sandbox:') ||
+                                    srcStr.includes('/mnt/data/')
+                                  ) {
+                                    return null;
+                                  }
 
-                                return (
-                                  <ImageContainer
-                                    src={srcStr}
-                                    index={0}
-                                    totalImages={1}
-                                    images={[srcStr]}
-                                    onSendMessage={onSendMessage}
-                                  />
-                                );
-                              },
-                              a: link,
-                              ...tableComponents,
-                            }}
-                            remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
-                            rehypePlugins={[rehypeKatex]}
-                            remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                          >
-                            {mathReadyContent}
-                          </ReactMarkdown>
+                                  return (
+                                    <ImageContainer
+                                      src={srcStr}
+                                      index={0}
+                                      totalImages={1}
+                                      images={[srcStr]}
+                                      onSendMessage={onSendMessage}
+                                    />
+                                  );
+                                },
+                                a: link,
+                              }}
+                              remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
+                              rehypePlugins={[rehypeKatex]}
+                              remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                            >
+                              {mathReadyContent}
+                            </ReactMarkdown>
+                          </div>
                         )}
                       </>
                     )}
