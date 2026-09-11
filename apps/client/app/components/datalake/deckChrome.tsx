@@ -279,6 +279,7 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
   objectiveLine,
   isDark,
   actions,
+  fromChat = false,
 }: {
   name: string;
   description?: string;
@@ -286,6 +287,9 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
   objectiveLine: string;
   isDark: boolean;
   actions?: ReactNode;
+  /** True when this brief is the one the AI chat last formulated (and hasn't been
+   *  hand-edited since); surfaces a persistent "synced from chat" provenance chip. */
+  fromChat?: boolean;
 }) {
   return (
     // No frame, ground or inset of its own: the brief is the first thing in the
@@ -309,6 +313,11 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
         >
           Active Brief — now solving
         </Typography>
+        {fromChat && (
+          <Chip data-testid="opti-brief-from-chat" size="sm" variant="outlined" sx={dataChipSx(isDark)}>
+            synced from chat
+          </Chip>
+        )}
       </Box>
       {/* Each line carries its own bottom margin: the card's own gap is off, so a
           line that does not render (no description) takes no space with it. */}

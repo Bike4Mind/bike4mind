@@ -1606,7 +1606,13 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       {showSyntaxHighlight ? (
-        <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>
+        <>
+          <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>
+          {/* Repeated rather than hoisted above the branch: the suggestions read as part of
+              the reply, so they follow whichever body this view rendered. Edit mode is the
+              one body they are deliberately left out of. */}
+          {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
+        </>
       ) : (
         <>
           <ThoughtBubbles content={thought || ''} isStreaming={!completed} defaultFolded={isExpandable} />

@@ -71,6 +71,9 @@ export const surfaceBackground = (isDark: boolean, accent: Hue, secondary: Hue) 
  * target, the objective it is solving for. One style for all of them: a hairline
  * and no fill, so a row of them reads as one set of facts rather than as tags
  * competing for the eye.
+ *
+ * `isDark` is vestigial now that the hairline is a mode-aware token; the signature
+ * stays until the callers still passing it are updated.
  */
 export const dataChipSx = (isDark: boolean) => ({
   fontSize: '13px',
@@ -80,7 +83,7 @@ export const dataChipSx = (isDark: boolean) => ({
   '--Chip-paddingInline': '8px',
   borderRadius: '4px',
   color: 'text.primary',
-  borderColor: isDark ? 'rgba(209, 228, 244, 0.1)' : 'rgba(22, 34, 43, 0.1)',
+  borderColor: 'divider',
 });
 
 export interface TickerStat {

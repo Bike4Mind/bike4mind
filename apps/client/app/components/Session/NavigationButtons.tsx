@@ -27,7 +27,7 @@ const NavigationButtons: FC<NavigationButtonsProps> = ({ navigationIntents }) =>
         mt: '16px',
         pt: '16px',
         borderTop: '1px solid',
-        borderColor: 'text.tertiary',
+        borderColor: 'divider',
       }}
     >
       {/* display: block because Joy renders body-xs as a span, and a margin on an
