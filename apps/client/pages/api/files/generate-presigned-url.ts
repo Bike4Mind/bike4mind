@@ -7,6 +7,7 @@ import {
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
   KnowledgeType,
+  settingsMap,
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
@@ -22,7 +23,7 @@ import {
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { dataLakeService } from '@bike4mind/services';
-import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -52,16 +53,10 @@ const handler = baseApi().post(
       }
 
       const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-      let maxFileSize: number = 20 * 1024 * 1024; // Default to 20MB
-      if (settings.MaxFileSize) {
-        try {
-          // Convert the MB setting to bytes
-          maxFileSize = parseInt(settings.MaxFileSize, 10) * 1024 * 1024;
-          console.log(`MaxFileSize set to ${maxFileSize} bytes`);
-        } catch (err) {
-          console.log('Error parsing MaxFileSize setting', err);
-        }
-      }
+      // MaxFileSize's own definition always sets defaultValue; makeNumberSetting's shared param
+      // type widens it to number|undefined for settings that omit one.
+      const maxFileSize =
+        getSettingsValue('MaxFileSize', settings, settingsMap.MaxFileSize.defaultValue!) * 1024 * 1024;
 
       if (!data.fileSize) throw new BadRequestError('No file size provided');
       if (data.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
