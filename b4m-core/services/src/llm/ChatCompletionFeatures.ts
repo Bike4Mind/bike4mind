@@ -338,7 +338,9 @@ export interface IChatCompletionServiceOptions {
      * (this is the only in-tree injection slot), but an added one needs forwarding by hand.
      */
     k: number;
-  }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
+    // `sourceDate` (YYYY-MM-DD of the originating document) is optional for the same bivariance
+    // reason called out above: a host that does not supply it renders undated rather than failing.
+  }) => Promise<{ fact: string; relevance: number; sources: string[]; sourceDate?: string }[]>;
   /**
    * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
    * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
@@ -845,11 +847,20 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // `context.length` would overcount `chars` by the framing preamble and the `- ` bullets -
       // and `chars` is specified as retrieved CONTENT only, so it means the same thing here as on
       // the cosine surfaces, which is what makes the merge's SUM meaningful.
-      const injectedFacts = lakeMemoryFacts(beliefs.map(b => b.fact));
+      // Sanitized one belief at a time rather than as a bare list, because a fact that sanitizes to
+      // empty is DROPPED - sanitizing the texts en masse would shift the indices and silently re-pair
+      // facts with the wrong document's date. Still `lakeMemoryFacts`, so the same helper decides what
+      // renders and what is counted.
+      const injectedFacts = beliefs.flatMap(belief => {
+        const [fact] = lakeMemoryFacts([belief.fact]);
+        return fact ? [{ fact, sourceDate: belief.sourceDate }] : [];
+      });
       const context = buildLakeMemoryContext(injectedFacts);
       recordRetrieval('ok', dataLakeTags, {
+        // Still the facts' own chars: the date suffix is framing, like the preamble and the bullets,
+        // and `chars` means retrieved CONTENT so its sum stays comparable across surfaces.
         chunks: injectedFacts.length,
-        chars: injectedFacts.reduce((total, fact) => total + fact.length, 0),
+        chars: injectedFacts.reduce((total, belief) => total + belief.fact.length, 0),
       });
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
