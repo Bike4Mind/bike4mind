@@ -41,8 +41,8 @@ const userApiKeyRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const organizationRepository = vi.hoisted(() => ({ findIdsAdministeredBy: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository }));
-const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import { NotFoundError } from '@server/utils/errors';
 // Order matters: the first baseApi() call is rotate, the second is revoke.
@@ -52,6 +52,7 @@ import '@pages/api/user-api-keys/[id]/revoke';
 function post(id: string | undefined, body: unknown = {}) {
   const { req, res } = createMocks({ method: 'POST', query: id === undefined ? {} : { id }, body });
   (req as any).user = { id: 'admin-user', isAdmin: false };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -94,5 +95,28 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     revokeUserApiKey.mockRejectedValueOnce(new NotFoundError('API key not found'));
     const { req, res } = post('key-1');
     await expect(mockRefs.revokeHandler!(req, res)).rejects.toThrow(/not found/i);
+  });
+});
+
+/**
+ * Both writes happen after the key change has committed, so they go through the
+ * best-effort wrapper with the request logger attached: a failed counter write
+ * gets recorded, not turned into a 5xx the client will retry.
+ */
+describe('rotate and revoke - analytics is best effort', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rotate logs through logEventSafe with the request logger', async () => {
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
+  });
+
+  it('revoke logs through logEventSafe with the request logger', async () => {
+    const { req, res } = post('key-1', { reason: 'rotated out' });
+    await mockRefs.revokeHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });
