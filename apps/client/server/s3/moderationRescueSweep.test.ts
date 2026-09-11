@@ -38,17 +38,17 @@ describe('runModerationRescueSweep', () => {
     expect(update.$set.moderationStatus).toBe('pending');
   });
 
-  it('selects only stranded, imported-knowledge pending files (stale, knowledge/ prefix)', async () => {
+  it('selects every stale pending row regardless of prefix, so ordinary uploads recover too', async () => {
     h.lean.mockResolvedValue([]);
     await runModerationRescueSweep({ enabled: true, limit: 50, logger });
     const filter = h.find.mock.calls[0][0];
     expect(filter.moderationStatus).toBe('pending');
     expect(filter.deletedAt).toBe(null);
     expect(filter.createdAt.$lt).toBeInstanceOf(Date);
-    // Scoped to import keys so the sweep never writes a terminal verdict on an ordinary presign upload.
-    expect(filter.filePath).toBeInstanceOf(RegExp);
-    expect(filter.filePath.test('knowledge/u1/abc')).toBe(true);
-    expect(filter.filePath.test('9f2c-abc.png')).toBe(false);
+    // NOT prefix-scoped: an ordinary (non-knowledge) upload whose scan crashed must be re-scanned too,
+    // or it sits pending -> permanently unservable. The knowledge/ prefix gates only the per-row
+    // missing-object soft-delete (below), never the selection.
+    expect(filter.filePath).toBeUndefined();
   });
 
   it('reclaims stale scanning rows regardless of prefix, so a crashed ordinary upload is not stranded', async () => {
@@ -70,9 +70,25 @@ describe('runModerationRescueSweep', () => {
     expect(h.moderate).toHaveBeenCalledTimes(2);
     expect(h.moderate).toHaveBeenCalledWith(expect.objectContaining({ filePaths: ['knowledge/u1/a'], userId: 'u1' }));
     expect(h.moderate).toHaveBeenCalledWith(expect.objectContaining({ filePaths: ['knowledge/u2/b'], userId: 'u2' }));
-    // Swept rows are past the age floor, so a missing object is a permanent orphan: retire it
+    // A swept knowledge/ row past the age floor whose object is gone is a permanent orphan: retire it
     // terminally instead of releasing it to be re-selected forever (the starvation fix).
     expect(h.moderate).toHaveBeenCalledWith(expect.objectContaining({ terminalOnMissingObject: true }));
+  });
+
+  it('re-scans an ordinary (non-knowledge) upload but never soft-deletes it on a missing object', async () => {
+    // terminalOnMissingObject must be false for a bare-key upload: its row predates its bytes, so a
+    // missing object may be an upload that never completed, not a permanent orphan to retire.
+    h.lean.mockResolvedValue([
+      { filePath: 'knowledge/u1/a', userId: 'u1' },
+      { filePath: '9f2c-abc.png', userId: 'u2' },
+    ]);
+    await runModerationRescueSweep({ enabled: true, limit: 50, logger });
+    expect(h.moderate).toHaveBeenCalledWith(
+      expect.objectContaining({ filePaths: ['knowledge/u1/a'], terminalOnMissingObject: true })
+    );
+    expect(h.moderate).toHaveBeenCalledWith(
+      expect.objectContaining({ filePaths: ['9f2c-abc.png'], terminalOnMissingObject: false })
+    );
   });
 
   it('does not scan when nothing is stranded', async () => {

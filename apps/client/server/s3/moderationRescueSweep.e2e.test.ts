@@ -151,18 +151,34 @@ describe('runModerationRescueSweep (DB integration)', () => {
     expect(third).toEqual({ rescanned: 0 });
   });
 
-  it('never touches an ordinary (non-knowledge) presign orphan - no terminal verdict on arbitrary uploads', async () => {
-    // An abandoned ordinary upload: a bare-key presign row past the staleness floor whose bytes never
-    // landed. It is NOT an import (no knowledge/ prefix), so the sweep must leave it entirely alone -
-    // no soft-delete, no 'blocked'. Stamping it would be an un-appealable false content block on a
-    // storage-cleanup concern (Blocker 2). Key absent -> would NoSuchKey if it were ever downloaded.
+  it('re-scans an ordinary (non-knowledge) upload whose bytes exist, recovering it to clean', async () => {
+    // Blocker 1: an ordinary presign upload whose objectCreated scan crashed is reclaimed to 'pending',
+    // and the sweep must then actually re-scan it. A knowledge/-scoped selection only relabels it
+    // 'pending' and never picks it back up, leaving it permanently unservable (pending is as unservable
+    // as scanning). Object exists (non-image) -> resolves clean.
+    store.objects.set('9f2c-recovered.png', Buffer.from('recovered plain text, not an image'));
+    await seedScanning('9f2c-recovered.png', 'text/plain');
+
+    await runModerationRescueSweep({ enabled: true, limit: 5, logger });
+
+    const row = await FabFile.findOne({ filePath: '9f2c-recovered.png' }).lean();
+    expect(row?.moderationStatus).toBe('clean');
+    expect(row?.deletedAt ?? null).toBe(null);
+  });
+
+  it('releases (never soft-deletes) an ordinary upload whose object is missing', async () => {
+    // An abandoned bare-key presign row past the floor whose bytes never landed. It IS now selected and
+    // re-scanned, but terminalOnMissingObject is false for a non-knowledge key: an ordinary upload's row
+    // is created before its bytes land, so a missing object may be an upload that never completed - it
+    // is released as transient, never retired or 'blocked' (Blocker 2 stays fixed). Key absent ->
+    // NoSuchKey.
     await seedPending('9f2c-abandoned.png', 'image/png');
 
     const res = await runModerationRescueSweep({ enabled: true, limit: 5, logger });
-    expect(res).toEqual({ rescanned: 0 });
+    expect(res).toEqual({ rescanned: 0 }); // released, so not counted as resolved
 
     const row = await FabFile.findOne({ filePath: '9f2c-abandoned.png' }).lean();
-    expect(row?.moderationStatus).toBe('pending'); // untouched, not selected
+    expect(row?.moderationStatus).toBe('pending'); // released, NOT soft-deleted
     expect(row?.deletedAt ?? null).toBe(null);
     expect(row?.blockReason).toBeFalsy();
   });

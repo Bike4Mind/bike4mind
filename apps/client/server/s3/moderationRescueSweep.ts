@@ -7,11 +7,11 @@ import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps
 // in-flight. Mirrors the chunk sweep's stale-claim threshold.
 const MODERATION_STALE_MS = 30 * 60_000;
 
-// The sweep only owns imported-knowledge rows, whose keys are `knowledge/<userId>/<suffix>` (see
-// notebookImportService). Ordinary presigned uploads are bare `<uuid>.<ext>` at the root; scoping to
-// this prefix keeps the sweep off arbitrary FabFiles - critically, an abandoned/never-completed
-// ordinary upload must not be selected and stamped a terminal moderation verdict. Left-anchored so
-// it can ride a filePath index.
+// Imported-knowledge keys are `knowledge/<userId>/<suffix>` (see notebookImportService); ordinary
+// presigned uploads are bare `<uuid>.<ext>` at the root. Used to gate ONLY the missing-object
+// soft-delete (terminalOnMissingObject) to import rows: an ordinary upload's row is created before
+// its bytes land, so a missing object there may be a not-yet-completed upload, not an orphan.
+// Left-anchored so a future filePath index can seek it.
 const KNOWLEDGE_KEY_PREFIX = /^knowledge\//;
 
 export interface ModerationRescueSweepArgs {
@@ -22,19 +22,20 @@ export interface ModerationRescueSweepArgs {
 }
 
 /**
- * Recover imported-knowledge FabFiles whose moderation scan never completed. `moderationStatus`
- * defaults to 'pending' and is only ever moved to clean/blocked by a scan (isImageServeable withholds
- * a URL until then), so a stale 'pending' is always a failed or never-run scan - never a
- * terminal-by-design state, and therefore always safe to re-scan. This closes the recovery gap the
- * notebook-import path would otherwise leave (a transient scan failure releases the row to 'pending'
- * with nothing to retry it).
+ * Recover FabFiles whose moderation scan never completed. `moderationStatus` defaults to 'pending'
+ * and is only ever moved to clean/blocked by a scan (isImageServeable withholds a URL until then), so
+ * a stale 'pending' is always a failed or never-run scan - never a terminal-by-design state, and
+ * therefore always safe to re-scan. Covers BOTH imported-knowledge rows (whose post-commit import
+ * scan can fail with nothing to retry it) and ordinary presigned uploads (whose objectCreated scan
+ * can crash mid-claim); re-scanning bytes that exist is exactly what those paths would have done, and
+ * for an ordinary upload this sweep is the only recovery there is.
  *
- * The TERMINAL re-scan selection is scoped to the `knowledge/` key prefix on purpose: that path
- * writes terminal outcomes, so it must never touch an ordinary presigned upload (bare `<uuid>.<ext>`).
- * An abandoned/slow ordinary upload sitting 'pending' is not this sweep's concern - stamping it a
- * terminal moderation verdict would be an un-appealable false block. See KNOWLEDGE_KEY_PREFIX. The
- * stale-'scanning' reclaim below is deliberately NOT scoped: it only moves 'scanning' -> 'pending'
- * (non-terminal) and is the sole writer that frees a crashed ordinary-upload claim.
+ * Only ONE decision is prefix-scoped: the missing-object soft-delete (terminalOnMissingObject),
+ * passed true per-row for `knowledge/` keys only. A knowledge row past the age floor whose object is
+ * gone is a permanent orphan to retire; an ordinary upload's row is created BEFORE its bytes land, so
+ * a missing object there may just be an upload that never completed - released as transient, never
+ * soft-deleted. Every other outcome (clean/blocked/release) is identical for both. See
+ * KNOWLEDGE_KEY_PREFIX.
  *
  * Re-scans in place with the same claim/persist wiring as the import path. Runs from the daily
  * reconcile cron; recovery latency is coarse but the held file is fail-closed (unservable) until it
@@ -62,11 +63,10 @@ export async function runModerationRescueSweep({
   // on any write, so an unrelated edit to a scanning row would reset its staleness clock. Fall back
   // to updatedAt only for legacy rows claimed before moderationClaimedAt existed.
   //
-  // NOT scoped to KNOWLEDGE_KEY_PREFIX, unlike the terminal selection below: this only moves
-  // 'scanning' -> 'pending' (never a terminal verdict), so it is safe on any FabFile - and it is the
-  // ONLY writer that un-sticks an ordinary presigned upload whose objectCreated scan crashed
-  // mid-claim (objectCreated's pending|null CAS can never re-claim its own 'scanning' row). Scoping
-  // this to knowledge/ would strand every such ordinary upload on 'scanning' forever (unservable).
+  // Not scoped by filePath: this only moves 'scanning' -> 'pending' (never a terminal verdict), so it
+  // is safe on any FabFile - and it is the ONLY writer that un-sticks an ordinary presigned upload
+  // whose objectCreated scan crashed mid-claim (objectCreated's pending|null CAS can never re-claim
+  // its own 'scanning' row).
   await FabFile.updateMany(
     {
       moderationStatus: 'scanning',
@@ -79,12 +79,15 @@ export async function runModerationRescueSweep({
     { $set: { moderationStatus: 'pending' } }
   );
 
+  // Select every stale 'pending' row, imported or ordinary: re-scanning a row whose bytes exist is
+  // exactly what the import / objectCreated path would have done, and this sweep is the only thing
+  // that re-scans an ordinary upload once its scan crashed. Prefix only gates the terminal
+  // missing-object soft-delete below, per row - never the selection.
   const stuck = await FabFile.find(
     {
       moderationStatus: 'pending',
       deletedAt: null, // matches missing-or-null; a soft-deleted upload is not stranded, skip it
       createdAt: { $lt: cutoff },
-      filePath: KNOWLEDGE_KEY_PREFIX, // imported-knowledge rows only; a prefix match implies exists + non-empty
     },
     { filePath: 1, userId: 1 }
   )
@@ -98,15 +101,15 @@ export async function runModerationRescueSweep({
   // and moderateImportedKnowledgeFiles never throws - a single bad file cannot abort the sweep.
   let rescanned = 0;
   for (const file of stuck) {
-    // terminalOnMissingObject: a swept row is already past the age floor, so a NoSuchKey means a
-    // permanent orphan (an import whose bytes never landed) - soft-delete it (a storage-cleanup
-    // outcome, NOT a content-policy block) instead of releasing it to be re-selected forever, which
-    // would starve genuinely-stranded rows.
+    // terminalOnMissingObject only for `knowledge/` keys: a swept import row past the age floor whose
+    // object is gone is a permanent orphan, so soft-delete it (a storage-cleanup outcome, NOT a
+    // content-policy block) instead of releasing it to be re-selected forever. An ordinary upload's
+    // row predates its bytes, so a missing object there is released as transient, never retired.
     const { scanned } = await moderateImportedKnowledgeFiles({
       filePaths: [file.filePath],
       userId: file.userId,
       enabled,
-      terminalOnMissingObject: true,
+      terminalOnMissingObject: KNOWLEDGE_KEY_PREFIX.test(file.filePath),
       ...deps,
     });
     rescanned += scanned;
