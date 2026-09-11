@@ -69,6 +69,13 @@ function isRetryableDriveError(e: unknown): boolean {
     const status = typeof raw === 'string' ? Number(raw) : raw;
     if (typeof status === 'number' && isTransientDriveStatus(status)) return true;
   }
+  // A GaxiosError with NO response at all is a network-level failure (ECONNRESET, ETIMEDOUT,
+  // ENOTFOUND, a socket hangup, ...) - gaxios' own (now-disabled) retry layer covered these via
+  // noResponseRetries regardless of the specific code, for any method in httpMethodsToRetry, which
+  // GET is. `err.code` on this shape is the system error code, always a STRING (never one of the
+  // numeric statuses checked above), so that combination is the signal. All four Drive calls here
+  // are idempotent GETs, so retrying is safe.
+  if (response == null && typeof err.code === 'string') return true;
   return false;
 }
 

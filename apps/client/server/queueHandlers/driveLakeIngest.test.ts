@@ -119,10 +119,18 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
   ...(await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>()),
   createDriveClient: () => ({}),
 }));
-vi.mock('@server/integrations/google/drive/driveContent', () => ({
-  walkFolder: h.walkFolder,
-  fetchDriveFileContent: h.fetchDriveFileContent,
-}));
+// Mocks only the two Drive calls; keeps the real DriveWalkTimeBudgetExceededError export so tests
+// and the handler agree on the class an `instanceof` check below is testing against.
+vi.mock('@server/integrations/google/drive/driveContent', async () => {
+  const actual = await vi.importActual<typeof import('@server/integrations/google/drive/driveContent')>(
+    '@server/integrations/google/drive/driveContent'
+  );
+  return {
+    ...actual,
+    walkFolder: h.walkFolder,
+    fetchDriveFileContent: h.fetchDriveFileContent,
+  };
+});
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
@@ -136,6 +144,7 @@ import {
   MAX_INGEST_REDRIVES,
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
+import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -943,6 +952,23 @@ describe('driveLakeIngest consumer', () => {
         expect.any(Number)
       );
       expect(h.sendToQueue.mock.calls[0][2]).toBeGreaterThanOrEqual(60);
+    });
+
+    it('defers the whole sync when the folder walk runs out of invocation time, not just on a throttle', async () => {
+      // walkFolder throws this when its own remainingMs() check trips mid-tree - a large folder can
+      // now spend the whole invocation just walking, and this must not be killed with the claim
+      // stranded any more than an actual Drive throttle is.
+      h.walkFolder.mockRejectedValue(new DriveWalkTimeBudgetExceededError());
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(h.batchCreate).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', redriveCount: 1 },
+        expect.any(Number)
+      );
     });
 
     it('releases before it enqueues, so the deferred run finds a connection it can claim', async () => {

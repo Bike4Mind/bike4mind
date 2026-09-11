@@ -18,22 +18,56 @@ const EDITOR_EXPORTS: Record<string, string> = {
 /** A file discovered by the recursive walk, with its path relative to the ingested root. */
 export type WalkedDriveFile = DriveFile & { relativePath: string };
 
+// Checked between folders (not pages - a mid-listing pagination cost is bounded separately by
+// MAX_LIST_PAGES), so it has to cover the worst case of one MORE folder's listing: withDriveRetry's
+// own budget maxes out around 7s of sleep, plus the request itself. Generous margin below that
+// because a walk that trips this still has to unwind back out to the caller's shed path before the
+// invocation dies.
+const WALK_DEADLINE_BUFFER_MS = 60_000;
+
+/**
+ * Thrown when a walk runs low on invocation time mid-tree, rather than being killed with the sync
+ * claim stranded. Deliberately its own type, not folded into `isDriveRateLimitError` - this is not
+ * Drive telling us to slow down, and conflating the two would make a slow-but-healthy walk look like
+ * a quota problem to anything that inspects the reason. The caller treats both the same way (shed
+ * and let a continuation redo the walk), since neither can finish this attempt (#2395 review).
+ */
+export class DriveWalkTimeBudgetExceededError extends Error {
+  constructor() {
+    super('Drive folder walk ran out of invocation time');
+    this.name = 'DriveWalkTimeBudgetExceededError';
+  }
+}
+
 /**
  * Recursively walk a Drive folder tree, returning every non-folder file with its relativePath.
  * A `visited` set guards against cycles - a Drive folder graph can contain shortcuts/loops, and
  * an unguarded walk would recurse forever. Reuses the one-level `listFolderChildren` primitive.
  *
- * Throws on any listing failure, throttles included (each page is retried in-process first). A
- * caller that can shed load MUST test the thrown error with `isDriveRateLimitError` and defer:
- * re-running a failed walk costs a fresh listing of every page it already fetched, which adds to
- * the very quota that is exhausted (#2395).
+ * `remainingMs`, when given, is checked before every folder: a large tree can now spend the whole
+ * invocation just walking (each folder's call carries withDriveRetry's own retry budget on top of
+ * the request itself), and without this a slow walk would be killed mid-tree with the sync claim
+ * stranded rather than ever reaching the caller's shed-and-retry path (#2395 review).
+ *
+ * Throws on any listing failure, throttles and a spent time budget included (each page is retried
+ * in-process first). A caller that can shed load MUST test the thrown error with
+ * `isDriveRateLimitError` or `instanceof DriveWalkTimeBudgetExceededError` and defer: re-running a
+ * failed walk costs a fresh listing of every page it already fetched, which adds to the very quota
+ * that is exhausted (#2395).
  */
-export async function walkFolder(drive: drive_v3.Drive, rootFolderId: string): Promise<WalkedDriveFile[]> {
+export async function walkFolder(
+  drive: drive_v3.Drive,
+  rootFolderId: string,
+  remainingMs?: () => number
+): Promise<WalkedDriveFile[]> {
   const files: WalkedDriveFile[] = [];
   const visited = new Set<string>();
   const queue: Array<{ id: string; path: string }> = [{ id: rootFolderId, path: '' }];
 
   while (queue.length > 0) {
+    if (remainingMs && remainingMs() < WALK_DEADLINE_BUFFER_MS) {
+      throw new DriveWalkTimeBudgetExceededError();
+    }
     const { id, path } = queue.shift()!;
     if (visited.has(id)) continue;
     visited.add(id);

@@ -207,6 +207,31 @@ describe('withDriveRetry', () => {
     await expect(settleThroughBackoff(withDriveRetry('files.list', call))).resolves.toBe('listed');
     expect(call).toHaveBeenCalledTimes(2);
   });
+
+  // gaxios' disabled retry layer also covered failures with NO HTTP response at all (a dropped
+  // connection, a DNS miss, a timed-out socket) via its own noResponseRetries - this has to too, now
+  // that it is the only layer left.
+  it('retries a network-level failure with no HTTP response (ECONNRESET, ETIMEDOUT, ...)', async () => {
+    vi.useFakeTimers();
+    const call = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }))
+      .mockResolvedValue('listed');
+
+    await expect(settleThroughBackoff(withDriveRetry('files.list', call))).resolves.toBe('listed');
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a permanent failure that merely lacks a numeric code', async () => {
+    // A response IS present here (unlike the network-failure case above), so this must stay a
+    // permanent failure - retrying anything without a response would swallow ordinary bugs too.
+    const call = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('boom'), { code: 'SOME_APP_ERROR', response: { status: 400 } }));
+
+    await expect(withDriveRetry('files.get', call)).rejects.toThrow('boom');
+    expect(call).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('createDriveClient', () => {

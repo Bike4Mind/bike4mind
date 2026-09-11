@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
-import { walkFolder, fetchDriveFileContent } from './driveContent';
+import { walkFolder, fetchDriveFileContent, DriveWalkTimeBudgetExceededError } from './driveContent';
 import { FOLDER_MIME_TYPE, isDriveRateLimitError } from './driveClient';
 
 const folder = (id: string, name: string) => ({ id, name, mimeType: FOLDER_MIME_TYPE });
@@ -36,6 +36,34 @@ describe('walkFolder', () => {
 
     const files = await walkFolder(drive, 'root');
     expect(files.map(f => f.relativePath)).toEqual(['loop/c.txt']);
+  });
+
+  it('does not check the time budget when no remainingMs is given', async () => {
+    const { drive } = mockTreeDrive({ root: [file('a', 'a.txt', 'text/plain')] });
+    await expect(walkFolder(drive, 'root')).resolves.toEqual([
+      { id: 'a', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+    ]);
+  });
+
+  it('throws DriveWalkTimeBudgetExceededError before listing another folder once the budget runs low', async () => {
+    // Two folders deep so the guard has a second folder to trip on before ever reaching it.
+    const { drive, list } = mockTreeDrive({
+      root: [folder('sub', 'sub')],
+      sub: [file('b', 'b.txt', 'text/plain')],
+    });
+    // Plenty of time for the root listing, then below the buffer for the next one.
+    const remainingMs = vi.fn().mockReturnValueOnce(120_000).mockReturnValue(1_000);
+
+    await expect(walkFolder(drive, 'root', remainingMs)).rejects.toBeInstanceOf(DriveWalkTimeBudgetExceededError);
+    expect(list).toHaveBeenCalledTimes(1); // root only - never reached 'sub'
+  });
+
+  it('never starts the walk at all if the budget is already spent', async () => {
+    const { drive, list } = mockTreeDrive({ root: [file('a', 'a.txt', 'text/plain')] });
+    const remainingMs = () => 1_000;
+
+    await expect(walkFolder(drive, 'root', remainingMs)).rejects.toBeInstanceOf(DriveWalkTimeBudgetExceededError);
+    expect(list).not.toHaveBeenCalled();
   });
 });
 

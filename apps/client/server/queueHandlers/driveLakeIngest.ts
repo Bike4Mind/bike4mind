@@ -38,6 +38,7 @@ import { createDriveClient, isDriveRateLimitError } from '@server/integrations/g
 import {
   walkFolder,
   fetchDriveFileContent,
+  DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
 } from '@server/integrations/google/drive/driveContent';
 import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
@@ -469,21 +470,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     //    removeFileFromLake throws NotFoundError, aborting the reconcile mid-prune).
     let walkedRaw: WalkedDriveFile[];
     try {
-      walkedRaw = await walkFolder(drive, connection.driveFolderId);
+      walkedRaw = await walkFolder(drive, connection.driveFolderId, remainingMs);
     } catch (err) {
-      if (!isDriveRateLimitError(err)) throw err;
-      // A throttle that outlived the per-call retries is a quota problem, not a broken sync. Throwing
-      // it on would DLQ the connection after two flat SQS redeliveries - and each of those re-walks
-      // the folder from scratch, re-listing every page it already fetched, which ADDS load to the
-      // quota that is already exhausted. Shed instead: release the claim and come back later, with
-      // the same jittered delay the content-fetch deferral uses. Bounded by redriveCount so a folder
-      // Drive never lets us walk cannot spin forever.
+      const timedOut = err instanceof DriveWalkTimeBudgetExceededError;
+      if (!timedOut && !isDriveRateLimitError(err)) throw err;
+      // A throttle that outlived the per-call retries, or a walk that ran out of invocation time, is
+      // not a broken sync. Throwing it on would DLQ the connection after two flat SQS redeliveries -
+      // and each of those re-walks the folder from scratch, re-listing every page it already fetched,
+      // which ADDS load to a quota that may already be exhausted. Shed instead: release the claim and
+      // come back later, on the same jittered delay the content-fetch deferral uses - a timeout gets
+      // it too, not because it needs to dodge a quota, but so a folder that keeps outrunning its
+      // invocation budget doesn't spin straight back into the same wall. Both share redriveCount with
+      // the claim-contention deferral above, so a folder that keeps coming back around - for whatever
+      // reason - cannot spin forever.
       const delaySeconds = rateLimitBackoffSeconds();
       const canDefer = redriveCount < MAX_INGEST_REDRIVES;
-      logger.warn('[driveLakeIngest] Drive rate-limited the folder walk', {
+      logger.warn('[driveLakeIngest] folder walk deferred', {
         connectionId,
         slice,
         redriveCount,
+        reason: timedOut ? 'time_budget_exceeded' : 'rate_limited',
         deferring: canDefer,
         delaySeconds: canDefer ? delaySeconds : undefined,
         error: err instanceof Error ? err.message : String(err),
@@ -499,7 +505,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(
         canDefer
           ? null
-          : `Google Drive is rate-limiting this sync and it gave up after ${MAX_INGEST_REDRIVES} deferrals without listing the folder. Nothing was ingested. The next scheduled poll retries it; if it keeps happening, sync fewer folders on the same schedule.`
+          : // redriveCount is shared with the claim-contention deferral above, so a chain landing here
+            // may have spent most of its deferrals on someone else's sync being in flight, not on this -
+            // never attribute the full count to one cause the operator cannot verify.
+            `This sync's folder walk did not finish - Google Drive rate-limiting and/or the invocation's ` +
+              `time budget - and gave up after ${MAX_INGEST_REDRIVES} total deferrals without listing the ` +
+              `folder. Nothing was ingested. The next scheduled poll retries it; if it keeps happening, sync ` +
+              `fewer folders on the same schedule.`
       );
       ingestClaimToken = undefined;
       if (canDefer) {
