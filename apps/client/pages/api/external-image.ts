@@ -1,6 +1,6 @@
 import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { isExecutableUploadMimeType } from '@bike4mind/common';
-import { createS3Client } from '@bike4mind/fab-pipeline';
+import { createS3Client, isPrivateIP } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
@@ -37,7 +37,7 @@ const FETCH_TIMEOUT_MS = 10_000;
  * does not defend against DNS rebinding. The admin-only gate is the primary
  * control; this is defence in depth.
  */
-function rejectIfUnsafe(url: URL): string | null {
+export function rejectIfUnsafe(url: URL): string | null {
   if (url.protocol !== 'https:') {
     return 'only https URLs are allowed';
   }
@@ -59,32 +59,16 @@ function rejectIfUnsafe(url: URL): string | null {
     return 'IPv4-mapped IPv6 addresses are not allowed';
   }
 
-  // Reject IPv4 in private / loopback / link-local ranges
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4) {
-    const [a, b] = [parseInt(ipv4[1], 10), parseInt(ipv4[2], 10)];
-    if (
-      a === 10 ||
-      a === 127 ||
-      a === 0 ||
-      (a === 169 && b === 254) || // link-local + AWS metadata 169.254.169.254
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224 // multicast / reserved
-    ) {
-      return 'private/reserved IPv4 addresses are not allowed';
-    }
+  // Reject IPv4 in private / loopback / link-local ranges, via `isPrivateIP` from
+  // `@bike4mind/fab-pipeline` rather than a local prefix list (#1969).
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && isPrivateIP(host)) {
+    return 'private/reserved IPv4 addresses are not allowed';
   }
 
-  // Reject IPv6 unique-local (fc00::/7) and link-local (fe80::/10)
-  if (
-    host.startsWith('fc') ||
-    host.startsWith('fd') ||
-    host.startsWith('fe8') ||
-    host.startsWith('fe9') ||
-    host.startsWith('fea') ||
-    host.startsWith('feb')
-  ) {
+  // Reject IPv6 private/reserved ranges (unique-local, link-local, site-local, etc.).
+  // Also delegated to `isPrivateIP` - this file used to reimplement the same per-hextet
+  // prefix list and drifted out of sync with it, leaving fe00::/9 and fec0::/10 open (#1969).
+  if (host.includes(':') && isPrivateIP(host)) {
     return 'private/reserved IPv6 addresses are not allowed';
   }
 
