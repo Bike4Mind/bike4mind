@@ -299,6 +299,22 @@ around rank 5-6. Given precision of 0.35 that may well be an improvement, but it
 switching on rather than a no-op, and it is the opposite direction from the "tune it UPWARD" note at its
 definition.
 
+Both paragraphs above were derived by hand from the band and the spread. `forced-floor-sweep.ts` now
+measures them directly off the same fixtures, so the re-tune after the embedding flip does not have to
+repeat the derivation:
+
+```bash
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture out/text-embedding-3-small.system-help.fixture.json \
+  --floors 0:0,85:75,85:0,90:0,95:0
+```
+
+Read `bound` before recall. A relative floor showing 0.0% there is the dormant case this section
+describes under ada-002; `cut @` against `budget-bound` is what separates a floor that cuts from one
+cutting past where the char budget already stopped. It shares the served path's arithmetic (see
+`forcedRetrievalRelativeCutoff`), so the gate it reports is the gate production applies - over a
+deeper candidate pool, since this harness is exact kNN and prod now serves through ANN.
+
 ## Out of scope
 
 This harness measures. It does not change anything. Flipping `defaultEmbeddingModel`, re-embedding the
@@ -312,6 +328,8 @@ pnpm --filter @bike4mind/scripts test retrieval/
 pnpm --filter @bike4mind/scripts typecheck
 pnpm --filter @bike4mind/scripts retrieval:model-comparison \
   --fixtures retrieval/fixtures/tiny-comparison.fixture.json --widths 16,8
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture retrieval/fixtures/tiny-comparison.fixture.json --floors 0:0,85:75
 ```
 
 `fixtures/tiny-comparison.fixture.json` is a 16-dim **synthetic** capture with a planted topical
