@@ -69,8 +69,12 @@ const SEP = '\0';
  * The server's taxonomy step already treats a relativePath that resolves to no folder as
  * contributing no folder tags (generate-presigned-urls-batch.ts), so this is the same rule read in
  * one more place.
+ *
+ * Exported (not just used by sourceIdentityKeyFor below) so a THIRD reader - a corpus-shape report
+ * that groups lake members by folder - resolves the same folder a fourth private copy would drift
+ * from. That is the exact failure this module was extracted to stop.
  */
-function folderKeyOf(relativePath: string, fileName: string): string | null {
+export function folderKeyOf(relativePath: string, fileName: string): string | null {
   // A trailing separator carries no information: `docs/` and `docs` are one folder.
   const path = relativePath.replace(/\/+$/, '');
   const lastSeparator = path.lastIndexOf('/');
