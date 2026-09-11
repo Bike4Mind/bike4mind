@@ -43,7 +43,10 @@ name: pr-bot-review
 #   1. concurrency `cancel-in-progress`: a rapid re-label supersedes the in-flight
 #      run rather than queueing a second full review behind it. It is per-mode
 #      (see the concurrency block below) - true for `bot-review`, false for
-#      `bot-fold`, so a label click cannot cancel a run mid-push.
+#      `bot-fold` - which means a fold run never cancels anything. It does NOT
+#      mean a fold run cannot BE cancelled: the flag is read off the incoming run
+#      and the group key carries no mode. What keeps a cancelled fold from minting
+#      a token or pushing is the `!cancelled()` on those steps.
 #   2. the "substantive-change guard" step below: skips when the only commits since
 #      our last review are the b4m-release-bot changeset.
 
@@ -365,8 +368,8 @@ jobs:
               unset or empty, means review only - report findings and change
               nothing. You have no shell and cannot read the environment, so the
               value interpolated into this line is the only copy you get.
-            - When FOLD_MODE is 'true' you additionally have Edit, Write and
-              MultiEdit, and they are for the findings that meet the skill's
+            - When FOLD_MODE is 'true' you additionally have Edit and Write, and
+              they are for the findings that meet the skill's
               fold bar and nothing else. Edit the working tree and stop there:
               you still have no shell and no credential you can reach, so do
               not try to commit or push. A `run:` step after you commits and
@@ -380,11 +383,12 @@ jobs:
               any of `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`,
               `pnpm-workspace.yaml`, `turbo.json`, `.npmrc` or `.dockerignore`, any
               `Dockerfile` whatever its suffix, any `*.sh`, `*.bash` or `*.zsh`, any
-              extensionless repo-root file, and any binary file. Findings in those
-              files belong in the review body for a human to apply; do not edit them,
-              or you lose the whole fixup. `.github/`, `.git/` and `.claude/` are
-              denied to your write tools outright, so an edit there fails on the spot
-              rather than costing you the fold.
+              extensionless repo-root file, any repo-root dotfile, and any binary
+              file. Findings in those files belong in the review body for a human
+              to apply; do not edit them,
+              or you lose the whole fixup. `.github/`, `.git/`, `.claude/` and
+              `.mcp.json` are denied to your write tools outright, so an edit there
+              fails on the spot rather than costing you the fold.
             - When FOLD_MODE is 'true', never submit the review as APPROVE.
               The fold commit is pushed right after your review lands, and this
               repo dismisses stale reviews on push, so an approval would read
@@ -449,36 +453,57 @@ jobs:
             # run a `filter.*.clean` command out of `.git/info/attributes` in the step
             # holding the push token. Denying Read(.git/**) blocks writes there today
             # as well, but that is harness behaviour rather than a contract.
-            # `.claude/**` is fenced for the same "do not rest on the vendor" reason:
-            # `.claude/settings.json` can declare `hooks`, which the CLI executes on
-            # tool events - command execution with no `Bash` tool, which is the
-            # invariant this whole job is built on. The CLI's own sensitive-file list
-            # refuses those writes today; that list is exactly the thing a rename can
-            # move, so the fence is stated here rather than assumed.
-            # NOT fenced, and stated rather than left to be discovered: `$HOME`. A
-            # blanket deny is not available - on a hosted runner the checkout itself
-            # lives under `$HOME` (`/home/runner/work/...`), so denying `$HOME` would
-            # deny the fold. The bound is therefore per-step, and the invariant a new
-            # step has to satisfy is: ANY PROGRAM A POST-AGENT STEP RUNS THAT READS A
-            # STARTUP FILE OUT OF `$HOME` BEFORE ITS OWN INPUT MUST HAVE THAT STARTUP
-            # DISABLED IN THAT STEP'S `env:`. Two programs qualify today:
-            #   git     - reads `~/.gitconfig`, which can set a `filter.*.clean`
-            #             command; nulled with GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM /
-            #             GIT_CONFIG_NOSYSTEM on both steps that run git after the agent.
-            #   python3 - CPython's `site` imports `usercustomize` from the user site
-            #             directory (derived from `$HOME` and the minor version alone)
-            #             BEFORE it reads the program on stdin, and an imported `.py`
-            #             needs no execute bit; suppressed with PYTHONNOUSERSITE on the
-            #             transcript step. Note `-E` does NOT suppress user site.
+            # `.claude/**` and `.mcp.json` are fenced for the same "do not rest on the
+            # vendor" reason: `.claude/settings.json` can declare `hooks` and
+            # `.mcp.json` can declare an MCP server, and both are command execution
+            # with no `Bash` tool, which is the invariant this whole job is built on.
+            # The CLI loads a project-root `.mcp.json` without being asked and
+            # `--mcp-config` merges with it rather than replacing it, so starting the
+            # server is the execution and the allow list never gets a say. The CLI's own
+            # sensitive-file list refuses both writes today; that list is exactly the
+            # thing a rename can move, so the fence is stated here rather than assumed.
+            # NOT fenced, and stated rather than left to be discovered: `$HOME`, and the
+            # process CWD, which on a hosted runner is the checkout. A blanket deny is
+            # not available for either - the checkout itself lives under `$HOME`
+            # (`/home/runner/work/...`), so denying `$HOME` would deny the fold. The
+            # bound is therefore per-step, and the invariant a new step has to satisfy,
+            # stated as the class rather than as the two instances that have bitten so
+            # far: EVERY PROGRAM A POST-AGENT STEP RUNS MUST HAVE ALL OF ITS IMPLICIT,
+            # AGENT-WRITABLE INPUT SOURCES DISABLED IN THAT STEP. Implicit means the
+            # program consults it without being asked, so authenticating what the step
+            # passes in says nothing about it. Two kinds qualify, and each has cost a
+            # round here: STARTUP FILES read out of `$HOME` before the program's own
+            # input, and DEFAULT SEARCH PATHS that resolve into the checkout.
+            #   git     - startup file. Reads `~/.gitconfig`, which can set a
+            #             `filter.*.clean` command; nulled with GIT_CONFIG_GLOBAL /
+            #             GIT_CONFIG_SYSTEM / GIT_CONFIG_NOSYSTEM on both steps that run
+            #             git after the agent.
+            #   python3 - both. CPython's `site` imports `usercustomize` from the user
+            #             site directory (derived from `$HOME` and the minor version
+            #             alone) before it reads the program on stdin, AND `python3 -`
+            #             puts the CWD on `sys.path` as entry 0, so a planted `./json.py`
+            #             wins the redactor's own `import json`. An imported `.py` needs
+            #             no execute bit for either. Both closed by `-I` on the
+            #             invocation, with PYTHONNOUSERSITE as the belt; note `-E` alone
+            #             covers neither.
+            #   jq      - startup file, ACCEPTED residual rather than closed. jq
+            #             auto-loads `~/.jq`, which can redefine a builtin used by the
+            #             ScheduleWakeup detection query in the transcript step, and
+            #             there is no suppression flag or variable for it. The bound is
+            #             jq's own: no shell escape, and that query's only effect is
+            #             which sentence `Report incomplete review` prints. Any new jq
+            #             whose output decides something must supply its own program
+            #             with `-n`/`--args` fixtures instead.
             # `gh` was checked and does not qualify: an alias cannot shadow a built-in
             # command, and the configured pager is not invoked when stdout is not a TTY.
             # `bash` does not qualify: GitHub runs step shells non-interactive and
-            # non-login, so no `~/.bashrc` / `~/.profile` is sourced.
+            # non-login, so no `~/.bashrc` / `~/.profile` is sourced, and every step here
+            # names its programs without relying on a `$PATH` entry under `$HOME`.
             #
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "Edit(/${{ runner.temp }}/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)
@@ -676,6 +701,25 @@ jobs:
           # `^(...)/` anchor and the trailing one defeats `\.(sh|bash|zsh)$`, so the
           # guard matches nothing at all for such a file. No tracked path in this repo
           # is non-ASCII today, so this arms the first time one is committed.
+          #
+          # NO COMMENTS INSIDE THE `grep -E` BELOW. Bash removes a backslash-newline
+          # before it tokenizes, so a `#` line between two continued arguments ends the
+          # command there: the arms after it are never passed to grep, the orphaned
+          # `-e` is run as a program, and `|| true` swallows the "command not found".
+          # Exit status stays 0 and the guard silently loses arms. That shipped once.
+          #
+          # The last two arms are categories rather than enumerations, because an
+          # enumeration goes stale on the next file added:
+          #   `^[^/.]+$`  any extensionless repo-root file. Every tracked one is a dev
+          #               entrypoint with the exec bit, the Dockerfile, or LICENSE /
+          #               NOTICE - none of which a fold has business rewriting.
+          #   `^\.[^/]*$` any repo-root dotfile. Every tracked one configures a tool:
+          #               `.mcp.json` (an MCP server definition is command execution,
+          #               and the CLI loads a project-root one without being asked),
+          #               `.semgrep.yml`, `.gitleaks*`, `.gitattributes`, `.envrc`,
+          #               `.gitignore` (which a fold could use to hide its own dropped
+          #               -untracked-files warning). Subsumes the root `.npmrc` and
+          #               `.dockerignore` the arm above catches at any depth.
           BLOCKED=$(
             git -c core.quotePath=false diff --cached --name-only | grep -E \
               -e '^(\.github|\.husky|\.claude|scripts|infra|patches)/' \
@@ -683,12 +727,8 @@ jobs:
               -e '(^|/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pnpm-workspace\.yaml|turbo\.json|\.npmrc|\.dockerignore)$' \
               -e '(^|/)Dockerfile(\..*)?$' \
               -e '\.(sh|bash|zsh)$' \
-              # The category, not today's five names: any extensionless repo-root
-              # file. Every tracked one is either a dev entrypoint with the exec
-              # bit, the Dockerfile, or LICENSE/NOTICE - none of which a fold has
-              # business rewriting, and an enumeration would go stale on the next
-              # one added.
-              -e '^[^/.]+$' || true
+              -e '^[^/.]+$' \
+              -e '^\.[^/]*$' || true
             # Refused here rather than by the size bound below, which numstat reports
             # as 0 changed lines for a binary however large the rewrite. A fold
             # applies textual review findings, so a staged binary is not one.
@@ -697,7 +737,7 @@ jobs:
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"
             echo "$BLOCKED"
-            echo 'reason=the fixup touched CI configuration (anything under `.github/`, `.husky/`, `.claude/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, a `Dockerfile` of any suffix or `.dockerignore`, a `*.sh`/`*.bash`/`*.zsh` or any extensionless repo-root file), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
+            echo 'reason=the fixup touched CI configuration (anything under `.github/`, `.husky/`, `.claude/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, a `Dockerfile` of any suffix or `.dockerignore`, a `*.sh`/`*.bash`/`*.zsh`, or any extensionless repo-root file or repo-root dotfile), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
             emit blocked
             exit 1
           fi
@@ -809,16 +849,24 @@ jobs:
       - name: Report cancelled fold
         # The one reachable hole in the reporting cross-product. Every other fold
         # reporter is `!cancelled()` and `Report incomplete review` needs
-        # `posted != 'true'`, so a cancellation after the review landed used to
-        # comment nothing at all - while `Remove re-review label` is `always()` and
-        # consumed the label regardless. That left a review naming findings it says
-        # it applied, no fold commit, and no explanation of why.
+        # `posted != 'true'`, so a cancellation used to comment nothing at all -
+        # while `Remove re-review label` is `always()` and consumed the label
+        # regardless. That left a review naming findings it says it applied, no fold
+        # commit, and no explanation of why.
         # Reachable two ways: `timeout-minutes`, and `cancel-in-progress` firing
         # because the concurrency group has no mode component, so any other label
         # added during a fold run supersedes it.
+        #
+        # Deliberately NOT conjoined with `posted` or `fold_push`: on cancellation
+        # GitHub re-evaluates the `if:` of every unfinished step, so a cancel during
+        # the agent step leaves `review_posted` unrun and `posted` empty - which is
+        # most of the window this step exists for. `fold_push.outputs.pushed` has the
+        # same problem one step later, where a cancel between the push landing and
+        # `emit true` writing $GITHUB_OUTPUT leaves it empty on a branch that DID
+        # receive the commit. So the gate is the cancellation and the mode, and the
+        # body below is worded for a state it cannot measure rather than asserting one.
         if: |
-          cancelled() && env.FOLD_MODE == 'true' &&
-          steps.review_posted.outputs.posted == 'true'
+          cancelled() && env.FOLD_MODE == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
@@ -828,7 +876,7 @@ jobs:
         run: |
           gh pr comment "$PR" \
             --repo "$REPO" \
-            --body "🤖 The review above was posted, but the run was CANCELLED before the \`bot-fold\` fixup could be committed, so nothing was pushed and the branch is untouched. Any finding the review claims to have applied was not. Re-label to try again. See the [workflow run](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID})." || true
+            --body "🤖 This \`bot-fold\` run was CANCELLED. Treat its outcome as unknown: a review may or may not have been posted, and if one was, the findings it claims to have applied may or may not have reached the branch - a cancellation can land on either side of the push. Check the branch and the [workflow run](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}) before re-labelling. The \`bot-fold\` label has been removed either way." || true
 
       - name: Report fold no-op
         # The push step succeeded and yet no fixup landed, or landed only in part.
@@ -884,14 +932,12 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_SYSTEM: /dev/null
           GIT_CONFIG_NOSYSTEM: '1'
-          # Same reasoning one layer down: reading the redactor's bytes out of the
-          # commit authenticates the PROGRAM, not the INTERPRETER's startup. CPython
-          # imports `usercustomize` from `$HOME/.local/lib/pythonX.Y/site-packages`
-          # before it reads stdin, so without this an agent-written 0644 file there
-          # executes first, with this step's env (which holds SKILL_FILE, the private
-          # skill) - on the `posted != 'true'` branch, where the push path's guards
-          # all skip. `-E` does not cover this; `-s`/`-S` would, but `-S` disables
-          # `site` wholesale.
+          # Belt to the `python3 -I` below, which is the live bound on the interpreter.
+          # Both are kept because they are independent: `-I` implies `-E`, so while the
+          # flag is there this variable is ignored, and if the flag is ever edited away
+          # this alone still suppresses the user site directory - the route CPython uses
+          # to import `usercustomize` out of `$HOME/.local/lib/pythonX.Y/site-packages`
+          # before it reads the program on stdin. `-E` does not cover that on its own.
           PYTHONNOUSERSITE: '1'
         run: |
           set -uo pipefail
@@ -921,8 +967,16 @@ jobs:
           # This step's gate is `posted != 'true'` while the push step's path guard
           # needs `posted == 'true'`, so on every run that reaches this line the guard
           # never ran at all - the bound has to be here and not there.
+          #
+          # `-I` (isolated) bounds the interpreter, which authenticating the program
+          # does not. `python3 -` sets `sys.path[0]` to the process CWD, and a `run:`
+          # step's CWD is $GITHUB_WORKSPACE - the checkout the agent holds Edit on - so
+          # an agent-planted `./json.py` would execute at the redactor's `import json`
+          # (neither `json` nor `re` is in `sys.modules` at startup). `-I` clears that
+          # entry and implies `-s` and `-E`. It costs nothing here: the redactor is
+          # stdlib-only and takes its three arguments positionally.
           if ! git show HEAD:.github/scripts/redact-review-transcript.py |
-                 python3 - "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"; then
+                 python3 -I - "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"; then
             echo "::warning::transcript redaction failed; not uploading"
             echo "uploadable=false" >> "$GITHUB_OUTPUT"
             echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
