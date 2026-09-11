@@ -68,7 +68,6 @@
     "no_valid_emails_error": "অনুগ্রহ করে বৈধ ইমেইল ঠিকানা প্রবেশ করান",
     "send_referral": "রেফারাল পাঠান",
     "send_referral_success": "রেফারাল সফলভাবে পাঠানো হয়েছে!",
-    "send_referral_skipped": "{{count}} আমন্ত্রণ(গুলি) বাদ দেওয়া হয়েছে — এই ইমেল ঠিকানাগুলির ইতিমধ্যে একটি অ্যাকাউন্ট রয়েছে।",
     "send_referral_failed": "{{count}} আমন্ত্রণ(গুলি) পাঠানো সম্ভব হয়নি। আবার চেষ্টা করুন।",
     "send_referral_error": "রেফারাল পাঠাতে গিয়ে ত্রুটি হয়েছে। দয়া করে আবার চেষ্টা করুন।",
     "slack_notification_default": "USER_NAME:USER_ID ব্যবহারকারী দ্বারা FRIEND_EMAIL এ পাঠানো রেফারাল"

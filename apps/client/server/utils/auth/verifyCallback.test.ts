@@ -21,6 +21,13 @@ vi.mock('@server/auth/requireNonSystemUser', () => ({
   requireNonSystemUser: (u: unknown) => u,
 }));
 
+// The invite gate reads admin settings; drive it directly instead of stubbing the
+// settings repository (the @bike4mind/database mock above deliberately carries only User).
+const mockIsOpenRegistrationAllowed = vi.fn();
+vi.mock('./openRegistration', () => ({
+  isOpenRegistrationAllowed: () => mockIsOpenRegistrationAllowed(),
+}));
+
 import { verifyCallback } from './verifyCallback';
 
 const runStandard = (
@@ -38,6 +45,9 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockRevokeAllByUserId.mockReset();
   mockRevokeAllByUserId.mockResolvedValue(0);
+  // Open by default so the pre-existing create-path tests keep exercising creation.
+  mockIsOpenRegistrationAllowed.mockReset();
+  mockIsOpenRegistrationAllowed.mockResolvedValue(true);
 });
 
 // Failure-safe restore of any vi.spyOn() (e.g. console.error) so a throwing
@@ -439,6 +449,105 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
   });
 });
 
+describe('verifyCallback - SAML identity is scoped to the asserting IDP', () => {
+  // A nameID is unique inside one IDP, never across them, and for SAML the stage-1 lookup
+  // key IS the nameID. The email-domain bind in server/auth/auth.ts cannot cover this: the
+  // attacker's assertion carries an email genuinely inside their own registered domain and
+  // puts the victim's identifier in nameID, which stage 1 matches on and the bind never
+  // inspects. So the IDP has to be part of the match itself.
+  const VICTIM = {
+    _id: 'victim-id',
+    email: 'victim@acme.com',
+    emailVerified: true,
+    hasUsablePassword: true,
+    authProviders: [{ strategy: AuthStrategy.SAML, id: 'victim@acme.com', samlIdentityProviderId: 'idp-acme' }],
+  };
+
+  // Stands in for Mongo: an $elemMatch matches only when EVERY clause matches the stored
+  // entry, which is the whole point of adding the IDP clause. Without it the mock returns
+  // the victim, exactly as the database would.
+  const mongoLikeFindOne = () =>
+    mockFindOne.mockImplementation((query: Record<string, any>) => {
+      const elemMatch = query?.authProviders?.$elemMatch;
+      if (!elemMatch) return Promise.resolve(null); // stage 2: nothing owns the attacker's email
+      const entry = VICTIM.authProviders[0] as Record<string, unknown>;
+      const matches = Object.entries(elemMatch).every(([field, value]) => entry[field] === value);
+      return Promise.resolve(matches ? { ...VICTIM } : null);
+    });
+
+  const runSaml = (profile: Record<string, unknown>, samlIdentityProviderId: string) =>
+    new Promise<{ err: unknown; user: any; info: unknown }>(resolve => {
+      const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      verifyCallback(AuthStrategy.SAML)('access-tok', 'refresh-tok', profile, done, {
+        strategy: AuthStrategy.SAML,
+        samlNameId: profile.id as string,
+        samlIdentityProviderId,
+      });
+    });
+
+  it("refuses to resolve another IDP's user from a colliding nameID", async () => {
+    mongoLikeFindOne();
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
+
+    // partner.com's IDP asserts an email inside its OWN domain (so the domain bind passes)
+    // while naming the acme.com victim in nameID.
+    const { user } = await runSaml(
+      { id: 'victim@acme.com', emails: [{ value: 'attacker@partner.com', verified: true }] },
+      'idp-partner'
+    );
+
+    // The victim must not be the resolved account, and must not be touched.
+    expect(user?._id).not.toBe('victim-id');
+    expect(user?.email).not.toBe('victim@acme.com');
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+
+    // And the reason it cannot be: the IDP is part of the stage-1 match.
+    expect(mockFindOne).toHaveBeenCalledWith({
+      authProviders: {
+        $elemMatch: expect.objectContaining({
+          strategy: AuthStrategy.SAML,
+          id: 'victim@acme.com',
+          samlIdentityProviderId: 'idp-partner',
+        }),
+      },
+    });
+  });
+
+  it('still resolves the user when the same IDP re-asserts its own nameID', async () => {
+    mongoLikeFindOne();
+
+    const { err, user } = await runSaml(
+      { id: 'victim@acme.com', emails: [{ value: 'victim@acme.com', verified: true }] },
+      'idp-acme'
+    );
+
+    expect(err).toBeNull();
+    expect(user?._id).toBe('victim-id');
+    // Same (nameID, IDP) identity, so this is a refresh: no re-linking gate, no revoke.
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1);
+    expect(mockUpdateOne.mock.calls[0][1].$inc).toBeUndefined();
+  });
+
+  it('leaves strategies without a per-IDP discriminator unscoped', async () => {
+    mockFindOne.mockResolvedValueOnce({
+      _id: 'u1',
+      email: 'user@example.com',
+      emailVerified: true,
+      authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub' }],
+    });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub',
+      emails: [{ value: 'user@example.com', verified: true }],
+    });
+
+    // No samlIdentityProviderId clause smuggled into a Google lookup.
+    expect(mockFindOne).toHaveBeenCalledWith({
+      authProviders: { $elemMatch: { strategy: AuthStrategy.Google, id: 'google-sub' } },
+    });
+  });
+});
+
 describe('verifyCallback - new user creation username field', () => {
   it('stores the provider username (handle) not the displayName so second login finds the user', async () => {
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
@@ -671,6 +780,80 @@ describe('verifyCallback - OAuth create: username dedupe on collision', () => {
   });
 });
 
+describe('verifyCallback - OAuth create: unverified provider email is not persisted as login identity', () => {
+  it('does NOT persist the email on create when the provider marks it unverified', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'attacker' });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-attacker',
+      username: 'attacker',
+      emails: [{ value: 'victim@example.com', verified: false }],
+    });
+
+    // Sign-in still succeeds and the account is created, but WITHOUT the unverified
+    // email as its login identity - so it can't pre-seed a Stage-2 match key that a
+    // later verified sign-in for the same address would be auto-linked into.
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+  });
+
+  it('does NOT persist the email on create when the provider gives no verification signal', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'nosignal' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-nosignal',
+      username: 'nosignal',
+      emails: [{ value: 'victim@example.com' }], // no `verified` field
+    });
+
+    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+  });
+
+  it('DOES persist the email on create when the provider marks it verified (unchanged behavior)', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', email: 'real@example.com' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-real',
+      displayName: 'Real User',
+      emails: [{ value: 'real@example.com', verified: true }],
+    });
+
+    expect(mockCreate.mock.calls[0][0].email).toBe('real@example.com');
+  });
+
+  it('SAML create persists the email (IdP-attested, verified:true by construction)', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', email: 'saml-user@example.com' });
+
+    await runStandard(AuthStrategy.SAML, {
+      id: 'saml-nameid',
+      emails: [{ value: 'saml-user@example.com', verified: true }],
+    });
+
+    expect(mockCreate.mock.calls[0][0].email).toBe('saml-user@example.com');
+  });
+
+  it('creates an emailless account with a random username when the email is unverified and no username is given', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'user-abc12345' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-emailless',
+      emails: [{ value: 'victim@example.com', verified: false }],
+    });
+
+    const createArg = mockCreate.mock.calls[0][0];
+    expect(createArg.email).toBeUndefined();
+    // No username and no usable (verified) email local-part -> random fallback, no crash.
+    expect(createArg.username).toMatch(/^user-[a-f0-9]{8}$/);
+  });
+});
+
 describe('verifyCallback - Google "with params" callback signature', () => {
   it('strips the params arg and forwards profile + done correctly', async () => {
     mockFindOne.mockResolvedValueOnce(null);
@@ -691,5 +874,60 @@ describe('verifyCallback - Google "with params" callback signature', () => {
     });
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('verifyCallback - invite gate on federated first login', () => {
+  const freshProfile = {
+    id: 'sub-new',
+    displayName: 'New Person',
+    emails: [{ value: 'new@example.com', verified: true }],
+  };
+
+  // No existing account: both lookup stages miss, so this is the create path.
+  const noExistingUser = () => mockFindOne.mockResolvedValue(null);
+
+  it('refuses a Google first login on an invite-only instance', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+
+    const { user, info } = await runStandard(AuthStrategy.Google, freshProfile);
+
+    expect(user).toBeFalsy();
+    expect(info).toMatchObject({ code: 'registration_closed' });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a GitHub first login on an invite-only instance', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+
+    const { user } = await runStandard(AuthStrategy.Github, freshProfile);
+
+    expect(user).toBeFalsy();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('exempts enterprise SSO: a SAML first login still creates the account', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+    mockCreate.mockResolvedValue({ _id: 'u-saml', email: 'new@example.com' });
+
+    const { user } = await runStandard(AuthStrategy.SAML, freshProfile);
+
+    expect(user).toBeTruthy();
+    expect(mockCreate).toHaveBeenCalled();
+    // The gate is never even consulted for SSO.
+    expect(mockIsOpenRegistrationAllowed).not.toHaveBeenCalled();
+  });
+
+  it('allows a Google first login when open registration is on', async () => {
+    noExistingUser();
+    mockCreate.mockResolvedValue({ _id: 'u-google', email: 'new@example.com' });
+
+    const { user } = await runStandard(AuthStrategy.Google, freshProfile);
+
+    expect(user).toBeTruthy();
+    expect(mockCreate).toHaveBeenCalled();
   });
 });

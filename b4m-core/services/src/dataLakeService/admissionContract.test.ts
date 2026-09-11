@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { FabFileChunkPolicyConflict } from '@bike4mind/common';
+import type { FabFileChunkPolicyConflict, LakeMembershipMemberInput } from '@bike4mind/common';
 import { FabFileSourceType } from '@bike4mind/common';
 import {
   admissionDoorLabel,
   computeServerTextHash,
+  describeSameIdentityAdmission,
+  detectSameIdentityAdmission,
   deriveAdmissionStatus,
   normalizeTextForHash,
 } from './admissionContract';
@@ -78,5 +80,111 @@ describe('admissionDoorLabel', () => {
 
   it('falls back to unknown when a door left provenance unset', () => {
     expect(admissionDoorLabel(undefined)).toBe('unknown');
+  });
+});
+
+describe('detectSameIdentityAdmission', () => {
+  let seq = 0;
+  const memberOf = (over: Partial<LakeMembershipMemberInput> = {}): LakeMembershipMemberInput => ({
+    fabFileId: `f${++seq}`,
+    fileName: 'policy.md',
+    arm: 'meta-tag',
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    fileSize: 100,
+    serverTextHash: 'aaa',
+    ...over,
+  });
+
+  it('RECORDS a same-identity admission and never rejects it', () => {
+    // The report-only property, pinned: this returns a finding, and there is no throwing or
+    // refusing path for a caller to reach. A same-named upload is very often a legitimate revision,
+    // so a gate here would have blocked the corrected copies this whole lane came from.
+    const incoming = memberOf({ createdAt: new Date('2026-03-01T00:00:00Z') });
+    const existing = memberOf();
+
+    const found = detectSameIdentityAdmission(incoming, [existing]);
+
+    expect(found).not.toBeNull();
+    expect(found?.tier).toBe('fileName');
+    expect(found?.group.fileName).toBe('policy.md');
+    // The admitted member is IN the group, newest first: the ruling is stamped over the whole group.
+    expect(found?.group.members.map(m => m.fabFileId)).toEqual([incoming.fabFileId, existing.fabFileId]);
+    expect(found?.group.memberCount).toBe(2);
+  });
+
+  it('grades identity confidence the same way the membership report does', () => {
+    const identical = detectSameIdentityAdmission(memberOf(), [memberOf()]);
+    expect(identical?.group.bucket).toBe('proven-identical');
+
+    // A REVISION: same source, different text. The case a hash could never catch, and the reason
+    // the key is path identity.
+    const revised = detectSameIdentityAdmission(memberOf({ serverTextHash: 'bbb' }), [memberOf()]);
+    expect(revised?.group.bucket).toBe('differing');
+
+    const unverified = detectSameIdentityAdmission(memberOf({ serverTextHash: null }), [memberOf()]);
+    expect(unverified?.group.bucket).toBe('unverified');
+  });
+
+  it('offers nothing when no sibling shares the name', () => {
+    expect(detectSameIdentityAdmission(memberOf(), [])).toBeNull();
+    expect(detectSameIdentityAdmission(memberOf(), [memberOf({ fileName: 'other.md' })])).toBeNull();
+  });
+
+  it('offers nothing when the shared name is the ONLY thing shared', () => {
+    // Two unrelated `policy.md` under different folders. This is the false pair the bare file-name
+    // tier produces, and offering to collapse it is the one error this check cannot afford.
+    const incoming = memberOf({ relativePath: 'legal/', createdAt: new Date('2026-03-01T00:00:00Z') });
+    const unrelated = memberOf({ relativePath: 'archive/' });
+
+    expect(detectSameIdentityAdmission(incoming, [unrelated])).toBeNull();
+  });
+
+  it('offers nothing for a nameless member, which can match nobody', () => {
+    expect(detectSameIdentityAdmission(memberOf({ fileName: undefined }), [memberOf()])).toBeNull();
+  });
+
+  it('reports the driveFileId tier for two copies of one Drive document', () => {
+    const incoming = memberOf({
+      fileName: 'policy-v3.md',
+      driveFileId: 'd1',
+      createdAt: new Date('2026-03-01T00:00:00Z'),
+    });
+    const existing = memberOf({ fileName: 'policy-v3.md', driveFileId: 'd1' });
+
+    const found = detectSameIdentityAdmission(incoming, [existing]);
+
+    expect(found?.tier).toBe('driveFileId');
+    expect(found?.group.memberCount).toBe(2);
+  });
+
+  it('does NOT match a Drive file across a rename, unlike the retrieval-time collapse', () => {
+    // A stable `driveFileId` is not enough here, and that is deliberate rather than a gap.
+    // `buildDuplicateGroups` keys the OUTER group on the exact file name because a ruling is stored
+    // against (dataLakeId, fileName), so two names cannot share one tombstone key - which means the
+    // driveFileId tier can only ever SPLIT a same-name group, never join two generations filed under
+    // different names. `partitionBySupersession` does no name grouping and so does match across a
+    // rename (see sourceIdentity.test.ts); the two surfaces genuinely differ here, and the previous
+    // version of this test claimed the opposite while giving both fixtures the same name.
+    const renamed = memberOf({
+      fileName: 'policy-v4.md',
+      driveFileId: 'd1',
+      createdAt: new Date('2026-04-01T00:00:00Z'),
+    });
+    const existing = memberOf({ fileName: 'policy-v3.md', driveFileId: 'd1' });
+
+    expect(detectSameIdentityAdmission(renamed, [existing])).toBeNull();
+  });
+
+  it('describes a finding by id and tier, never by file name', () => {
+    const incoming = memberOf({ createdAt: new Date('2026-03-01T00:00:00Z') });
+    const found = detectSameIdentityAdmission(incoming, [memberOf()])!;
+
+    const line = describeSameIdentityAdmission('lake-1', found);
+
+    expect(line).toContain('lake-1');
+    expect(line).toContain('matched by fileName');
+    expect(line).toContain(incoming.fabFileId);
+    // The name is uploader content and this line reaches the ingestion logs.
+    expect(line).not.toContain('policy.md');
   });
 });

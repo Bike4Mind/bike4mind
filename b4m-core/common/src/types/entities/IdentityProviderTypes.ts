@@ -35,7 +35,12 @@ export interface IIdentityProvider {
   oktaConfig?: {
     audience: string;
     clientId: string;
-    clientSecret: string;
+    /**
+     * Optional because it is `select: false` at rest: every read except the
+     * `*WithSecrets` accessors below resolves it as undefined. Same for
+     * samlConfig.decryptionPvk / privateCert above.
+     */
+    clientSecret?: string;
     /** Authorization server ID (default: 'default') */
     authServerId?: string;
     /** If true, use org-level authorization server (no /oauth2/ path) */
@@ -54,6 +59,14 @@ export interface IIdentityProviderRepository extends IBaseRepository<IIdentityPr
   findActiveByEmailDomain: (domain: string) => Promise<IIdentityProviderDocument | null>;
   findAll: () => Promise<IIdentityProviderDocument[]>;
   findActiveIDPs: () => Promise<IIdentityProviderDocument[]>;
+  /**
+   * The login-path reads: the only accessors whose results carry the `select: false`
+   * secrets, decrypted. Everything above resolves those fields as undefined, which is
+   * what keeps key material out of API responses by construction. Never build a
+   * response from these.
+   */
+  findByIdWithSecrets: (id: string) => Promise<IIdentityProviderDocument | null>;
+  findAllWithSecrets: () => Promise<IIdentityProviderDocument[]>;
 }
 
 export interface AuthStrategyResponse {

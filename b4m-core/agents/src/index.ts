@@ -218,10 +218,13 @@ export type {
 // Core: persistent V8 context + per-session lifecycle / budget tracking
 export { ReplContext } from './rlm/ReplContext';
 export type { ReplToolFn, ReplToolMap, ReplRunResult, ReplContextOptions } from './rlm/ReplContext';
-export type { ReplExecutor } from './rlm/replExecutor';
+export { ReplSandboxRetiredError } from './rlm/replExecutor';
+export { REPL_EXECUTOR_NAMES } from './rlm/replExecutor';
+export type { ReplExecutor, ReplExecutorName } from './rlm/replExecutor';
 export { WorkerReplExecutor } from './rlm/WorkerReplExecutor';
 export type { WorkerReplExecutorOptions } from './rlm/WorkerReplExecutor';
-export { IsolatedVmExecutor } from './rlm/IsolatedVmExecutor';
+export { IsolatedVmExecutor, TOOL_CALL_TIMEOUT_FRACTION, HOST_DEADLINE_GRACE_MS } from './rlm/IsolatedVmExecutor';
+export { WAKE_PER_CALL_REPL_TIMEOUT_MS } from './deepAgent/runtime/reactAct';
 export type { IsolatedVmExecutorOptions } from './rlm/IsolatedVmExecutor';
 export {
   ReplSession,
@@ -235,7 +238,13 @@ export {
   evictIdleReplSessions,
   _resetReplSessionsForTests,
 } from './rlm/ReplSession';
-export type { ReplSessionOptions, ReplSessionUsage, ReplSessionEvents } from './rlm/ReplSession';
+export type {
+  ReplSessionOptions,
+  ReplSessionUsage,
+  ReplSessionEvents,
+  ReplExecutorChoice,
+  SubLlmReservation,
+} from './rlm/ReplSession';
 
 // Tool factory: wraps a ReplSession in the ICompletionOptionTools contract
 export { makeCodeExecuteTool, CODE_EXECUTE_TOOL_NAME } from './rlm/codeExecuteTool';
@@ -250,5 +259,12 @@ export { wrapAgentToolsForRepl } from './rlm/wrapAgentToolsForRepl';
 export type { WrapOpts, WrapResult } from './rlm/wrapAgentToolsForRepl';
 
 // Production-shape sub-LLM: backed by any ICompletionBackend
+export {
+  recordReplSandboxUnavailable,
+  REPL_SANDBOX_NAMESPACE,
+  SANDBOX_UNAVAILABLE_METRIC,
+} from './rlm/replSandboxMetrics';
+export type { ReplSandboxCaller } from './rlm/replSandboxMetrics';
+
 export { buildBackendSubAgentQuery } from './rlm/backendSubAgent';
 export type { BackendSubAgentDeps } from './rlm/backendSubAgent';

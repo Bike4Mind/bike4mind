@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -6,12 +7,16 @@ import {
   dataLakeAccessGrantRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  adminSettingsRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 
 /**
  * GET  /api/data-lakes/:id/rechunk           -> { underChunkedCount, failedCount }
@@ -43,7 +48,7 @@ const RechunkInput = z.object({
 
 const detectDeps = { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
@@ -60,6 +65,7 @@ const handler = baseApi()
     return res.json({ underChunkedCount: underChunked.length, failedCount });
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query;
     const { limit } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
@@ -72,6 +78,39 @@ const handler = baseApi()
 
     let enqueued = 0;
     if (wave.length > 0) {
+      // Kill switch BEFORE the reset, for the reason /converge documents at the same point: the
+      // consumer's check only drops messages already on the queue, and by then
+      // `resetChunkStateByIds` has deleted this wave's passages and nulled its health rollups. A
+      // consumer-side stamp alone cannot protect this route - the destruction happens on the
+      // producer side.
+      //
+      // Gated even though this door repairs rather than converges: it deletes and re-embeds a whole
+      // wave at full spend, which is exactly what an operator turning the switch on is trying to
+      // stop. Refusing is also recoverable in a way the alternative is not - the files stay
+      // searchable and the admin can retry once the switch is off, whereas a wave halted mid-flight
+      // leaves them with no passages at all.
+      if (
+        await isConvergenceHalted(
+          { origin: CONVERGENCE_ORIGIN, lakeId: lake.id },
+          {
+            adminSettings: adminSettingsRepository,
+            scopedSettings: scopedSettingsRepository,
+            dataLakes: dataLakeRepository,
+          },
+          req.logger
+        )
+      ) {
+        req.logger?.log?.(
+          `[convergence] lake ${lake.id}: background lake work is paused; rechunk refused before touching ${wave.length} member(s)`
+        );
+        return res.json({
+          detected: detected.length,
+          enqueued: 0,
+          remaining: detected.length,
+          outcome: 'paused',
+        });
+      }
+
       const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
       if (!queueUrl) throw new Error('Chunk queue URL not found');
       // Reset the wave, then enqueue exactly what the reset changed. The reset is preconditioned on
@@ -83,6 +122,12 @@ const handler = baseApi()
       // allSettled, not all: one failed send must not fail the whole wave. A file whose send didn't
       // land is left in the reset state (chunked:false, chunkCount:0), which is exactly what the
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.
+      // The cost of routing recovery that way, since the reset above covers the whole wave before
+      // any send: the file stays unsearchable until the chunk rescue sweep re-enqueues it - daily
+      // 05:00 UTC hosted (infra/cron.ts), ~60s self-host, and only while `enableAutoChunk` is on,
+      // which is the one condition that can hold it indefinitely. REBUILD_PENDING_STALE_MS (2h) does
+      // not gate that sweep; it gates this door's own stale-pending re-detection
+      // (findConvergencePausedFilesByScope).
       //
       // NO `chunkSize` on purpose, unlike /converge which sends `policy.requiredTarget`. This door
       // restores RETRIEVABILITY and is deliberately policy-independent: it has to work on a lake with
@@ -96,7 +141,17 @@ const handler = baseApi()
       // is run once. Documented for owners in knowledge-management.md. Retrieval first, conformance
       // second - a wrong-sized searchable file still answers; an unsearchable one does not.
       const results = await Promise.allSettled(
-        resetIds.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: userById.get(id)! }))
+        resetIds.map(id =>
+          sendToQueue(queueUrl, {
+            fabFileId: id,
+            userId: userById.get(id)!,
+            // Provenance for the #1676 kill switch, matching /converge. The producer gate above is
+            // what protects the passages; this is what stops an in-flight wave from continuing to
+            // re-embed if the switch is turned on after the messages were sent.
+            origin: CONVERGENCE_ORIGIN,
+            lakeId: lake.id,
+          })
+        )
       );
       const failed = results.filter(r => r.status === 'rejected').length;
       const skipped = userById.size - resetIds.length;

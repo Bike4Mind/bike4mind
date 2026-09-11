@@ -4,8 +4,9 @@
  * measurement, not a merge gate. See README.md in this directory for how to run it.
  */
 import { describe, expect, it } from 'vitest';
+import { MIN_PASS_RATE, formatEvalReport } from '../harness';
 import { ABSTENTION_CASES } from './cases';
-import { MIN_PASS_RATE, formatAbstentionReport, runAbstentionEval } from './run';
+import { runAbstentionEval } from './run';
 
 const baseUrl = process.env.ABSTENTION_EVAL_BASE_URL;
 const model = process.env.ABSTENTION_EVAL_MODEL;
@@ -24,10 +25,10 @@ describe.skipIf(!baseUrl || !model)('forced-retrieval abstention (live model)', 
     async () => {
       const results = await runAbstentionEval({ baseUrl: baseUrl!, model: model!, samples }, ABSTENTION_CASES);
       // The report is the deliverable - a bare pass/fail on a stochastic suite is not actionable.
-      console.log(`\n${model} @ ${samples} samples/case\n${formatAbstentionReport(results)}\n`);
+      console.log(`\n${model} @ ${samples} samples/case\n${formatEvalReport(results)}\n`);
 
       const regressed = results.filter(r => r.passRate < MIN_PASS_RATE);
-      expect(regressed.map(r => `${r.caseId}: ${r.samples.find(s => !s.passed)?.reason}`)).toEqual([]);
+      expect(regressed.map(r => `${r.evalCase.id}: ${r.samples.find(s => !s.passed)?.reason}`)).toEqual([]);
     },
     // A full sweep is cases x samples sequential completions; a local model needs the headroom.
     10 * 60 * 1000

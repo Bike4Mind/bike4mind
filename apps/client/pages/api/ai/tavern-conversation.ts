@@ -178,6 +178,9 @@ const handler = baseApi()
         memorySections = {};
         for (const [charId, agentId] of Object.entries(agentIds)) {
           try {
+            // Object-level authz: only read memory for agents the caller can access
+            const agent = await agentRepository.shareable.findAccessibleById(req.user, agentId as string);
+            if (!agent) continue;
             const memories = await agentRepository.getMemoryJournal(agentId as string, 20);
             if (memories.length > 0) {
               memorySections[charId] = agentMemoryService.buildMemoryPromptSection(memories);
@@ -237,6 +240,9 @@ const handler = baseApi()
 
           for (const [charId, agentId] of Object.entries(agentIds)) {
             try {
+              // Object-level authz: appending memory is a write, so require update access
+              const agent = await agentRepository.shareable.findUpdateAccessById(req.user, agentId as string);
+              if (!agent) continue;
               const char = (characters as { id: string; name: string; personality: string }[]).find(
                 c => c.id === charId
               );

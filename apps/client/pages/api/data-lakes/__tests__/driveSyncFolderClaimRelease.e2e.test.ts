@@ -144,7 +144,7 @@ beforeEach(() => {
   h.verifyOrgAccess.mockResolvedValue(undefined);
   h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
   h.createDriveClient.mockReturnValue({});
-  h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: true, canRead: true });
+  h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });
   h.sendToQueue.mockResolvedValue(undefined);
 });
 

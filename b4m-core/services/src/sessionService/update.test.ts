@@ -158,7 +158,11 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
   it('leaves forceKnowledgeRetrieval untouched when the field is omitted', async () => {
     const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true });
     await updateSession(user, { id: 'session-1', name: 'Renamed' }, adapters);
-    expect(update.mock.calls[0][0]).toMatchObject({ forceKnowledgeRetrieval: true, name: 'Renamed' });
+    // Omitted -> not written at all, so the stored value is left untouched (a targeted
+    // write, not a round-trip of the whole session).
+    const saved = update.mock.calls[0][0];
+    expect(saved.name).toBe('Renamed');
+    expect(saved).not.toHaveProperty('forceKnowledgeRetrieval');
   });
 
   it('ignores surface even if a caller passes it (allow-list strips it; sidebar visibility preserved)', async () => {
@@ -171,7 +175,9 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
     );
     const saved = update.mock.calls[0][0];
     expect(saved.forceKnowledgeRetrieval).toBe(true);
-    expect(saved.surface).toBe('opti'); // unchanged - never overwritten by the update
+    // surface is stripped by the allow-list AND never round-tripped, so it is absent from
+    // the targeted write and the stored 'opti' is left untouched.
+    expect(saved).not.toHaveProperty('surface');
   });
 });
 
@@ -362,8 +368,9 @@ describe('updateSession - project propagation opt-out', () => {
       const { adapters } = makeAdapters();
       await updateSession(user, { id: 'session-1', name: 'renamed' }, adapters);
 
-      // The fixture session carries [], so this pins "unchanged", not "cleared".
-      expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual([]);
+      // Field absent -> not written at all, so the stored list is left untouched rather
+      // than round-tripped. A stronger "unchanged, not cleared" guarantee than before.
+      expect(adapters.db.sessions.update.mock.calls[0][0]).not.toHaveProperty('knowledgeIds');
     });
   });
 });
@@ -481,6 +488,8 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
     await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
 
-    expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:chosen'] });
+    // Derivation is skipped, so retrievalTags is never in the targeted write - the existing
+    // scope is left untouched rather than overwritten (or round-tripped).
+    expect(update.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
   });
 });

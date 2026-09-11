@@ -62,8 +62,9 @@ export const CreateSessionRequestSchema = z.object({
   // to no lake at all instead of widening to every entitled lake (see resolveLakeMemoryScope).
   lakeScopeExplicit: z.boolean().optional(),
   // Resolved from the lake by the create route (resolveLakeSessionDefaults) so the merged create
-  // params carry it through to core; declared here for the shared type only. NOT client-supplied:
-  // the route strips any client-sent value, so the lake stays authoritative for the grounding mode.
+  // params carry it through to core; declared here for the shared type only. The route strips a
+  // client-sent value whenever `dataLakeId` is set, leaving the lake authoritative; a session that
+  // names a lake by `retrievalTags` alone is the one case where the caller's own mode survives.
   corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
   retrievalExcludeFilenameMarkers: z
     .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))
@@ -71,6 +72,11 @@ export const CreateSessionRequestSchema = z.object({
     .optional(),
   retrievalVectorizedOnly: z.boolean().optional(),
   temperature: z.number().optional(),
+  // Lake ids the caller wants this session admitted to despite not being a member (manage-but-not-
+  // member admission). Consumed and authorized (canManageLake) at the create route, which writes it
+  // onto the session as a SEPARATE authorized write AFTER creation - never persisted through
+  // createSession's own input, so this field is declared here for the shared request type only.
+  preauthorizedLakeIds: z.array(z.string()).optional(),
 });
 
 export const ProjectFilesRequestSchema = z.object({
@@ -112,6 +118,15 @@ export const ProjectInviteRequestSchema = z.object({
   available: z.number().positive().optional(),
 });
 
+// `offset: true` because the default rejects "+09:00", which the docs table advertises and a
+// zone-aware caller is the most likely one to send.
+// Labelled deliberately: a bare union reports only zod's generic "Invalid input", losing the
+// "Invalid ISO datetime" a lone datetime schema gave. The route copies issue.message into errors[]
+// and the modal renders it, so this string is what an API caller sending "15/01/2026" actually reads.
+const DATE_OR_DATETIME = z.union([z.iso.date(), z.iso.datetime({ offset: true })], {
+  error: 'must be YYYY-MM-DD or a full ISO datetime',
+});
+
 export const NotebookExportRequestSchema = z.object({
   includeKnowledge: z.boolean().optional().prefault(true),
   includeArtifacts: z.boolean().optional().prefault(true),
@@ -125,9 +140,23 @@ export const NotebookExportRequestSchema = z.object({
     .positive()
     .optional()
     .prefault(10 * 1024 * 1024), // 10MB default
-  notebookIds: z.array(z.string()).optional(),
-  fromDate: z.iso.datetime().optional(),
-  toDate: z.iso.datetime().optional(),
+  // These feed `_id: { $in: ... }` on ObjectId-keyed SessionModel, so one non-hex entry rejects the
+  // whole query with a CastError the route could only answer as a 500. Empty is rejected rather
+  // than treated as "all": getSessionsToExport only adds the `_id` filter when the array is
+  // non-empty, so `[]` and an omitted field produce the same bare `{ userId }` query - a caller
+  // who named zero notebooks would receive an archive of every one they own.
+  notebookIds: z
+    .array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'must be a 24-character hex notebook id'))
+    .min(1, 'name at least one notebook, or omit notebookIds to export all')
+    .max(50, 'Maximum 50 notebooks per export request')
+    .optional(),
+  // A bare "2026-01-15" is accepted alongside a full timestamp, since that is what an
+  // `<input type="date">` produces and a datetime-only schema rejected every such value. The
+  // export modal no longer sends that form - it resolves the picked day in the viewer's own zone,
+  // the only place that zone is known - so this now serves API callers, whose bare date the
+  // service reads as a UTC day: the only defensible reading when no offset was supplied.
+  fromDate: DATE_OR_DATETIME.optional(),
+  toDate: DATE_OR_DATETIME.optional(),
 });
 
 export const NotebookCurateRequestSchema = z.object({

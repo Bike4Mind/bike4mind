@@ -1,3 +1,5 @@
+import type { InconsistencyKind } from './corpusInconsistency';
+import type { WireLakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -22,6 +24,7 @@ import {
   deriveServeCharBudget,
   isChunkRebuildPending,
   isChunkStalled,
+  isChunklessStall,
 } from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
@@ -212,7 +215,11 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset), so keying on
   // the reason alone would fail a repaired file forever.
   // Same guard, same reason, as `decideMemberConvergence`'s own arm.
-  const passagesRemoved = member.chunkCount === 0 && member.chunkStallReason === 'rechunkPaused';
+  //
+  // `isChunklessStall`, not the bare `rechunkPaused`: `unchunkedPaused` is the same halted state on a
+  // file that arrived empty rather than one a wave emptied, and it grades identically here. NOT the
+  // full CHUNK_STALL_REASONS - a vectorize-paused file still has its passages.
+  const passagesRemoved = member.chunkCount === 0 && isChunklessStall(member.chunkStallReason);
   // A rebuild that was REQUESTED and has not committed (#1939). Deliberately NOT folded into
   // `passagesRemoved`: the passages are equally gone, but this one is expected back, so forcing P3
   // to `fail` here would make every ordinary "Rebuild passages" wave and every per-file reprocess
@@ -339,12 +346,13 @@ export type LakeHealthReport = {
  * to drop the lake off `healthy` regardless of the percentage beside it.
  */
 /**
- * The members `summarizeLakeHealth` grades: chunked, or chunkless via one of the two markers that
- * mean "expected back", not "never had any". Exported so a sibling report over the same scan - e.g.
+ * The members `summarizeLakeHealth` grades: chunked, or chunkless via a marker that says so. A
+ * chunkless member with no marker at all is the one thing left out - nothing distinguishes it from an
+ * image or a pending upload. Exported so a sibling report over the same scan - e.g.
  * `findDuplicateMembers` in `computeLakeHealth` - agrees by construction about which members are "in"
  * the lake, rather than by a comment promising the two filters stay in sync.
  *
- * The CHUNK arm only, matching `findDataLakeHealthMembers`'s own `$match` and
+ * The CHUNK arm only (`isChunklessStall`), matching `findDataLakeHealthMembers`'s own `$match` and
  * `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
  * already admitted by `chunkCount > 0` and needs no exception here.
  *
@@ -358,7 +366,7 @@ export function selectLakeHealthMembers<
   T extends Pick<LakeHealthMemberInput, 'chunkCount' | 'chunkStallReason' | 'chunkRebuildRequestedAt'>,
 >(members: T[]): T[] {
   return members.filter(
-    m => m.chunkCount > 0 || m.chunkStallReason === 'rechunkPaused' || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+    m => m.chunkCount > 0 || isChunklessStall(m.chunkStallReason) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
   );
 }
 
@@ -517,11 +525,184 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
   /** True when the lake exceeded the member scan bound, so every ratio here is partial. */
   scanTruncated: boolean;
   /**
+   * The MEMBERSHIP dimension (#2245): who is in this lake and whether any document is here twice.
+   * Separate from the predicates above because every one of them can pass on a lake carrying two
+   * upload generations of the same files - each generation genuinely is chunked and vectorized.
+   *
+   * OVERLAPS `duplicateMembers` below, which #2317 added independently while this was in review, and
+   * the two DISAGREE by construction, now on two axes. POPULATION: this grades over the membership
+   * population (which keeps chunkless members on purpose), `duplicateMembers` grades over the health
+   * population (which drops them). GROUPING: this narrows each name group to the members sharing the
+   * newest generation's source identity (#2238), so two unrelated `README.md` under different folders
+   * stop being reported here, while `duplicateMembers` still groups by file name alone and reports
+   * them. So this report is the narrower of the two on grouping and the wider on population - it is
+   * not a subset either way. Two duplicate counts for one lake is not a shape to ship - one of them
+   * should go, and which one is a product decision (#2245 says it supersedes the report-only half of
+   * #2239). Kept side by side only so a merge did not silently delete either.
+   *
+   * Both are ruling-blind, and deliberately: this route admits `public` readers, and what an owner
+   * has decided about their lake is not their audience's business. `MembershipRepairPlanRead` (GET
+   * /api/data-lakes/:id/membership-duplicates, #2238) is the manage-gated, ruling-aware view, and it
+   * is what a surface offering a decision must read - not this.
+   */
+  membership: WireLakeMembershipReport;
+  /**
    * Duplicate-fileName members (#2239). Report-only - see `findDuplicateMembers`. `groups` (and each
    * group's `members`) are capped for payload size by the caller; `memberCount`/`groupCount` on the
    * report and `memberCount` on each group stay exact.
+   *
+   * See the note on `membership` above: these two are redundant and expected to disagree, in group
+   * membership as well as in count.
    */
   duplicateMembers: LakeHealthDuplicatesReport;
+  /**
+   * Lake memory: whether this lake's extracted-fact profile is enabled, present and current.
+   * See `LakeMemoryHealth` and `deriveLakeMemoryState` above - the same shape the build door's own
+   * GET returns, so the two surfaces cannot disagree about what "built" means.
+   */
+  lakeMemory: LakeMemoryHealth;
+  /**
+   * SUMMARY of the last cross-document inconsistency report (#2242), or null when detection has never
+   * run. Null is NOT "clean" and a surface must not render it as such - detection is an
+   * owner-triggered pass, because it reads chunk text and health may not (#1665).
+   *
+   * Counts only. No excerpts, and no `subject`, because both are lifted verbatim from member
+   * documents - a `relationship-conflict` subject IS an organization name taken out of the prose.
+   * GET /health is READ-gated (org and public-lake readers reach it) and applies no redaction, while
+   * the report itself is manage-only: `redactLakeForActor` withholds the stored fields from readers,
+   * and POST /inconsistencies is write-gated for exactly that reason.
+   *
+   * So the shape here carries nothing to redact rather than relying on a caller to redact it. An
+   * actor-conditional payload would put the burden on every future reader of this response; a
+   * structurally prose-free one cannot leak even if someone forgets. The full findings come from
+   * POST /inconsistencies, which is already gated.
+   */
+  inconsistency: {
+    computedAt: Date | null;
+    /**
+     * True when detection did not read every chunk of every member, so counts are a LOWER BOUND.
+     * Unconditionally true today: the pass reads a bounded number of chunks per member.
+     */
+    sampled: boolean;
+    /** True when the lake has more members than the pass sampled. The actionable half of `sampled`. */
+    memberSampled: boolean;
+    /**
+     * Members whose text was actually read. Zero with a non-null `computedAt` means the pass ran and
+     * scanned nothing, which is NOT a clean lake - the same distinction `null` carries one level up.
+     */
+    memberCount: number;
+    /** EXACT: summed from `countsByKind`, so it never implies fewer findings than were detected. */
+    findingCount: number;
+    /** True when the stored finding list was capped. `findingCount` above is unaffected. */
+    truncated: boolean;
+    countsByKind: Record<InconsistencyKind, number>;
+  } | null;
+};
+
+/**
+ * Lake memory: whether a lake's extracted-fact profile is enabled, present, and current - a
+ * state machine layered on top of the four content predicates above, not a replacement for them.
+ */
+
+/**
+ * How long a per-lake extraction lease is honored before another run may reclaim it. Shared by
+ * `extractLakeMemory.ts` (which claims/releases it), the build-door's "no lease held" precondition,
+ * and `isLeaseHeld` below, so the three cannot disagree about what "still running" means. Longer
+ * than the Lambda's own 10-minute timeout (infra/queues.ts), so a healthy in-flight run is never
+ * stolen; short enough that a crashed run (which never released its lease) is reclaimable on the
+ * next attempt without a reconciler.
+ */
+export const LAKE_MEMORY_EXTRACTION_LEASE_MS = 15 * 60_000;
+
+/**
+ * Whether a lake-memory extraction lease is still in force at `now`. `at` is the lake's
+ * `lakeMemoryExtractionAt` - `null`/`undefined` means no run currently holds it (either none ever
+ * has, or the last one released cleanly in its `finally`); a stamp older than the lease window is a
+ * crashed run's STALE lease, which reads as not-held here for the same reason
+ * `claimLakeMemoryExtraction` would let a new run reclaim it.
+ */
+export function isLeaseHeld(at: Date | string | null | undefined, now: Date): boolean {
+  if (!at) return false;
+  const claimedAt = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(claimedAt.getTime())) return false;
+  return claimedAt.getTime() >= now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS;
+}
+
+/** The six lake-memory states: the issue's five plus `building`, which the extraction lease makes observable. */
+export const LAKE_MEMORY_STATES = ['platform-off', 'lake-off', 'never-built', 'building', 'stale', 'current'] as const;
+export type LakeMemoryState = (typeof LAKE_MEMORY_STATES)[number];
+
+/**
+ * These six are NOT mutually exclusive - `building` genuinely co-occurs with `platform-off`: the
+ * platform kill-switch drops queued messages (`lakeMemoryExtraction.ts`) but cannot stop a run that
+ * already claimed its lease. So precedence is written down explicitly here rather than left to
+ * `LAKE_MEMORY_STATES`'s array order above:
+ *
+ *   platform-off > lake-off > building > never-built > stale > current
+ *
+ * `building` = lease held OR continuation cursor non-null (a chain claims/releases its lease PER
+ * SLICE, so between two slices of one chain the lease reads null while the work is demonstrably
+ * unfinished - the cursor is what survives across slices). Pure: every input is a fact the caller
+ * has already computed (from the lease, the cursor, and the ledger aggregate), so this function
+ * does no I/O and needs no mocking to test.
+ */
+export function deriveLakeMemoryState(input: {
+  platformEnabled: boolean;
+  lakeEnabled: boolean;
+  building: boolean;
+  everBuilt: boolean;
+  stale: boolean;
+}): LakeMemoryState {
+  if (!input.platformEnabled) return 'platform-off';
+  if (!input.lakeEnabled) return 'lake-off';
+  if (input.building) return 'building';
+  if (!input.everBuilt) return 'never-built';
+  if (input.stale) return 'stale';
+  return 'current';
+}
+
+/**
+ * The shape both lake-memory surfaces return: the build door's GET, and `lakeMemory` on
+ * `LakeHealthApiResponse` below. One type so the two endpoints cannot describe "lake memory state"
+ * differently.
+ *
+ * `factCount`/`sourceDocumentCount`/`lastBuiltAt` are derived from the memory ledger, not a lake
+ * field - the lake carries no build stamp, only a concurrency lease (see `isLeaseHeld`). They are
+ * approximate in the senses documented at each field below.
+ */
+export type LakeMemoryHealth = {
+  state: LakeMemoryState;
+  /**
+   * Whether a run holds the extraction lease RIGHT NOW - the strict half of `state === 'building'`,
+   * which is also true for a parked continuation cursor.
+   *
+   * Needed because those two halves want opposite affordances and `state` alone cannot separate them.
+   * A held lease means "wait, something is working". A parked cursor with no lease means the chain
+   * ended without finishing - the slice ceiling was hit, the platform or lake flag went off mid-chain,
+   * or a run died - and the only way forward is for someone to build again. Without this, every one of
+   * those reads as `building` forever, and a UI that hides its build control while building offers no
+   * way out of a state nothing will leave on its own.
+   *
+   * A boolean, never the lease timestamp: `redactLakeForActor` withholds `lakeMemoryExtractionAt` from
+   * readers on purpose, and this keeps the derived signal on the same footing as `building` itself.
+   */
+  running: boolean;
+  /** Newest surviving ledger event's timestamp for this lake's principal, or null if none exists. */
+  lastBuiltAt: Date | null;
+  /**
+   * Approximate count of distinct subjects (folded beliefs) in the surviving chain. Not exact in the
+   * `readProfile` sense: it counts raw subject cardinality, not the result of applying retract
+   * semantics.
+   */
+  factCount: number;
+  /**
+   * Distinct source documents cited by the surviving chain. A document cited by a live event was
+   * certainly read; one whose only citing events were later shredded is indistinguishable from one
+   * never read - so this is a lower bound once anything has been purged.
+   */
+  sourceDocumentCount: number;
+  /** The lake's current member count (from its own stats), for comparing against `sourceDocumentCount`. */
+  memberCount: number;
 };
 
 function emptyTally(): PredicateTally {

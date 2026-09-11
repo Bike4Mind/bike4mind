@@ -8,6 +8,16 @@ import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ForbiddenError } from '@server/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { OAuthFailureReason } from './oauthFailureReason';
+import { isOpenRegistrationAllowed } from './openRegistration';
+
+/**
+ * Strategies where anyone on the internet can present an identity, so a first login
+ * is a self-serve signup and must obey the invite-only switch. SAML and Okta are
+ * absent on purpose: an admin had to register that IdP for the domain first, which is
+ * the authorization - gating them would break enterprise onboarding on instances that
+ * are invite-only for the public.
+ */
+const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([AuthStrategy.Google, AuthStrategy.Github]);
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
 // six total create attempts (base + 5 retries) is already generous for a
@@ -128,12 +138,22 @@ const authenticateUser = async (
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
   const username = profile?.username ?? profile?.preferred_username ?? null;
   const id = profile?.id ?? profile?.sub ?? null;
+  // SAML identity is (nameID, samlIdentityProviderId), never nameID alone: a nameID is
+  // unique within one IdP but nothing stops two IdPs minting the same one, and for SAML
+  // `id` above IS the nameID. Without this discriminator any registered IdP can assert a
+  // nameID belonging to another IdP's tenant and match that tenant's user on stage 1 -
+  // the domain bind in server/auth/auth.ts guards the asserted *email*, which a stage-1
+  // hit never consults. Mirrors the oktaIdentityProviderId comparison in
+  // pages/api/auth/okta/callback.ts; null for strategies that have no per-IdP notion
+  // (Google, GitHub), where it adds no constraint.
+  const samlIdpId = authProvider?.samlIdentityProviderId ?? null;
+  const idpScope = samlIdpId ? { samlIdentityProviderId: samlIdpId } : {};
 
   try {
     // Stage 1: match by immutable (strategy, providerId).
     // Guard: only when id is truthy - $elemMatch with id:null would match other
     // users' legacy null-id rows and introduce a new null-collision takeover.
-    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id } } }) : null;
+    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id, ...idpScope } } }) : null;
 
     // Stage 2: fallback to mutable email/username only when stage 1 missed.
     // The Missing Identifier guard lives here (between stages) because a stage-1
@@ -184,8 +204,15 @@ const authenticateUser = async (
       // a stage-1 hit on a later entry could be mis-evaluated here. Duplicates
       // are now collapsed on write (applyAccountLink) and on save (UserModel
       // pre-save guard), so such rows self-heal on the next login.
+      // The samlIdpId clause is the refresh-exemption half of the same (nameID, IdP)
+      // identity above: without it a cross-IdP nameID collision that reached this point
+      // would be treated as "the same identity we already linked" and skip the gate
+      // entirely. Vacuous for strategies with no per-IdP discriminator.
       const existingSameIdentity =
-        existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
+        existingProviderIndex !== -1 &&
+        !!incomingId &&
+        authProviders[existingProviderIndex].id === incomingId &&
+        (!samlIdpId || authProviders[existingProviderIndex].samlIdentityProviderId === samlIdpId);
 
       let promoteEmailVerified = false;
       if (!existingSameIdentity) {
@@ -245,9 +272,28 @@ const authenticateUser = async (
       linkedUser.isNewOAuthLink = isNewProvider;
       done(null, linkedUser);
     } else {
+      // Invite gate. `registerUser` refuses a code-less signup on an invite-only
+      // instance, but this path creates accounts with User.create and never reaches it,
+      // so a closed instance still accepted any Google/GitHub first login.
+      //
+      // Enterprise SSO is deliberately exempt (see SELF_SERVE_STRATEGIES): registering
+      // the IdP is itself the admin's authorization for that domain's users.
+      if (SELF_SERVE_STRATEGIES.has(strategy) && !(await isOpenRegistrationAllowed())) {
+        done(null, undefined, { code: 'registration_closed' });
+        return;
+      }
+
       const name = profile?.displayName ?? profile?.name ?? username ?? '';
-      const baseUsername = deriveOAuthUsername(username, name, email);
-      user = await createUniqueOAuthUser({ name, baseUsername, email, oauthCredentials });
+      // Gate the provider-asserted email out of a brand-new account's login
+      // identity unless the provider marked it verified. An unverified email
+      // persisted here becomes a Stage-2 match key (the email $or above) that a
+      // later verified sign-in for the same address would auto-link into (see
+      // decideAutoLink), handing this account to whoever created it. SAML's
+      // wrapper synthesizes verified:true, so IdP-attested logins still persist
+      // their email; sibling OAuth create paths must apply the same gate.
+      const emailForNewAccount = isProviderEmailVerified(profile) ? email : null;
+      const baseUsername = deriveOAuthUsername(username, name, emailForNewAccount);
+      user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
       // Transient flag (not persisted), mirroring isNewOAuthLink above: lets
       // the callback endpoint log the registration and forward a one-shot
       // signup signal to the client for ad-conversion tracking.

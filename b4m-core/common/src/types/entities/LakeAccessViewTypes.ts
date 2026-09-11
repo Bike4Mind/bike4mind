@@ -22,8 +22,10 @@ export type LakeGrantStatus = 'active' | 'expired';
 export interface LakeAccessGrantView {
   principalType: DataLakePrincipalType;
   principalId: string;
-  /** Resolved display name (a user's name/email, or an org's name); absent if the principal no
-   * longer resolves - a deleted user still appears as a row so the audit trail stays complete. */
+  /** Resolved display name (a user's name or username, or an org's name); absent if the principal
+   * no longer resolves - a deleted user still appears as a row so the audit trail stays complete.
+   * Never an email - see `userDisplayName`, which is why the grant form cannot match a typed
+   * address against an existing row. */
   principalName?: string;
   role: DataLakeAccessRole;
   grantedByUserId: string;

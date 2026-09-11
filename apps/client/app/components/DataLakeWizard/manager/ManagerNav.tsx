@@ -26,6 +26,7 @@ import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import RestoreIcon from '@mui/icons-material/Restore';
+import ReplayIcon from '@mui/icons-material/Replay';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
@@ -53,8 +54,10 @@ import {
   useDataLakeFiles,
   useGetArchivedDataLakes,
   useGetDeletedDataLakes,
+  useGetTransitionalDataLakes,
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
+  useRetryLakeLifecycle,
   useUnarchiveDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
@@ -74,7 +77,7 @@ interface ManagerNavProps {
   lakesLoading: boolean;
   /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
-  /** Lake id -> its attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  /** Lake id -> its attention-worthy taxonomy batch, if any (see manager/taxonomySlot.ts). */
   taxonomyBatchByLakeId: Map<string, IDataLakeBatchSummary>;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */
@@ -120,15 +123,22 @@ export default function ManagerNav({
   const [showLakes, setShowLakes] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
+  // Open by default, unlike the other two: this section only exists when something is wrong, so
+  // there is nothing to spare the reader by keeping it shut.
+  const [showTransitional, setShowTransitional] = useState(true);
   const [purgeTarget, setPurgeTarget] = useState<{ id: string; name: string } | null>(null);
   const unarchiveLake = useUnarchiveDataLake();
   const restoreDeletedLake = useRestoreDeletedDataLake();
   const deleteLake = usePermanentDeleteDataLake();
   const cleanupLake = useCleanupDataLake();
+  const retryLifecycle = useRetryLakeLifecycle();
   // Fetched up front rather than on first expand: an empty section renders as a single "No
   // archived" row instead of an accordion, and that needs the count before anyone clicks.
   const { data: archivedLakes } = useGetArchivedDataLakes();
   const { data: deletedLakes } = useGetDeletedDataLakes();
+  // Server-side manage-scoped and cutoff-filtered, so a non-empty result IS the reason to render
+  // the section - see useGetTransitionalDataLakes.
+  const { data: transitionalLakes } = useGetTransitionalDataLakes();
 
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
   // Dep on .data, not the whole result: react-query returns a fresh result object on every
@@ -190,6 +200,11 @@ export default function ManagerNav({
     const q = searchQuery.toLowerCase();
     return list.filter(l => l.name.toLowerCase().includes(q));
   };
+
+  // Filtered ONCE, because the needs-attention section gates on non-empty: gating on the unfiltered
+  // list while rendering the filtered one puts a search query that matches no stranded lake into
+  // the empty-row branch that section is built never to reach.
+  const strandedLakes = filterByName(transitionalLakes);
 
   // Search is scoped to the current level: entering/leaving a lake or drilling a category
   // clears it, so a query typed to find a lake at root can't silently filter (and hide) that
@@ -436,9 +451,13 @@ export default function ManagerNav({
                                   />
                                 </Tooltip>
                               )}
-                              {/* Background AI-tag suggestion indicator - an independent clock
-                                  from ingest, so this can appear well after the lake's files
-                                  are already fully uploaded/searchable. */}
+                              {/* Background AI-tag suggestion gates (progress, review, failed) -
+                                  an independent clock from ingest, so these can appear well
+                                  after the lake's files are already fully uploaded/searchable.
+                                  Adding or removing a taxonomyStatus gate anywhere in this
+                                  block means revisiting SLOT_PRIORITY in
+                                  manager/taxonomySlot.ts, whose order is argued from which
+                                  statuses these gates render. */}
                               {(taxonomyBatch?.taxonomyStatus === 'queued' ||
                                 taxonomyBatch?.taxonomyStatus === 'analyzing') && (
                                 <Tooltip title="Suggesting tags with AI - usually ready in under a minute" size="sm">
@@ -517,6 +536,55 @@ export default function ManagerNav({
                   </List>
                 ))}
             </Box>
+
+            {/* Lakes a crashed or timed-out lifecycle call left mid-operation. Rendered ONLY when
+                non-empty: unlike Archived/Deleted this is not a standing view of the app, so a
+                steady-state "No stranded lakes" row would be noise on every healthy install. */}
+            {strandedLakes?.length ? (
+              <NavLifecycleSection
+                label="Needs attention"
+                open={showTransitional}
+                onToggle={() => setShowTransitional(v => !v)}
+                testid="datalake-transitional-section"
+                lakes={strandedLakes}
+                hoverBg={hoverBg}
+                renderRowTrailing={lake => {
+                  // The service deliberately lists a lake whose `updatedAt` is missing or
+                  // unparseable, so the `since` clause is dropped rather than rendering
+                  // "since Invalid Date" - the row's presence is the signal, not the stamp.
+                  const movedAt = new Date(lake.updatedAt).getTime();
+                  const since = Number.isNaN(movedAt) ? '' : ` since ${new Date(movedAt).toLocaleString()}`;
+                  return (
+                    <Tooltip title={`In '${lake.status}'${since}`} placement="top">
+                      <Chip
+                        size="sm"
+                        variant="soft"
+                        color="warning"
+                        sx={COUNT_CHIP_SX}
+                        data-testid={`datalake-transitional-status-${lake.id}`}
+                      >
+                        {lake.status}
+                      </Chip>
+                    </Tooltip>
+                  );
+                }}
+                // Withheld for a row the server named no retry action for (a purge, whose sweep is
+                // already accepted and irreversible, or a 'restoring' lake whose axis is not
+                // provable), which leaves that row status-only - the section drops its menu trigger
+                // rather than opening an empty one.
+                renderActions={lake => {
+                  const action = lake.retryAction;
+                  return action ? (
+                    <RowMenuItem
+                      testId={`datalake-retry-btn-${lake.id}`}
+                      icon={<ReplayIcon sx={{ fontSize: 16 }} />}
+                      label={`Retry ${action}`}
+                      onClick={() => retryLifecycle.mutate({ id: lake.id, action })}
+                    />
+                  ) : null;
+                }}
+              />
+            ) : null}
 
             {/* Archived (reversible) */}
             <NavLifecycleSection
@@ -659,36 +727,34 @@ export default function ManagerNav({
 }
 
 /**
- * Purge-time warning that the lake still has a Drive folder attached. Renders nothing when there is
- * no connection (or it is not visible to this caller - the endpoint 404s on a personal lake and
- * 403s for a non-manager).
+ * Purge-time notice that the lake has a Drive folder attached, so the user learns the purge also
+ * ends that sync. It does NOT tell them to disconnect first: the phase-2 purge sweep releases the
+ * connection itself (releaseDriveConnectionForLake), removing this lake's access to the folder and
+ * freeing it to be connected again - so the copy has to stay in step with that teardown. That
+ * release runs from a queue worker after the request that accepts the purge returns, so it is
+ * contingent on the sweep completing rather than guaranteed by the purge click itself; a sweep that
+ * exhausts into the DLQ leaves the lake (and its connection row) sitting in `purging` until retried.
  *
- * It deliberately does NOT promise that purging releases the connection, because today it does not:
- * the row survives its lake and its globally-unique driveFolderId then blocks re-claiming that
- * folder app-wide, with no UI or API path back (#1807). So the copy tells the user to disconnect
- * FIRST. When #1807 lands and teardown releases the connection itself, this wording must change
- * with it - it describes a defect, not a design.
+ * Renders nothing when the lake has no connection, including a personal lake (the route resolves
+ * `connection: null` for those, never 404); a read that genuinely fails (lake gone, or a 404 for a
+ * caller who lacks org owner/manager access) renders the unknown case.
  */
 function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
   // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
-  // the user opens, so skipping a personal lake's guaranteed 404 there is worth it. This warning
+  // the user opens, so skipping a personal lake's guaranteed null there is worth it. This warning
   // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
-  // populate would trade one wasted request for silently withholding the warning on a lake that
-  // does have a connection. A rare 404 on a purge dialog is the cheaper failure.
+  // populate would trade one wasted request for silently withholding the notice on a lake that
+  // does have a connection. A rare failed read on a purge dialog is the cheaper tradeoff.
   const { data: connection, isError, isLoading } = useLakeDriveConnection(lakeId);
 
-  // A FAILED read is not "no connection". Collapsing it into the silent case would borrow the
-  // benign default's meaning for an unknown, and the cost lands on the one action that cannot be
-  // undone: the user purges, the row survives, and its globally-unique driveFolderId blocks
-  // re-claiming that folder app-wide with no path back (#1807). A 404 (personal lake / no
-  // connection) resolves to `connection: null` and is NOT an error, so this only fires on a real
-  // failure - it does not nag on every ordinary purge.
+  // A FAILED read is not "no connection": staying silent would name a folder sync the user is about
+  // to end on some purges and not others, for no reason they can see.
   if (isError) {
     return (
       <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-unknown">
-        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake. If one is, purging leaves the
-        connection behind and that folder cannot be connected to another lake afterwards - restore the lake and
-        disconnect Drive first to be safe.
+        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake, so we can&rsquo;t show its name
+        here. If one is connected, purging stops the sync and frees the folder to be connected to another lake. Nothing
+        in Google Drive is deleted.
       </Typography>
     );
   }
@@ -697,8 +763,9 @@ function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
   const folder = connection.folderName || connection.driveFolderId;
   return (
     <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-warning">
-      This lake still syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging leaves that connection behind, and
-      the folder cannot be connected to another lake afterwards. Restore the lake and disconnect Drive first.
+      This lake syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging stops that sync and removes this
+      lake&rsquo;s access to the folder. Nothing in Google Drive is deleted, and the folder can be connected to another
+      lake afterwards.
     </Typography>
   );
 }

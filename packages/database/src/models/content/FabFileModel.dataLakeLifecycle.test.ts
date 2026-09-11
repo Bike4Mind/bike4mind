@@ -384,6 +384,126 @@ describe('FabFile data lake lifecycle membership', () => {
     });
   });
 
+  describe('getAccessibleFiles - lake membership arm (#1576)', () => {
+    const VIEWER = 'u-viewer-not-creator';
+
+    it('a non-owner reaches a meta-tagged member and a creator-owned prefix-only member, never a colliding-prefix stranger', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { lakeMemberships: [scope] }
+      );
+
+      expect(result.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
+    });
+
+    it('two lakes sharing a prefix under different creators never cross on the attachment door either', async () => {
+      await seedLakeRows();
+      const otherCreator = 'u-other-creator-attach';
+      const otherPrefixOwned = await makeFile({
+        fileName: 'other-prefix-owned-attach.txt',
+        userId: otherCreator,
+        tags: [{ name: 'acme:other-report-attach' }], // same prefix as `scope`, different creator
+      });
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [otherPrefixOwned._id.toString()],
+        viewerCaslScope,
+        { lakeMemberships: [scope] } // only the ORIGINAL creator's arm, not `otherCreator`'s
+      );
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('a file matching both the CASL scope and a lake arm is returned once, not duplicated', async () => {
+      const rows = await seedLakeRows();
+      const creatorCaslScope = { userId: CREATOR };
+
+      const result = await fabFileRepository.getAccessibleFiles([rows.prefixOwned._id.toString()], creatorCaslScope, {
+        lakeMemberships: [scope],
+      });
+
+      expect(result).toHaveLength(1);
+    });
+
+    it("an archived lake member is not returned through the lake arm, while the caller's OWN archived file still is", async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { archivedAt: new Date() } });
+      const ownArchived = await makeFile({
+        fileName: 'own-archived.txt',
+        userId: VIEWER,
+        tags: [],
+        archivedAt: new Date(),
+      });
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), ownArchived._id.toString()],
+        viewerCaslScope,
+        { lakeMemberships: [scope] }
+      );
+
+      expect(result.map(f => f.fileName)).toEqual(['own-archived.txt']);
+    });
+
+    it('forwards the dataLakeTags bucket: a non-owner reaches a meta-tagged member by tag alone', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { dataLakeTags: [DATALAKE_TAG] }
+      );
+
+      // The exact meta-tag arm only: prefix-owned.txt carries no datalake: tag, so this bucket
+      // alone must not reach it, and no stranger carries the tag either.
+      expect(result.map(f => f.fileName)).toEqual(['meta.txt']);
+    });
+
+    it('forwards the dataLakeTagPrefixes bucket, which is UNANCHORED - it reaches prefix matches the caller does not own', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { dataLakeTagPrefixes: ['acme:'] }
+      );
+
+      // Pinning the widest arm this door can be handed. Unlike a `lakeMemberships` scope, the
+      // prefix bucket carries NO creator conjunct, so every acme:-tagged file matches regardless
+      // of owner - which is why it is only ever supplied for a registry lake on an access-gated
+      // path, and why lakeMembershipsFrom's `owned` allow-list must keep registry scopes out of
+      // lakeMemberships. A regression that widened this bucket's source would show up here.
+      expect(result.map(f => f.fileName).sort()).toEqual([
+        'prefix-group.txt',
+        'prefix-owned.txt',
+        'prefix-shared.txt',
+        'unrelated.txt',
+      ]);
+    });
+
+    it('an absent lakeAccess, or one with empty buckets, reproduces the byte-identical legacy result set', async () => {
+      const rows = await seedLakeRows();
+      const creatorCaslScope = { userId: CREATOR };
+      const ids = [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds];
+
+      const withoutLakeAccess = await fabFileRepository.getAccessibleFiles(ids, creatorCaslScope);
+      const withEmptyBuckets = await fabFileRepository.getAccessibleFiles(ids, creatorCaslScope, {});
+
+      const names = (rows: typeof withoutLakeAccess) => rows.map(f => f.fileName).sort();
+      // CREATOR owns both member files outright, so ownership alone (no lake arm) already
+      // reaches them - this pins that adding the parameter changes nothing when it's unused.
+      expect(names(withoutLakeAccess)).toEqual(['meta.txt', 'prefix-owned.txt']);
+      expect(names(withEmptyBuckets)).toEqual(names(withoutLakeAccess));
+    });
+  });
+
   describe('archiveByDataLakeTag / unarchiveByDataLakeTag', () => {
     it('archives the members and leaves every stranger-owned prefix match live', async () => {
       const rows = await seedLakeRows();

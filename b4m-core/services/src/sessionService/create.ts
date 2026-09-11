@@ -5,6 +5,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  IAgentRepository,
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
@@ -33,8 +34,10 @@ const createSessionParametersSchema = z.object({
   // Marks the `retrievalTags` above as a deliberate selection, so an EMPTY one scopes the
   // lake-memory card to nothing instead of widening to every entitled lake.
   lakeScopeExplicit: z.boolean().optional(),
-  // Resolved from the lake at the create route (resolveLakeSessionDefaults), NOT client-supplied:
-  // the route deletes any client-sent value before merging, so the lake is authoritative for it.
+  // Resolved from the lake at the create route (resolveLakeSessionDefaults) whenever `dataLakeId`
+  // is set: the route deletes the client-sent value there, so the lake is authoritative. A session
+  // that names a lake ONLY by `retrievalTags` keeps the caller's own mode, having no lake-defaults
+  // merge for it to override.
   // secureParameters strips unknown keys, so it MUST be declared here or the resolved grounding mode
   // is silently dropped and the completion path falls back to size-only behavior.
   corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
@@ -60,11 +63,26 @@ const createSessionParametersSchema = z.object({
 
 type CreateSessionParameters = z.infer<typeof createSessionParametersSchema>;
 
+/**
+ * Compile-time guard for the manage-but-not-member admission. `preauthorizedLakeIds` must never
+ * become a `createSession` input: the create route authorizes it with `canManageLake` and writes it
+ * in a separate call afterwards, so no copy path (fork/snip/clone) can carry it. Adding the key to
+ * the schema above resolves the argument to `false` and fails the build.
+ *
+ * This lives here rather than as a `@ts-expect-error` in create.test.ts because tsconfig.json
+ * excludes test files, so an assertion in one is in no typecheck program and can never fail.
+ */
+type AssertTrue<T extends true> = T;
+export type CreateSessionParametersOmitPreauthorizedLakeIds = AssertTrue<
+  'preauthorizedLakeIds' extends keyof CreateSessionParameters ? false : true
+>;
+
 export interface CreateSessionAdapters {
   db: {
     sessions: ISessionRepository;
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
+    agents: IAgentRepository;
   };
   /** Optional so existing callers compile; without it a failed lake-tag derivation is silent. */
   logger?: Logger;
@@ -103,6 +121,14 @@ export const createSession = async (
       ? rest.retrievalTags
       : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
 
+  // Object-level authz: only attach agents the caller can actually access (owner +
+  // user-shares + group-shares). Foreign ids are filtered out (not replaced by the query
+  // result) so the caller's original order and duplicates are preserved.
+  const accessibleAgentIds = agentIds.length
+    ? new Set((await db.agents.shareable.findAllAccessibleByIds(user, agentIds)).map(agent => agent.id))
+    : null;
+  const authorizedAgentIds = accessibleAgentIds ? agentIds.filter(id => accessibleAgentIds.has(id)) : agentIds;
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -119,7 +145,7 @@ export const createSession = async (
     userId: user.id,
     knowledgeIds,
     artifactIds,
-    agentIds,
+    agentIds: authorizedAgentIds,
     firstCreated: new Date(),
     lastUpdated: new Date(),
     updatedAt: new Date(),

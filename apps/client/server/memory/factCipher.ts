@@ -89,15 +89,23 @@ export interface Keyring {
     principalKind: Principal['kind'],
     principalId: string,
     ownerUserId: string,
-    candidateDek: string
-  ): Promise<string>;
+    candidateDek: string,
+    startedAt: Date
+  ): Promise<string | null>;
   findDek(principalKind: Principal['kind'], principalId: string): Promise<string | null>;
   destroy(principalKind: Principal['kind'], principalId: string): Promise<void>;
 }
 
 export interface KeyProvider {
-  /** The principal's DEK, minting one on first use. */
-  getOrCreateDek(principal: Principal, ownerUserId: string): Promise<Buffer>;
+  /**
+   * The principal's DEK, minting one on first use - or NULL when the key was crypto-shredded after
+   * `startedAt`, meaning this unit of work predates an erase and must not write.
+   *
+   * `startedAt` is the moment the caller's work began, not the moment of this call: a run's lease
+   * claim, a request's arrival. See MemoryPrincipalKeyRepository.getOrCreate for why that is the
+   * comparison that both refuses in-flight work and still lets a fresh rebuild re-key.
+   */
+  getOrCreateDek(principal: Principal, ownerUserId: string, startedAt: Date): Promise<Buffer | null>;
   /** The principal's DEK, or null once destroyed. */
   getDek(principal: Principal): Promise<Buffer | null>;
   /** Destroy the principal's DEK - the irreversible crypto-shred. */
@@ -166,9 +174,15 @@ export function createKeyProvider(keyring: Keyring, masterKey = resolveMasterKey
   }
   const store = (dek: Buffer): string => (masterKey ? wrapDek(masterKey, dek) : RAW + dek.toString('base64'));
   return {
-    async getOrCreateDek(principal, ownerUserId) {
-      const stored = await keyring.getOrCreate(principal.kind, principal.id, ownerUserId, store(randomBytes(32)));
-      return unwrapDek(masterKey, stored);
+    async getOrCreateDek(principal, ownerUserId, startedAt) {
+      const stored = await keyring.getOrCreate(
+        principal.kind,
+        principal.id,
+        ownerUserId,
+        store(randomBytes(32)),
+        startedAt
+      );
+      return stored ? unwrapDek(masterKey, stored) : null;
     },
     async getDek(principal) {
       const stored = await keyring.findDek(principal.kind, principal.id);

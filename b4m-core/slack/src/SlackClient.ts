@@ -170,6 +170,18 @@ export interface SlackSearchResult {
 }
 
 /**
+ * Escapes text that will be interpolated into a `sendMessage`/`SendMessageParams.text` string
+ * built from untrusted content (e.g. a webpage title, a user-supplied filename), so it cannot be
+ * read as Slack mrkdwn markup. Without this, a value containing `<!channel>` or `<@USERID>` posts
+ * as a real broadcast/mention rather than literal text - escaping the angle brackets (and `&`, per
+ * Slack's own text-escaping rules) is sufficient, since those special forms cannot parse without
+ * them.
+ */
+export function escapeSlackMrkdwn(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
  * Centralized interface for all Slack API interactions via the @slack/web-api SDK.
  * The SDK handles retry with exponential backoff and rate-limit Retry-After headers.
  */
@@ -178,7 +190,7 @@ export class SlackClient {
   private logger: Logger;
   private readonly MAX_TEXT_LENGTH = 4000; // Slack's character limit
 
-  constructor(botToken: string, logger: Logger) {
+  constructor(botToken: string, logger: Logger, options?: { timeoutMs?: number }) {
     if (isPlaceholderValue(botToken)) {
       throw new Error('Slack bot token is not configured - cannot initialize SlackClient');
     }
@@ -186,6 +198,15 @@ export class SlackClient {
       retryConfig: {
         retries: 2, // Low retries for Lambda timeout budget
       },
+      // `@slack/web-api` v7 has no request timeout by default, so a slow (not down) Slack API can
+      // otherwise block a caller indefinitely. Scoped per-instance via `options.timeoutMs` rather
+      // than a hardcoded value on every caller: this class is shared by ~30 call sites (message
+      // sends, `files.uploadV2`, the paginated Slack-export `conversations.history`), most of which
+      // never asked for a ceiling and might legitimately need longer than a fixed default. `options`
+      // stays absent (unlimited, matching pre-existing behavior for every caller before it existed)
+      // unless a caller explicitly opts in - see `notifySlackIndexingComplete.ts` for the caller
+      // that needs one, and why.
+      timeout: options?.timeoutMs,
     });
     this.logger = logger;
 

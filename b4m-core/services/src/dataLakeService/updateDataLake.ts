@@ -72,6 +72,27 @@ export const updateDataLake = async (
     ...(params.requiredEntitlement ? { requiredEntitlement: normalizeEntitlementKey(params.requiredEntitlement) } : {}),
   };
 
+  // `lakeMemoryEnabled` is recorded whatever the platform `EnableLakeMemory` setting says, ON
+  // included. The platform flag gates BEHAVIOUR, not the stored preference, and it is enforced
+  // independently at each of five consumers: recall checks it at the call site
+  // (ChatCompletionProcess), the manual build door 409s on it, the batch-progress producer stays dark
+  // rather than enqueueing, the extraction queue handler drops a message that was already queued, and
+  // the health payload's `platform-off` state outranks every other. So a stored `true` under a
+  // disabled platform is inert by construction rather than by this route refusing to write it.
+  //
+  // Note the gate is at the queue handler's ENTRY, not inside the extraction: a run that has already
+  // claimed its lease reads the flag zero more times, so flipping the platform off does not abort it
+  // mid-slice. The bound is the handler's own timeout, not the flip.
+  //
+  // Refusing it here would be a different and worse contract, though note it is a different
+  // POPULATION from the one retain-but-inert protects: not clearing existing flags preserves lakes
+  // that opted in BEFORE the switch went off, whereas this route is about a lake opting in WHILE it
+  // is off, and refusing that would lose nobody's prior opt-in. The reason to accept it anyway is
+  // that a silent drop is the worst of the three options - the editor is told the save succeeded and
+  // the lake stays off - and refusing loudly is the build door's job, which already 409s with a
+  // reason. Accepting the write keeps the queue of who wants this when the platform returns, and it
+  // is audited, so "who turned this on, and when" survives a kill-switch cycle.
+
   // NO-OP EARLY-OUT, deliberately mirroring setLakeVisibility, which has always had one. A PUT
   // whose every supplied field already holds exactly the value it is setting changed nothing, so
   // it must not write: it would otherwise move `lastUpdatedByUserId` to someone who altered

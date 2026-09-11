@@ -26,6 +26,21 @@ const updateSessionParamtersSchema = SessionUpdateRequestSchema.extend({
 
 type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
 
+/**
+ * Compile-time guard for the manage-but-not-member admission, mirroring the one in
+ * sessionService/create.ts. `preauthorizedLakeIds` must never become an `updateSession` input: it is
+ * set once at session-create after the route's own `canManageLake` check, and a session update must
+ * not be able to grant or alter it. Adding the key to `SessionUpdateRequestSchema` resolves the
+ * argument to `false` and fails the build.
+ *
+ * This lives here rather than as a `@ts-expect-error` in update.test.ts because tsconfig.json
+ * excludes test files, so an assertion in one is in no typecheck program and can never fail.
+ */
+type AssertTrue<T extends true> = T;
+export type UpdateSessionParametersOmitPreauthorizedLakeIds = AssertTrue<
+  'preauthorizedLakeIds' extends keyof UpdateSessionParameters ? false : true
+>;
+
 interface UpdateSessionAdapters {
   db: {
     sessions: ISessionRepository;
@@ -84,7 +99,14 @@ export const updateSession = async (
     await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
   }
 
-  session.name = name || session.name;
+  // Persist ONLY the fields this request changed, as a plain partial keyed by id.
+  // findUpdateAccessById returns a hydrated mongoose doc, and passing it straight to
+  // db.sessions.update($set of the whole thing) reverted any owner share revocation,
+  // visibility change or soft-delete that landed during this handler's window (the read
+  // authorizes a sharee; a lake derivation and signed-URL pre-warm can run before the write).
+  const update: Partial<ISessionDocument> & { id: string } = { id };
+  if (name) update.name = name;
+
   // Re-derive the lake scope whenever a file is ATTACHED. Deriving only at CREATE left the most
   // ordinary way a user reaches a lake completely unscoped: attaching a lake file to an
   // already-open notebook goes through here, and an empty `retrievalTags` is not a narrow scope -
@@ -103,22 +125,22 @@ export const updateSession = async (
       logger: adapters.logger,
       resolveLakeAccess: adapters.resolveLakeAccess,
     });
-    if (derived.length > 0) session.retrievalTags = derived;
+    if (derived.length > 0) update.retrievalTags = derived;
   }
 
-  session.knowledgeIds = knowledgeIds || session.knowledgeIds;
-  session.artifactIds = artifactIds || session.artifactIds;
-  session.tags = tags || session.tags;
-  session.lastUsedModel = lastUsedModel || session.lastUsedModel;
+  if (knowledgeIds) update.knowledgeIds = knowledgeIds;
+  if (artifactIds) update.artifactIds = artifactIds;
+  if (tags) update.tags = tags;
+  if (lastUsedModel) update.lastUsedModel = lastUsedModel;
   // Explicit undefined check (not `|| session.x`) so toggling OFF (false) actually persists.
   if (forceKnowledgeRetrieval !== undefined) {
-    session.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
+    update.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
   }
-  session.lastUpdated = new Date();
+  update.lastUpdated = new Date();
 
-  await db.sessions.update(session);
+  const updated = await db.sessions.update(update);
 
-  return session;
+  return updated ?? session;
 };
 
 const addFilesToProjects = async (

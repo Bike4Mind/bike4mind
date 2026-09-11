@@ -37,14 +37,20 @@ export function sanitizeReportHtml(html: string): string {
       'div',
       'figure',
       'figcaption',
+      'img',
     ],
     allowedAttributes: {
       '*': ['class'],
       a: ['href', 'title'],
+      // Markdown-embedded images (`![](...)`) in what's-new emails; the hero image is
+      // concatenated raw upstream, so without this only markdown images were silently dropped.
+      img: ['src', 'alt', 'width', 'height'],
     },
     allowedSchemes: ['http', 'https', 'mailto'],
     allowedSchemesByTag: {
       a: ['http', 'https', 'mailto'],
+      // No data: / javascript: image srcs - only remotely hosted images, matching the hero image.
+      img: ['http', 'https'],
     },
     disallowedTagsMode: 'discard',
   });

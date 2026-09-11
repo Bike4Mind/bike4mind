@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -22,7 +23,7 @@ const BrowseQuery = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET /api/data-lakes/public - browse the public-lake discovery catalog (search + paging).
   // "Public" = readable by any SIGNED-IN user, not open to the world: baseApi() authenticates

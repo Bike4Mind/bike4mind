@@ -120,7 +120,10 @@ export const generateSignedUrl = async (fabFile: IFabFileDocument, { db, storage
   fabFile.fileUrl = fileUrl;
   fabFile.fileUrlExpireAt = fileUrlExpireAt;
 
-  await db.fabFiles.update(fabFile, { timestamps: false });
+  // Read-triggered cache refresh: persist ONLY the regenerated URL fields. A
+  // whole-document write here (this GET is reachable by a sharee) would revert an
+  // owner's concurrent revocation, soft-delete or visibility change.
+  await db.fabFiles.update({ id: fabFile.id, fileUrl, fileUrlExpireAt }, { timestamps: false });
 
   return fabFile;
 };

@@ -70,6 +70,20 @@ function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
   return typeof doc.toJSON === 'function' ? doc.toJSON() : { ...key };
 }
 
+/**
+ * The list mixes a caller's own keys with every key billed to an org they administer, so most
+ * rows describe someone else's activity. `metadata.clientIP`, `metadata.userAgent` and the
+ * `baseline` (which carries `commonIPs`) are the minter's location and device history --
+ * administering the billing org does not entitle a viewer to that. Everything the management
+ * UI actually renders (name, scopes, usage counts, createdFrom, timestamps) is untouched.
+ */
+function redactForNonMinter(json: IUserApiKey, isMinter: boolean): IUserApiKey {
+  if (isMinter || !json.metadata) return json;
+
+  const { clientIP: _ip, userAgent: _ua, baseline: _baseline, ...safeMetadata } = json.metadata;
+  return { ...json, metadata: safeMetadata };
+}
+
 const handler = baseApi()
   .get(async (req, res) => {
     const userId = req.user?.id;
@@ -114,7 +128,7 @@ const handler = baseApi()
     );
 
     const payload = keys.map(key => {
-      const json = serializeKey(key);
+      const json = redactForNonMinter(serializeKey(key), key.userId === userId);
       return key.scopes.includes(ApiKeyScope.EMBED_CHAT)
         ? { ...json, ownerHasWhitelabel: ownerHasWhitelabel.get(ownerCacheKey(key)) ?? false }
         : json;
