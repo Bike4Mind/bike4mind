@@ -19,6 +19,10 @@ import {
 import { createFeedbackOnServer } from '@client/app/utils/feedbackAPICalls';
 import { FeedbackStatus } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useSessions } from '@client/app/contexts/SessionsContext';
+import { useQueryClient } from '@tanstack/react-query';
+import { isOptimisticId } from '@client/app/utils/llm';
+import { latestQuestId, type CachedQuestPages } from '@client/app/utils/latestQuestId';
 import CloseIcon from '@mui/icons-material/Close';
 import SettingsIcon from '@mui/icons-material/Settings';
 
@@ -38,6 +42,8 @@ export const HelpModal: React.FC = () => {
   const userId = currentUser?.id;
   const logEvent = useLogEvent();
   const { settings, updatePreferences } = useUserSettings();
+  const { currentSessionId } = useSessions();
+  const queryClient = useQueryClient();
   const [feedbackContent, setFeedbackContent] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const theme = useTheme();
@@ -75,6 +81,19 @@ export const HelpModal: React.FC = () => {
     }
   };
 
+  /**
+   * The session (and its latest turn) the reporter was looking at when they wrote this, so the
+   * record can be joined to what it is actually about. Both are untrusted claims: the create
+   * handler re-reads and ownership-checks them, so an omitted or stale one just yields a
+   * product-level report rather than an error. Read straight from the quest cache instead of
+   * subscribing to the query - this modal is mounted app-wide and must not fetch on its own.
+   */
+  const sessionContext = (): { sessionId?: string; questId?: string } => {
+    if (!currentSessionId || isOptimisticId(currentSessionId)) return {};
+    const questId = latestQuestId(queryClient.getQueryData<CachedQuestPages>(['quests', 'session', currentSessionId]));
+    return { sessionId: currentSessionId, ...(questId ? { questId } : {}) };
+  };
+
   const handleSubmitFeedback = async () => {
     if (isSubmitting) return;
     if (!feedbackContent.trim()) {
@@ -90,6 +109,7 @@ export const HelpModal: React.FC = () => {
         tags: ['feedback', 'cs'],
         content: feedbackContent,
         status: FeedbackStatus.New,
+        ...sessionContext(),
       });
 
       // Close only once the outcome is known, so a rejection's error toast (in the catch
