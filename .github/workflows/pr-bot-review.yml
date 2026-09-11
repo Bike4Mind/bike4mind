@@ -644,7 +644,7 @@ jobs:
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"
             echo "$BLOCKED"
-            echo 'reason=the fixup touched files CI executes (anything under `.github/`, `.husky/`, `.claude/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, a `Dockerfile`, a `*.sh`/`*.bash`/`*.zsh` or an extensionless root script), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
+            echo 'reason=the fixup touched CI configuration (anything under `.github/`, `.husky/`, `.claude/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, a `Dockerfile`, a `*.sh`/`*.bash`/`*.zsh` or an extensionless root script), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
             emit blocked
             exit 1
           fi
