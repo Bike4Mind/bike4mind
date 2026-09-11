@@ -8,11 +8,12 @@ import type { PromptMeta } from '../types/entities/PromptMetaTypes';
  * 1. The store REQUIRES it. `PromptMetaSchema.session.id`/`.userId` are `required: true`
  *    (QuestModel), and a copy is inserted through `create()` - the only quest write that runs
  *    Mongoose validators. Live quest writes go through `update()` (findOneAndUpdate + $set,
- *    validators off), and several writers materialize promptMeta from nothing
+ *    validators off), and several writers used to materialize promptMeta from nothing
  *    (`quest.promptMeta = quest.promptMeta ?? {}` in ChatCompletionFeatures, addStatusToQuest in
- *    Image/VideoGeneration, applyQuestStatusChanges' no-existing-meta branch), so quests DO exist
- *    on disk carrying promptMeta with no session block at all. Copying one verbatim threw
- *    ValidationError and failed the whole fork.
+ *    Image/VideoGeneration, applyQuestStatusChanges' no-existing-meta branch - now routed through
+ *    `materializePromptMetaSession` below), so quests written before that fix can still carry
+ *    promptMeta with no session block at all. Copying one verbatim throws ValidationError and
+ *    fails the whole fork.
  *
  * 2. `session.userId` is a scoping key, not just telemetry: `databaseSearcher.ts` scopes
  *    deep-research's internal quest search by `promptMeta.session.userId`. A copy that keeps the
@@ -52,4 +53,31 @@ export function rebindPromptMetaSession(
       userId: destination.userId,
     },
   };
+}
+
+/**
+ * Materialize a quest's `promptMeta` with a valid `session` block, for writers that build
+ * promptMeta from nothing on a live quest - as opposed to `rebindPromptMetaSession` above, which
+ * retargets an already-complete promptMeta at a NEW session when a quest is copied.
+ *
+ * Every call site here is a live turn writing to the quest's own session, so overwriting
+ * `session.id`/`.userId` unconditionally is safe and idempotent - it isn't changing ownership, it's
+ * asserting the invariant `PromptMetaSchema.session.{id,userId}` are `required: true` on every
+ * write, not just the `create()` path. Without it, quests with no session block at all pass
+ * silently through `update()` (findOneAndUpdate + $set, no validators) and become invisible to
+ * `databaseSearcher.ts`'s owner-scoped search and to the `session.userId`-keyed admin rollups
+ * (analytics.ts, model-metrics.ts).
+ *
+ * Always returns a `PromptMeta` (never `undefined`) - unlike `rebindPromptMetaSession`, there is no
+ * "absent promptMeta, leave it absent" case: the caller is about to assign one either way.
+ */
+export function materializePromptMetaSession(
+  promptMeta: PromptMeta | null | undefined,
+  destination: { sessionId: string; userId: string }
+): PromptMeta {
+  return (
+    rebindPromptMetaSession(promptMeta, destination) ?? {
+      session: { id: destination.sessionId, userId: destination.userId },
+    }
+  );
 }

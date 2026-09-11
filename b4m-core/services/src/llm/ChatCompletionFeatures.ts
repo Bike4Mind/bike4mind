@@ -61,6 +61,7 @@ import {
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
   PROMPT_TEXT_MAX,
+  materializePromptMetaSession,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -766,7 +767,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       dataLakeTags: string[],
       injected?: NonNullable<RetrievalSummary['injected']>
     ) => {
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: this.user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
@@ -829,7 +833,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
 
       // Telemetry: record that the card fired and from which lakes, so an eval row shows lake grounding
       // independent of whether the model then also called the knowledge tools.
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: this.user.id,
+      });
       quest.promptMeta.context = quest.promptMeta.context ?? {};
       // beliefBudget rides along so `beliefCount` is readable on its own: below the budget means that
       // is all that qualified, AT the budget means the turn saturated it. Saturation is not proof the
@@ -1957,7 +1964,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
     );
 
-    quest.promptMeta = quest.promptMeta || {};
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
     quest.promptMeta.warnings = [
       ...(quest.promptMeta.warnings ?? []),
       `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
@@ -1997,7 +2007,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         surfaces: [],
@@ -2216,7 +2229,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument,
     forcedSkipReason: NonNullable<RetrievalSummary['forcedSkipReason']>
   ): void {
-    quest.promptMeta = quest.promptMeta ?? {};
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
     quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
       attempted: false,
       mode: 'forced',
@@ -2275,7 +2291,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       dataLakeTags: string[],
       injected?: NonNullable<RetrievalSummary['injected']>
     ) => {
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
@@ -2751,7 +2770,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           },
         };
       });
-      quest.promptMeta = quest.promptMeta || {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       const existingCitables = quest.promptMeta.citables || [];
       const citableKey = (c: CitableSource) => c.id || c.url || c.title;
       if (this.citationStyle === 'indexed') {
