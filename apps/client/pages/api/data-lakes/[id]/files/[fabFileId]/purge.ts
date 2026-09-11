@@ -174,12 +174,12 @@ const handler = baseApi()
           // same helper both file-delete routes call, over the file's pre-delete tags. That lake's
           // own meta-tag is filtered out: it is in `tagNames`, and leaving it in would run a second
           // identical aggregation over the lake the service already rebuilt.
+          //
+          // Same `actor` built above, not a narrowed literal - this rebuild can auto-activate a
+          // draft lake too, and must carry the same attribution.
           const purgedLakeTag = lake.datalakeTag?.toLowerCase();
           const otherLakeTags = tagNames.filter(name => name.toLowerCase() !== purgedLakeTag);
-          await recomputeStatsForLakeTags(otherLakeTags, {
-            logger: req.logger,
-            actor: { userId: ctx.userId, isAdmin: ctx.isAdmin },
-          });
+          await recomputeStatsForLakeTags(otherLakeTags, { logger: req.logger, actor });
         },
         logger: req.logger,
       });
