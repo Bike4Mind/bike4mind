@@ -54,6 +54,9 @@ describe('runModerationRescueSweep', () => {
     expect(h.moderate).toHaveBeenCalledTimes(2);
     expect(h.moderate).toHaveBeenCalledWith(expect.objectContaining({ filePaths: ['knowledge/u1/a'], userId: 'u1' }));
     expect(h.moderate).toHaveBeenCalledWith(expect.objectContaining({ filePaths: ['knowledge/u2/b'], userId: 'u2' }));
+    // Swept rows are past the age floor, so a missing object is a permanent orphan: retire it
+    // terminally instead of releasing it to be re-selected forever (the starvation fix).
+    expect(h.moderate).toHaveBeenCalledWith(expect.objectContaining({ terminalOnMissingObject: true }));
   });
 
   it('does not scan when nothing is stranded', async () => {

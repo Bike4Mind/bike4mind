@@ -53,7 +53,16 @@ export async function runModerationRescueSweep({
   // Sequential and per file: each row carries its own owner, the set is small (a rare recovery),
   // and moderateImportedKnowledgeFiles never throws - a single bad file cannot abort the sweep.
   for (const file of stuck) {
-    await moderateImportedKnowledgeFiles({ filePaths: [file.filePath], userId: file.userId, enabled, ...deps });
+    // terminalOnMissingObject: a swept row is already past the age floor, so a NoSuchKey means a
+    // permanent orphan (never-uploaded presign row) - retire it instead of releasing it to be
+    // re-selected forever, which would starve genuinely-stranded rows.
+    await moderateImportedKnowledgeFiles({
+      filePaths: [file.filePath],
+      userId: file.userId,
+      enabled,
+      terminalOnMissingObject: true,
+      ...deps,
+    });
   }
 
   logger.info('[ModerationRescueSweep] re-scanned stranded files', { count: stuck.length });

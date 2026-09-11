@@ -72,4 +72,38 @@ describe('moderateImportedKnowledgeFiles', () => {
     expect(args.release).toHaveBeenCalledWith('oid');
     expect(args.persist).not.toHaveBeenCalled();
   });
+
+  const noSuchKey = () => Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' });
+
+  it('retires an orphan terminally (blocked/missing_object) when the object is gone and terminalOnMissingObject is set', async () => {
+    // A never-uploaded presign row: the object was never written, so the download throws NoSuchKey.
+    const moderate = vi.fn(async () => {
+      throw noSuchKey();
+    }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
+    const args = buildArgs({ moderate, terminalOnMissingObject: true });
+    await moderateImportedKnowledgeFiles(args);
+    expect(args.persist).toHaveBeenCalledWith('oid', { moderationStatus: 'blocked', blockReason: 'missing_object' });
+    // Must NOT release - releasing back to pending is exactly the poison loop this fixes.
+    expect(args.release).not.toHaveBeenCalled();
+  });
+
+  it('still releases (does not retire) a missing object on the import path where terminalOnMissingObject is unset', async () => {
+    const moderate = vi.fn(async () => {
+      throw noSuchKey();
+    }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
+    const args = buildArgs({ moderate }); // terminalOnMissingObject not set
+    await moderateImportedKnowledgeFiles(args);
+    expect(args.release).toHaveBeenCalledWith('oid');
+    expect(args.persist).not.toHaveBeenCalled();
+  });
+
+  it('still releases (does not retire) a transient failure even when terminalOnMissingObject is set', async () => {
+    const moderate = vi.fn(async () => {
+      throw new Error('rekognition throttled'); // not a missing-object error
+    }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
+    const args = buildArgs({ moderate, terminalOnMissingObject: true });
+    await moderateImportedKnowledgeFiles(args);
+    expect(args.release).toHaveBeenCalledWith('oid');
+    expect(args.persist).not.toHaveBeenCalled();
+  });
 });

@@ -183,8 +183,13 @@ export async function handler() {
   // so a stranded 'pending' file does not stay unservable forever.
   const { rescanned: rescannedModerationFiles } = await runModerationRescueSweep({
     enabled:
-      getSettingsValue('ImageModerationEnabled', await getSettingsMap({ adminSettings: adminSettingsRepository })) ??
-      true,
+      getSettingsValue(
+        'ImageModerationEnabled',
+        // Guard the settings read itself: it is awaited as an ARGUMENT to the sweep, evaluated
+        // before the .catch() below is attached, so a settings/DB blip here would otherwise reject
+        // out of the whole tick. Default to moderation ON (fail-closed) if the read fails.
+        await getSettingsMap({ adminSettings: adminSettingsRepository }).catch(() => ({}))
+      ) ?? true,
     limit: MODERATION_RESCUE_MAX_PER_RUN,
     logger,
   }).catch(err => {

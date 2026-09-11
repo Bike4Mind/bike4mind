@@ -36,8 +36,29 @@ export interface ModerateImportedKnowledgeFilesArgs {
   ): Promise<void>;
   /** Release a claim back to `pending` after a transient scan failure so the row is never stranded on `scanning`. */
   release(_id: unknown): Promise<void>;
+  /**
+   * When true, a scan that fails because the object does not exist in storage (NoSuchKey/404)
+   * moves the row to a terminal `blocked` (blockReason `missing_object`) instead of releasing it
+   * back to `pending`. Only the rescue sweep sets this: it selects only rows already past the
+   * staleness age floor, where a never-created object is a permanent orphan (an abandoned
+   * presigned upload), so releasing would re-select the same orphan every run - a poison batch
+   * that starves genuinely-stranded rows. The fresh-import path leaves it unset, so a young row's
+   * missing object is treated as transient and released for the sweep to retry later.
+   */
+  terminalOnMissingObject?: boolean;
   downloadBytes(filePath: string): Promise<Buffer>;
   downloadPartialBytes(filePath: string, length: number): Promise<Buffer>;
+}
+
+/**
+ * A storage read that failed because the object does not exist (vs a transient 5xx/throttle):
+ * S3's GetObject throws `NoSuchKey` (404) for a key that was never written. Matches the AWS SDK v3
+ * error shape structurally so this module needn't import the S3 client.
+ */
+function isMissingObjectError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number } };
+  return e.name === 'NoSuchKey' || e.Code === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404;
 }
 
 /**
@@ -64,6 +85,7 @@ export async function moderateImportedKnowledgeFiles(args: ModerateImportedKnowl
     claim,
     persist,
     release,
+    terminalOnMissingObject,
     downloadBytes,
     downloadPartialBytes,
   } = args;
@@ -95,6 +117,19 @@ export async function moderateImportedKnowledgeFiles(args: ModerateImportedKnowl
         ...(result.blockReason ? { blockReason: result.blockReason } : {}),
       });
     } catch (err) {
+      if (claimed && terminalOnMissingObject && isMissingObjectError(err)) {
+        // The object was never written to storage - an abandoned presigned upload leaves a
+        // 'pending' row whose filePath points at a key that will never exist. Releasing it back to
+        // 'pending' would re-select the same orphan on every sweep (a poison batch that can starve
+        // genuinely-stranded rows), so give up terminally. Mirrors the unsupported-format terminal
+        // in moderateUploadedFile: a deterministic failure resolves to 'blocked' (already
+        // non-serveable) rather than an endless retryable release.
+        await persist(claimed._id, { moderationStatus: 'blocked', blockReason: 'missing_object' }).catch(
+          () => undefined
+        );
+        logger.warn(`Imported knowledge file ${filePath} has no stored object; marking terminal (missing_object)`);
+        continue;
+      }
       // Transient failure (Rekognition throttle/5xx, download error): release the claim so the
       // file stays held ('pending') and never stuck on 'scanning'. Fail-closed: still not servable.
       if (claimed) await release(claimed._id).catch(() => undefined);

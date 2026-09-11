@@ -206,8 +206,13 @@ async function main() {
     // file does not stay unservable forever. Isolated like the passes above.
     await runModerationRescueSweep({
       enabled:
-        getSettingsValue('ImageModerationEnabled', await getSettingsMap({ adminSettings: adminSettingsRepository })) ??
-        true,
+        getSettingsValue(
+          'ImageModerationEnabled',
+          // Guard the settings read itself: it is awaited as an ARGUMENT to the sweep, evaluated
+          // before the .catch() below is attached, so a settings/DB blip here would otherwise
+          // reject out of the tick. Default to moderation ON (fail-closed) if the read fails.
+          await getSettingsMap({ adminSettings: adminSettingsRepository }).catch(() => ({}))
+        ) ?? true,
       limit: CHUNK_SCAN_BATCH,
       logger: bootLogger,
     }).catch(err => {
