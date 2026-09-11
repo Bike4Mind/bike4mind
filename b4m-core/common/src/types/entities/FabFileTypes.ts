@@ -612,6 +612,14 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * repairs the least-retrievable files first. Powers the lake "Rebuild passages" detection.
    */
   findUnderChunkedFabFileIds(fabFileIds: string[], tokenThreshold: number): Promise<string[]>;
+  /**
+   * Of the given ids, which have at least one row in fabfilechunks - one aggregate over the
+   * `{fabFileId:1,_id:1}` index (mirrors `findUnderChunkedFabFileIds`), so a caller checking a
+   * batch of candidates does not pay a per-id round trip. Built for the #2583 detection sweep: a
+   * file whose id is NOT in the returned set, despite `vectorizedChunkCount > 0`, declares chunks
+   * it does not have.
+   */
+  findFabFileIdsWithChunks(fabFileIds: string[]): Promise<Set<string>>;
 }
 
 /**
@@ -1378,6 +1386,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * `maxChunkCharLength`), ascending by `_id` - the health backfill's phase-2 cursor.
    */
   findFileIdsMissingChunkRollups(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
+  /**
+   * One page of file ids that DECLARE vectorized chunks (`vectorizedChunkCount > 0`), ascending by
+   * `_id` - candidates for the #2583 detection sweep to check against `findFabFileIdsWithChunks`.
+   * A candidate absent from that result has zero chunk rows behind a positive count.
+   */
+  findFileIdsWithPositiveVectorizedCount(options?: {
+    limit?: number;
+    afterFileId?: string;
+  }): Promise<{ id: string; fileName?: string }[]>;
   /** Stamp all four recomputed chunk-derived rollups together - the health backfill's phase-2 write. */
   setChunkRollups(
     id: string,

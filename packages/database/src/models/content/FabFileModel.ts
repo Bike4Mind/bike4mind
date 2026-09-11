@@ -277,6 +277,17 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return rows.map(r => r._id);
   }
 
+  async findFabFileIdsWithChunks(fabFileIds: string[]): Promise<Set<string>> {
+    if (fabFileIds.length === 0) return new Set();
+    // Same shape as findUnderChunkedFabFileIds: $match on the id set, $group to distinct fabFileId,
+    // both served by the { fabFileId: 1, _id: 1 } index. No chunk content is read.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string }>([
+      { $match: { fabFileId: { $in: fabFileIds } } },
+      { $group: { _id: '$fabFileId' } },
+    ]);
+    return new Set(rows.map(r => r._id));
+  }
+
   /**
    * The file's vectorize rollup, computed in ONE pass over its chunks (the fetch is unavoidable -
    * `vector` is in no index - so it must not be paid twice per batch):
@@ -1909,6 +1920,28 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       .limit(limit)
       .lean();
     return docs.map(d => String(d._id));
+  }
+
+  /**
+   * One page of file ids that DECLARE vectorized chunks (`vectorizedChunkCount > 0`), ascending by
+   * `_id` for cursor paging - the #2583 detection sweep's candidate list. Pair with
+   * `fabFileChunkRepository.findFabFileIdsWithChunks` to find which of these have zero chunk rows
+   * behind that count.
+   */
+  async findFileIdsWithPositiveVectorizedCount(
+    options: { limit?: number; afterFileId?: string } = {}
+  ): Promise<{ id: string; fileName?: string }[]> {
+    const { limit = 500, afterFileId } = options;
+    const docs = await this.fabFileModel
+      .find({
+        vectorizedChunkCount: { $gt: 0 },
+        ...(afterFileId ? { _id: { $gt: afterFileId } } : {}),
+      })
+      .select({ _id: 1, fileName: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => ({ id: String(d._id), fileName: d.fileName }));
   }
 
   /** Stamp all four recomputed chunk-derived rollups together - the health backfill's phase-2 write. */
