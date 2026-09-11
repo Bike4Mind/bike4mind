@@ -71,6 +71,13 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       'Lake-health counts chunk rows that truly carry a vector, which deliberately excludes the ' +
       'oversized-unembeddable chunks `vectorizedChunkCount` counts as terminal.',
   },
+  {
+    pattern: /embedded\s*!==\s*null\s*&&\s*embedded\s*>=\s*chunkCount/,
+    reason:
+      'describeKnowledgeBase summarizeHealth: same lake-health settledness question as the ' +
+      'embeddedChunkCount entry above (its own docblock says so), just destructured to a local ' +
+      '`embedded` name instead of the field name.',
+  },
 ];
 
 const SELF_PATH = path.relative(REPO_ROOT, fileURLToPath(import.meta.url)).replace(/\\/g, '/'); // normalize on Windows
