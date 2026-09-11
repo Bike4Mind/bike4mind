@@ -150,6 +150,20 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       userId: user.id,
     });
 
+    // A reporter can read back and retract their own reports. Every condition below is INVISIBLE
+    // to a by-class `can(action, FeedbackModel)` check, which reports true as soon as any rule for
+    // the action exists - so a feedback route must authorize against the fetched document instance
+    // (see feedback/[id]/read.ts, update.ts, delete.ts) or narrow the query with accessibleBy()
+    // (see feedback/index.ts). A by-class check here would grant every non-admin the admin view.
+    // MUST STAY IN SYNC with the feedback rules in packages/database/src/utils/ability.ts.
+    allow(Permission.read, FeedbackModel, {
+      userId: user.id,
+    });
+
+    allow(Permission.delete, FeedbackModel, {
+      userId: user.id,
+    });
+
     if (user.isAdmin) {
       allow(Permission.read, FeedbackModel);
       allow(Permission.delete, FeedbackModel);
