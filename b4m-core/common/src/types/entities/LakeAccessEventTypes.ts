@@ -16,8 +16,10 @@ import { IMongoDocument } from './common';
 // guard), so for them this trail answers "what was read", not "what was asked".
 //
 // FORCED RETRIEVAL is the one exception, and it is narrow on purpose: it writes a ZERO ROW on
-// exactly one exit, the turn that searched its resolved lake scope and had no chunk clear the
-// similarity floor. Without that row "how often did this lake serve nothing" is unanswerable here,
+// exactly one exit, the turn that searched its resolved lake scope WHOLE and had no chunk clear
+// the similarity floor. "Whole" is a gate, not a description: a session that narrows the lake with
+// a content tag of its own searched a slice, and a starve against a slice is not evidence about
+// the lake, so it records nothing. Without that row "how often did this lake serve nothing" is unanswerable here,
 // because a starved turn and a turn that never ran are both equally absent - and the starve is the
 // outcome a lake owner most needs counted, being the one their own corpus can fix. Every other
 // empty forced-retrieval exit (no reachable lake, no readable document, nothing vectorized, an
@@ -29,6 +31,10 @@ import { IMongoDocument } from './common';
 // files to reverse into lakes. It carries `servedNothing: true` - read that flag, never a
 // zero-count test - and any consumer that counts rows as reads must exclude or label it (see
 // `assembleLakeAccessView`, which does).
+// The per-TURN rollups are the deliberate exception: `candidateCapPressure` and
+// `supersessionPressure` DO count zero rows, because a turn that hit the cap and then served
+// nothing is the most diagnostic row of the lot. They are named and documented as turns, not
+// reads, and they reconcile against `readCount + noResultCount` - never against `readCount`.
 // One consequence to be deliberate about: a probing query that matches nothing now DOES leave a
 // row, and on a lake that opted into query-text logging it leaves the query text too. That is the
 // point (an unanswered question is the most actionable thing a lake owner can see), but it is a

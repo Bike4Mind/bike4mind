@@ -154,8 +154,11 @@ describe('DataLakeAccessModal', () => {
   it('reports candidate-cap pressure with both counts, qualified as window-scoped', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     const line = screen.getByTestId('datalake-access-cap-pressure');
-    // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every read.
-    expect(line).toHaveTextContent(/4 of 9 reported read/i);
+    // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every turn.
+    // TURN, not read: a zero row raises this counter while staying out of readCount, so the label
+    // has to be the wider word or the two numbers cannot be reconciled by the person reading them.
+    expect(line).toHaveTextContent(/4 of 9 reported turn/i);
+    expect(line).not.toHaveTextContent(/reported read/i);
     expect(line).toHaveTextContent(/in this window/i);
     // Attribution wording: the cap is a property of the turn's whole candidate listing, so the
     // contrast is with caps this lake caused - never with reads, which it plainly did cause.
@@ -180,7 +183,8 @@ describe('DataLakeAccessModal', () => {
   it('reports supersession pressure with both counts and the total withheld', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     const line = screen.getByTestId('datalake-access-supersession-pressure');
-    expect(line).toHaveTextContent(/3 of 9 reported read/i);
+    expect(line).toHaveTextContent(/3 of 9 reported turn/i);
+    expect(line).not.toHaveTextContent(/reported read/i);
     expect(line).toHaveTextContent(/5 withheld in total/i);
     // Suppression is recoverable, and saying so is the contract the collapse itself states: the
     // weakest identity tier is a bare file name, so a wrong collapse has to be actionable.

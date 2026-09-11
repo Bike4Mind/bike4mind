@@ -2747,6 +2747,17 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     expect(record).not.toHaveBeenCalled();
   });
 
+  /**
+   * `lakeScoped` alone is not enough to attribute a starve. A non-lake retrieval tag is AND'ed into
+   * the candidate listing, so the turn searched the lake INTERSECT that tag - a slice. Recording it
+   * would over-count a coverage gap against a lake that was never searched whole, which is the
+   * wrong direction to be wrong in for a compliance artifact.
+   */
+  it('writes no zero row when the session narrows the lake with a content tag of its own', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1 }), ['datalake:z', 'course:bio101']);
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('does not mark an ordinary grounded row as having served nothing', async () => {
     await run(makeCtx({ files: [generation('only', '2025-01-01')] }), ['datalake:z']);
     // The grounded write never mentions the flag at all, so key absence is the real assertion here.

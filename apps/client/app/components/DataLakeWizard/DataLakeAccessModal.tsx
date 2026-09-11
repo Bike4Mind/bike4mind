@@ -67,10 +67,10 @@ const describeCapPressure = (view: LakeAccessView): string => {
   const windowScope = view.historyTruncated ? ' in this window' : '';
   const lastRead = pressure.lastAtCapAt ? `, most recently ${fmtDateTime(pressure.lastAtCapAt)}` : '';
   return (
-    `Candidate-cap pressure: ${pressure.turnsAtCap} of ${pressure.turnsWithSignal} reported read(s)${windowScope} ` +
-    `hit the forced-retrieval candidate cap${lastRead} - a capped read considers only part of the readable library. ` +
-    'The cap applies to the whole candidate listing for a turn, so this counts reads of this lake that hit it, not ' +
-    'caps this lake caused.'
+    `Candidate-cap pressure: ${pressure.turnsAtCap} of ${pressure.turnsWithSignal} reported turn(s)${windowScope} ` +
+    `hit the forced-retrieval candidate cap${lastRead} - a capped turn considers only part of the readable library. ` +
+    'The cap applies to the whole candidate listing for a turn, so this counts turns that searched this lake and hit ' +
+    'it, not caps this lake caused. Turns, not reads: an empty search counts here too.'
   );
 };
 
@@ -86,9 +86,9 @@ const describeSupersessionPressure = (view: LakeAccessView): string => {
   const last = pressure.lastSuppressedAt ? `, most recently ${fmtDateTime(pressure.lastSuppressedAt)}` : '';
   return (
     `Superseded-version pressure: ${pressure.turnsWithSuppression} of ${pressure.turnsWithSignal} reported ` +
-    `read(s)${windowScope} withheld an older version of a document this lake also holds a newer copy of ` +
+    `turn(s)${windowScope} withheld an older version of a document this lake also holds a newer copy of ` +
     `(${pressure.filesSuppressed} withheld in total)${last}. A withheld version leaves the ranking, not the lake - ` +
-    'it is still retrievable by id or name.'
+    'it is still retrievable by id or name. Turns, not reads: an empty search counts here too.'
   );
 };
 

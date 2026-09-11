@@ -246,7 +246,10 @@ describe('lakeAccessViewToCsv', () => {
     // readCount 0 with a nonzero noResultCount is the row this split exists to make representable:
     // someone queried the lake four times and it answered none of them.
     expect(csv).toContain('"user","u3","","","","0","4"');
-    expect(csv).toContain('# NOTE: readCount counts reads that returned content');
+    // The note must NOT say "reads that returned content": a catalog browse row returns no ids and
+    // still counts, so that phrasing would make the artifact lie about its own column.
+    expect(csv).toContain('# NOTE: readCount counts every recorded read (a catalog browse included');
+    expect(csv).not.toContain('readCount counts reads that returned content');
   });
 
   it('adds no truncation signal when the history was not capped', () => {

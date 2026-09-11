@@ -237,6 +237,18 @@ describe('aggregateSupersessionPressure', () => {
       filesSuppressed: 0,
     });
   });
+
+  // Deliberate: this rollup counts TURNS. A turn that ran the collapse and THEN served nothing is
+  // the most diagnostic row there is, so it must raise these counters even though it is kept out
+  // of readCount. Pins the decision, not just the code.
+  it('counts a zero row, which is what makes this a turn count and not a read count', () => {
+    const pressure = aggregateSupersessionPressure([
+      event({ servedNothing: true, filesSupersededCollapsed: 2, surface: 'forced-retrieval' as LakeAccessSurface }),
+    ]);
+    expect(pressure.turnsWithSignal).toBe(1);
+    expect(pressure.turnsWithSuppression).toBe(1);
+    expect(pressure.filesSuppressed).toBe(2);
+  });
 });
 
 describe('aggregateCandidateCapPressure', () => {
@@ -280,6 +292,15 @@ describe('aggregateCandidateCapPressure', () => {
 
   it('empty input yields the zero pressure', () => {
     expect(aggregateCandidateCapPressure([])).toEqual({ turnsWithSignal: 0, turnsAtCap: 0 });
+  });
+
+  // Same decision as the supersession rollup above: a starved turn that hit the cap is exactly the
+  // turn an owner needs to see, so the zero row counts here while staying out of readCount.
+  it('counts a zero row, which is what makes this a turn count and not a read count', () => {
+    const pressure = aggregateCandidateCapPressure([
+      event({ servedNothing: true, candidateCapReached: true, surface: 'forced-retrieval' as LakeAccessSurface }),
+    ]);
+    expect(pressure).toEqual({ turnsWithSignal: 1, turnsAtCap: 1, lastAtCapAt: NOW });
   });
 });
 

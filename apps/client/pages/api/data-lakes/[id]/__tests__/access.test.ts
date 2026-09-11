@@ -66,6 +66,12 @@ const view: LakeAccessView = {
     turnsAtCap: 2,
     lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
   },
+  supersessionPressure: {
+    turnsWithSignal: 4,
+    turnsWithSuppression: 1,
+    filesSuppressed: 3,
+    lastSuppressedAt: new Date('2026-08-12T00:00:00.000Z'),
+  },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
 
@@ -115,6 +121,12 @@ describe('GET /api/data-lakes/[id]/access', () => {
       turnsWithSignal: 6,
       turnsAtCap: 2,
       lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
+    });
+    expect(body.data.supersessionPressure).toEqual({
+      turnsWithSignal: 4,
+      turnsWithSuppression: 1,
+      filesSuppressed: 3,
+      lastSuppressedAt: new Date('2026-08-12T00:00:00.000Z'),
     });
   });
 

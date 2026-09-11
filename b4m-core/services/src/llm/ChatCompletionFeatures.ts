@@ -2759,14 +2759,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // `promptMeta.retrieval` instead. See the PRODUCT DECISION block in LakeAccessEventTypes.ts
         // for the whole rule.
         //
-        // Gated on `lakeScoped`, which is what makes attributing to the whole scope honest here.
-        // With it true, `lakes` is exactly the lake(s) the session named (narrowLakeAccessToSession
-        // filters to them), so the search WAS that lake and "it served nothing" is literally true.
-        // With it false the lake was one of several mixed sources behind a question that was not
-        // about it, and counting a starve against it would be the same category error the grounded
-        // write below refuses by passing `allowFullScopeFallback: false`. That makes the resulting
-        // per-lake count a deliberate LOWER bound, which is the direction to be wrong in.
-        const searchedLakeIds = lakeScoped ? lakes.map(lake => lake.id) : [];
+        // Gated on `lakeScoped` AND on the session adding no content tag of its own, because both
+        // are needed for "this lake served nothing" to be literally true.
+        //
+        // `lakeScoped` alone is not enough. With it true, `lakes` is exactly the lake(s) the
+        // session named (narrowLakeAccessToSession filters to them) - but `nonLakeRetrievalTags` is
+        // AND'ed into the candidate listing above, so a session scoped to `datalake:alpha` plus a
+        // content tag searches only alpha INTERSECT that tag. Attributing that starve to alpha
+        // would report a coverage gap in a lake that was never searched whole - an OVER-count, and
+        // in a compliance artifact that is the wrong direction to be wrong in. So a session
+        // carrying any non-lake retrieval tag writes no row at all.
+        //
+        // With `lakeScoped` false the lake was one of several mixed sources behind a question that
+        // was not about it, and counting a starve against it would be the same category error the
+        // grounded write below refuses by passing `allowFullScopeFallback: false`.
+        //
+        // `this.retrievalFilter` deliberately does NOT disqualify a row: it excludes files the lake
+        // itself marks unretrievable, so a starve behind it is still a fact about what this lake can
+        // serve. Both gates together keep the per-lake count a deliberate LOWER bound.
+        const attributableToLake = lakeScoped && nonLakeRetrievalTags.length === 0;
+        const searchedLakeIds = attributableToLake ? lakes.map(lake => lake.id) : [];
         if (searchedLakeIds.length > 0) {
           recordLakeAccessEvent(
             this.chatCompletion.db.lakeAccessEvents,
