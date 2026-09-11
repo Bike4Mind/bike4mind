@@ -7,7 +7,6 @@ import {
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
   KnowledgeType,
-  settingsMap,
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
@@ -29,6 +28,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { Resource } from 'sst';
 
 const s3Client = createS3Client();
@@ -53,10 +53,7 @@ const handler = baseApi().post(
       }
 
       const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-      // MaxFileSize's own definition always sets defaultValue; makeNumberSetting's shared param
-      // type widens it to number|undefined for settings that omit one.
-      const maxFileSize =
-        getSettingsValue('MaxFileSize', settings, settingsMap.MaxFileSize.defaultValue!) * 1024 * 1024;
+      const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
       if (!data.fileSize) throw new BadRequestError('No file size provided');
       if (data.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
