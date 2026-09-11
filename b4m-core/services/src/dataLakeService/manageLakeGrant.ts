@@ -3,13 +3,11 @@ import type {
   DataLakePrincipalType,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
-  IDataLakeRepository,
   IUserRepository,
 } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake, type ManageActor } from './manageRule';
+import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { canManageLake, type LakeGrant, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
-import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { grantChange } from './diffLakeConfig';
 import { refuseGrantWrite, refuseOwnerGrantChange } from './lakeGrantWriteRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
@@ -23,11 +21,7 @@ import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLa
 interface ManageLakeGrantAdapters extends LakeConfigAuditAdapters {
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById'>;
-    dataLakeAccessGrants: Pick<
-      IDataLakeAccessGrantRepository,
-      'listByLake' | 'findGrant' | 'upsertGrant' | 'removeGrant'
-    >;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'findGrant' | 'upsertGrant' | 'removeGrant'>;
     users: Pick<IUserRepository, 'findAllByEmailsOrUsernames'>;
   };
 }
@@ -68,27 +62,22 @@ export interface RevokeLakeAccessResult {
   revoked: boolean;
 }
 
-/** The shared prologue: load, refuse a fallback lake, and apply the manage gate once. */
-async function loadManageableLake(
-  actor: ManageActor,
-  dataLakeId: string,
-  { db }: ManageLakeGrantAdapters
-): Promise<{ lake: IDataLakeDocument; grants: Awaited<ReturnType<typeof loadActiveLakeGrants>> }> {
-  const lake = await db.dataLakes.findById(dataLakeId);
-  if (!lake) {
-    throw new NotFoundError('Data lake not found');
-  }
+/**
+ * The shared prologue: refuse a fallback lake, then apply the manage gate once. Pure over an
+ * already-resolved lake and its ACTIVE grants - both doors below are reached through the route's
+ * `assertLakeAccessWithGrants`, which read exactly this pair, so neither is re-fetched here. The
+ * missing-lake refusal lives in that gate too, as a not-found-style denial.
+ */
+function assertManageableLake(lake: IDataLakeDocument, actor: ManageActor, grants: LakeGrant[]): void {
   // A hardcoded registry lake has no document to hang a grant row on.
   assertLakeGrantable(lake);
 
-  const grants = await loadActiveLakeGrants(lake, { db });
   if (!canManageLake(lake, actor, grants)) {
     // Forbidden, not BadRequest: the route access-gates first, so a caller reaching here can already
     // see the lake and nothing is disclosed by saying they may not manage it. Same call the access
     // view's own manage gate makes.
     throw new ForbiddenError('You do not have permission to manage access to this data lake');
   }
-  return { lake, grants };
 }
 
 /**
@@ -128,12 +117,13 @@ async function loadManageableLake(
  */
 export async function grantLakeAccess(
   actor: ManageActor,
-  dataLakeId: string,
+  lake: IDataLakeDocument,
+  grants: LakeGrant[],
   input: GrantLakeAccessInput,
   adapters: ManageLakeGrantAdapters
 ): Promise<GrantLakeAccessResult> {
   const { db, logger } = adapters;
-  const { lake, grants } = await loadManageableLake(actor, dataLakeId, adapters);
+  assertManageableLake(lake, actor, grants);
 
   const principalId = await resolvePrincipalId(input, db);
   const refusal = refuseGrantWrite(lake, { ...input, principalId });
@@ -220,12 +210,13 @@ export async function grantLakeAccess(
  */
 export async function revokeLakeAccess(
   actor: ManageActor,
-  dataLakeId: string,
+  lake: IDataLakeDocument,
+  grants: LakeGrant[],
   input: RevokeLakeAccessInput,
   adapters: ManageLakeGrantAdapters
 ): Promise<RevokeLakeAccessResult> {
   const { db, logger } = adapters;
-  const { lake, grants } = await loadManageableLake(actor, dataLakeId, adapters);
+  assertManageableLake(lake, actor, grants);
 
   const existing = await db.dataLakeAccessGrants.findGrant(lake.id, input.principalType, input.principalId);
   if (!existing) return { revoked: false };

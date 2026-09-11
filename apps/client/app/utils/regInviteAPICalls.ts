@@ -37,8 +37,10 @@ export type IUserInvitation = {
 
 export type IReferralResult = {
   message: string;
+  // Every address that was accepted for processing, in submission order. The endpoint
+  // deliberately does not say which of these already had an account -- that split was an
+  // account-existence oracle (see pages/api/reg-invites/refer.ts).
   sent: string[];
-  skipped: string[];
   failed: string[];
 };
 

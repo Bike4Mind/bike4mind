@@ -29,6 +29,8 @@ import {
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
+import { recordDataLakeSearchMetrics } from './dataLakeSearchMetrics';
+import { reportScanTruncation, type ScanTruncationReport, type SearchEntrypoint } from './scanTruncationMetrics';
 import { isVectorSearchReady, partitionByVectorSearchReadiness } from './vectorSearchEligibility';
 import {
   buildRetrievalUnavailableReport,
@@ -178,6 +180,18 @@ export interface SemanticSearchScanAccounting {
   annFilesQueried: number;
   /** Chunk hits returned by ANN retrieval across all ann-queried files and models, before minScore/scope filtering. */
   annHits: number;
+  /**
+   * Ready files the saturated ANN path deliberately left off the brute-force scan - the index
+   * covered them and they lost on rank. This is the cutover's success signal, and the number
+   * that goes to zero if the ANN path silently stops serving.
+   *
+   * RANK-BOUNDED, not a coverage claim: it counts files absent from a topK-saturated result,
+   * which is not the same as "chunks avoided" and says nothing about whether a file is indexed.
+   * Only an under-saturated result (`hitsReturned < topK`) is evidence about coverage, and that
+   * case rebuckets to the scan path instead of counting here. Atlas only - self-host still
+   * rebuckets on absence alone (see the saturation comment in rankChunksForFiles).
+   */
+  annUnrankedFilesLeftOffScan: number;
   /**
    * Distinct embedding models an ANN query was actually issued under this search: 0 when ANN
    * never ran, 1 for a healthy single-model lake, up to `1 + MAX_ALTERNATE_ANN_MODELS`. Without
@@ -434,6 +448,7 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     chunksSkippedDimensionMismatch: 0,
     annFilesQueried: 0,
     annHits: 0,
+    annUnrankedFilesLeftOffScan: 0,
     annModelsQueried: 0,
     budgets: { maxFiles: resolved.maxFiles, maxChunks: resolved.maxChunks },
   };
@@ -801,7 +816,14 @@ async function rankChunksForFiles(args: {
     const mismatch = createEmbeddingMismatchAccumulator(excludedForeignFiles(new Set()), embeddingModel);
     mismatch.queryEmbeddingFailed();
     return {
-      ...emptyResult(embeddingModel, budgets, { filesMatching: args.filesMatching, filesScoped: fileIds.length }),
+      // fileBudgetHit rides along deliberately: the scope walk already hit its budget before the
+      // embedding failed, so dropping it here would report a truncated corpus as complete.
+      ...emptyResult(embeddingModel, budgets, {
+        filesMatching: args.filesMatching,
+        filesScoped: fileIds.length,
+        truncated: args.fileBudgetHit,
+        fileBudgetHit: args.fileBudgetHit,
+      }),
       embeddingMismatch: mismatch.report(),
       retrievalUnavailable,
       supersession,
@@ -890,6 +912,9 @@ async function rankChunksForFiles(args: {
   // an outage that broke the primary model's query almost certainly breaks every other model on
   // the same backend/connection, so there is no point spending alternate-model embeds against it.
   let primaryAnnFailed = false;
+  // Hoisted out of the saturation branch below so it survives into the scan accounting; the
+  // count is only meaningful there (a saturated ANN result is the only case that produces it).
+  let annUnrankedFilesLeftOffScan = 0;
   const primaryAnnQueried = annEligible.length > 0;
   if (annEligible.length > 0) {
     try {
@@ -974,12 +999,12 @@ async function rankChunksForFiles(args: {
       // The whole point of the index: these ready files are NOT scanned. Logged because the
       // failure this replaced was silent, and a regression here would be silent again - the
       // count is how much scanning the ANN path actually avoided on this query.
-      const notRescanned = annEligible.filter(f => !annResult.filesWithHits.has(f.id)).length;
-      if (notRescanned > 0) {
+      annUnrankedFilesLeftOffScan = annEligible.filter(f => !annResult.filesWithHits.has(f.id)).length;
+      if (annUnrankedFilesLeftOffScan > 0) {
         logger?.debug?.('[semanticSearch] ANN saturated its limit; unranked ready files left off the scan path', {
           embeddingModel,
           backend: canUseAtlas ? 'atlas' : 'opensearch',
-          fileCount: notRescanned,
+          fileCount: annUnrankedFilesLeftOffScan,
           hitsReturned: annResult.hitsReturned,
         });
       }
@@ -1084,9 +1109,31 @@ async function rankChunksForFiles(args: {
     chunksSkippedDimensionMismatch: scanned.chunksSkippedDimensionMismatch,
     annFilesQueried: annEligible.length + outcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
     annHits: annResult.hitsReturned + alternateHitsReturned,
+    annUnrankedFilesLeftOffScan,
     annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
+
+  // Published here rather than at the individual counters' call sites: this is the one point
+  // that sees both the ANN and scan halves of the same search, and it covers both entrypoints
+  // (semanticDataLakeSearch and fileScopedSemanticSearch). No-ops outside a deployed stage.
+  //
+  // Deliberately NOT hoisted to withTruncationReport, which exists to catch the return paths this
+  // point cannot see. Those paths ranked nothing, so they would publish an all-zero datapoint -
+  // and a zero on annUnrankedFilesLeftOffScan is precisely the regression this metric watches for.
+  await recordDataLakeSearchMetrics(
+    {
+      // Three-way, unlike the log lines above: a dimension value partitions the metric
+      // permanently, so "no backend ran" cannot be folded into 'opensearch' the way it can be
+      // shrugged off in a log field read in context.
+      backend: canUseAtlas ? 'atlas' : canUseOpenSearch ? 'opensearch' : 'none',
+      annUnrankedFilesLeftOffScan: scan.annUnrankedFilesLeftOffScan,
+      chunksScanned: scan.chunksScanned,
+      annHits: scan.annHits,
+      annModelsQueried: scan.annModelsQueried,
+    },
+    logger
+  );
 
   // How this cutover failed once already: enabled, every index built, and not one chunk carrying an
   // `embeddingModel`, so the ann path no-opped on every request and nothing anywhere said so. Zero
@@ -1125,12 +1172,11 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  if (scan.truncated) {
-    logger?.warn?.(
-      `[semanticSearch] TRUNCATED scan: ranked ${scan.chunksScanned} chunks across ${scan.filesScanned}/${scan.filesMatching} files ` +
-        `(maxFiles=${scan.budgets.maxFiles}, maxChunks=${scan.budgets.maxChunks}) - results rank an INCOMPLETE corpus`
-    );
-  } else if (scan.chunksScanned > 0 && scan.chunksSkippedDimensionMismatch === scan.chunksScanned) {
+  // Truncation is reported by the entrypoint wrappers, not here: this function is only one of
+  // three return paths that can set `scan.truncated`. The suppression the old else-if provided is
+  // kept explicitly - a budgeted prefix that happens to be entirely foreign-model says nothing
+  // about the whole corpus, so the diagnosis below would be guessing.
+  if (!scan.truncated && scan.chunksScanned > 0 && scan.chunksSkippedDimensionMismatch === scan.chunksScanned) {
     // Guarded on ALL chunks mismatching: a few stale chunks mid-revectorize are expected and must
     // stay quiet, but an entire corpus in the wrong vector space can never return anything.
     logger?.warn?.(
@@ -1194,7 +1240,41 @@ async function rankChunksForFiles(args: {
   };
 }
 
+/**
+ * The one place a truncated search is reported. Both public entrypoints are thin wrappers around
+ * their real bodies so that every internal return path - a budgeted scan, an empty query
+ * embedding, a fully retrieval-excluded scope - passes through here. Reporting from the ranking
+ * core instead would see only the first of the three.
+ */
+async function withTruncationReport(
+  entrypoint: SearchEntrypoint,
+  result: SemanticDataLakeSearchResult,
+  logger?: Logger
+): Promise<SemanticDataLakeSearchResult> {
+  const { scan } = result;
+  if (!scan.truncated) return result;
+
+  const report: ScanTruncationReport = {
+    fileBudgetHit: scan.fileBudgetHit,
+    chunkBudgetHit: scan.chunkBudgetHit,
+    filesScanned: scan.filesScanned,
+    filesMatching: scan.filesMatching,
+    chunksScanned: scan.chunksScanned,
+    maxFiles: scan.budgets.maxFiles,
+    maxChunks: scan.budgets.maxChunks,
+  };
+  await reportScanTruncation(entrypoint, report, logger);
+  return result;
+}
+
 export async function semanticDataLakeSearch(
+  params: SemanticDataLakeSearchParams,
+  adapters: SemanticDataLakeSearchAdapters
+): Promise<SemanticDataLakeSearchResult> {
+  return withTruncationReport('lake-scoped', await lakeScopedSearch(params, adapters), params.logger);
+}
+
+async function lakeScopedSearch(
   params: SemanticDataLakeSearchParams,
   adapters: SemanticDataLakeSearchAdapters
 ): Promise<SemanticDataLakeSearchResult> {
@@ -1339,6 +1419,13 @@ export interface FileScopedSemanticSearchAdapters {
  * deleted/archived files curated into a scope contribute nothing.
  */
 export async function fileScopedSemanticSearch(
+  params: FileScopedSemanticSearchParams,
+  adapters: FileScopedSemanticSearchAdapters
+): Promise<SemanticDataLakeSearchResult> {
+  return withTruncationReport('file-scoped', await fileScopedSearch(params, adapters), params.logger);
+}
+
+async function fileScopedSearch(
   params: FileScopedSemanticSearchParams,
   adapters: FileScopedSemanticSearchAdapters
 ): Promise<SemanticDataLakeSearchResult> {

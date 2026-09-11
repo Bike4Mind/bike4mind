@@ -515,12 +515,44 @@ export const RetrievalSummarySchema = z.object({
    *
    * Date-bound any rollup, the same caveat `mode` documents on itself: turns recorded before this
    * landed carry no volume, and no backfill is possible - the volume of a past turn is gone.
+   *
+   * `preRelativeFloorCandidates` and `postRelativeFloorCandidates` are the ONE pair here that is
+   * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
+   * - the candidates left after the absolute similarity floor, and after the relative floor
+   * trims them. `chunks` is what survived the char budget on top of that, so the three
+   * numbers bracket two independent trimmers:
+   *
+   *   pre -> [relative floor] -> post -> [char budget] -> chunks
+   *
+   * They exist so a low `chunks` is diagnosable - a small corpus and a floor that trimmed a large
+   * pool end in the same `chunks`. `pre - post` is the floor's own effect and nothing else;
+   * `pre - chunks` is NOT, because the budget trims the same walk. Both optional: only forced
+   * retrieval computes a ranked pool, a surface without one (lake memory, the knowledge tools)
+   * never writes either, and absence must not read as zero candidates. SUMMED like `chunks`, with
+   * the same absent-is-not-zero handling as `topScore`.
+   *
+   * COMPARE THE PAIR ONLY TO ITSELF, never to `chunks`, unless `surfaces` is forced retrieval
+   * alone. `chunks` and `chars` sum across ALL surfaces while this pair is forced-only, so a mixed
+   * turn can store `chunks` above `pre` - inverting the relationship the pair exposes. Lake memory
+   * is the common case, not the exotic one: it is enabled inside the same forced-retrieval gate,
+   * so on a lake-memory lake it writes on nearly every forced turn. Its chunks can be backed out
+   * via `context.lakeMemory.beliefCount` (approximately - that count is pre-sanitization); its
+   * CHARS land only inside the shared sum, with no per-surface field to subtract them back out, so
+   * `chars` cannot be decontaminated at all. `pre - post` needs neither, which is the point of
+   * storing both.
+   *
+   * BOTH SATURATE, so `pre` counts what the SCAN REACHED, not what the corpus holds: `pool` is
+   * truncated in-scan at FORCED_RETRIEVAL_MAX_SCORED_CHUNKS (256), over a scan itself bounded by
+   * FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS (4000) across FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100).
+   * 2000 qualifying chunks and 300 both record 256; above the cap a rollup is a plateau.
    */
   injected: z
     .object({
       chunks: z.number(),
       chars: z.number(),
       topScore: z.number().optional(),
+      preRelativeFloorCandidates: z.number().optional(),
+      postRelativeFloorCandidates: z.number().optional(),
     })
     .optional(),
   /**

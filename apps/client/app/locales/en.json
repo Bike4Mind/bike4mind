@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Please enter valid email address(es)",
     "send_referral": "Send Referral",
     "send_referral_success": "Referral sent successfully!",
-    "send_referral_skipped": "{{count}} invite(s) skipped — those email addresses already have an account.",
     "send_referral_failed": "{{count}} invite(s) could not be sent. Please try again.",
     "send_referral_error": "Error sending referral. Please try again.",
     "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL"

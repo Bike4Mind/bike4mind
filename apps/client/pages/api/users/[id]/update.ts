@@ -162,10 +162,10 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
-      // Keep securityQuestions + userNotes so the response stays symmetric with GET
-      // /users/[id] (ProfileDataForm round-trips them); dropping them here would blank
-      // the fields in the query cache the client seeds from this response.
-      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
+      // Admin branch: symmetric with the admin view of GET /users/[id].
+      return res.json(
+        redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'], keepAdminOnly: ['userNotes'] })
+      );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
@@ -187,9 +187,10 @@ const handler = baseApi().put(
         await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
       }
 
-      // Same for non-admin updates (keep GET/PUT symmetric - see the admin branch above)
+      // Non-admin self-update: symmetric with the self view of GET /users/[id], which means
+      // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
       const finalUser = await User.findById(userId);
-      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
+      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] }));
     }
   })
 );

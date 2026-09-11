@@ -113,18 +113,38 @@ vi.mock('@server/integrations/google/drive/common', () => ({
   getValidConnectionDriveAccessToken: async () => 'access-token',
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
 }));
-vi.mock('@server/integrations/google/drive/driveClient', () => ({ createDriveClient: () => ({}) }));
-vi.mock('@server/integrations/google/drive/driveContent', () => ({
-  walkFolder: h.walkFolder,
-  fetchDriveFileContent: h.fetchDriveFileContent,
+// Only the client factory is stubbed: isDriveRateLimitError is the real predicate, because the
+// walk-throttle deferral below is exactly the behaviour a stubbed one would fake away.
+vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>()),
+  createDriveClient: () => ({}),
 }));
+// Mocks only the two Drive calls; keeps the real DriveWalkTimeBudgetExceededError export so tests
+// and the handler agree on the class an `instanceof` check below is testing against.
+vi.mock('@server/integrations/google/drive/driveContent', async () => {
+  const actual = await vi.importActual<typeof import('@server/integrations/google/drive/driveContent')>(
+    '@server/integrations/google/drive/driveContent'
+  );
+  return {
+    ...actual,
+    walkFolder: h.walkFolder,
+    fetchDriveFileContent: h.fetchDriveFileContent,
+  };
+});
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'ingest-queue-url' } } }));
 
-import { dispatch, hasDriveFileChanged, MAX_INGEST_CANDIDATES, MAX_INGEST_SLICES } from './driveLakeIngest';
+import {
+  dispatch,
+  hasDriveFileChanged,
+  MAX_INGEST_CANDIDATES,
+  MAX_INGEST_REDRIVES,
+  MAX_INGEST_SLICES,
+} from './driveLakeIngest';
+import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -910,6 +930,105 @@ describe('driveLakeIngest consumer', () => {
       // Unlike the deadline yield, a throttled slice delays its continuation - coming straight back
       // would hit the same exhausted quota.
       expect(h.sendToQueue.mock.calls[0][2]).toBeGreaterThanOrEqual(60);
+    });
+
+    it('defers the whole sync when Drive throttles the folder WALK, rather than letting it DLQ', async () => {
+      // The walk is the one Drive call with no slice to hand off to, so a throttle there used to
+      // throw for SQS to redeliver - flat, twice, DLQ. Each redelivery also re-walks the folder from
+      // scratch, adding load to the very quota that is exhausted.
+      h.walkFolder.mockRejectedValue(
+        Object.assign(new Error('Rate Limit Exceeded'), { code: 429, response: { status: 429 } })
+      );
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      // Nothing was touched, the claim is handed back so the deferred run can take it, and the
+      // deferral is delayed rather than immediate.
+      expect(h.batchCreate).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', redriveCount: 1 },
+        expect.any(Number)
+      );
+      expect(h.sendToQueue.mock.calls[0][2]).toBeGreaterThanOrEqual(60);
+    });
+
+    it('defers the whole sync when the folder walk runs out of invocation time, not just on a throttle', async () => {
+      // walkFolder throws this when its own remainingMs() check trips mid-tree - a large folder can
+      // now spend the whole invocation just walking, and this must not be killed with the claim
+      // stranded any more than an actual Drive throttle is.
+      h.walkFolder.mockRejectedValue(new DriveWalkTimeBudgetExceededError());
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(h.batchCreate).not.toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', redriveCount: 1 },
+        expect.any(Number)
+      );
+    });
+
+    it('releases before it enqueues, so the deferred run finds a connection it can claim', async () => {
+      // Enqueuing first would land a delayed message against a connection still marked 'syncing';
+      // it would lose the claim, redrive again, and burn the bounded deferrals on the wrong problem.
+      h.walkFolder.mockRejectedValue(Object.assign(new Error('429'), { code: 429 }));
+      h.releaseSyncClaim.mockImplementation(async () => {
+        h.order.push('release');
+        return { id: 'conn1', status: 'connected' };
+      });
+      h.sendToQueue.mockImplementation(async () => void h.order.push('enqueue'));
+
+      await run({ connectionId: 'conn1' });
+
+      expect(h.order).toEqual(['release', 'enqueue']);
+    });
+
+    it('settles a continuation batch before deferring, so it cannot strand in processing', async () => {
+      // A continuation throttled at its walk produced nothing, and the deferral comes back as a
+      // FRESH chain - so its adopted batch has no later slice to close it out.
+      h.walkFolder.mockRejectedValue(Object.assign(new Error('429'), { code: 429 }));
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 2,
+        skippedFiles: 0,
+        files: [],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', claimToken: 'token-prev', slice: 1 });
+
+      expect(h.setTotalFilesIfActive).toHaveBeenCalled();
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', redriveCount: 1 },
+        expect.any(Number)
+      );
+    });
+
+    it('stops deferring a throttled walk once the redrives are spent, and says so', async () => {
+      h.walkFolder.mockRejectedValue(Object.assign(new Error('429'), { code: 429 }));
+
+      await run({ connectionId: 'conn1', redriveCount: MAX_INGEST_REDRIVES });
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      const [, , lastError] = h.releaseSyncClaim.mock.calls[0];
+      expect(lastError).toContain('rate-limiting');
+      expect(lastError).not.toContain('subfolders');
+    });
+
+    it('still throws a non-throttle walk failure through to SQS', async () => {
+      // Only a throttle is sheddable. A broken folder id or a dead credential has to keep reaching
+      // the DLQ, or a permanently-failing connection would defer quietly forever.
+      h.walkFolder.mockRejectedValue(Object.assign(new Error('File not found'), { code: 404 }));
+
+      await expect(run({ connectionId: 'conn1' })).rejects.toThrow('File not found');
+      expect(h.sendToQueue).not.toHaveBeenCalled();
     });
 
     it('tells the operator the sync was rate-limited when a throttled chain hits the ceiling', async () => {

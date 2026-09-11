@@ -87,7 +87,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.connRelease.mockResolvedValue(true);
     h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
     h.createDriveClient.mockReturnValue({});
-    h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: true, canRead: true });
+    h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -113,7 +113,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   it('refuses to claim a folder the connecting user cannot read (anti-squat gate)', async () => {
     // Drive 404s a folder the caller can't see, so getFolderAccess reports it as non-existent - the
     // claim must be refused so a manager can't squat a folder id belonging to another org.
-    h.getFolderAccess.mockResolvedValue({ exists: false, isFolder: false, canRead: false });
+    h.getFolderAccess.mockResolvedValue({ ok: true, exists: false, isFolder: false, canRead: false });
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
       /do not have access/i
@@ -123,8 +123,22 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
+  it('tells the user Drive is throttling us rather than that they lost access to their folder', async () => {
+    // The conflation this guards: a throttled probe used to come back `exists: false`, so the user
+    // was told they had no access to a folder they own and went hunting a permission problem that
+    // did not exist. The claim is still refused - it just says the true reason.
+    h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'rate_limited', detail: '429' });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /rate-limiting/i
+    );
+    expect(h.connFindByDriveFolderId).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('rejects a readable id that is a file, not a folder', async () => {
-    h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: false, canRead: true });
+    h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: false, canRead: true });
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not a folder/i);
     expect(h.connCreate).not.toHaveBeenCalled();

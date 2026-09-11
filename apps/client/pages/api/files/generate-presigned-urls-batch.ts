@@ -21,6 +21,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
@@ -76,8 +77,19 @@ const handler = baseApi().post(async (req: Request, res) => {
   }
 
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
-  // through per-file tags. Gate every such tag with the same write check.
+  // through per-file tags. Gate every such tag with the same write check. `datalakeTag` itself is
+  // resolved server-side from `dataLakeSlug` and never appears in the client payload, so it must
+  // be added to the asserted set explicitly - checking `clientMetaTags` alone would let a
+  // files:write-only key join a lake via `dataLakeSlug` with no data-lake scope at all.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
+  // Covers both membership signals for these new files: a `datalake:*` meta-tag, and a plain
+  // content tag matching one of the caller's OWN lakes' `fileTagPrefix` (the prefix arm - see
+  // assertDataLakeTagWriteScope's own doc comment). Only the latter needs `userId` - none of
+  // these files exist yet, so it can only ever be a JOIN.
+  await assertDataLakeTagWriteScope(req, datalakeTag ? [...clientMetaTags, datalakeTag] : clientMetaTags, {
+    userId,
+    db: { dataLakes: dataLakeRepository },
+  });
   await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
     db: {
       dataLakes: dataLakeRepository,

@@ -284,8 +284,16 @@ const authenticateUser = async (
       }
 
       const name = profile?.displayName ?? profile?.name ?? username ?? '';
-      const baseUsername = deriveOAuthUsername(username, name, email);
-      user = await createUniqueOAuthUser({ name, baseUsername, email, oauthCredentials });
+      // Gate the provider-asserted email out of a brand-new account's login
+      // identity unless the provider marked it verified. An unverified email
+      // persisted here becomes a Stage-2 match key (the email $or above) that a
+      // later verified sign-in for the same address would auto-link into (see
+      // decideAutoLink), handing this account to whoever created it. SAML's
+      // wrapper synthesizes verified:true, so IdP-attested logins still persist
+      // their email; sibling OAuth create paths must apply the same gate.
+      const emailForNewAccount = isProviderEmailVerified(profile) ? email : null;
+      const baseUsername = deriveOAuthUsername(username, name, emailForNewAccount);
+      user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
       // Transient flag (not persisted), mirroring isNewOAuthLink above: lets
       // the callback endpoint log the registration and forward a one-shot
       // signup signal to the client for ad-conversion tracking.

@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeProposalRepository } from '@bike4mind/database';
@@ -23,7 +24,7 @@ const ReviewInput = z.object({
  * resolves the actor, checks the proposal belongs to the lake in the path, and wires the ordinary
  * URL ingestion door as the admission adapter.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
     const { id, proposalId } = req.query as { id: string; proposalId: string };

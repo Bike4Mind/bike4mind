@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { dataLakeService } from '@bike4mind/services';
 import { DATA_LAKE_ACCESS_ROLES, DATA_LAKE_PRINCIPAL_TYPES } from '@bike4mind/common';
 import { dataLakeRepository, dataLakeAccessGrantRepository, userRepository } from '@bike4mind/database';
@@ -52,21 +53,22 @@ interface GrantsQuery {
  * DELETE takes the principal in the query rather than a body: the pair is an identifier, and a
  * request body on DELETE is unevenly supported by intermediaries.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request<{}, unknown, unknown, GrantsQuery>, res) => {
     const { id } = req.query;
     const input = GrantInput.parse(req.body);
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // The gate hands back the active grants it read to make its own decision, so the manage gate
+    // inside the service is applied to that same set rather than re-reading the lake and its grants.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const data = await dataLakeService.grantLakeAccess(actor, lake.id, input, {
+    const data = await dataLakeService.grantLakeAccess(actor, lake, grants, input, {
       db: {
-        dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
         ...lakeConfigAuditDb,
@@ -84,14 +86,15 @@ const handler = baseApi()
     });
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // The gate hands back the active grants it read to make its own decision, so the manage gate
+    // inside the service is applied to that same set rather than re-reading the lake and its grants.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const data = await dataLakeService.revokeLakeAccess(actor, lake.id, input, {
+    const data = await dataLakeService.revokeLakeAccess(actor, lake, grants, input, {
       db: {
-        dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
         ...lakeConfigAuditDb,

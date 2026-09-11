@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DATA_LAKES, type DataLakeConfig, type IDataLakeDocument } from '@bike4mind/common';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from './getDataLakePrompts';
-import { grantedLakeReachFor } from './resolveLakeReadAccess';
+import { grantedLakeReachForTurn } from './resolveLakeReadAccess';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 
 /**
  * A spy that KEEPS the real implementation - every other test in this file depends on the helper
- * actually reading the grant rows. It exists so one test can assert the literal arguments this
- * call site passes, which is the only way the `includeReaders = false` + no-org-ids floor is
- * pinned: threading `organizationIds` alone changes no observable behaviour (`grantedLakeReachFor`
- * reads them only under `includeReaders`), so no outcome assertion can catch that pre-wiring.
+ * actually reading the grant rows, and on its per-turn memo actually collapsing the repeat. It
+ * exists so one test can assert the literal arguments this call site passes, which is the only way
+ * the `includeReaders = false` + no-org-ids floor is pinned: threading `organizationIds` alone
+ * changes no observable behaviour (the reach helper reads them only under `includeReaders`), so no
+ * outcome assertion can catch that pre-wiring.
+ *
+ * Spied on the MEMOIZING wrapper because that is what the call site calls - the wrapper reaches
+ * `grantedLakeReachFor` through the module's own binding, which a spy on that export cannot see.
  */
 vi.mock('./resolveLakeReadAccess', async importOriginal => {
   const actual = await importOriginal<typeof import('./resolveLakeReadAccess')>();
-  return { ...actual, grantedLakeReachFor: vi.fn(actual.grantedLakeReachFor) };
+  return { ...actual, grantedLakeReachForTurn: vi.fn(actual.grantedLakeReachForTurn) };
 });
 
 const OWNER = 'user-owner';
@@ -303,7 +307,9 @@ describe('getAccessibleDataLakePrompts', () => {
         principalGrants: { 'user:somebody-else': [{ dataLakeId: 'shared', role: 'curator' }] },
       });
       expect(await getAccessibleDataLakePrompts(ctx)).toEqual([]);
-      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, expect.anything());
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, {
+        activeAsOf: expect.any(Date),
+      });
     });
 
     it('feeds the granted ids to the DB pre-filter as its grant arm', async () => {
@@ -328,6 +334,10 @@ describe('getAccessibleDataLakePrompts', () => {
         principalGrants: { [`organization:${ORG}`]: [{ dataLakeId: 'shared', role: 'curator' }] },
       });
       expect(await getAccessibleDataLakePrompts(ctx)).toEqual([]);
+      // The positive assertion keeps the negative one honest: with a per-turn memo above the reach
+      // helper, a cache hit would satisfy `not.toHaveBeenCalledWith('organization', ...)` without
+      // the org arm being guarded at all, and the guard would stop guarding without ever failing.
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, expect.anything());
       expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).not.toHaveBeenCalledWith(
         'organization',
         expect.anything(),
@@ -340,7 +350,9 @@ describe('getAccessibleDataLakePrompts', () => {
       // pre-wired, and flipping `includeReaders` would activate it with no other edit.
       const ctx = asCurator('curator');
       await getAccessibleDataLakePrompts(ctx);
-      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, expect.anything());
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledWith('user', CURATOR, {
+        activeAsOf: expect.any(Date),
+      });
       expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
     });
 
@@ -352,8 +364,55 @@ describe('getAccessibleDataLakePrompts', () => {
      * state the comment at the call site says it prevents. This is the assertion that catches it.
      */
     it('resolves the grant arm with no org ids and readers off (the permanent injection floor)', async () => {
+      const ctx = asCurator('curator');
+      await getAccessibleDataLakePrompts(ctx);
+      // Asserted on the memoizing wrapper, which is what this site calls: the memo keys on these
+      // two arguments precisely so injection and retrieval cannot collide in it, so the floor and
+      // the key are the same assertion.
+      expect(grantedLakeReachForTurn).toHaveBeenCalledWith(ctx, CURATOR, [], expect.anything(), false);
+    });
+
+    /**
+     * The read runs per TOOL CALL, so a grounded turn issued it 2..N times over with byte-identical
+     * arguments (#2589). Both calls here share ONE context object, which is what a turn does: the
+     * `ToolContext` is built once per request and closed over by every tool, so `search` and
+     * `retrieve` hand this resolver the same instance.
+     */
+    it('issues one grant read for two injections in the same turn', async () => {
+      const ctx = asCurator('curator');
+
+      const first = await getAccessibleDataLakePrompts(ctx);
+      const second = await getAccessibleDataLakePrompts(ctx);
+
+      expect(second).toEqual(first);
+      expect(second).toEqual([{ id: 'shared', name: 'Shared Lake', systemPrompt: 'Cite the control number.' }]);
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
+      // The membership read rides the same per-turn memo, for the same reason.
+      expect(ctx.db.organizations.findMembershipOrgIds).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT share the memo between two turns', async () => {
+      // Two contexts are two requests. A hit across them would keep honoring a grant revoked a
+      // request ago - the process-lifetime cache the memo's WeakMap scope exists to avoid being.
       await getAccessibleDataLakePrompts(asCurator('curator'));
-      expect(grantedLakeReachFor).toHaveBeenCalledWith(CURATOR, [], expect.anything(), false);
+      const second = asCurator('curator');
+      await getAccessibleDataLakePrompts(second);
+      expect(second.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-reads after a failed grant read rather than reusing the empty arm', async () => {
+      // A cached rejection would read as "this curator holds no grants" for the rest of the turn -
+      // the same confusion the fail-closed warn exists to end, made sticky.
+      const ctx = asCurator('curator');
+      (ctx.db.dataLakeAccessGrants?.listByPrincipal as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('grants down')
+      );
+
+      expect(await getAccessibleDataLakePrompts(ctx)).toEqual([]);
+      expect(await getAccessibleDataLakePrompts(ctx)).toEqual([
+        { id: 'shared', name: 'Shared Lake', systemPrompt: 'Cite the control number.' },
+      ]);
+      expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(2);
     });
 
     it('drops a granted lake whose datalakeTag is malformed, as retrieval does', async () => {

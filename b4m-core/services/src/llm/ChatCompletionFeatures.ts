@@ -61,6 +61,7 @@ import {
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
   PROMPT_TEXT_MAX,
+  materializePromptMetaSession,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -199,9 +200,11 @@ interface DatabaseAdapters {
     findById: (id: string) => Promise<ILatticeModel | null>;
     update: (data: any) => Promise<ILatticeModel | null>;
   };
+  // 'find' is forwarded to ToolContext.db.dataLakes -> createFabFile (persistGeneratedFileAsFabFile),
+  // for its fallback tagger's prefix-overlap check.
   dataLakes?: Pick<
     IDataLakeRepository,
-    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
+    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
   >;
   /**
    * Access-grant lookup shared by two independent optional features:
@@ -764,7 +767,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       dataLakeTags: string[],
       injected?: NonNullable<RetrievalSummary['injected']>
     ) => {
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: this.user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
@@ -827,7 +833,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
 
       // Telemetry: record that the card fired and from which lakes, so an eval row shows lake grounding
       // independent of whether the model then also called the knowledge tools.
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: this.user.id,
+      });
       quest.promptMeta.context = quest.promptMeta.context ?? {};
       // beliefBudget rides along so `beliefCount` is readable on its own: below the budget means that
       // is all that qualified, AT the budget means the turn saturated it. Saturation is not proof the
@@ -1955,7 +1964,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
     );
 
-    quest.promptMeta = quest.promptMeta || {};
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
     quest.promptMeta.warnings = [
       ...(quest.promptMeta.warnings ?? []),
       `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
@@ -1995,7 +2007,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         surfaces: [],
@@ -2214,7 +2229,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument,
     forcedSkipReason: NonNullable<RetrievalSummary['forcedSkipReason']>
   ): void {
-    quest.promptMeta = quest.promptMeta ?? {};
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
     quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
       attempted: false,
       mode: 'forced',
@@ -2273,7 +2291,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       dataLakeTags: string[],
       injected?: NonNullable<RetrievalSummary['injected']>
     ) => {
-      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
@@ -2582,7 +2603,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
         // No topScore: nothing was scored, so `topScore` is still its -1 sentinel and persisting
         // that would read as a real (very poor) similarity rather than as an absent one.
-        recordRetrieval('not_indexed', dataLakeTags, { chunks: 0, chars: 0 });
+        // Both counts are 0 here (scoredCount === 0 means nothing ever cleared into the pool, and
+        // a relative floor over an empty pool leaves it empty), but read off pool rather than
+        // hardcoded so this stays true if the guard above it ever moves. Written as a PAIR even
+        // though `scored` does not exist yet, because the two must be present on the same turns:
+        // a rollup over one has to cover the same population as a rollup over the other.
+        recordRetrieval('not_indexed', dataLakeTags, {
+          chunks: 0,
+          chars: 0,
+          preRelativeFloorCandidates: pool.length,
+          postRelativeFloorCandidates: pool.length,
+        });
         return this.noContextMessages('unavailable');
       }
       const ranked = pool.sort(compareForcedRetrievalCandidates);
@@ -2687,6 +2718,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           chunks: 0,
           chars: 0,
           ...(scoredCount > 0 ? { topScore } : {}),
+          // Necessarily 0, both of them - this is a recorded zero, NOT the trimmed-pool case the
+          // pair exists to expose. The exit is reached only when `sections` came out empty. The
+          // walk above skips a candidate only via its budget `break`, and `used` starts at 0
+          // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
+          // an empty `sections` means an empty `scored`. And the top candidate always survives its
+          // own relative cutoff (`>=` against `topScore * fraction`, fraction <= 1), so an empty
+          // `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE floor, which is exactly
+          // what the `chunks: 0` beside it says. If that budget ever admits 0, this breaks.
+          preRelativeFloorCandidates: ranked.length,
+          postRelativeFloorCandidates: scored.length,
         });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
@@ -2700,6 +2741,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         chunks: sections.length,
         chars: used,
         ...(scoredCount > 0 ? { topScore } : {}),
+        // `pre - post` is the relative floor's own effect and nothing else. Do NOT read
+        // `pre - chunks` as the floor: the char budget trims the same walk, so that gap is the two
+        // trimmers summed - and `chunks` sums across surfaces while this pair is forced-only.
+        preRelativeFloorCandidates: ranked.length,
+        postRelativeFloorCandidates: scored.length,
       });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
@@ -2724,7 +2770,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           },
         };
       });
-      quest.promptMeta = quest.promptMeta || {};
+      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+        sessionId: quest.sessionId,
+        userId: user.id,
+      });
       const existingCitables = quest.promptMeta.citables || [];
       const citableKey = (c: CitableSource) => c.id || c.url || c.title;
       if (this.citationStyle === 'indexed') {

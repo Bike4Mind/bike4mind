@@ -180,7 +180,19 @@ async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngest
   return existing.id;
 }
 
-/** Read the index and resolve each public entry's markdown + body fingerprint. */
+/**
+ * Read the index and resolve each public entry's markdown + body fingerprint.
+ *
+ * The `accessLevel === 'public'` filter below is load-bearing. The `system-help` lake declares no
+ * requiredUserTag/requiredEntitlement, so everything ingested here is semantically searchable by
+ * every authenticated user; do NOT widen it to admin articles the way `retrieval.ts` and
+ * `vectorize-help-content.ts` deliberately do.
+ *
+ * It is also the ONLY gate on the scheduled path: that caller passes the raw `docs-site/docs`
+ * tree (`apps/client/server/cron/helpDatalakeIngest.ts`, copied in by `infra/cron.ts`), which
+ * holds `admin/` beside `features/`. The CLI caller's root is the public bundle alone, so there
+ * the filter has a second layer behind it - here it has none.
+ */
 function loadDesiredCorpus(
   opts: HelpDatalakeIngestOptions,
   logger: HelpDatalakeLogger

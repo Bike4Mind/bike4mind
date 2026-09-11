@@ -17,6 +17,7 @@ let viewState: {
 let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean; isError?: boolean };
 const transferMutate = vi.fn();
 const grantMutate = vi.fn();
+/** `mutateAsync`, because the confirm dialog awaits the DELETE to decide whether to close. */
 const revokeMutate = vi.fn();
 let revokePending = false;
 /** The in-flight DELETE's own input, which is what scopes the pending state to one row. */
@@ -27,12 +28,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeOwnershipCandidates: () => candidatesState,
   useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
   useGrantLakeAccess: () => ({ mutateAsync: grantMutate, isPending: false }),
-  useRevokeLakeAccess: () => ({ mutate: revokeMutate, isPending: revokePending, variables: revokeVariables }),
+  useRevokeLakeAccess: () => ({ mutateAsync: revokeMutate, isPending: revokePending, variables: revokeVariables }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
 }));
 
 const toastError = vi.fn();
 vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => toastError(...a) } }));
+
+/** Open the confirmation for one grant row, which is now the only path to a DELETE. */
+const openRevokeConfirm = async (principalTestId: string) => {
+  await userEvent.click(screen.getByTestId(`datalake-access-revoke-${principalTestId}`));
+  return screen.getByTestId('datalake-revoke-modal');
+};
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -341,8 +348,71 @@ describe('DataLakeAccessModal grant writes', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
     expect(screen.queryByTestId('datalake-access-revoke-user-owner1')).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId('datalake-access-revoke-user-cur1'));
+    await openRevokeConfirm('user-cur1');
+    // The control opens the confirmation; nothing reaches the door until it is accepted.
+    expect(revokeMutate).not.toHaveBeenCalled();
+  });
+
+  it('sends the DELETE only once the revoke is confirmed, and nothing at all on cancel', async () => {
+    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    await openRevokeConfirm('user-cur1');
+    await userEvent.click(screen.getByTestId('datalake-revoke-cancel-btn'));
+    expect(revokeMutate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('datalake-revoke-modal')).not.toBeInTheDocument();
+
+    await openRevokeConfirm('user-cur1');
+    await userEvent.click(screen.getByTestId('datalake-revoke-confirm-btn'));
     expect(revokeMutate).toHaveBeenCalledWith({ id: 'lake1', principalType: 'user', principalId: 'cur1' });
+    // Closed on success, so the second click of a double-click has no confirm left to hit.
+    expect(screen.queryByTestId('datalake-revoke-modal')).not.toBeInTheDocument();
+  });
+
+  it('keeps the confirmation open when the door refuses, so the toast can be acted on', async () => {
+    revokeMutate.mockRejectedValueOnce(new Error('nope'));
+    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    await openRevokeConfirm('user-cur1');
+    await userEvent.click(screen.getByTestId('datalake-revoke-confirm-btn'));
+    expect(screen.getByTestId('datalake-revoke-modal')).toBeInTheDocument();
+  });
+
+  it('locks its own confirm while the DELETE is in flight, so one confirmation cannot send two', async () => {
+    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await openRevokeConfirm('user-cur1');
+
+    revokePending = true;
+    revokeVariables = { principalType: 'user', principalId: 'cur1' };
+    rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
+    expect(screen.getByTestId('datalake-revoke-confirm-btn')).toBeDisabled();
+  });
+
+  it('names what an organization grant and a curator grant take away, and flags an already-lapsed one', async () => {
+    viewState = loaded({
+      ...fullView,
+      grants: [
+        { ...fullView.grants[0]!, principalType: 'organization', principalId: 'orgA', principalName: 'Acme' },
+        { ...fullView.grants[0]!, principalId: 'cur1', role: 'curator', status: 'active', expiresAt: null },
+      ],
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    // An org row is the one whose blast radius is invisible from the name on it.
+    await openRevokeConfirm('organization-orgA');
+    expect(screen.getByTestId('datalake-revoke-org-warning')).toHaveTextContent(/everyone in Acme/i);
+    // The seeded row is expired, so the copy must not promise it is cutting off live access.
+    expect(screen.getByTestId('datalake-revoke-expired-note')).toHaveTextContent(/already lapsed/i);
+    expect(screen.queryByTestId('datalake-revoke-effect-note')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('datalake-revoke-cancel-btn'));
+
+    await openRevokeConfirm('user-cur1');
+    // Mirror of the grant form's disclosure: the role carried injection trust, so revoking says so.
+    expect(screen.getByTestId('datalake-revoke-curator-warning')).toHaveTextContent(/system-prompt trust/i);
+    expect(screen.getByTestId('datalake-revoke-effect-note')).toHaveTextContent(/ends immediately/i);
+    expect(screen.queryByTestId('datalake-revoke-org-warning')).not.toBeInTheDocument();
   });
 
   it('grants a reader by email, closing the form on success', async () => {

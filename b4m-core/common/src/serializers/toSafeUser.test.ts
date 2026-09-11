@@ -213,13 +213,33 @@ describe('redactUserSecretsForSelf', () => {
   });
 
   it('re-includes fields listed in the keep option (for tightly-scoped callers)', () => {
-    const kept = redactUserSecretsForSelf(fullUser, { keep: ['securityQuestions', 'userNotes'] })!;
+    const kept = redactUserSecretsForSelf(fullUser, { keep: ['securityQuestions'] })!;
     expect(kept.securityQuestions).toBeDefined();
-    expect(kept.userNotes).toBeDefined();
     // credentials are still stripped even with a keep list
     expect('password' in kept).toBe(false);
     expect('resetPasswordToken' in kept).toBe(false);
     expect('stripeCustomerId' in kept).toBe(false);
+  });
+
+  it('does not let keep re-admit an admin-only field', () => {
+    // The subject of a profile must not get the admin's notes about them back. `keep` is
+    // chosen from the subject's point of view, so admin-only fields live behind their own
+    // option; the cast is what a caller would have to write to get past the type.
+    const kept = redactUserSecretsForSelf(fullUser, {
+      keep: ['userNotes'] as unknown as ['securityQuestions'],
+    })!;
+    expect('userNotes' in kept).toBe(false);
+  });
+
+  it('re-includes admin-only fields only via keepAdminOnly', () => {
+    const adminView = redactUserSecretsForSelf(fullUser, {
+      keep: ['securityQuestions'],
+      keepAdminOnly: ['userNotes'],
+    })!;
+    expect(adminView.userNotes).toBeDefined();
+    expect(adminView.securityQuestions).toBeDefined();
+    // still not a back door for credentials
+    expect('password' in adminView).toBe(false);
   });
 
   it('returns null for null/undefined input', () => {

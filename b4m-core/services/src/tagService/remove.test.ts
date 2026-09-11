@@ -253,6 +253,52 @@ describe('tagService - remove', () => {
   });
 
   /**
+   * `assertWriteScope` is API-KEY SCOPE, a separate axis from the manage-rights reasoning above:
+   * this service only ever touches files `userId` owns, so no manage-rights check is needed, but a
+   * `files:write`-only key should not be able to walk a file out of a lake via this path any more
+   * than `files/tags/toggle.ts` lets it via a meta-tag. Fired only when a prefix-arm match is
+   * detected, and BEFORE the strip - not transactional, so a denial must land before any write.
+   */
+  describe('API-key write-scope gate on a prefix-arm delete', () => {
+    it('calls assertWriteScope before stripping files when the deleted tag matches a lake prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn();
+
+      await remove(userId, { id: existingTagId }, { ...adapters, assertWriteScope });
+
+      expect(assertWriteScope).toHaveBeenCalledTimes(1);
+      const gateOrder = assertWriteScope.mock.invocationCallOrder[0];
+      const stripOrder = (mockFabFileRepo.removeTagByUserId as Mock).mock.invocationCallOrder[0];
+      expect(gateOrder).toBeLessThan(stripOrder);
+    });
+
+    it('does not call assertWriteScope when the deleted tag matches no lake prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('unrelated:tag'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn();
+
+      await remove(userId, { id: existingTagId }, { ...adapters, assertWriteScope });
+
+      expect(assertWriteScope).not.toHaveBeenCalled();
+    });
+
+    it('propagates a denial from assertWriteScope before any file is touched', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn(() => {
+        throw new Error('datalake:write is required');
+      });
+
+      await expect(remove(userId, { id: existingTagId }, { ...adapters, assertWriteScope })).rejects.toThrow(
+        'datalake:write is required'
+      );
+      expect(mockFabFileRepo.removeTagByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
    * The audit principal on the auto-activate row a prefix-arm delete can emit. Sibling of #1964's
    * tag-toggle door: this path built its actor with no `auditPrincipal`, so a key-driven delete
    * that published a draft lake recorded the human instead of the key. Removing `auditPrincipal`

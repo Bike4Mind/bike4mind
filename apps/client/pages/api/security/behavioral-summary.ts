@@ -26,7 +26,12 @@ export type SecurityBehavioralSummary = z.infer<typeof SecurityBehavioralSummary
 
 const logger = new Logger({ metadata: { service: 'SecurityBehavioralSummary' } });
 
-async function generateSecurityBehavioralSummary(user: { id: string; email: string; username: string }) {
+async function generateSecurityBehavioralSummary(user: {
+  id: string;
+  email: string;
+  username: string;
+  isAdmin: boolean;
+}) {
   // 1. Gather security context for the last 24 hours
   const hours = 24;
   const since = new Date(Date.now() - hours * 60 * 60 * 1000);
@@ -37,8 +42,11 @@ async function generateSecurityBehavioralSummary(user: { id: string; email: stri
   // Suspicious patterns where this user was targeted
   const suspiciousPatterns = await authFailLogRepository.getSuspiciousPatternsTargetingUser(user.username, since);
 
-  // Blocked IPs (system-wide, but still signal overall risk)
-  const blockedIPs = await blockedIPRepository.list(10);
+  // The IP blocklist is an admin-only security control (see pages/api/security/blocked-ips.ts,
+  // which gates every method on ensureAdmin). It is system-wide, not this user's data, and the
+  // LLM's summary/recommendations are free text handed back to the caller -- so for a non-admin
+  // it is neither fetched nor placed in the prompt context.
+  const blockedIPs = user.isAdmin ? await blockedIPRepository.list(10) : [];
 
   // API key usage / alerts
   const apiKeys = await userApiKeyRepository.findByUserId(user.id);
@@ -82,14 +90,16 @@ async function generateSecurityBehavioralSummary(user: { id: string; email: stri
         riskLevel: pattern.riskLevel,
       })),
     },
-    blockedIPs: {
-      count: blockedIPs.length,
-      items: blockedIPs.map(item => ({
-        ip: item.ip,
-        blockedAt: item.blockedAt,
-        reason: item.reason,
-      })),
-    },
+    ...(user.isAdmin && {
+      blockedIPs: {
+        count: blockedIPs.length,
+        items: blockedIPs.map(item => ({
+          ip: item.ip,
+          blockedAt: item.blockedAt,
+          reason: item.reason,
+        })),
+      },
+    }),
     apiKeys: apiKeySummary,
     // Placeholder for phishing test integration; not yet wired up
     phishingTest: {
@@ -240,8 +250,11 @@ const handler = baseApi()
           id: user.id as string,
           email: user.email as string,
           username: user.username as string,
+          isAdmin: user.isAdmin === true,
         };
 
+        // Cache key is per-user, so an admin's blocklist-bearing summary is never replayed
+        // to a non-admin.
         const cacheKey = CacheKeys.securityBehavioralSummary(safeUser.id);
 
         const summary = await cacheService.getCachedData<SecurityBehavioralSummary>(

@@ -30,6 +30,7 @@ import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -124,6 +125,7 @@ const handler = baseApi()
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
+    await assertDataLakeTagWriteScope(req, candidateTagNames);
     // No `members` here: this is a whole-array write, so the payload cannot distinguish a join
     // from a resend, and `reconcileLakeTags` (inside `updateFabFile` below) runs the admission
     // contract over every lake this write actually JOINS - meta-tag and prefix-arm alike - with the
@@ -179,6 +181,10 @@ const handler = baseApi()
             // Same reason the DELETE handler below attaches one: a tag write here can flip a draft
             // lake to active, and this route accepts a `b4m_live_` key.
             auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+            // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
+            // resolved file owner) - called only when reconcileLakeTags actually finds a prefix-arm
+            // join. Mirrors the toggle route's identical gate.
+            assertWriteScope: () => assertDataLakeWriteScope(req),
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {

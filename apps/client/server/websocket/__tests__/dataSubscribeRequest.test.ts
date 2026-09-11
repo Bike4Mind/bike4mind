@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   Inbox: {},
   Invite: {},
   mongoose: {},
-  Organization: {},
+  Organization: { collection: { collectionName: 'organizations' } },
   Project: {},
   QuerySubscription: { findOneAndUpdate: (...args: unknown[]) => mockQuerySubscriptionFindOneAndUpdate(...args) },
   Quest: { collection: { collectionName: 'quests' } },
@@ -59,6 +59,7 @@ vi.mock('@server/models/Subscription', () => ({
 
 vi.mock('@server/websocket/subscriptionScopes', () => ({
   questMasterPlanSubscriptionScope: vi.fn(),
+  inviteSubscriptionScope: vi.fn(),
 }));
 
 vi.mock('@server/utils/errors', () => ({

@@ -12,6 +12,12 @@ import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
  *
  * Authentication: The CLI's connection was verified during $connect, so we
  * validate the sender by checking the Connection model for the connectionId.
+ *
+ * `originConnectionId` is client-supplied, so the destination is resolved back to a Connection
+ * row and must belong to the SAME user as the sender. keepCommandRequest only ever hands the
+ * value to that user's own sockets (it fans out via sendToClient), so the legitimate flow always
+ * satisfies this; anything else is a caller naming a stranger's socket to push a forged
+ * keep_command_result into their HUD.
  */
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, _context, logger) => {
   const { connectionId, domainName, stage } = event.requestContext;
@@ -31,6 +37,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const connection = await Connection.findOne({ connectionId });
   if (!connection) {
     logger.error(`[KEEP_CMD_RESP] Unknown connectionId: ${connectionId}`);
+    return { statusCode: 200 };
+  }
+
+  const destination = await Connection.findOne({ connectionId: originConnectionId });
+  if (!destination || destination.userId !== connection.userId) {
+    logger.warn(
+      `[KEEP_CMD_RESP] Dropping relay for request ${requestId}: originConnectionId ${originConnectionId} is unknown or belongs to another user`
+    );
     return { statusCode: 200 };
   }
 
