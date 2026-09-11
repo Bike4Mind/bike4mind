@@ -12,7 +12,6 @@ import {
   usdToCreditsStochastic,
   type CompletionSource,
 } from '@bike4mind/common';
-import { getSettingsMap } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { isOperationalBillingEnabled } from './isOperationalBillingEnabled';
@@ -111,8 +110,7 @@ export async function recordOperationalUsage(
 
   let creditsCharged = 0;
   try {
-    const settings = await getSettingsMap(db);
-    const shouldBill = !params.bypassCreditBilling && isOperationalBillingEnabled(settings);
+    const shouldBill = !params.bypassCreditBilling && (await isOperationalBillingEnabled(db, logger));
 
     if (shouldBill && db.creditTransactions && db.users && db.organizations) {
       const credits = usdToCreditsStochastic(params.costUsd);

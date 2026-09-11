@@ -27,6 +27,13 @@ vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
 import handler from '../recalculate-message-counts';
 
 const TOTAL_NOTEBOOKS = 50;
+const UNGROOMED_PER_OPERATION = 6;
+
+/** Field the handler counts as "still to do" for each spending operation. */
+const ungroomedField = (call: unknown[]) => {
+  const filter = call[0] as Record<string, unknown>;
+  return Object.keys(filter).find(key => key.endsWith('At') && filter[key] === null);
+};
 
 const run = async (body: Record<string, unknown>) => {
   const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
@@ -40,35 +47,73 @@ const run = async (body: Record<string, unknown>) => {
 describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCount.mockResolvedValue(TOTAL_NOTEBOOKS);
+    // The total is the first call (progress reporting); each spending operation then counts
+    // only the notebooks it would actually groom.
+    mockCount.mockImplementation(async (filter: Record<string, unknown>) =>
+      'summaryAt' in filter || 'taggedAt' in filter ? UNGROOMED_PER_OPERATION : TOTAL_NOTEBOOKS
+    );
     mockAssertCredits.mockResolvedValue(undefined);
     mockPublishStart.mockResolvedValue(undefined);
   });
 
   // The batch is what makes the spider the largest operational spend on the platform: a check
   // sized to one notebook would wave through a 50-notebook fan-out against an empty pool.
-  it('sizes the check by notebooks x spending operations', async () => {
+  it('sums one ungroomed count per spending operation', async () => {
     await run({ operations: ['summarize', 'tags'] });
 
     expect(mockAssertCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'admin-1', operationCount: TOTAL_NOTEBOOKS * 2 })
+      expect.objectContaining({ userId: 'admin-1', operationCount: UNGROOMED_PER_OPERATION * 2 })
+    );
+    expect(mockCount.mock.calls.map(ungroomedField).filter(Boolean).sort()).toEqual(['summaryAt', 'taggedAt']);
+  });
+
+  // The spider skips an already-groomed notebook (`!session.summaryAt` / `!session.taggedAt`), so
+  // pricing a re-run at totalNotebooks would refuse a large account credits for work it will not
+  // do - the gate would make the spider unusable above a few hundred notebooks.
+  it('sizes the check to the ungroomed notebooks, not to every notebook the admin owns', async () => {
+    await run({ operations: ['summarize'] });
+
+    expect(mockAssertCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ operationCount: UNGROOMED_PER_OPERATION })
     );
   });
 
-  // messageCount is a pure recount and curation/embeddings settle through their own handlers, so
-  // counting them would refuse runs that cost nothing on this path.
+  // Nothing left to groom must cost nothing: the pre-flight short-circuits a zero count.
+  it('asks for nothing when every notebook is already groomed', async () => {
+    mockCount.mockImplementation(async (filter: Record<string, unknown>) =>
+      'summaryAt' in filter || 'taggedAt' in filter ? 0 : TOTAL_NOTEBOOKS
+    );
+
+    await run({ operations: ['summarize', 'tags'] });
+
+    expect(mockAssertCredits).toHaveBeenCalledWith(expect.objectContaining({ operationCount: 0 }));
+  });
+
+  // messageCount is a pure recount; curation publishes to a handler with no billing path and the
+  // spider generates embeddings inline without recording usage. Counting them would refuse runs
+  // that cost nothing on this path.
   it('excludes the operations that never settle through recordOperationalUsage', async () => {
     await run({ operations: ['messageCount', 'curation', 'embeddings', 'summarize'] });
 
     expect(mockAssertCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ operationCount: TOTAL_NOTEBOOKS * 1 })
+      expect.objectContaining({ operationCount: UNGROOMED_PER_OPERATION })
     );
   });
 
-  it('skips the check for a dry run, which performs no model calls', async () => {
+  // The operations list comes off the request body, so a repeat must not double the price.
+  it('does not double-count a repeated operation', async () => {
+    await run({ operations: ['summarize', 'summarize'] });
+
+    expect(mockAssertCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ operationCount: UNGROOMED_PER_OPERATION })
+    );
+  });
+
+  it('skips the check, and its counts, for a dry run', async () => {
     await run({ dryRun: true, operations: ['summarize', 'tags'] });
 
     expect(mockAssertCredits).not.toHaveBeenCalled();
+    expect(mockCount.mock.calls.map(ungroomedField).filter(Boolean)).toEqual([]);
     expect(mockPublishStart).toHaveBeenCalled();
   });
 
