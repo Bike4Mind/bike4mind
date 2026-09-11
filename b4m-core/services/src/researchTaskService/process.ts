@@ -59,9 +59,10 @@ interface ResearchTaskProcessAdapters {
     apiKeys: Pick<IApiKeyRepository, 'findByUserIdAndType' | 'findByUserIdAndTypes'>;
     // Widened to match ToolContext.db.dataLakes below (this whole `db` object is passed through
     // to it), not just what the new write-gate call needs.
+    // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<
       IDataLakeRepository,
-      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById'
+      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById' | 'find'
     >;
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads

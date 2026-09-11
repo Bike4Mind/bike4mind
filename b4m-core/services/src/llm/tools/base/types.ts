@@ -104,9 +104,11 @@ export interface ToolContext {
     >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
+    // 'find' is forwarded straight to createFabFile (persistGeneratedFileAsFabFile), for its
+    // fallback tagger's prefix-overlap check.
     dataLakes?: Pick<
       IDataLakeRepository,
-      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
+      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
     >;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
