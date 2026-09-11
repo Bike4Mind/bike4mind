@@ -1,6 +1,7 @@
-import { JupyterCellOutputAction } from '@bike4mind/common';
+import { ApiKeyScope, JupyterCellOutputAction } from '@bike4mind/common';
 import { Quest } from '@bike4mind/database/content';
 import { Connection } from '@bike4mind/database/social';
+import { connectionHoldsScope } from '@server/websocket/connectionScope';
 import { withWebSocketContext, sendToClient } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
@@ -34,13 +35,27 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     return { statusCode: 200 };
   }
 
+  // This frame mutates notebook execution state, which notebooks:write is the scope for. A socket
+  // opened with a narrower key has no authority here - notably cc-bridge:connect, which is enough
+  // to pass $connect on its own. A key holding notebooks:write alongside one of the three connect
+  // scopes still passes, which is the intended shape: the gate narrows the credential, it does not
+  // ban API keys from the action.
+  if (!connectionHoldsScope(connection, [ApiKeyScope.WRITE_NOTEBOOKS])) {
+    logger.warn(`[JUPYTER_OUTPUT] Connection ${connectionId} lacks notebooks:write - dropping cell output`);
+    return { statusCode: 200 };
+  }
+
   const userId = connection.userId;
   logger.info(`[JUPYTER_OUTPUT] Cell ${cellIndex} output (type: ${outputType}, complete: ${isComplete})`);
 
-  // Find the most recent quest in this session with jupyterNotebook state
+  // Owner-scoped: sessionId is caller-supplied, so without this predicate any authenticated
+  // socket could drive another user's notebook execution state. `promptMeta.session.userId` is
+  // the quest's owner field - the Quest schema has no top-level `userId` (see the note in
+  // pages/api/jupyter/execute.ts).
   const quest = await Quest.findOne(
     {
       sessionId,
+      'promptMeta.session.userId': userId,
       'jupyterNotebook.status': { $in: ['generating', 'executing'] },
     },
     {},
@@ -75,7 +90,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       }
     }
 
-    await Quest.findByIdAndUpdate(quest._id, { $set: updateData });
+    // Re-assert ownership on the write, not just the read: the quest was selected under the
+    // caller's own predicate, so this only closes the gap between the two queries.
+    await Quest.findOneAndUpdate({ _id: quest._id, 'promptMeta.session.userId': userId }, { $set: updateData });
   }
 
   // Relay the cell output to web clients only for real-time display

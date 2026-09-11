@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
@@ -67,7 +68,7 @@ const UploadCompleteInput = z.object({
  *   Deleting them BEFORE finalize (which recomputes lake stats) keeps the file count honest;
  *   doing it here rather than in a separate client call removes an ordering/lost-write race.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
     const userId = req.user.id;

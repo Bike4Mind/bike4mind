@@ -92,7 +92,11 @@ export interface RotateUserApiKeyResponse {
 /**
  * Includes revoked (`disabled`) keys - the management tables render them as a
  * `Revoked` row with the actions disabled, so revocation stays visible instead
- * of the key silently dropping out of the list.
+ * of the key silently dropping out of the list. Hiding them is a per-table
+ * client-side filter (see UserApiKeysTab's Show revoked toggle), deliberately
+ * NOT a narrower fetch: every mutation here invalidates the single
+ * `['user-api-keys']` entry, so two tables asking for different slices under
+ * one key would clobber each other's cache.
  */
 export function useGetUserApiKeys() {
   return useQuery<IUserApiKeyDocument[]>({
@@ -216,6 +220,28 @@ export function useAdminResetApiKeyRateLimit({ onSuccess }: { onSuccess?: () => 
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys'] });
+      if (onSuccess) onSuccess();
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+/**
+ * Permanently remove an already-revoked key's row. The route refuses a key that
+ * is still active (409), so the table's delete action stays disabled until the
+ * key is revoked - same rule, enforced on both sides.
+ */
+export function useDeleteUserApiKey({ onSuccess }: { onSuccess?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: async keyId => {
+      await api.delete(`/api/user-api-keys/${keyId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
       if (onSuccess) onSuccess();
     },
     onError: (error: Error) => {

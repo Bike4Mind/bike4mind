@@ -131,10 +131,10 @@ function GrantRow({
             variant="plain"
             color="danger"
             onClick={onRevoke}
-            // Guards the double-click - a second DELETE names a row that is already gone, so the
-            // reply reports "no longer had access" for an action that in fact worked - but only on
-            // the row being revoked: one shared flag greyed out every row, and Joy's `loading`
-            // forces `disabled`, so a slow request read as a frozen panel.
+            // The confirm dialog is what closes the double-DELETE path (a second click lands on its
+            // disabled Revoke, not on a second request); this keeps the in-flight state visible on
+            // the row it belongs to. Scoped to that one row because a shared flag greyed out every
+            // row, and Joy's `loading` forces `disabled`, so a slow request read as a frozen panel.
             loading={revoking}
             disabled={revoking}
             data-testid={`datalake-access-revoke-${grant.principalType}-${grant.principalId}`}
@@ -306,6 +306,99 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
             Transfer
           </Button>
           <Button variant="plain" color="neutral" onClick={onClose} data-testid="datalake-transfer-cancel-btn">
+            Cancel
+          </Button>
+        </DialogActions>
+      </ModalDialog>
+    </Modal>
+  );
+}
+
+/**
+ * Confirm removing one grant.
+ *
+ * Confirm-gated for the same reason as transfer: the write is immediate, has no undo, and is silent
+ * from the actor's side - an accidental revoke surfaces only when the affected person reports losing
+ * access. It also closes the double-DELETE the bare button allowed, since the second click lands on
+ * a disabled confirm rather than on a second request that reports "no longer had access" for an
+ * action which in fact worked.
+ *
+ * The copy deliberately says what revoking does NOT do: a grant is one of several ways into a lake,
+ * so removing it is not the same as locking the principal out (see `resolveLakeReadAccess`).
+ */
+function RevokeAccessDialog({
+  lakeId,
+  lakeName,
+  grant,
+  revoke,
+  onClose,
+}: {
+  lakeId: string;
+  lakeName: string;
+  grant: LakeAccessGrantView;
+  /** Owned by the table so the row being revoked can show the same in-flight state. */
+  revoke: ReturnType<typeof useRevokeLakeAccess>;
+  onClose: () => void;
+}) {
+  const principal = grant.principalName ?? grant.principalId;
+
+  const handleConfirm = async () => {
+    try {
+      await revoke.mutateAsync({ id: lakeId, principalType: grant.principalType, principalId: grant.principalId });
+      onClose();
+    } catch {
+      // The mutation's onError already surfaced the server's refusal; keep the dialog open so the
+      // manager can read it and retry rather than losing their place in the table.
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose}>
+      <ModalDialog data-testid="datalake-revoke-modal" sx={{ width: { xs: '95%', sm: '26rem' } }}>
+        <ModalClose data-testid="datalake-revoke-close" />
+        <DialogTitle>Revoke access</DialogTitle>
+        <DialogContent>
+          <Stack gap={2} sx={{ pt: 1 }}>
+            <Typography level="body-sm" data-testid="datalake-revoke-summary">
+              Remove the {grant.role} grant on {lakeName} from {principal}?
+            </Typography>
+            {/* An org grant is the one row whose blast radius is not visible from the name on it. */}
+            {grant.principalType === 'organization' && (
+              <Alert color="warning" variant="soft" data-testid="datalake-revoke-org-warning">
+                This grant covers everyone in {principal}, so every member loses the access it gives them.
+              </Alert>
+            )}
+            {/* Mirror of the grant form's curator disclosure - what the role carried is what revoking
+                takes back. Keep in step with isTrustedForInjection (resolveLakeReadAccess.ts). */}
+            {grant.role === 'curator' && (
+              <Alert color="warning" variant="soft" data-testid="datalake-revoke-curator-warning">
+                A curator manages this lake. Revoking also removes their ability to change its files and settings, and
+                the system-prompt trust that comes with the role.
+              </Alert>
+            )}
+            {grant.status === 'expired' ? (
+              <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-revoke-expired-note">
+                This grant has already lapsed, so it admits no one today - revoking removes the record of it.
+              </Typography>
+            ) : (
+              <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-revoke-effect-note">
+                Access through this grant ends immediately, and granting it again starts with no expiry. Other ways in
+                are untouched: anyone who also reaches this lake through an access channel, or through their own grant,
+                keeps that access.
+              </Typography>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            color="danger"
+            loading={revoke.isPending}
+            onClick={handleConfirm}
+            data-testid="datalake-revoke-confirm-btn"
+          >
+            Revoke access
+          </Button>
+          <Button variant="plain" color="neutral" onClick={onClose} data-testid="datalake-revoke-cancel-btn">
             Cancel
           </Button>
         </DialogActions>
@@ -555,6 +648,9 @@ function AccessViewBody({
 }) {
   const [transferring, setTransferring] = useState(false);
   const [granting, setGranting] = useState(false);
+  // The row whose Revoke was clicked, awaiting confirmation. Holds the row itself, not just its
+  // principal pair, so the dialog can describe what is being removed without a second lookup.
+  const [revokeTarget, setRevokeTarget] = useState<LakeAccessGrantView | null>(null);
   const revoke = useRevokeLakeAccess();
   return (
     <Stack gap={3} data-testid="datalake-access-body">
@@ -589,6 +685,15 @@ function AccessViewBody({
         </Box>
         {granting && <GrantAccessForm view={view} onClose={() => setGranting(false)} />}
         {transferring && <TransferOwnershipDialog lakeId={view.lakeId} onClose={() => setTransferring(false)} />}
+        {revokeTarget && (
+          <RevokeAccessDialog
+            lakeId={view.lakeId}
+            lakeName={view.lakeName}
+            grant={revokeTarget}
+            revoke={revoke}
+            onClose={() => setRevokeTarget(null)}
+          />
+        )}
         {view.grants.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="datalake-access-grants-empty">
             No explicit grants. Access follows the channels below.
@@ -612,16 +717,7 @@ function AccessViewBody({
                   <GrantRow
                     key={`${g.principalType}:${g.principalId}`}
                     grant={g}
-                    onRevoke={
-                      g.role === 'owner'
-                        ? undefined
-                        : () =>
-                            revoke.mutate({
-                              id: view.lakeId,
-                              principalType: g.principalType,
-                              principalId: g.principalId,
-                            })
-                    }
+                    onRevoke={g.role === 'owner' ? undefined : () => setRevokeTarget(g)}
                     // `variables` is the in-flight request's own input, so the pending state lands
                     // on the row that was clicked rather than on all of them.
                     revoking={

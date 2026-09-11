@@ -16,7 +16,7 @@ import { escape } from 'html-escaper';
 
 const CreateReferralRequestSchema = z.object({
   userName: z.string(),
-  friendEmail: z.array(z.string()),
+  friendEmail: z.array(z.string().email()),
   emailTitle: z.string(),
   emailBody: z.string(),
   tags: z.array(z.string()).optional(),
@@ -26,7 +26,10 @@ const handler = baseApi().post(
   async (req: Request<unknown, unknown, z.infer<typeof CreateReferralRequestSchema>>, res) => {
     const newReferralData = CreateReferralRequestSchema.parse(req.body);
     const user = req.user;
-    const { userName, friendEmail, emailTitle, emailBody } = newReferralData;
+    const { userName, emailTitle, emailBody } = newReferralData;
+    // Dedup before the quota guard below, not after - otherwise a duplicated address counts
+    // once against numReferralsAvailable but is still charged once per copy further down.
+    const friendEmail = Array.from(new Set(newReferralData.friendEmail));
     const userId = user.id;
 
     // Minting credit-bearing invite codes requires proof the sender's own email
@@ -38,10 +41,15 @@ const handler = baseApi().post(
       throw new BadRequestError('Please verify your email address before sending referral invites');
     }
 
-    // Pre-resolve which targets already have an account so the availability guard counts
-    // only *sendable* invites. A duplicate-account email is skipped (not sent) and must not
-    // block the request or cost a referral - matching the `sent.length` decrement below.
-    // One `$in` query also replaces the per-email `findOne` the loop used to do.
+    // Pre-resolve which targets already have an account, so the loop below can skip sending
+    // to them. One `$in` query replaces the per-email `findOne` the loop used to do.
+    //
+    // Every submitted address counts against the quota, whether or not it turns out to be
+    // sendable. This route used to charge only for genuine sends, which made it a bulk
+    // account-existence oracle: probe a list for free, then read the answer off the response
+    // (or off the referrals-remaining counter). Charging uniformly closes both channels -
+    // the cost of a probe no longer depends on the answer. The trade is that referring
+    // someone who already has an account now costs the sender a referral.
     const existingAccountEmails = new Set(
       (
         await User.find({ email: { $in: friendEmail } })
@@ -49,8 +57,7 @@ const handler = baseApi().post(
           .lean<Array<{ email: string }>>()
       ).map(u => u.email)
     );
-    const sendableCount = friendEmail.filter(email => !existingAccountEmails.has(email)).length;
-    if (user.numReferralsAvailable < sendableCount) {
+    if (user.numReferralsAvailable < friendEmail.length) {
       throw new BadRequestError('Not enough referrals available');
     }
 
@@ -67,10 +74,9 @@ const handler = baseApi().post(
     const emailPromises: Promise<unknown>[] = [];
     const slackErrorMessages: string[] = [];
 
-    // Track per-email outcomes so the sender gets actionable feedback instead of a
-    // silent "success" when some invites are skipped (e.g. duplicate accounts).
+    // `sent` tracks genuine sends for the analytics counter; the caller instead sees
+    // `accepted` below, which does not distinguish a send from a skip.
     const sent: string[] = [];
-    const skipped: string[] = [];
     const failed: string[] = [];
 
     if (!user.regInvites) {
@@ -81,9 +87,9 @@ const handler = baseApi().post(
       try {
         // Already-account emails were resolved up front (drives the sendable guard above).
         if (existingAccountEmails.has(target)) {
-          const skipMessage = `Email ${target} is already associated with an existing account. Skipping invite.`;
-          slackErrorMessages.push(skipMessage);
-          skipped.push(target);
+          // Reported to Slack only -- admin-side. The caller's response must not say which
+          // addresses landed here (see `accepted` below).
+          slackErrorMessages.push(`Email ${target} is already associated with an existing account. Skipping invite.`);
           continue;
         }
 
@@ -179,9 +185,13 @@ const handler = baseApi().post(
       await postMessageToSlack(slackMessage);
     }
 
-    // Only consume referrals for invites that were actually sent - skipped
-    // (duplicate account) and failed invites should not cost the sender a referral.
-    user.numReferralsAvailable = Math.max(0, user.numReferralsAvailable - sent.length);
+    // Everything that was not a hard processing failure is reported to the caller as sent,
+    // in submission order so position cannot betray which addresses were skipped. The
+    // decrement matches, keeping the referrals-remaining counter free of the same signal.
+    const failedSet = new Set(failed);
+    const accepted = friendEmail.filter(email => !failedSet.has(email));
+
+    user.numReferralsAvailable = Math.max(0, user.numReferralsAvailable - accepted.length);
     await userRepository.update(user);
     await logEvent(
       {
@@ -195,8 +205,7 @@ const handler = baseApi().post(
 
     return res.status(201).json({
       message: 'Referral invites processed successfully',
-      sent,
-      skipped,
+      sent: accepted,
       failed,
     });
   }

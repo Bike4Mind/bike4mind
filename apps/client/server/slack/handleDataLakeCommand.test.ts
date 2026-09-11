@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ForbiddenError } from '@bike4mind/common';
 
 // The @datalake grammar parser is unit-tested in the slack package; here we mock it and exercise
 // the handler's dispatch, listing and ingest-reply behavior in isolation.
@@ -861,5 +862,62 @@ describe('runDataLakeSlackCommand (gate + dispatch)', () => {
 
     expect(logger.error).toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('went wrong') }));
+  });
+
+  it('surfaces an HTTPError message rethrown by the write gate (#2639)', async () => {
+    // dataLakeIngestAuthz.ts rethrows anything that is not a refusal (NotFoundError/BadRequestError),
+    // so an HTTPError subclass reaching here already carries a message written to be shown to the
+    // caller, unlike the generic "db down" case above.
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new ForbiddenError('This lake is locked pending a compliance review'));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'This lake is locked pending a compliance review' })
+    );
+  });
+
+  it('surfaces the message from an HTTPError-shaped error that fails instanceof (cross-realm)', async () => {
+    // Simulates @bike4mind/common resolving as two module realms across the
+    // @bike4mind/services -> this file boundary: a class with the exact shape a real
+    // ForbiddenError constructor produces (statusCode, a name ending in "Error", and an
+    // additionalInfo key) but NOT an instance of the imported HTTPError class.
+    class OtherRealmForbiddenError extends Error {
+      statusCode = 403;
+      additionalInfo?: Record<string, unknown>;
+      constructor(message: string) {
+        super(message);
+        this.name = 'ForbiddenError';
+      }
+    }
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new OtherRealmForbiddenError('Cross-realm refusal message'));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: 'Cross-realm refusal message' }));
+  });
+
+  it('falls back to the generic reply for an HTTPError with an empty message', async () => {
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new ForbiddenError(''));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('went wrong') }));
+  });
+
+  it('caps an oversized HTTPError message instead of relaying it verbatim', async () => {
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new ForbiddenError('x'.repeat(400)));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: `${'x'.repeat(300)}...` }));
   });
 });

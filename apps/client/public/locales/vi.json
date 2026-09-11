@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Vui lòng nhập địa chỉ email hợp lệ",
     "send_referral": "Gửi giới thiệu",
     "send_referral_success": "Gửi giới thiệu thành công!",
-    "send_referral_skipped": "{{count}} lời mời bị bỏ qua — những địa chỉ email đó đã có tài khoản.",
     "send_referral_failed": "{{count}} lời mời không thể gửi. Vui lòng thử lại.",
     "send_referral_error": "Lỗi khi gửi giới thiệu. Vui lòng thử lại.",
     "slack_notification_default": "Giới thiệu gửi bởi người dùng USER_NAME:USER_ID đến FRIEND_EMAIL"

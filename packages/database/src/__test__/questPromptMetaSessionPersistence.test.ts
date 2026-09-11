@@ -98,7 +98,7 @@ describe('Quest promptMeta.session write-path asymmetry', () => {
 /**
  * Same asymmetry, one field over. `ChatHistoryItemSchema.prompt` was `required: true`, but the
  * writes that can create a quest without one bypass validators entirely:
- * `upsertBySessionIdAndConversationItemId` (a bare upsert, used by the voice transcript handler,
+ * `upsertVoiceTranscriptTurn` (a bare upsert, used by the voice transcript handler,
  * whose assistant branch only ever sets replies/status/type/timestamp) and `update()`. Prompt-less
  * quests are therefore normal on disk - 17 of 55 in one local database - and a copy of one died on
  * `prompt: Path 'prompt' is required.` before the promptMeta rebind could matter.
@@ -110,7 +110,7 @@ describe('Quest prompt write-path asymmetry', () => {
   setupMongoTest();
 
   it('lets the unvalidated upsert create a quest with no prompt', async () => {
-    const upserted = await questRepository.upsertBySessionIdAndConversationItemId('session1', 'item-1', {
+    const upserted = await questRepository.upsertVoiceTranscriptTurn('session1', 'item-1', 'user1', {
       replies: ['assistant said this'],
       status: 'done',
       type: 'voice_transcript',

@@ -57,10 +57,18 @@ const LakeMemorySchema = subSchema({
 // is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
 // `default: undefined` on the path below is inert for a single nested subdocument (nothing
 // vivifies it) and kept only for symmetry with the siblings, where it does work.
+//
+// pre/postRelativeFloorCandidates: optional like topScore, and for the same reason - only forced
+// retrieval's ranked pool has a relative floor to trim, so no other surface ever writes them. They
+// are written and absent together, so a rollup over one is a rollup over the same turns as the
+// other. See the pair's own comment in promptMeta.ts for why they are only ever compared to each
+// other and never to `chunks`.
 const InjectedVolumeSchema = subSchema({
   chunks: { type: Number, required: true },
   chars: { type: Number, required: true },
   topScore: { type: Number, required: false },
+  preRelativeFloorCandidates: { type: Number, required: false },
+  postRelativeFloorCandidates: { type: Number, required: false },
 });
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
@@ -418,7 +426,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     timestamp: { type: Date, required: true },
     type: { type: String, required: true },
     // NOT required, despite the TS type being `prompt: string`. An assistant-side voice turn is
-    // created by upsertBySessionIdAndConversationItemId (a bare upsert - no validators) which sets
+    // created by upsertVoiceTranscriptTurn (a bare upsert - no validators) which sets
     // only replies/status/type/timestamp, so prompt-less quests are normal on disk. `required: true`
     // could therefore never protect the write that omits it; it only fired on create(), the copy
     // path, turning someone else's prompt-less turn into a failed fork/snip/clone of a whole
@@ -791,12 +799,32 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return { ...result.toObject(), id: result._id.toString() } as Pick<IChatHistoryItemDocument, 'id' | 'status'>;
   }
 
-  async upsertBySessionIdAndConversationItemId(
+  /**
+   * Upsert the quest row for one voice-transcript turn.
+   *
+   * Keyed on (sessionId, conversationItemId, OWNER) - not on the first two alone. The
+   * conversationItemId is minted by the voice client, so on a session shared with write access a
+   * second user could otherwise reuse another user's item id and overwrite their turn in place.
+   * With the owner in the key a reused id creates that caller's own row instead of taking one
+   * over.
+   *
+   * `promptMeta.session.id` is written on insert because Mongo seeds an upserted document only
+   * from the equality filter, which supplies the owner but not the session id its sub-schema
+   * also requires. Rows written before this owner binding existed carry no promptMeta at all and
+   * so will no longer be matched - a voice session live across the deploy inserts a fresh row
+   * rather than updating its earlier one.
+   */
+  async upsertVoiceTranscriptTurn(
     sessionId: string,
     conversationItemId: string,
+    ownerUserId: string,
     data: Partial<IChatHistoryItemDocument>
   ) {
-    return this.model.findOneAndUpdate({ sessionId, conversationItemId }, { $set: data }, { upsert: true, new: true });
+    return this.model.findOneAndUpdate(
+      { sessionId, conversationItemId, 'promptMeta.session.userId': ownerUserId },
+      { $set: data, $setOnInsert: { 'promptMeta.session.id': sessionId } },
+      { upsert: true, new: true }
+    );
   }
 
   // Flag a quest as stopped so an in-flight ChatCompletionProcess cancellation

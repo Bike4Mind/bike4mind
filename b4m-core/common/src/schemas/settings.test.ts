@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   settingsMap,
   publicSafeSettingKeys,
+  userReadableSettingKeys,
   redactSettingSecrets,
   redactSettingSecretsForBroadcast,
   buildPublicSettingsProjection,
@@ -170,6 +171,78 @@ describe('other object settings use makeObjectSetting', () => {
 });
 
 describe('public settings projection (M2.5 security boundary)', () => {
+  describe('userReadableSettingKeys', () => {
+    it('excludes admin-only operational config a non-admin has no claim to', () => {
+      // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
+      // filter served them to every authenticated caller.
+      const keys = new Set(userReadableSettingKeys());
+      for (const adminOnly of [
+        'sreAgentConfig',
+        'secopsTriageConfig',
+        'contextTelemetryAlerts',
+        'prReportIdentityMap',
+        'prReportRepo',
+        'prReportEgressAllowlist',
+      ]) {
+        expect(keys.has(adminOnly)).toBe(false);
+      }
+    });
+
+    it('excludes every isSensitive setting', () => {
+      const keys = new Set(userReadableSettingKeys());
+      const sensitive = (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>).filter(
+        s => s.isSensitive === true
+      );
+      expect(sensitive.length).toBeGreaterThan(0);
+      for (const s of sensitive) expect(keys.has(s.key)).toBe(false);
+    });
+
+    it('covers the whole experimental block except its sensitive members', () => {
+      // useExperimentalFeatureSettings selects these by group membership. Dropping one
+      // would not throw - it would silently serve the compiled default and discard the
+      // admin's override - so the block must be allowed as a block. The one exception is a
+      // member carrying a secret (ollamaBackend is an internal backend URL): isSensitive
+      // subtracts last, and no client hook reads that key by name.
+      const keys = new Set(userReadableSettingKeys());
+      const sensitive = new Set(
+        (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>)
+          .filter(s => s.isSensitive === true)
+          .map(s => s.key)
+      );
+      const expected = experimentalFeatureSettingKeys.filter(k => !sensitive.has(k));
+      expect(expected.length).toBeGreaterThan(0);
+      for (const k of expected) expect(keys.has(k)).toBe(true);
+    });
+
+    it('includes the publicSafe keys, which already ship unauthenticated', () => {
+      const keys = new Set(userReadableSettingKeys());
+      for (const k of publicSafeSettingKeys()) expect(keys.has(k)).toBe(true);
+    });
+
+    it('includes the explicitly tagged non-experimental keys the app needs', () => {
+      const keys = new Set(userReadableSettingKeys());
+      for (const k of [
+        'enforceCredits',
+        'pricePerCredit',
+        'MaxFileSize',
+        'defaultEmbeddingModel',
+        // ReferralModal and useSystemPromptFiles() both read these by name with no
+        // admin guard - carry no secret, but were missed by the initial opt-in pass.
+        'ReferralCreditsAmount',
+        'SystemFiles',
+      ]) {
+        expect(keys.has(k)).toBe(true);
+      }
+    });
+
+    it('is a strict subset of the catalog', () => {
+      const all = new Set((Object.values(settingsMap) as Array<{ key: string }>).map(s => s.key));
+      const keys = userReadableSettingKeys();
+      for (const k of keys) expect(all.has(k)).toBe(true);
+      expect(keys.length).toBeLessThan(all.size);
+    });
+  });
+
   describe('publicSafeSettingKeys', () => {
     it('returns only keys explicitly tagged publicSafe', () => {
       const keys = publicSafeSettingKeys();
@@ -842,6 +915,26 @@ describe('LakeAccessAuditRetentionDays cannot be configured below the floor', ()
     expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(undefined)).toBe(
       LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS
     );
+  });
+});
+
+describe('MaxFileSize cannot coerce a cleared field to a real 0', () => {
+  // A cleared admin field is stored as '', which z.coerce.number() reads as 0 - a value that
+  // PASSES validation, so the schema's own `.prefault(30)` (undefined-only) never fires and
+  // every caller sees a real 0MB limit instead of the intended default. The `min: 1` floor
+  // makes that coerced 0 fail validation instead, so callers (getSettingsValue's safeParse
+  // fallback) land on the default the way an unset row already does.
+  it('rejects both a cleared field and an explicit 0, unlike prefault-only defaulting', () => {
+    expect(() => settingsMap.MaxFileSize.schema.parse('')).toThrow();
+    expect(() => settingsMap.MaxFileSize.schema.parse(0)).toThrow();
+  });
+
+  it('still prefaults an unset row to 30', () => {
+    expect(settingsMap.MaxFileSize.schema.parse(undefined)).toBe(30);
+  });
+
+  it('accepts a genuinely configured value', () => {
+    expect(settingsMap.MaxFileSize.schema.parse('50')).toBe(50);
   });
 });
 
