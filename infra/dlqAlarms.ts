@@ -117,8 +117,11 @@ if (isMonitoredStage) {
   const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
-    // If OPS_ALERT_EMAIL is unset on a later deploy before the link is clicked, retain the
-    // resource in AWS rather than dropping it from state and leaving a dangling subscription.
+    // If OPS_ALERT_EMAIL is unset on a later deploy before the confirmation link is clicked,
+    // retain the resource in AWS rather than leaving a dangling subscription outside state.
+    // Note: rotating OPS_ALERT_EMAIL is a replace (endpoint is force-new), so the old
+    // subscription is retained rather than unsubscribed -- manually unsubscribe the old
+    // endpoint from the SNS console after any address change.
     new aws.sns.TopicSubscription(
       'OobAlarmTopicEmailSub',
       {
@@ -127,6 +130,12 @@ if (isMonitoredStage) {
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
       { retainOnDelete: true }
+    );
+  } else {
+    console.warn(
+      `[WARN] OPS_ALERT_EMAIL is unset on stage '${$app.stage}'. ` +
+        `OobAlarmTopic will be created with no subscriber -- DlqAlarmHandlerDlq alarms ` +
+        `will publish into the void. Set OPS_ALERT_EMAIL in the deploy pipeline variables.`
     );
   }
 
