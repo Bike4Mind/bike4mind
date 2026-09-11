@@ -84,13 +84,6 @@ const handler = baseApi()
         logger: req.logger,
       });
 
-      // A file joining a lake must also land under that lake's content prefix, or it is
-      // invisible to tag-counts and to the Explorer's tag tree.
-      const tags = await dataLakeService.reconcileDataLakeFallbackTags(params.tags ?? [], {
-        db: { dataLakes: dataLakeRepository },
-        logger: req.logger,
-      });
-
       // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
       // Shared with the presign routes (see assertBatchOwnership).
       if (params.batchId) {
@@ -100,45 +93,42 @@ const handler = baseApi()
       }
 
       const result = await withTransaction(async () => {
-        return fabFilesService.createFabFile(
-          user.id,
-          { ...params, ...(tags.length > 0 && { tags }) },
-          {
-            db: {
-              adminSettings: adminSettingsRepository,
-              fabFiles: FabFile,
-              users: User,
-              dataLakes: dataLakeRepository,
-              // The service re-gates the lake tag internally, so its inputs must stay at least as
-              // wide as the route's own prologue above: without the grant repo that re-gate loses
-              // the curator and transferred-owner rungs and refuses a caller this route just
-              // authorized. Same shape as proposalAdmissionDeps.ts / dataLakeIngestDeps.ts.
-              dataLakeAccessGrants: dataLakeAccessGrantRepository,
-              scopedSettings: scopedSettingsRepository,
+        return fabFilesService.createFabFile(user.id, params, {
+          db: {
+            adminSettings: adminSettingsRepository,
+            fabFiles: FabFile,
+            users: User,
+            dataLakes: dataLakeRepository,
+            // The service re-gates the lake tag internally, so its inputs must stay at least as
+            // wide as the route's own prologue above: without the grant repo that re-gate loses
+            // the curator and transferred-owner rungs and refuses a caller this route just
+            // authorized. Same shape as proposalAdmissionDeps.ts / dataLakeIngestDeps.ts.
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            scopedSettings: scopedSettingsRepository,
+          },
+          logger: req.logger,
+          storage: {
+            upload: async (filepath, content, option) => {
+              await getFilesStorage().upload(content, filepath, {
+                ContentType: option?.ContentType || 'text/plain',
+                ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
+              });
+              return filepath;
             },
-            storage: {
-              upload: async (filepath, content, option) => {
-                await getFilesStorage().upload(content, filepath, {
-                  ContentType: option?.ContentType || 'text/plain',
-                  ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
-                });
-                return filepath;
-              },
-              generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-                getFilesStorage().getSignedUrl(filepath, 'put', {
-                  expiresIn: expireInSeconds,
-                }),
-            },
-            // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
-            // server-side `provenance` adapter, never from the request body, so the origin cannot be
-            // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
-            provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
-            // The other half of the same parity: the grant repo restores the grant rungs, but the
-            // org rungs need the actor's administered-org set, which the service cannot read off a
-            // user document.
-            administeredOrgIds: ctx.administeredOrgIds,
-          }
-        );
+            generateSignedUrl: (filepath: string, expireInSeconds: number) =>
+              getFilesStorage().getSignedUrl(filepath, 'put', {
+                expiresIn: expireInSeconds,
+              }),
+          },
+          // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
+          // server-side `provenance` adapter, never from the request body, so the origin cannot be
+          // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
+          provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
+          // The other half of the same parity: the grant repo restores the grant rungs, but the
+          // org rungs need the actor's administered-org set, which the service cannot read off a
+          // user document.
+          administeredOrgIds: ctx.administeredOrgIds,
+        });
       });
 
       await logEvent(

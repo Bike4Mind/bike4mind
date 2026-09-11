@@ -199,9 +199,11 @@ interface DatabaseAdapters {
     findById: (id: string) => Promise<ILatticeModel | null>;
     update: (data: any) => Promise<ILatticeModel | null>;
   };
+  // 'find' is forwarded to ToolContext.db.dataLakes -> createFabFile (persistGeneratedFileAsFabFile),
+  // for its fallback tagger's prefix-overlap check.
   dataLakes?: Pick<
     IDataLakeRepository,
-    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById'
+    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
   >;
   /**
    * Access-grant lookup shared by two independent optional features:
