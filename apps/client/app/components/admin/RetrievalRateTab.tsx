@@ -200,51 +200,56 @@ export default function RetrievalRateTab() {
             />
           </Stack>
 
-          <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }} data-testid="retrieval-rate-answerability">
-            <Typography level="title-sm">Could the corpus have answered?</Typography>
-            <Typography level="body-xs" textColor="text.secondary" sx={{ mb: 1.5 }}>
-              Offered turns split by whether an offline replay found anything in the corpus at or above a cosine of{' '}
-              {summary.answerability.cutoff.toFixed(2)}. A turn where the model did not retrieve is only a defect if
-              there was something to find.
-            </Typography>
+          {/* The type says this is always present - the fold never omits it - but the client trusts a
+             live HTTP response, not the fold directly, and a response from an API pod one deploy behind
+             the client bundle predates this field. Guard rather than crash the whole tab over it. */}
+          {summary.answerability && (
+            <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }} data-testid="retrieval-rate-answerability">
+              <Typography level="title-sm">Could the corpus have answered?</Typography>
+              <Typography level="body-xs" textColor="text.secondary" sx={{ mb: 1.5 }}>
+                Offered turns split by whether an offline replay found anything in the corpus at or above a cosine of{' '}
+                {summary.answerability.cutoff.toFixed(2)}. A turn where the model did not retrieve is only a defect if
+                there was something to find.
+              </Typography>
 
-            {summary.answerability.unknown.turns === summary.offeredTurns && summary.offeredTurns > 0 ? (
-              <Alert color="neutral" data-testid="retrieval-rate-answerability-unreplayed">
-                No turn in this window has been replayed, so the split below is empty. Run the answerability replay
-                (packages/scripts/retrieval/answerability-replay.ts) over this window to populate it.
-              </Alert>
-            ) : (
-              <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
-                <StatCard
-                  label="Missed retrievals"
-                  value={formatRate(missRate(summary.answerability.answerable))}
-                  caption={`${(
-                    summary.answerability.answerable.turns - summary.answerability.answerable.retrievedTurns
-                  ).toLocaleString()} of ${summary.answerability.answerable.turns.toLocaleString()} answerable turns where the model did not search`}
-                />
-                <StatCard
-                  label="Wasted retrievals"
-                  value={formatRate(summary.answerability.notAnswerable.rate)}
-                  caption={`${summary.answerability.notAnswerable.retrievedTurns.toLocaleString()} of ${summary.answerability.notAnswerable.turns.toLocaleString()} turns with nothing to find where it searched anyway`}
-                />
-                <StatCard
-                  label="Not replayed"
-                  value={summary.answerability.unknown.turns.toLocaleString()}
-                  caption={`Excluded from both figures${
-                    summary.answerability.inconclusiveTurns > 0
-                      ? `, including ${summary.answerability.inconclusiveTurns.toLocaleString()} whose scan hit its ceiling below the cutoff`
-                      : ''
-                  }`}
-                />
-              </Stack>
-            )}
+              {summary.answerability.unknown.turns === summary.offeredTurns && summary.offeredTurns > 0 ? (
+                <Alert color="neutral" data-testid="retrieval-rate-answerability-unreplayed">
+                  No turn in this window has been replayed, so the split below is empty. Run the answerability replay
+                  (packages/scripts/retrieval/answerability-replay.ts) over this window to populate it.
+                </Alert>
+              ) : (
+                <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
+                  <StatCard
+                    label="Missed retrievals"
+                    value={formatRate(missRate(summary.answerability.answerable))}
+                    caption={`${(
+                      summary.answerability.answerable.turns - summary.answerability.answerable.retrievedTurns
+                    ).toLocaleString()} of ${summary.answerability.answerable.turns.toLocaleString()} answerable turns where the model did not search`}
+                  />
+                  <StatCard
+                    label="Wasted retrievals"
+                    value={formatRate(summary.answerability.notAnswerable.rate)}
+                    caption={`${summary.answerability.notAnswerable.retrievedTurns.toLocaleString()} of ${summary.answerability.notAnswerable.turns.toLocaleString()} turns with nothing to find where it searched anyway`}
+                  />
+                  <StatCard
+                    label="Not replayed"
+                    value={summary.answerability.unknown.turns.toLocaleString()}
+                    caption={`Excluded from both figures${
+                      summary.answerability.inconclusiveTurns > 0
+                        ? `, including ${summary.answerability.inconclusiveTurns.toLocaleString()} whose scan hit its ceiling below the cutoff`
+                        : ''
+                    }`}
+                  />
+                </Stack>
+              )}
 
-            <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
-              Replayed after the fact, not measured during the turn: the corpus may have moved since, and for turns
-              where retrieval never ran the lake scope is reconstructed from the session as it stands now. Treat a
-              replay run long after the window as weak evidence.
-            </Typography>
-          </Sheet>
+              <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
+                Replayed after the fact, not measured during the turn: the corpus may have moved since, and for turns
+                where retrieval never ran the lake scope is reconstructed from the session as it stands now. Treat a
+                replay run long after the window as weak evidence.
+              </Typography>
+            </Sheet>
+          )}
 
           <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }}>
             <Typography level="title-sm" sx={{ mb: 1 }}>
