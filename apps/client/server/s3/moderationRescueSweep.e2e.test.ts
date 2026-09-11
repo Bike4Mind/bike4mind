@@ -129,7 +129,8 @@ describe('runModerationRescueSweep (DB integration)', () => {
     await seedPending('flaky.txt', 'text/plain');
 
     const { rescanned } = await runModerationRescueSweep({ enabled: true, limit: 5, logger });
-    expect(rescanned).toBe(1); // it WAS selected and processed, then released - not skipped
+    expect(rescanned).toBe(0); // released (transient), so NOT counted as resolved/scanned
+    expect(logger.warn).toHaveBeenCalled(); // but it WAS processed (released with a warning), not skipped
 
     const row = await FabFile.findOne({ filePath: 'flaky.txt' }).lean();
     expect(row?.moderationStatus).toBe('pending');

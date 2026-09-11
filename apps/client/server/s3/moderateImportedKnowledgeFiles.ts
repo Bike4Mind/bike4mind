@@ -69,10 +69,18 @@ function isMissingObjectError(err: unknown): boolean {
  * imported image would sit `pending` forever (unservable) which is why the import used to
  * mis-stamp it `clean` and bypass moderation entirely. The declared mimeType is attacker-supplied,
  * so `moderate` (moderateUploadedFile) byte-sniffs the real type: non-images resolve to `clean`
- * immediately, real image bytes take the Rekognition path. Must stay in sync with the claim +
- * verdict semantics in objectCreated.ts. Never throws - a failed scan leaves the file held.
+ * immediately, real image bytes take the Rekognition path. Shares moderateUploadedFile's verdict
+ * logic and the fail-closed invariant with the upload-time path (objectCreated.ts) - a terminal
+ * verdict is never re-scanned and a held file stays unservable 'pending' - but serializes via its
+ * own atomic pending|null -> scanning claim, which is a different mechanism from objectCreated's
+ * (that path never writes the interim 'scanning' state). Never throws - a failed scan leaves the
+ * file held. Returns the count of files resolved to a terminal verdict this run (scanned
+ * clean/blocked, or retired as a missing-object orphan); files skipped (claim lost) or released
+ * (transient failure) are not counted.
  */
-export async function moderateImportedKnowledgeFiles(args: ModerateImportedKnowledgeFilesArgs): Promise<void> {
+export async function moderateImportedKnowledgeFiles(
+  args: ModerateImportedKnowledgeFilesArgs
+): Promise<{ scanned: number }> {
   const {
     filePaths,
     userId,
@@ -90,6 +98,7 @@ export async function moderateImportedKnowledgeFiles(args: ModerateImportedKnowl
     downloadPartialBytes,
   } = args;
 
+  let scanned = 0;
   for (const filePath of filePaths) {
     let claimed: ClaimedFabFile | null = null;
     try {
@@ -116,6 +125,7 @@ export async function moderateImportedKnowledgeFiles(args: ModerateImportedKnowl
           : {}),
         ...(result.blockReason ? { blockReason: result.blockReason } : {}),
       });
+      scanned++;
     } catch (err) {
       if (claimed && terminalOnMissingObject && isMissingObjectError(err)) {
         // The object was never written to storage - an abandoned presigned upload leaves a
@@ -127,6 +137,7 @@ export async function moderateImportedKnowledgeFiles(args: ModerateImportedKnowl
         await persist(claimed._id, { moderationStatus: 'blocked', blockReason: 'missing_object' }).catch(
           () => undefined
         );
+        scanned++;
         logger.warn(`Imported knowledge file ${filePath} has no stored object; marking terminal (missing_object)`);
         continue;
       }
@@ -138,4 +149,5 @@ export async function moderateImportedKnowledgeFiles(args: ModerateImportedKnowl
       );
     }
   }
+  return { scanned };
 }

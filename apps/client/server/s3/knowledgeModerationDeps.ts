@@ -12,8 +12,11 @@ import type { Types } from 'mongoose';
  * callers that run it: the notebook-import handler (scans a fresh import's files post-commit) and
  * the daily rescue sweep (re-scans files an earlier attempt left stranded on 'pending'). Both must
  * claim/persist/release identically - the claim is the single mutual-exclusion point between them -
- * so the wiring lives here once. The atomic claim is the same pending|null -> scanning CAS
- * objectCreated.ts uses, so a concurrent upload-path scan of the same row cannot double-process it.
+ * so the wiring lives here once. The claim is an atomic pending|null -> scanning CAS, so only one
+ * runner can ever flip a given row out of 'pending' - the two callers here (and any concurrent
+ * upload-path scan) cannot double-process it. objectCreated.ts guards the upload-time scan
+ * differently (it never writes the interim 'scanning' state), so this is a parallel guarantee, not
+ * the identical mechanism.
  */
 export function buildKnowledgeModerationDeps(
   logger: Logger

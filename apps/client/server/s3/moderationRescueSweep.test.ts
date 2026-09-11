@@ -20,7 +20,7 @@ const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } 
 beforeEach(() => {
   vi.clearAllMocks();
   h.updateMany.mockResolvedValue({});
-  h.moderate.mockResolvedValue(undefined);
+  h.moderate.mockResolvedValue({ scanned: 1 });
   // find(...).limit(...).lean()
   h.find.mockReturnValue({ limit: vi.fn().mockReturnValue({ lean: h.lean }) });
 });
