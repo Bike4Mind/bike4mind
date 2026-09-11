@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Card,
   Chip,
@@ -50,11 +50,19 @@ import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useNavigate } from '@tanstack/react-router';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
+import { unsavedFieldKeys } from '../unsavedFieldLabels';
+import { stageFieldEdit } from '../stageFieldEdit';
 
 interface UsersViewProps {
   user: AdminUserListItem;
   index: number;
   inModal?: boolean;
+  /**
+   * Reports which fields are staged-but-unsaved, so a host that can navigate away
+   * from the card (FullUserViewModal) can warn before the edits are lost. Called only
+   * when the set of unsaved fields actually changes, and safe to pass inline.
+   */
+  onUnsavedFieldsChange?: (fieldKeys: string[]) => void;
 }
 
 // Keyed by IUserDocument, not the narrower list-projection row: admins edit fields the
@@ -64,7 +72,7 @@ export type EditedFieldsState = {
   [key in keyof Partial<IUserDocument>]: boolean;
 };
 
-export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }) => {
+export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, onUnsavedFieldsChange }) => {
   const deleteUser = useDeleteUser();
   const updateUser = useUpdateUser();
   const loginAsUser = useLoginAsUser();
@@ -94,11 +102,36 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
     setFormState({ ...user });
     setTempUserLevel(user.level);
     setCreditReason('');
+    // The staged values are being replaced by this snapshot, so the flags that described
+    // them have to go too. Without this they survive an action that already saved (Verify
+    // Email writes through its own mutation, then syncs the card via onFieldChange) and
+    // the card keeps claiming an unsaved edit that no longer exists.
+    setEditedFields({});
   }, [user]);
+
+  // Latest-callback ref: keeps the report effect off the callback's identity, so a caller
+  // passing an inline arrow cannot turn it into a re-render loop.
+  const reportUnsavedFields = useRef(onUnsavedFieldsChange);
+  useEffect(() => {
+    reportUnsavedFields.current = onUnsavedFieldsChange;
+  });
+
+  // Keyed on a signature rather than the array, so a keystroke that leaves the same set of
+  // fields unsaved does not re-notify the host. Field keys are identifiers, so no key can
+  // contain the separator.
+  const unsavedSignature = unsavedFieldKeys(editedFields).join('|');
+  const unsavedKeys = useMemo(() => (unsavedSignature ? unsavedSignature.split('|') : []), [unsavedSignature]);
+
+  useEffect(() => {
+    // Runs whenever that set changes, and on unmount - the case that motivates the reset:
+    // the card is gone, so its staged edits are too, and the host must stop guarding them.
+    reportUnsavedFields.current?.(unsavedKeys);
+    return () => reportUnsavedFields.current?.([]);
+  }, [unsavedKeys]);
 
   const handleFormFieldChange = (key: keyof IUserDocument, value: unknown) => {
     setFormState(prev => ({ ...prev, [key]: value }));
-    setEditedFields(prev => ({ ...prev, [key]: true }));
+    setEditedFields(prev => stageFieldEdit(prev, key, value, user));
   };
 
   const handleDeleteUser = async (userId: string) => {

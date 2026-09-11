@@ -40,6 +40,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const HELP_INDEX_PATH = path.join(REPO_ROOT, 'apps/client/app/generated/help-index.json');
+// The public bundle only - the admin half lives in app/generated/help-content-admin (see
+// bundle-help-content.ts) and must never be ingested. The gate is the accessLevel filter in
+// loadDesiredCorpus; this root just means a slip there cannot reach an admin file from here.
 const HELP_CONTENT_ROOT = path.join(REPO_ROOT, 'apps/client/public/help-content');
 
 async function main(opts: { userId: string; dryRun: boolean }): Promise<number> {

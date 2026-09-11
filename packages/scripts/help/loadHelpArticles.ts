@@ -39,6 +39,29 @@ export const CATEGORY_ACCESS_LEVELS: Record<string, HelpAccessLevel> = {
 };
 
 /**
+ * The producer half of the access-level split, and the one place it can fail open.
+ *
+ * Throws rather than defaulting: this value decides which output root bundle-help-content.ts
+ * copies an article into, and the public root is served unauthenticated by Next. A category added
+ * to INCLUDED_CATEGORIES but not mapped here would otherwise publish every article in it as
+ * public help content on a green build with no warning.
+ */
+export function accessLevelForCategory(topCategory: string): HelpAccessLevel {
+  // hasOwn, not a truthiness check: a category named `constructor` or `toString` would otherwise
+  // resolve to an inherited Object member and skip the throw.
+  const accessLevel = Object.hasOwn(CATEGORY_ACCESS_LEVELS, topCategory)
+    ? CATEGORY_ACCESS_LEVELS[topCategory]
+    : undefined;
+  if (!accessLevel) {
+    throw new Error(
+      `Help category "${topCategory}" has no CATEGORY_ACCESS_LEVELS entry in loadHelpArticles.ts. ` +
+        'Add one: an unmapped category would be published as unauthenticated public help content.'
+    );
+  }
+  return accessLevel;
+}
+
+/**
  * Directories (relative to a category root) to exclude wholesale.
  * `quest-examples` holds generated example quest logs with no frontmatter - they
  * are not user-facing help and never appear in the served index.
@@ -161,6 +184,9 @@ export async function findHelpArticleFiles(): Promise<string[]> {
  * reports it as an error; the index builder skips it).
  */
 export async function loadHelpArticles(): Promise<LoadedHelpArticle[]> {
+  // Up front, because an included-but-empty category has no article to trip the per-article check.
+  for (const category of INCLUDED_CATEGORIES) accessLevelForCategory(category);
+
   const files = await findHelpArticleFiles();
   const articles: LoadedHelpArticle[] = [];
 
@@ -179,7 +205,7 @@ export async function loadHelpArticles(): Promise<LoadedHelpArticle[]> {
       relativePath: path.relative(DOCS_ROOT, filePath),
       slug: filePathToSlug(filePath),
       category,
-      accessLevel: CATEGORY_ACCESS_LEVELS[topCategory] ?? 'public',
+      accessLevel: accessLevelForCategory(topCategory),
       frontmatter,
       content,
       headings: extractHeadings(content),

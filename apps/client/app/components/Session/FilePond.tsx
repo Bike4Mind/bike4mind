@@ -24,7 +24,9 @@ const FilePondModal: React.FC<FilePondModalProps> = ({ onFileProcessComplete }) 
   const [files] = useState<any[]>([]);
   const pond = useRef(null);
   const { serverSettings } = useServerSettings();
-  const maxFileSize = serverSettings.find(setting => setting.settingName === 'MaxFileSize') || 100;
+  // `.find(...)` returns the whole IAdminSettings row, not its value - read `.settingValue`
+  // (matches the server default of 30MB, not the old unrelated 100MB fallback).
+  const maxFileSize = Number(serverSettings.find(setting => setting.settingName === 'MaxFileSize')?.settingValue) || 30;
   // FilePond expects the max file size as a string in MB, e.g. '100MB'
   const maxFileSizeForFilePond = `${maxFileSize}MB`;
 

@@ -110,7 +110,19 @@ export const ActiveCodeAgent: IActiveCodeAgentModel =
 export type SweptCodeAgent = Pick<IActiveCodeAgentDoc, 'instanceId' | 'deviceId' | 'workspaceName' | 'source'>;
 
 export const activeCodeAgentRepository = {
-  /** Upsert a session record on register. Idempotent: bridge reconnects call this again. */
+  /**
+   * Upsert a session record on register. Idempotent: bridge reconnects call this again.
+   *
+   * Refuses outright when `instanceId` is already registered to a DIFFERENT user: keying the
+   * upsert on instanceId alone let such a register rewrite the victim's userId, deviceId and
+   * connectionId, taking over their live session. The explicit read-then-refuse is what carries
+   * the guarantee - the unique index on instanceId is not: it turns the fallback insert into an
+   * E11000 rather than a takeover, but index build is not synchronous with the first write, so it
+   * cannot be the only thing standing between two users.
+   *
+   * `userId` is also in the FILTER so a register racing this check cannot match the victim's row
+   * either. ccAgentRegister.ts makes the same check first, to answer 403 rather than 500.
+   */
   async upsertOnRegister(
     doc: Pick<
       IActiveCodeAgentDoc,
@@ -129,9 +141,14 @@ export const activeCodeAgentRepository = {
       capabilities?: ICcAgentCapability[];
     }
   ): Promise<IActiveCodeAgentDoc> {
+    const existing = await ActiveCodeAgent.findOne({ instanceId: doc.instanceId }, { userId: 1 }).lean();
+    if (existing && existing.userId !== doc.userId) {
+      throw new Error(`ActiveCodeAgent instanceId=${doc.instanceId} is registered to another user`);
+    }
+
     const now = new Date();
     const result = await ActiveCodeAgent.findOneAndUpdate(
-      { instanceId: doc.instanceId },
+      { instanceId: doc.instanceId, userId: doc.userId },
       {
         $set: {
           userId: doc.userId,

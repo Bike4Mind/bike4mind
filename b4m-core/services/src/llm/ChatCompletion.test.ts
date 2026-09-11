@@ -3217,12 +3217,16 @@ describe('ChatCompletionProcess', () => {
           files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
         });
 
-        const quest = { promptMeta: { retrieval } } as any;
-        applyQuestStatusChanges(quest, {
-          promptMeta: {
-            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
-          },
-        } as any);
+        const quest = { sessionId: 's1', promptMeta: { retrieval } } as any;
+        applyQuestStatusChanges(
+          quest,
+          {
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any,
+          'user-1'
+        );
 
         expect(quest.promptMeta.retrieval).toEqual({
           attempted: true,

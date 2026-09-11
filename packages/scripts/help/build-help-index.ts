@@ -13,13 +13,19 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import type { HelpIndex, HelpIndexEntry, HelpCategory } from './types.js';
-import { INCLUDED_CATEGORIES, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
+import { DOCS_ROOT, INCLUDED_CATEGORIES, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
 
 // ES module compatibility
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const OUTPUT_PATH = path.resolve(__dirname, '../../../apps/client/app/generated/help-index.json');
+
+export interface BuildIndexOptions {
+  /** Overridable for testing; defaults to the real repo locations. */
+  outputPath?: string;
+  loadArticles?: () => Promise<LoadedHelpArticle[]>;
+}
 
 /**
  * Convert category path to display label
@@ -181,15 +187,19 @@ export function buildIndexFromEntries(rawEntries: HelpIndexEntry[]): HelpIndex {
 }
 
 /**
- * Main build function
+ * Main build function. Throws rather than writing an index it cannot stand behind;
+ * the CLI wrapper below turns that into a non-zero exit.
  */
-async function buildHelpIndex(): Promise<void> {
+export async function buildHelpIndex(opts: BuildIndexOptions = {}): Promise<void> {
+  const outputPath = opts.outputPath ?? OUTPUT_PATH;
+  const loadArticles = opts.loadArticles ?? loadHelpArticles;
+
   console.log('Building help index...');
-  console.log(`Output path: ${OUTPUT_PATH}`);
+  console.log(`Output path: ${outputPath}`);
   console.log(`Including categories: ${INCLUDED_CATEGORIES.join(', ')}`);
 
   // Load all user-facing help articles (shared loader owns file selection + parsing)
-  const articles = await loadHelpArticles();
+  const articles = await loadArticles();
   console.log(`Found ${articles.length} markdown files in user-facing categories`);
 
   // Convert to index entries, skipping title-less files
@@ -203,19 +213,31 @@ async function buildHelpIndex(): Promise<void> {
 
   console.log(`Processed ${entries.length} valid entries`);
 
+  // An empty corpus means the docs tree is missing or unreadable - the shape a
+  // container build takes when its context excludes docs-site. Writing the empty
+  // index would ship a help panel with no content and no error, so stop here: this
+  // runs from the client `prebuild`, where a throw is the only thing that reddens
+  // the build.
+  if (entries.length === 0) {
+    throw new Error(
+      `No indexable help articles found under ${DOCS_ROOT} (${articles.length} markdown files scanned). ` +
+        'Refusing to overwrite the help index with an empty one.'
+    );
+  }
+
   const index = buildIndexFromEntries(entries);
   const { categories } = index;
 
   // Ensure output directory exists
-  const outputDir = path.dirname(OUTPUT_PATH);
+  const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
   // Write the index
-  fs.writeFileSync(OUTPUT_PATH, JSON.stringify(index, null, 2));
+  fs.writeFileSync(outputPath, JSON.stringify(index, null, 2));
 
-  console.log(`Help index written to ${OUTPUT_PATH}`);
+  console.log(`Help index written to ${outputPath}`);
   console.log(`Total entries: ${entries.length}`);
   console.log(`Categories: ${categories.map(c => c.name).join(', ')}`);
 }

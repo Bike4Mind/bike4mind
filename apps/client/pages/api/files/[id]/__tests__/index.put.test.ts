@@ -131,7 +131,7 @@ const makeRes = () => {
 // a real 24-hex ObjectId string rather than a readable slug.
 const FILE_ID = '507f1f77bcf86cd799439011';
 
-const req = (body: unknown, id: string = FILE_ID, userId = 'u1', apiKeyInfo?: { keyId: string }) =>
+const req = (body: unknown, id: string = FILE_ID, userId = 'u1', apiKeyInfo?: { keyId: string; scopes?: string[] }) =>
   ({
     method: 'PUT',
     user: { id: userId, isAdmin: false },
@@ -148,8 +148,13 @@ const run = (body: unknown, res: unknown, id?: string) =>
 const runAs = (userId: string, body: unknown, res: unknown) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, FILE_ID, userId), res);
 
+// A real API key always carries scopes; these tests are about auditPrincipal attribution, not the
+// scope gate, so the key holds the write scope a lake-tag join/leave asserts.
 const runWithKey = (keyId: string, body: unknown, res: unknown) =>
-  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, FILE_ID, 'u1', { keyId }), res);
+  (handler as (req: unknown, res: unknown) => Promise<void>)(
+    req(body, FILE_ID, 'u1', { keyId, scopes: ['datalake:write'] }),
+    res
+  );
 
 const fabFile = (overrides: Record<string, unknown> = {}) => ({
   id: FILE_ID,

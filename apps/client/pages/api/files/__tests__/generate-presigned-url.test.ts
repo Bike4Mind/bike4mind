@@ -4,6 +4,9 @@ import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mi
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   findByDatalakeTag: vi.fn(),
+  // The prefix-arm scope gate's candidate-lake lookup (assertDataLakeTagWriteScope's `newFile`
+  // argument); empty by default so existing tests see no lake to match against.
+  lakeFind: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   findOverrides: vi.fn(),
@@ -36,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   // Scoped-override store the admission contract's lever (#1680) resolves through.
   scopedSettingsRepository: { findOverrides: h.findOverrides },
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
+  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
 }));
@@ -79,16 +82,18 @@ const makeRes = () => {
   return { res, json };
 };
 
-const req = (body: unknown) =>
+const req = (body: unknown, overrides: Record<string, unknown> = {}) =>
   ({
     method: 'POST',
     user: { id: 'u1', isAdmin: false },
     ability: {},
     body,
     logger: { error: vi.fn(), warn: vi.fn() },
+    ...overrides,
   }) as never;
 
-const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
+const run = (body: unknown, res: unknown, overrides?: Record<string, unknown>) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, overrides), res);
 
 const body = (overrides: Record<string, unknown> = {}) => ({
   fileName: 'report.txt',
@@ -114,6 +119,7 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
     h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
   });
 
@@ -156,6 +162,39 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
       /only an admin can change this data lake/i
     );
     expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  // Regression test: a plain content tag matching the caller's OWN lake's fileTagPrefix joins
+  // that lake via the prefix arm (no `datalake:*` meta-tag involved), so a scope check keyed only
+  // on meta-tags previously let a files:write-only key join a lake this way with no data-lake
+  // scope at all.
+  it('refuses a files:write-only key applying a tag under its own lake prefix (no meta-tag)', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+    const { res } = makeRes();
+    await expect(
+      run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), res, { apiKeyInfo: { scopes: ['files:write'] } })
+    ).rejects.toThrow(/datalake:write is required/);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('allows a key holding datalake:write to join a lake via its prefix arm alone', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+    const { res } = makeRes();
+    await run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), res, {
+      apiKeyInfo: { scopes: ['datalake:write'] },
+    });
+
+    expect(h.createFabFile).toHaveBeenCalled();
+  });
+
+  it('does not gate a tag matching no lake the caller owns', async () => {
+    h.lakeFind.mockResolvedValue([{ ...LAKE, createdByUserId: 'someone-else' }]);
+    const { res } = makeRes();
+    await run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), res, {
+      apiKeyInfo: { scopes: ['files:write'] },
+    });
+
+    expect(h.createFabFile).toHaveBeenCalled();
   });
 });
 

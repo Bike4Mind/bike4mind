@@ -7,6 +7,7 @@ import {
   IUsageEventInput,
   ModelInfo,
   MusicGenerationVendor,
+  materializePromptMetaSession,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -228,11 +229,19 @@ function resolveToolStatus(toolName: string, data: any): string | null {
  *     (or vice versa) would silently erase the other's outcome. See
  *     mergeRetrievalSummary (retrievalSummaryMerge.ts) for the merge policy.
  *
+ * `userId` seeds `promptMeta.session` (via materializePromptMetaSession) on every write that
+ * touches promptMeta, in EITHER branch below - not just the no-existing-meta one - because a quest
+ * read off disk can carry a promptMeta with no session block at all (bike4mind#2004: several
+ * writers used to materialize promptMeta this way, and older rows never got backfilled). Without
+ * this, `PromptMetaSchema.session.id`/`.userId` (required: true) go unenforced forever, since this
+ * write goes through update() (findOneAndUpdate + $set, no validators).
+ *
  * Mutates `quest` in place.
  */
 export function applyQuestStatusChanges(
   quest: IChatHistoryItemDocument,
-  changes: Partial<IChatHistoryItemDocument>
+  changes: Partial<IChatHistoryItemDocument>,
+  userId: string
 ): void {
   const { promptMeta: changedPromptMeta, images: changedImages, ...otherChanges } = changes;
 
@@ -247,19 +256,22 @@ export function applyQuestStatusChanges(
     });
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
-    quest.promptMeta = {
-      ...quest.promptMeta,
-      ...changedPromptMeta,
-      citables: dedupedCitables,
-      // Omit the key entirely when neither side has warnings, so an untouched quest is not
-      // given an empty array it never had.
-      ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
-      // Explicit override, not left to the spread above: an incoming write here must MERGE onto
-      // an existing forced-arm value, never replace it (see the docblock above).
-      ...(mergedRetrieval ? { retrieval: mergedRetrieval } : {}),
-    };
+    quest.promptMeta = materializePromptMetaSession(
+      {
+        ...quest.promptMeta,
+        ...changedPromptMeta,
+        citables: dedupedCitables,
+        // Omit the key entirely when neither side has warnings, so an untouched quest is not
+        // given an empty array it never had.
+        ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
+        // Explicit override, not left to the spread above: an incoming write here must MERGE onto
+        // an existing forced-arm value, never replace it (see the docblock above).
+        ...(mergedRetrieval ? { retrieval: mergedRetrieval } : {}),
+      },
+      { sessionId: quest.sessionId, userId }
+    );
   } else if (changedPromptMeta) {
-    quest.promptMeta = changedPromptMeta;
+    quest.promptMeta = materializePromptMetaSession(changedPromptMeta, { sessionId: quest.sessionId, userId });
   }
 
   if (changedImages) {
@@ -739,7 +751,7 @@ export class ToolBuilder {
           // Merge nested fields that accrete across a turn (promptMeta.citables,
           // images) instead of overwriting them wholesale - see
           // applyQuestStatusChanges.
-          applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>);
+          applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>, this.deps.user.id);
           await this.deps.sendStatusUpdate(quest, status ?? null);
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -856,7 +868,10 @@ export class ToolBuilder {
           await saveQuest(quest);
         },
         onArtifactExtracted: artifact => {
-          if (!quest.promptMeta) quest.promptMeta = {} as NonNullable<typeof quest.promptMeta>;
+          quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+            sessionId: quest.sessionId,
+            userId: this.deps.user.id,
+          });
           if (!quest.promptMeta!.artifacts) quest.promptMeta!.artifacts = [];
           quest.promptMeta!.artifacts.push(artifact as (typeof quest.promptMeta.artifacts)[number]);
           // Fire-and-forget save

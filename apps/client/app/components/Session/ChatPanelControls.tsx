@@ -38,7 +38,7 @@ interface ChatPanelControlsProps {
   /** data-testid prefix, e.g. 'docked-chat' or 'floating-chat' */
   testIdPrefix: string;
   /** Current docked layout; preselected in the menu. Omit in the floating window. */
-  activeLayout?: 'dockRight' | 'dockBottom';
+  activeLayout?: Exclude<LayoutChoice, 'floatingChat'>;
   /** Offer "Float" in the menu (docked panels only - the floating window is already there). */
   showFloat?: boolean;
 }
@@ -53,7 +53,7 @@ const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({ testIdPrefix, act
 
   return (
     <>
-      <Select
+      <Select<LayoutChoice>
         size="sm"
         variant="outlined"
         color="neutral"
@@ -65,7 +65,7 @@ const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({ testIdPrefix, act
         indicator={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
         renderValue={option => (
           <Typography noWrap level="body-sm" textColor="inherit" sx={{ minWidth: 0 }}>
-            {option ? LAYOUT_LABELS[option.value as LayoutChoice] : 'Layout'}
+            {option ? LAYOUT_LABELS[option.value] : 'Layout'}
           </Typography>
         )}
         slotProps={{

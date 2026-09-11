@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -48,7 +49,7 @@ interface AccessQuery {
   format?: string | string[];
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request<{ id: string }, unknown, unknown, AccessQuery>, res) => {
     // Next merges the [id] route param into req.query alongside the ?format= query string, so `id` is
@@ -59,14 +60,11 @@ const handler = baseApi()
     const format = firstQueryValue(req.query.format);
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // Grants read ONCE, by the access gate itself, and applied to both decisions below: the manage
+    // gate and the transfer capability. `resolveCanManageLake` would re-query them for the same
+    // answer, and so would a separate `loadActiveLakeGrants` here.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-
-    // Grants read ONCE and applied to both decisions: the manage gate below and the transfer
-    // capability further down. `resolveCanManageLake` would re-query them for the same answer.
-    const grants = await dataLakeService.loadActiveLakeGrants(lake, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     if (!dataLakeService.canManageLake(lake, ctx, grants)) {
       throw new ForbiddenError('You must be able to manage this data lake to view its access.');

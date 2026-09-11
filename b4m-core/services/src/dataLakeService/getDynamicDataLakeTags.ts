@@ -13,7 +13,8 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { isDatalakeTagWellFormed } from './createDataLake';
 import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
-import { grantedLakeReachFor, resolveEnforceReadGrants, type LakeGrantReach } from './resolveLakeReadAccess';
+import { grantedLakeReachForTurn, resolveEnforceReadGrants, type LakeGrantReach } from './resolveLakeReadAccess';
+import { membershipOrgIdsForTurn } from './membershipOrgIdsForTurn';
 
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
@@ -269,7 +270,10 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     // this throw and degrade to an empty scope, which is ALSO fail-closed (it denies, never
     // grants). So the placement buys observability into where a failure originated, not a
     // stronger deny guarantee than returning [] outright would have given.
-    const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
+    // Memoized per turn (this resolver runs per TOOL CALL), sharing one entry with the injection
+    // resolver - see membershipOrgIdsForTurn. The propagate-not-swallow placement above still holds:
+    // the memo evicts a rejection rather than caching it as "member of nothing".
+    const organizationIds = userId ? await membershipOrgIdsForTurn(context, userId, context.db.organizations) : [];
     // The grant rung, resolved on the SAME terms as browse (`grantedLakeReachFor`) so the two halves
     // of the access model cannot drift: owner/curator always, reader + org principals only under
     // the enforced cutover. Failing closed to no grants rather than propagating - a grant lookup
@@ -277,8 +281,14 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     let reach: LakeGrantReach = { grantedLakeIds: [], orgGrantedLakes: {} };
     if (userId && context.db.dataLakeAccessGrants) {
       try {
-        const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger);
-        reach = await grantedLakeReachFor(userId, organizationIds, context.db.dataLakeAccessGrants, includeReaders);
+        const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger, context);
+        reach = await grantedLakeReachForTurn(
+          context,
+          userId,
+          organizationIds,
+          context.db.dataLakeAccessGrants,
+          includeReaders
+        );
       } catch (err) {
         // Same fail-closed contract as the dataLakes read below: a failed grants read narrows the
         // view (the grant arm contributes nothing) and must SAY so, or a consumer would read the
