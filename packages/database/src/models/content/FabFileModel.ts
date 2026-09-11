@@ -18,6 +18,7 @@ import {
   KnowledgeType,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
+  UNCATEGORIZED_TAG_SUFFIX,
   type CitableFabFileFields,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
@@ -1573,15 +1574,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * predicate (see lakeScope's docblock in knowledgeBaseCount for the parity bug that mistake
    * caused once already).
    *
-   * Excludes both signals that made a file a MEMBER rather than describing what it is ABOUT: the
-   * `datalake:` meta-tag namespace (NOT_META_TAG, shared with the tag-count surfaces above) and,
-   * for a prefix-arm lake, the bare fileTagPrefix itself with no suffix - `acme:` alone identifies
-   * the lake, not a topic within it (mirrors buildLacksContentPrefixTagFilter's same distinction).
+   * Excludes every signal that made a file a MEMBER rather than describing what it is ABOUT:
+   *  - the `datalake:` meta-tag namespace (NOT_META_TAG, shared with the tag-count surfaces above);
+   *  - for a prefix-arm lake, the bare fileTagPrefix with no suffix - `acme:` alone identifies the
+   *    lake, not a topic within it (mirrors buildLacksContentPrefixTagFilter's same distinction);
+   *  - and `<prefix>uncategorized`, which the write doors (createDataLakeFallbackTagger,
+   *    addFileToDataLake, the backfill migration) stamp on every prefix-arm member carrying no
+   *    other content tag. It means "nothing else covers this file" - a membership placeholder, and
+   *    typically the MODAL tag on a lake, so leaving it in would rank it first and hand the model
+   *    "untagged" as the corpus's leading topic.
    */
   async countDataLakeTopicTags(scope: DataLakeMembershipScope, limit = 15): Promise<{ tag: string; count: number }[]> {
     const bareMembershipPrefix = effectiveTagPrefixArm(scope);
     const tagFilter = bareMembershipPrefix
-      ? { $and: [{ tagNames: NOT_META_TAG }, { tagNames: { $ne: bareMembershipPrefix } }] }
+      ? {
+          $and: [
+            { tagNames: NOT_META_TAG },
+            { tagNames: { $nin: [bareMembershipPrefix, `${bareMembershipPrefix}${UNCATEGORIZED_TAG_SUFFIX}`] } },
+          ],
+        }
       : { tagNames: NOT_META_TAG };
 
     return this.fabFileModel.aggregate([
@@ -1621,6 +1632,96 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $limit: limit },
       { $project: { tag: '$_id', count: 1, _id: 0 } },
     ]);
+  }
+
+  /**
+   * Whole-lake indexing health as five scalars (#1292) - what a corpus-shape answer needs, without
+   * hydrating a row per member to produce them.
+   *
+   * Deliberately NOT `findDataLakeHealthMembers`, and the difference is correctness, not only cost.
+   * That read exists to feed the per-member evaluator, so its `$match` admits only members that
+   * produced chunks (or that the kill switch stopped): a file whose EXTRACTION failed before
+   * chunking is invisible to it, and a caller counting failures from its rows reports "0 failed"
+   * for a lake that has real ones. This runs on the same membership + liveness predicate as
+   * `computeDataLakeStats`, so every live member is in scope and a pre-chunk failure counts.
+   *
+   * The bucket definitions track `evaluateMemberHealth` (@bike4mind/common/constants/lakeHealth),
+   * which is the owner of what these words mean - keep them in step:
+   *  - `fullyVectorizedFiles` keys on `embeddedChunkCount`, the count of vector-bearing ROWS, and
+   *    NOT `vectorizedChunkCount`, which also counts an oversized un-embeddable chunk as done. A
+   *    file the evaluator grades `unknown` (legacy rows with the count absent) is not counted as
+   *    vectorized here either, which is why `inFlightFiles` ships alongside: without it an
+   *    unmeasured member is indistinguishable from a broken one.
+   *  - `failedFiles` is `error` being a NON-EMPTY string, matching the evaluator's `hasError`.
+   *    A legacy `error: ''` row is not a failure, and `{ $ne: null }` would have called it one.
+   */
+  async summarizeDataLakeIndexingHealth(scope: DataLakeMembershipScope): Promise<{
+    chunkedFiles: number;
+    fullyVectorizedFiles: number;
+    failedFiles: number;
+    inFlightFiles: number;
+    totalChunks: number;
+    totalEmbeddedChunks: number;
+  }> {
+    const hasChunks = { $gt: [{ $ifNull: ['$chunkCount', 0] }, 0] };
+    // `$type` rather than a null compare: `error` is a free-form field and a legacy row can carry a
+    // non-string value, which `{ $ne: null }` would read as a failure.
+    const hasError = {
+      $and: [{ $eq: [{ $type: '$error' }, 'string'] }, { $gt: [{ $strLenCP: { $ifNull: ['$error', ''] } }, 0] }],
+    };
+    // The BSON-type aliases, NOT `$type: 'number'`: the aggregation `$type` returns the concrete
+    // alias ('double', 'int', ...) and never the query-operator's 'number' umbrella, so comparing
+    // against 'number' is false for every row - which reads as "no member is measured" and reports
+    // a fully-indexed lake as 0 fully vectorized. `$isNumber` would say this in one word but has no
+    // precedent in this codebase's DocumentDB-compatible pipelines.
+    const embeddedMeasured = { $in: [{ $type: '$embeddedChunkCount' }, ['double', 'int', 'long', 'decimal']] };
+    const fullyVectorized = {
+      $and: [hasChunks, embeddedMeasured, { $gte: ['$embeddedChunkCount', { $ifNull: ['$chunkCount', 0] }] }],
+    };
+    const count = (cond: unknown) => ({ $sum: { $cond: [cond, 1, 0] } });
+
+    const [agg] = await this.fabFileModel.aggregate<{
+      chunkedFiles: number;
+      fullyVectorizedFiles: number;
+      failedFiles: number;
+      inFlightFiles: number;
+      totalChunks: number;
+      totalEmbeddedChunks: number;
+    }>([
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          chunkedFiles: count(hasChunks),
+          fullyVectorizedFiles: count(fullyVectorized),
+          failedFiles: count(hasError),
+          // Chunked, not failed, and not yet provably complete - the population a "not fully
+          // indexed" answer must not silently fold into either of the other two buckets.
+          inFlightFiles: count({ $and: [hasChunks, { $not: [hasError] }, { $not: [fullyVectorized] }] }),
+          totalChunks: { $sum: { $ifNull: ['$chunkCount', 0] } },
+          totalEmbeddedChunks: { $sum: { $ifNull: ['$embeddedChunkCount', 0] } },
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+
+    return (
+      agg ?? {
+        chunkedFiles: 0,
+        fullyVectorizedFiles: 0,
+        failedFiles: 0,
+        inFlightFiles: 0,
+        totalChunks: 0,
+        totalEmbeddedChunks: 0,
+      }
+    );
   }
 
   /**

@@ -254,6 +254,30 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(topics.map(t => t.tag)).toContain('acme:report');
     });
 
+    it('excludes the <prefix>uncategorized placeholder - it means "untagged", not a topic', async () => {
+      // The write doors (createDataLakeFallbackTagger, addFileToDataLake, the backfill migration)
+      // stamp this on every prefix-arm member carrying no other content tag, so it is typically the
+      // MODAL tag on a lake. Left in, it sorts first and hands the model "untagged" as the corpus's
+      // leading topic - the guess-or-refusal outcome this tool exists to prevent.
+      for (const n of [1, 2, 3]) {
+        await makeFile({
+          fileName: `placeholder${n}.txt`,
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'acme:uncategorized' }],
+        });
+      }
+      await makeFile({
+        fileName: 'real.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: 'oncology' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain('acme:uncategorized');
+      expect(topics).toEqual([{ tag: 'oncology', count: 1 }]);
+    });
+
     it('caps the returned tags at `limit`, highest count first', async () => {
       await makeFile({
         fileName: 'many-tags.txt',
@@ -278,6 +302,115 @@ describe('FabFile data lake lifecycle membership', () => {
       const topics = await fabFileRepository.countDataLakeTopicTags(scope);
 
       expect(topics).toEqual([{ tag: 'oncology', count: 1 }]);
+    });
+  });
+
+  describe('summarizeDataLakeIndexingHealth (#1292)', () => {
+    it('counts a pre-chunk extraction failure, which the chunk-bearing health read cannot see', async () => {
+      await makeFile({
+        fileName: 'broken.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 0,
+        error: 'extraction failed',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // findDataLakeHealthMembers' $match admits only chunk-bearing members, so a caller counting
+      // failures from its rows reports "0 failed" for a lake that has a real one.
+      expect(health.failedFiles).toBe(1);
+      expect(health.chunkedFiles).toBe(0);
+    });
+
+    it('does not read a legacy empty-string error as a failure', async () => {
+      await makeFile({
+        fileName: 'fine.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+        error: '',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // Matches evaluateMemberHealth's hasError (a NON-EMPTY string). `{ $ne: null }` calls this broken.
+      expect(health.failedFiles).toBe(0);
+      expect(health.fullyVectorizedFiles).toBe(1);
+    });
+
+    it('keys "fully vectorized" on embeddedChunkCount, not vectorizedChunkCount', async () => {
+      // vectorizedChunkCount also counts an oversized un-embeddable chunk as done, which is why the
+      // shared evaluator grades P3 on embeddedChunkCount instead. This row is NOT fully vectorized.
+      await makeFile({
+        fileName: 'oversized.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 4,
+        vectorizedChunkCount: 4,
+        embeddedChunkCount: 2,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health.fullyVectorizedFiles).toBe(0);
+      expect(health.inFlightFiles).toBe(1);
+      expect(health.totalEmbeddedChunks).toBe(2);
+    });
+
+    it('keeps an unmeasured legacy member in flight rather than calling it broken', async () => {
+      await makeFile({
+        fileName: 'legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 3,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health).toMatchObject({
+        chunkedFiles: 1,
+        fullyVectorizedFiles: 0,
+        inFlightFiles: 1,
+        failedFiles: 0,
+        totalChunks: 3,
+      });
+    });
+
+    it('scopes to lake members only, on the same predicate as computeDataLakeStats', async () => {
+      await makeFile({
+        fileName: 'member.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+      });
+      await makeFile({
+        fileName: 'outsider.txt',
+        userId: STRANGER,
+        tags: [{ name: 'unrelated' }],
+        chunkCount: 9,
+        embeddedChunkCount: 9,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health.chunkedFiles).toBe(1);
+      expect(health.totalChunks).toBe(2);
+    });
+
+    it('returns zeroes for a lake with no members rather than undefined', async () => {
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health).toEqual({
+        chunkedFiles: 0,
+        fullyVectorizedFiles: 0,
+        failedFiles: 0,
+        inFlightFiles: 0,
+        totalChunks: 0,
+        totalEmbeddedChunks: 0,
+      });
     });
   });
 

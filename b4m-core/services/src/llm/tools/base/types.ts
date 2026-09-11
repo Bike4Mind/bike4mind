@@ -100,7 +100,13 @@ export interface ToolContext {
     fabfiles?: IFabFileRepository;
     fabfilechunks?: Pick<
       IFabFileChunkRepository,
-      'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+      | 'findByFabFileId'
+      | 'findVectorsByFabFileIds'
+      | 'findTextsByFabFileId'
+      | 'countByFabFileId'
+      // The models a corpus was ACTUALLY embedded with (describe_knowledge_base). Optional like
+      // the rest of this repo: absent, that tool reports the platform default alone and says so.
+      | 'distinctRetrievalIndexModelsByFabFileIds'
     >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
