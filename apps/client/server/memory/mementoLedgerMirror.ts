@@ -4,7 +4,15 @@ import {
   MEMENTO_DEDUP_SIMILARITY,
   type HasExperimentalFeatures,
 } from '@bike4mind/common';
-import { cosineSimilarity, resolveSubject, type EvidenceTier, type Principal } from '@bike4mind/memory';
+import {
+  cosineSimilarity,
+  figureScopedSubject,
+  fromDisjointSources,
+  resolveSubject,
+  statesDifferentFigures,
+  type EvidenceTier,
+  type Principal,
+} from '@bike4mind/memory';
 import { appendMemoryEvent, createLedgerMemoryStore } from './ledgerMemoryStore';
 import { createKeyProvider } from './factCipher';
 
@@ -39,6 +47,10 @@ type DedupEntry = {
   /** Whether `subject` is ALREADY the stored HMAC (an existing belief) or plaintext (a fresh subject). */
   subjectIsHashed: boolean;
   embedding: number[];
+  /** Carried so a coalesce can be checked for DISAGREEMENT before it replaces this belief. */
+  fact: string;
+  /** Carried for the same check: a differing figure from the SAME document is an update, not a conflict. */
+  sources: string[];
 };
 
 /** The best (highest-cosine) entry at or above the de-dup threshold, or null. Pure. */
@@ -134,7 +146,15 @@ export async function createLedgerAppendSession(params: {
         if (belief.shredded || !belief.embedding?.length) continue;
         // A folded belief's id IS its stored subject HMAC (subjects are never kept in plaintext), so it
         // re-asserts with subjectIsHashed to avoid a double-hash that would fork instead of coalesce.
-        entries.push({ subject: belief.id, subjectIsHashed: true, embedding: belief.embedding });
+        entries.push({
+          subject: belief.id,
+          subjectIsHashed: true,
+          embedding: belief.embedding,
+          // Defaulted, not asserted: a belief with no readable fact (a redacted one, say) yields no
+          // figures, so the disagreement check answers "restatement" and de-dup behaves as it always has.
+          fact: belief.fact ?? '',
+          sources: belief.sources ?? [],
+        });
       }
     } catch (error) {
       console.warn(
@@ -156,6 +176,26 @@ export async function createLedgerAppendSession(params: {
         match = bestDedupMatch(entries, fact.embedding);
       }
 
+      // A near-duplicate that states DIFFERENT figures, from a DIFFERENT document, is a disagreement
+      // between two co-equal sources - not a restatement. Coalescing it would assert onto the matched
+      // subject and replace that belief, so the lake would keep only whichever document was extracted
+      // last (measured: two readings of one metric embed at ~0.99, well over the de-dup threshold).
+      // Keep both and let the model weigh them; see `conflict.ts` for why this stops short of calling
+      // it a contradiction.
+      //
+      // Lake only, and that is load-bearing rather than cautious: this seam is shared with personal
+      // mementos, where one authority supersedes ITSELF and replacing really is correct. A lake is many
+      // co-equal documents. Same code, opposite right answer.
+      const preservedSubject =
+        match &&
+        params.principal.kind === 'lake' &&
+        statesDifferentFigures(fact.summary, match.fact) &&
+        fromDisjointSources(fact.sources ?? [], match.sources)
+          ? figureScopedSubject(derivedSubject, fact.summary)
+          : null;
+      if (preservedSubject !== null) match = null;
+      const freshSubject = preservedSubject ?? derivedSubject;
+
       const sealed = await appendMemoryEvent(
         memoryLedgerRepository,
         keys,
@@ -163,7 +203,7 @@ export async function createLedgerAppendSession(params: {
         {
           principal: params.principal,
           kind: 'assert',
-          subject: match ? match.subject : derivedSubject,
+          subject: match ? match.subject : freshSubject,
           fact: fact.summary,
           evidenceTier: fact.evidenceTier,
           at: new Date().toISOString(),
@@ -185,8 +225,19 @@ export async function createLedgerAppendSession(params: {
       // the per-fact profile re-read used to. On a coalesce the assert's embedding wins (mirrors the
       // fold), so update it; a genuinely new belief joins the set under its plaintext derived subject.
       if (fact.embedding?.length) {
-        if (match) match.embedding = fact.embedding;
-        else entries.push({ subject: derivedSubject, subjectIsHashed: false, embedding: fact.embedding });
+        if (match) {
+          match.embedding = fact.embedding;
+          match.fact = fact.summary;
+          match.sources = fact.sources ?? [];
+        } else {
+          entries.push({
+            subject: freshSubject,
+            subjectIsHashed: false,
+            embedding: fact.embedding,
+            fact: fact.summary,
+            sources: fact.sources ?? [],
+          });
+        }
       }
       return true;
     },

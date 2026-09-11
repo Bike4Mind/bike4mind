@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { settingsMap } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 
 const { findByIdMock, uploadMock, getSettingsValueMock, recomputeUploadedMock } = vi.hoisted(() => ({
@@ -112,6 +113,18 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     expect(res.status).toHaveBeenCalledWith(413);
     expect((req as unknown as { destroy: ReturnType<typeof vi.fn> }).destroy).toHaveBeenCalled();
     expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the MaxFileSize schema default rather than its own literal', async () => {
+    await handler(makeReq({}), makeRes());
+
+    // Guards the consolidation: a re-hardcoded fallback here would cap this door below the one
+    // fabFileService/create.ts applies, which is how the two drifted to 20 vs 30 in the first place.
+    expect(getSettingsValueMock).toHaveBeenCalledWith(
+      'MaxFileSize',
+      expect.anything(),
+      settingsMap.MaxFileSize.defaultValue
+    );
   });
 
   it('writes the body to the file own storage key and returns 200 on success', async () => {

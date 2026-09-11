@@ -177,4 +177,43 @@ describe('GET /api/admin/retrieval-rate', () => {
     await promise;
     expect(body(res).summary).toMatchObject({ unclassifiedTurns: 1, offeredTurns: 0, rate: null });
   });
+
+  describe('answerability cutoff', () => {
+    const probed = (topScore: number) => ({
+      attempted: false,
+      mode: 'optional',
+      surfaces: [],
+      answerability: { topScore, candidatesAboveFloor: 1, floor: 0.75, scanTruncated: false, probedAt: TIMESTAMP },
+    });
+
+    it('projects the probe, so the fold is not handed an undefined column', () => {
+      expect(RETRIEVAL_RATE_FIELDS).toContain('answerability');
+    });
+
+    it('defaults the cutoff when the caller does not name one', async () => {
+      mockFind.mockReturnValue(questChain([row(probed(0.8)), row(probed(0.5))]));
+      const { res, promise } = run();
+      await promise;
+      const summary = body(res).summary;
+      expect(summary.answerability.cutoff).toBe(0.75);
+      expect(summary.answerability.answerable.turns).toBe(1);
+      expect(summary.answerability.notAnswerable.turns).toBe(1);
+    });
+
+    it('re-thresholds the stored scores when the caller sweeps the cutoff', async () => {
+      mockFind.mockReturnValue(questChain([row(probed(0.8)), row(probed(0.5))]));
+      const { res, promise } = run({ answerableMinScore: '0.4' });
+      await promise;
+      const summary = body(res).summary;
+      expect(summary.answerability.cutoff).toBe(0.4);
+      expect(summary.answerability.answerable.turns).toBe(2);
+    });
+
+    it('rejects a cutoff given as a percentage rather than silently failing every turn', async () => {
+      // 75 would put the bar above any cosine, so every turn would read as not-answerable and the
+      // panel would show a confident, wrong zero. Loud here, like the date bounds above.
+      const { promise } = run({ answerableMinScore: '75' });
+      await expect(promise).rejects.toThrow();
+    });
+  });
 });

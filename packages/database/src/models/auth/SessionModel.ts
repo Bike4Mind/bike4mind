@@ -53,6 +53,9 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     disableUserIntegrations: { type: Boolean, required: false },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
+    // DELIBERATELY no default: absent must stay distinguishable from false, since `retrievalTags`
+    // itself hydrates to [] either way. See SessionTypes.lakeScopeExplicit.
+    lakeScopeExplicit: { type: Boolean, required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
     // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake

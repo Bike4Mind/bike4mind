@@ -654,6 +654,8 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   // Cardinality rides along with search: a corpus you can search but not count is what made the
   // model treat a count question as proof it had no access at all.
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
+  // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
+  paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
   return paired.filter(tool => !denied.has(tool));
 }
 
@@ -1969,6 +1971,7 @@ export class ChatCompletionProcess {
         session.retrievalTags,
         session.citationStyle,
         toRetrievalFilter(session),
+        session.lakeScopeExplicit,
         vettedPreauthorizedLakeIds
       );
       logger.info(
@@ -5942,6 +5945,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
     retrievalFilter?: RetrievalExclusionOptions,
+    lakeScopeExplicit?: boolean,
     /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
     preauthorizedLakeIds?: string[]
   ) {
@@ -6065,7 +6069,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       // being read forever). Also needs the host to have wired the app-layer ledger read.
       if (adminSettingsEnableLakeMemory && this.recallLakeMemory) {
         this.logger.log('  - Enabling LakeMemory (hot-card) feature');
-        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter));
+        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter, lakeScopeExplicit));
       }
     }
 

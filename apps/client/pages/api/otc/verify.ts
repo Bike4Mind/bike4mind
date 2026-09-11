@@ -149,7 +149,13 @@ const handler = baseApi({ auth: false })
         existingUser.emailVerified = true;
         existingUser.emailVerifiedAt = new Date();
         try {
-          await userRepository.update(existingUser);
+          // Write only the fields set here: a later loginRecords update below writes the same doc,
+          // and a whole-doc write on either would clobber the other's change.
+          await userRepository.update({
+            id: existingUser.id,
+            emailVerified: existingUser.emailVerified,
+            emailVerifiedAt: existingUser.emailVerifiedAt,
+          });
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
@@ -246,7 +252,8 @@ const handler = baseApi({ auth: false })
         });
         existingUser.loginRecords = existingUser.loginRecords.slice(0, 15);
         try {
-          await userRepository.update(existingUser);
+          // Targeted write (see emailVerified update above): only the loginRecords field.
+          await userRepository.update({ id: existingUser.id, loginRecords: existingUser.loginRecords });
         } catch (err) {
           req.logger.error('OTC login loginRecords update failed', err);
         }

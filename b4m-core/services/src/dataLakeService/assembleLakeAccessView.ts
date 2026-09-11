@@ -13,6 +13,7 @@ import type {
   LakeAccessView,
   LakeCandidateCapPressure,
   LakeGrantStatus,
+  LakeSupersessionPressure,
 } from '@bike4mind/common';
 import { orgAclRowConfersMembership } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
@@ -56,17 +57,24 @@ export function deriveAccessChannels(
  * carried through for display when a single principal has one. Pure over the event list.
  *
  * Sorted most-recently-active first so the busiest/most-recent readers head the compliance view.
+ *
+ * A ZERO ROW (`servedNothing`) counts toward `noResultCount`, the surfaces set and the first/last
+ * dates, but NEVER toward `readCount`: it records a search of this lake that returned nothing, so
+ * counting it as a read would report content leaving the lake when none did. The flag is read
+ * directly rather than inferred from the returned counts, which a catalog-metadata browse row also
+ * leaves at zero - see `ILakeAccessEvent.servedNothing`.
  */
 export function aggregateAccessHistory(
   events: Pick<
     ILakeAccessEventDocument,
-    'principalKind' | 'principalId' | 'onBehalfOfUserId' | 'surface' | 'createdAt'
+    'principalKind' | 'principalId' | 'onBehalfOfUserId' | 'surface' | 'createdAt' | 'servedNothing'
   >[]
 ): LakeAccessHistoryEntry[] {
   const byPrincipal = new Map<string, { entry: LakeAccessHistoryEntry; surfaces: Set<LakeAccessSurface> }>();
   for (const event of events) {
     const key = `${event.principalKind}:${event.principalId}`;
     const at = event.createdAt;
+    const servedNothing = event.servedNothing === true;
     const acc = byPrincipal.get(key);
     if (!acc) {
       byPrincipal.set(key, {
@@ -74,7 +82,8 @@ export function aggregateAccessHistory(
           principalKind: event.principalKind,
           principalId: event.principalId,
           onBehalfOfUserId: event.onBehalfOfUserId,
-          readCount: 1,
+          readCount: servedNothing ? 0 : 1,
+          noResultCount: servedNothing ? 1 : 0,
           lastAccessedAt: at,
           firstAccessedAt: at,
           surfaces: [],
@@ -84,7 +93,8 @@ export function aggregateAccessHistory(
       continue;
     }
     const { entry } = acc;
-    entry.readCount += 1;
+    if (servedNothing) entry.noResultCount += 1;
+    else entry.readCount += 1;
     if (at.getTime() > entry.lastAccessedAt.getTime()) entry.lastAccessedAt = at;
     if (at.getTime() < entry.firstAccessedAt.getTime()) entry.firstAccessedAt = at;
     // Keep the first on-behalf human seen; a principal reading for several humans is rare and the
@@ -118,6 +128,41 @@ export function aggregateCandidateCapPressure(
     pressure.turnsAtCap += 1;
     if (!pressure.lastAtCapAt || event.createdAt.getTime() > pressure.lastAtCapAt.getTime()) {
       pressure.lastAtCapAt = event.createdAt;
+    }
+  }
+  return pressure;
+}
+
+/**
+ * Project the per-event supersession-collapse count into the counters the view publishes. Pure over
+ * the same event list `aggregateAccessHistory` sees, so the numbers describe exactly the same
+ * window.
+ *
+ * PRESENCE-BASED, exactly as `aggregateCandidateCapPressure` above: a row raises `turnsWithSignal`
+ * iff it carries the field at all, so a surface (or an admin setting) that starts reporting the
+ * collapse later is counted with no change here. An absent field raises neither counter - see
+ * `ILakeAccessEvent.filesSupersededCollapsed` for why absent must never be read as `0`.
+ *
+ * The validity guard has no counterpart in the sibling's plain boolean check, and it is load-bearing
+ * because this projection SUMS: a `NaN` would poison `filesSuppressed` for the whole window and a
+ * negative would silently decrement it. `record()` applies the same non-negative-integer rule and so
+ * cannot persist either, which leaves only a row that reached the collection by another door - a
+ * script, a migration, the raw driver. Keep the two rules in step; they are two halves of one
+ * contract (see `ILakeAccessEvent.filesSupersededCollapsed`).
+ */
+export function aggregateSupersessionPressure(
+  events: Pick<ILakeAccessEventDocument, 'filesSupersededCollapsed' | 'createdAt'>[]
+): LakeSupersessionPressure {
+  const pressure: LakeSupersessionPressure = { turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 };
+  for (const event of events) {
+    const suppressed = event.filesSupersededCollapsed;
+    if (typeof suppressed !== 'number' || !Number.isInteger(suppressed) || suppressed < 0) continue;
+    pressure.turnsWithSignal += 1;
+    if (!suppressed) continue;
+    pressure.turnsWithSuppression += 1;
+    pressure.filesSuppressed += suppressed;
+    if (!pressure.lastSuppressedAt || event.createdAt.getTime() > pressure.lastSuppressedAt.getTime()) {
+      pressure.lastSuppressedAt = event.createdAt;
     }
   }
   return pressure;
@@ -186,6 +231,7 @@ export async function assembleLakeAccessView(
   // Same already-sliced window as the history above - a projection of rows already in hand, never
   // a second listByLake read.
   const candidateCapPressure = aggregateCandidateCapPressure(events);
+  const supersessionPressure = aggregateSupersessionPressure(events);
   const channels = deriveAccessChannels(lake);
 
   // One batched name resolution across every user id the view references: user-principal grants,
@@ -265,6 +311,7 @@ export async function assembleLakeAccessView(
     historyTruncated,
     windowStartsAt,
     candidateCapPressure,
+    supersessionPressure,
     generatedAt: now,
   };
 }

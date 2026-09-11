@@ -2,6 +2,26 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// ingestHelpDatalake.ts imports these packages, which resolve only through their built
+// dist/. The Help Docs Guards CI job runs this suite standalone with no core build (that
+// is deliberate - it must also run on a docs-only PR, where the core-build job is gated
+// off), so a real import here fails to resolve and the whole file errors at collection.
+// Same fix, same reason as vectorize-help-content.test.ts.
+//
+// The fab-pipeline symbols are only used by the module's own embedding-service builder,
+// which these tests bypass via injected `deps.embed`. countCodePoints is mirrored rather
+// than stubbed because chunk charLength is derived from it.
+vi.mock('@bike4mind/common', () => ({
+  countCodePoints: (text: string) => [...text].length,
+  KnowledgeType: { TEXT: 'TEXT' },
+}));
+vi.mock('@bike4mind/fab-pipeline', () => ({
+  EmbeddingFactory: vi.fn(),
+  getProviderFromModel: vi.fn(),
+  resolveEmbeddingConfig: vi.fn(),
+}));
+
 import {
   HELP_DATALAKE_SLUG,
   HELP_DATALAKE_TAG,
@@ -75,6 +95,9 @@ function makeHarness(lake: { id: string; status?: string } | null = { id: 'lake-
         bulkInsert: vi.fn(async (payloads: { fabFileId: string }[]) => {
           chunks.push(...payloads);
         }),
+        findFabFileIdsWithChunks: vi.fn(
+          async (ids: string[]) => new Set(chunks.filter(c => ids.includes(c.fabFileId)).map(c => c.fabFileId))
+        ),
       } as never,
       dataLakes: {
         findBySlug: vi.fn(async () => (lake ? ({ status: 'active', ...lake } as never) : null)),
@@ -153,6 +176,32 @@ describe('ingestHelpDatalake', () => {
     expect(h.deletedFileIds).toEqual([]);
   });
 
+  it('re-creates a member whose chunks are gone even though its body never changed (#2583)', async () => {
+    writeCorpus([makeEntry('features/a'), makeEntry('features/b')], {
+      'features/a': '## One\n\nalpha\n',
+      'features/b': '## Two\n\nbeta\n',
+    });
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+    const strandedId = h.files.find(f => f.tags.some(t => t.name === 'help:features/a'))!.id;
+
+    // The state #2583 reports: an interrupted delete took the chunks and left the file row
+    // standing, still claiming `vectorized: true` over a positive vectorizedChunkCount. The body
+    // and the embedding model are untouched, so a hash-and-model reuse gate re-elects it on every
+    // tick and the article is silently unanswerable forever.
+    for (let i = h.chunks.length - 1; i >= 0; i--) {
+      if (h.chunks[i].fabFileId === strandedId) h.chunks.splice(i, 1);
+    }
+
+    const result = await ingestHelpDatalake(h.deps, opts());
+
+    // Healed on the very next tick, and the sibling that still has its chunks is not re-embedded.
+    expect(result).toMatchObject({ created: 1, removed: 1, unchanged: 1 });
+    expect(h.files.some(f => f.id === strandedId)).toBe(false);
+    const replacement = h.files.find(f => f.tags.some(t => t.name === 'help:features/a'))!;
+    expect(h.chunks.some(c => c.fabFileId === replacement.id)).toBe(true);
+  });
+
   it('re-embeds an article whose body changed, and leaves its untouched sibling alone', async () => {
     writeCorpus([makeEntry('features/a'), makeEntry('features/b')], {
       'features/a': '## One\n\nalpha\n',
@@ -186,6 +235,56 @@ describe('ingestHelpDatalake', () => {
     expect(h.files.flatMap(f => f.tags.map(t => t.name))).not.toContain('help:features/opti');
     // The withdrawn article's chunks go too; a surviving chunk stays semantically searchable.
     expect(h.chunks.every(c => h.files.some(f => f.id === c.fabFileId))).toBe(true);
+  });
+
+  it('deletes the file row before its chunks, so an interruption orphans chunks rather than stranding a file (#2583)', async () => {
+    writeCorpus([makeEntry('features/opti'), makeEntry('features/optihashi')], {
+      'features/opti': '## Old\n\nconsolidated away\n',
+      'features/optihashi': '## New\n\nthe survivor\n',
+    });
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+
+    const order: string[] = [];
+    h.deps.db.fabFiles.deleteManyInIds = vi.fn(async (ids: string[]) => {
+      order.push('files');
+      for (const id of ids) {
+        const i = h.files.findIndex(f => f.id === id);
+        if (i >= 0) h.files.splice(i, 1);
+      }
+    });
+    h.deps.db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
+      order.push('chunks');
+    });
+
+    writeCorpus([makeEntry('features/optihashi')], {});
+    await ingestHelpDatalake(h.deps, opts());
+
+    // The file goes first (#2583): an interruption between the two steps must strand only
+    // orphaned chunks - unreachable without their file, costing storage rather than recall -
+    // never a file reporting a stale vectorizedChunkCount over chunks that no longer exist. Note
+    // `deleteManyInIds` tombstones the row rather than removing it; see the site comment for what
+    // that costs the retry story.
+    expect(order).toEqual(['files', 'chunks']);
+  });
+
+  it('leaves the withdrawn member already gone, not stranded with a stale chunk count, when the chunk delete is interrupted (#2583)', async () => {
+    writeCorpus([makeEntry('features/opti'), makeEntry('features/optihashi')], {
+      'features/opti': '## Old\n\nconsolidated away\n',
+      'features/optihashi': '## New\n\nthe survivor\n',
+    });
+    const h = makeHarness();
+    await ingestHelpDatalake(h.deps, opts());
+    const removedId = h.files.find(f => f.tags.some(t => t.name === 'help:features/opti'))?.id;
+
+    h.deps.db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
+      throw new Error('simulated crash');
+    });
+
+    writeCorpus([makeEntry('features/optihashi')], {});
+    await expect(ingestHelpDatalake(h.deps, opts())).rejects.toThrow('simulated crash');
+
+    expect(h.files.some(f => f.id === removedId)).toBe(false);
   });
 
   it('re-creates every member when the deployment embedding model changed', async () => {

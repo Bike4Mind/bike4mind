@@ -131,15 +131,19 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |
 | `recall`/`prec`/`hit`/`mrr` | did the wider band actually buy better retrieval, or just rescale the same ordering? |
 
-The last six columns all read `n/a` when no captured document matches a supporting slug in `corpus.ts`
-(the report says so in a note). `posTop`/`negTop` are partitioned by `supporting.length`, so on a lake
-the ground truth does not describe, the "positive" and "negative" halves are an arbitrary split and
-their gap is noise. `band` and `spread` need no labels and stay valid.
+The last six columns read `n/a` for an arm whose captured documents match no supporting slug in
+`corpus.ts` (the report says so in a note, **naming the arms** - it is a per-arm property, and on a
+mixed set the other rows' cells are real numbers). `posTop`/`negTop` are partitioned by
+`supporting.length`, so on a lake the ground truth does not describe, the "positive" and "negative"
+halves are an arbitrary split and their gap is noise. `band` and `spread` need no labels and stay
+valid.
 
 PARTIAL overlap gets its own note, because the all-or-nothing check above passes on it: a lake sharing
 one supporting slug renders a full set of quality columns computed against the whole supporting set,
 so `recall` and `prec` are bounded well below 1 by the corpus rather than by the model. The note states
-the fraction (`3 of 49 supporting documents captured`); compare arms to each other, not to 1.
+each arm's own fraction (`3-small@1536: 3 of 49, ada-002@1536: 2 of 49 supporting documents captured`),
+because coverage really does differ between arms - a `--reuse-stored-vectors` baseline drops a whole
+document whose chunks are unlabeled. Compare arms to each other, not to 1.
 
 Each arm block prints the band **twice**. `overall band` is pooled across every probe question,
 including the 5 deliberate negatives; `positives-only band` is the same statistic over the answerable
@@ -218,17 +222,82 @@ and every cosine is the same width, so the only remaining difference is the one-
 
 ## Results
 
-No credentialed run has happened yet. **Do not fill this in from memory or estimate any cell** - the
-whole point of the harness is that the numbers come from a measurement.
+Captured 2026-09-11 against the `system-help` lake on the `dev` (staging) stage: 51 capturable files,
+452 chunks, 62 files unreachable by the served path. The baseline reused the corpus's stored ada-002
+vectors (0 excluded - no unlabeled, mismatched, missing or wrong-width vector), and both candidates
+were embedded fresh for $0.0140 total. Scores are exact cosine, NOT the ANN path prod measures
+through.
 
-| arm | chunks | band min | band max | width | spread | posTop | negTop | recall | mrr |
-|---|---|---|---|---|---|---|---|---|---|
-| `text-embedding-ada-002@1536` (baseline) | | | | | | | | | |
-| `text-embedding-3-small@1536` | | | | | | | | | |
-| `text-embedding-3-small@512` | | | | | | | | | |
-| `text-embedding-3-large@3072` | | | | | | | | | |
-| `text-embedding-3-large@1536` | | | | | | | | | |
-| `text-embedding-3-large@512` | | | | | | | | | |
+**This corpus is NOT in the long-document regime** (median chunk 638 chars against the prod reference
+of 2182), so read the table for what it can support and no further - see the findings below.
+
+| arm | chunks | band min | band max | width | spread | posTop | negTop | recall | prec | hit | mrr |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `text-embedding-ada-002@1536` (baseline) | 452 | 0.7191 | 0.8110 | 0.0918 | 0.0279 | 0.7699 | 0.7647 | 0.910 | 0.295 | 1.000 | 0.707 |
+| `text-embedding-3-small@1536` | 452 | 0.2293 | 0.5588 | 0.3294 | 0.0968 | 0.4269 | 0.3615 | 0.867 | 0.353 | 1.000 | 0.897 |
+| `text-embedding-3-small@512` | 452 | 0.2608 | 0.5719 | 0.3111 | 0.0940 | 0.4619 | 0.3939 | 0.833 | 0.306 | 0.960 | 0.843 |
+| `text-embedding-3-large@3072` | 452 | 0.2104 | 0.5197 | 0.3093 | 0.0984 | 0.4031 | 0.3246 | 0.877 | 0.338 | 1.000 | 0.890 |
+| `text-embedding-3-large@1536` | 452 | 0.2161 | 0.5430 | 0.3269 | 0.0977 | 0.4261 | 0.3499 | 0.843 | 0.323 | 1.000 | 0.890 |
+| `text-embedding-3-large@512` | 452 | 0.2458 | 0.5946 | 0.3488 | 0.0973 | 0.4599 | 0.3761 | 0.843 | 0.336 | 1.000 | 0.845 |
+
+`prec` and `hit` are added to the columns this section originally listed: the harness prints both, and
+`hit` is what carries the truncation finding below.
+
+### SETTLED: ada-002 loses on every axis that matters
+
+Band width 3.5x, rank-1-to-rank-10 spread 3.5x, MRR 0.707 -> 0.897. The decisive one is the gap between
+`posTop` and `negTop` - how far a real answer outscores the best false lead on a question the corpus
+cannot answer:
+
+| arm | posTop - negTop |
+|---|---|
+| `ada-002@1536` | **0.0052** |
+| `3-small@1536` | 0.0654 |
+| `3-small@512` | 0.0680 |
+| `3-large@1536` | 0.0762 |
+| `3-large@3072` | 0.0785 |
+| `3-large@512` | 0.0838 |
+
+Every 3-* arm separates answerable from unanswerable 12-16x better than ada-002, whose 0.0052 leaves no
+absolute floor able to tell them apart at all. This conclusion does not depend on the corpus regime.
+
+ada-002 does win `recall` (0.910 against 0.867). With `hit` at 1.000 for both that edge buys little - it
+drags more of the supporting set into the top 10 while ranking it worse - but it belongs in the table
+rather than dropped.
+
+### NOT SETTLED: 3-small against 3-large
+
+They are within noise of each other here, and `3-small` costs 6.5x less - which is exactly the tempting
+conclusion this corpus cannot support. At a 638-char median this run reproduces the short-text regime
+the Mementos table was already in, where small ties large for the stated reason that the extra capacity
+is for long documents. Untested, not refuted. **Do not record a model verdict from this run.**
+
+### NEW: 512-dim truncation is not free at this chunk size
+
+Mementos measured 512 lossless on short facts (`b4m-core/memory/src/eval/dimensions.test.ts`). Here it
+costs real quality: `3-small` MRR 0.897 -> 0.843 and hit 1.000 -> 0.960, `3-large` MRR 0.890 -> 0.845.
+`3-small@512` is the only arm in the table that fails to place a supporting document in the top 10 for
+every question. Two points now sit on that curve - lossless at memento length, lossy at 638 chars - and
+the FAB corpus at 2182 chars sits further along the same axis, so expect the loss to grow rather than
+shrink. Directional, not proven.
+
+### NEW: what the measured bands do to the live cosine floors
+
+`3-small@1536` spans 0.2293-0.5588 and `3-large@3072` spans 0.2104-0.5197. The `0.75` floors in
+`forcedRetrieval.ts`, `ChatCompletionFeatures.ts` and `getFirstIterationMementosPreamble.ts` sit ABOVE
+the whole band in either space, so after the flip they reject every chunk on every query - the silent
+outage `b4m-core/common/src/schemas/embedding.ts` records this codebase hitting twice already.
+
+A FAB replacement floor is bracketed by `posTop` and `negTop`: roughly 0.38-0.40 for `3-small@1536`.
+That is NOT `MEMENTO_MIN_SIMILARITY` (0.25), which sits below this corpus's `negTop` of 0.3615 and would
+admit the noise. The memento floor does not transfer to the file corpus.
+
+`FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT` (85) changes character on the flip. Under ada-002 a
+per-turn spread of 0.0279 against a top near 0.77 puts rank 10 at ~96% of rank 1, so 85 rejects nothing.
+Under `3-small` a spread of ~0.097 against a top near 0.43 puts rank 10 near 78%, so 85 begins cutting
+around rank 5-6. Given precision of 0.35 that may well be an improvement, but it is a dormant gate
+switching on rather than a no-op, and it is the opposite direction from the "tune it UPWARD" note at its
+definition.
 
 ## Out of scope
 
@@ -248,3 +317,16 @@ pnpm --filter @bike4mind/scripts retrieval:model-comparison \
 `fixtures/tiny-comparison.fixture.json` is a 16-dim **synthetic** capture with a planted topical
 structure. It exercises the truncation, the scoring and the rendering end to end without credentials.
 No number it produces is a measurement of any embedding model.
+
+It carries `"syntheticMatryoshka": true`, which is what lets a model the registry does not know be
+truncated to a narrower arm. Only a committed test fixture sets it: without the flag, "unregistered
+model" and "synthetic fixture" would be one signal, and a typo in a hand-edited capture
+(`text-embedding-ada-oo2`) would render width arms of a model that never had them.
+
+## Re-capturing after a question is reworded
+
+Every captured query carries a `questionHash` of the `PROBE_QUESTIONS` text it embeds, and
+`loadEmbeddingFixture` checks it. Changing a question's wording therefore invalidates existing
+fixtures by design: the id still matches, so nothing downstream would have noticed that two arms were
+scored on different questions under one label. Re-capture every arm (the whole set - a mixed pair is
+the bug) before scoring again.

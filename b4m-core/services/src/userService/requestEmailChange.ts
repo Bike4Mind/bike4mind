@@ -62,8 +62,10 @@ export const requestEmailChange = async (
 
   await db.users.update(user);
 
-  // Send security notification to current email address
-  if (mailer.sendEmailChangeNotification) {
+  // Send security notification to current email address. An emailless account
+  // (OAuth signup whose provider did not assert a verified email) is using this
+  // same flow to ADD a first email, so there is no old address to alert.
+  if (user.email && mailer.sendEmailChangeNotification) {
     try {
       await mailer.sendEmailChangeNotification(user, newEmail);
     } catch (error) {

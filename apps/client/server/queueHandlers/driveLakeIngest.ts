@@ -1,3 +1,5 @@
+import type { drive_v3 } from '@googleapis/drive';
+import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
   User,
@@ -34,10 +36,20 @@ import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
 } from '@server/integrations/google/drive/common';
-import { createDriveClient, isDriveRateLimitError } from '@server/integrations/google/drive/driveClient';
+import {
+  createDriveClient,
+  isDriveRateLimitError,
+  listChanges,
+  getStartPageToken,
+  isDriveInvalidCursorError,
+  isFolder,
+  type DriveChange,
+  type DriveFile,
+} from '@server/integrations/google/drive/driveClient';
 import {
   walkFolder,
   fetchDriveFileContent,
+  isUnderRoot,
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
 } from '@server/integrations/google/drive/driveContent';
@@ -60,6 +72,10 @@ const Payload = z.object({
   claimToken: z.string().optional(),
   // Continuation depth, incremented per self-re-enqueue and bounded by MAX_INGEST_SLICES.
   slice: z.number().int().min(0).default(0),
+  // Bypass an existing syncCursor and run a full folder walk regardless. Set only by the manual
+  // "Re-sync" button (drive-sync.ts) on an already-connected folder - the explicit "re-sync
+  // everything" action (#2396) - never by the scheduled poll, which always prefers incremental.
+  forceFullWalk: z.boolean().default(false),
 });
 
 // A run that cannot proceed re-enqueues itself (with a delay) rather than dropping the work: a claim
@@ -154,10 +170,141 @@ export function hasDriveFileChanged(
   return false;
 }
 
+export type DriveChangeClassification = {
+  /** Genuinely new files, resolved to live under the connected root - ready to ingest as ADDs. */
+  adds: WalkedDriveFile[];
+  /** Previously-tracked files whose content moved and are still under the connected root. */
+  changed: WalkedDriveFile[];
+  /** driveFileIds to prune: Drive deleted/trashed them, or they moved out of the connected tree. */
+  removedFileIds: string[];
+  /**
+   * Entries this run could not DECIDE: the ancestry lookup hit a transient Drive failure, so neither
+   * "under the root" nor "moved out" was proven and the entry was left unapplied. Non-zero means this
+   * run's delta is incomplete and the caller must hold the cursor back - see the note in the header.
+   */
+  ambiguous: number;
+};
+
 /**
- * Background reconcile of an org Google Drive folder against a data lake (#1589, #1591). Walks the
- * folder, diffs it against the files this connection has already ingested, and applies the delta:
- * ADD a new file, RE-INGEST an edited one, and REMOVE from the lake one that is gone from the folder.
+ * Strip a changes.list `file`'s ancestry-only fields (`parents`, `trashed`) down to the plain
+ * WalkedDriveFile shape `walkFolder` produces, so a candidate looks identical to downstream code
+ * regardless of which sync mode found it.
+ */
+function toWalkedDriveFile(file: DriveFile & { parents?: string[]; trashed?: boolean }): WalkedDriveFile {
+  const { parents: _parents, trashed: _trashed, ...driveFile } = file;
+  return { ...driveFile, relativePath: driveFile.name };
+}
+
+/**
+ * Turn one `changes.list` page into the same ADD/CHANGE/REMOVE shape a full-walk diff produces
+ * (driveLakeIngest's dispatch), so the candidate-cap check, the apply/retire logic and the per-file
+ * ingest loop run identically regardless of which one supplied the delta.
+ *
+ * The Changes API is Drive-wide, not folder-scoped (see driveClient.listChanges), so a file this
+ * connection has never seen has its live membership PROVEN via isUnderRoot - the one extra Drive cost
+ * incremental sync pays, and only for genuinely new candidates. An already-tracked file skips that
+ * check (newestCopyOf already proves it belongs here) unless it no longer resolves under the root, in
+ * which case it is folded into removedFileIds - matching what a full walk would report for a file
+ * that moved out of the tree (present elsewhere in Drive, but no longer a candidate here).
+ *
+ * The feed is a LOG, not a snapshot: one record per modification, and Drive only collapses records
+ * WITHIN a page. A file renamed and later edited, or edited either side of a page boundary, arrives
+ * as several entries for one fileId. They are collapsed to the last entry per id up front (last wins -
+ * it is the file's most recent state) because the downstream apply is not idempotent per id: a
+ * doubled add ingests two FabFiles for one Drive file, and a doubled removal makes the second
+ * removeFileFromLake throw NotFoundError mid-prune, outside the try that settles reclaimed bytes.
+ * Same hazard the full walk's `seenIds` de-dup exists to prevent.
+ *
+ * isUnderRoot can also throw (a TRANSIENT Drive failure mid ancestry-walk, not a confirmed answer -
+ * see its doc comment). That is caught here per-candidate rather than left to fail the whole batch:
+ * a new file is excluded from this run, and an already-tracked file is left untouched rather than
+ * evicted - misreading a Drive hiccup as "moved out of the tree" would silently drop a still-live
+ * file from the lake. Neither is a free skip: the feed reports a modification ONCE, so a caller that
+ * advanced its cursor past an unresolved entry would never be told about it again, and the file would
+ * sit missing (or stale) until a human clicked Re-sync. Every such entry is counted into `ambiguous`
+ * so the caller can hold the cursor and let the next poll replay the same window - cheap, and
+ * idempotent, since anything already applied diffs out as a no-op.
+ */
+export async function classifyDriveChanges(
+  drive: drive_v3.Drive,
+  changes: DriveChange[],
+  rootFolderId: string,
+  newestCopyOf: (driveFileId: string) => { driveMd5Checksum?: string; driveModifiedTime?: Date | string } | undefined,
+  logger: Pick<Logger, 'warn'>
+): Promise<DriveChangeClassification> {
+  const adds: WalkedDriveFile[] = [];
+  const changed: WalkedDriveFile[] = [];
+  const removedFileIds: string[] = [];
+  const ancestryCache = new Map<string, string[] | null>();
+  let ambiguous = 0;
+
+  // Last entry per fileId wins; Map.set keeps the first insertion's position, so feed order is
+  // otherwise preserved. See the header for why a repeated id is not survivable downstream.
+  const latestPerFileId = new Map<string, DriveChange>();
+  for (const change of changes) latestPerFileId.set(change.fileId, change);
+
+  for (const { fileId, removed, file } of latestPerFileId.values()) {
+    const tracked = newestCopyOf(fileId);
+    const gone = removed || file?.trashed === true;
+
+    if (tracked) {
+      if (gone) {
+        removedFileIds.push(fileId);
+        continue;
+      }
+      if (!file || isFolder(file)) continue; // nothing ingestible changed
+      let underRoot: boolean;
+      try {
+        underRoot = await isUnderRoot(drive, file.parents, rootFolderId, ancestryCache);
+      } catch (e) {
+        ambiguous++;
+        logger.warn('[driveLakeIngest] ancestry check failed for a tracked file; leaving it in place this run', {
+          fileId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        continue;
+      }
+      if (!underRoot) {
+        removedFileIds.push(fileId); // moved out of the connected tree
+      } else if (hasDriveFileChanged(tracked, file)) {
+        changed.push(toWalkedDriveFile(file));
+      }
+      continue;
+    }
+
+    if (gone || !file || isFolder(file)) continue; // never tracked; nothing to remove or add
+    let underRoot: boolean;
+    try {
+      underRoot = await isUnderRoot(drive, file.parents, rootFolderId, ancestryCache);
+    } catch (e) {
+      ambiguous++;
+      logger.warn('[driveLakeIngest] ancestry check failed for a new file; excluding it from this run', {
+        fileId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      continue;
+    }
+    if (underRoot) {
+      // Flat relativePath (bare name, no ancestor path): reconstructing the full nested path here
+      // would cost the same ancestor walk again for display purposes only. A subsequent full walk
+      // (cursor invalidation, or an explicit Re-sync) fills in the real path - relativePath is
+      // display metadata, not an identity key (dedup and diff are keyed on driveFileId throughout).
+      adds.push(toWalkedDriveFile(file));
+    }
+  }
+
+  return { adds, changed, removedFileIds, ambiguous };
+}
+
+/**
+ * Background reconcile of an org Google Drive folder against a data lake (#1589, #1591, #2396). Gets
+ * this run's ADD/RE-INGEST/REMOVE delta one of two ways - a `changes.list` pull scoped to what
+ * happened since the connection's stored syncCursor (incremental; the common case once one exists),
+ * or a full recursive folder walk (first sync, an invalidated cursor, or an explicit "Re-sync
+ * everything") - then applies it identically either way: ADD a new file, RE-INGEST an edited one, and
+ * REMOVE from the lake one that is gone from the connected tree. See the mode branch just above the
+ * candidate-cap enforcement for how each one computes pureAdds/changed/removed/walkedIds, and
+ * classifyDriveChanges for how a Drive-wide changes feed is narrowed to this connection's own subtree.
  * Adds/re-ingests fetch and upload ONE file at a time - creating a lake-tagged FabFile and its
  * batch-manifest entry BEFORE the bytes land - and let the existing S3 objectCreated -> chunk ->
  * vectorize -> finalize pipeline do the rest. Both the manual Re-sync button and the scheduled poll
@@ -283,7 +430,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   try {
     const payload = Payload.parse(JSON.parse(event.Records[0].body));
     connectionId = payload.connectionId;
-    const { redriveCount, resumeBatchId, slice } = payload;
+    const { redriveCount, resumeBatchId, slice, forceFullWalk } = payload;
     logger.updateMetadata({ handler: 'driveLakeIngest', connectionId });
 
     // `?? ` alone is not enough: a non-finite reading is not nullish and every comparison against it
@@ -399,6 +546,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             // resumeBatchId, subtract nothing, and re-ingest the chain's already-`pending` tail as
             // duplicate ADDs - the exact spiral chaining exists to prevent.
             ...(resumeBatchId && { resumeBatchId, slice, claimToken: payload.claimToken }),
+            // Forward an explicit "Re-sync everything" through the redrive too - dropping it here
+            // would silently downgrade a manual re-sync into a plain (possibly incremental) run the
+            // moment it lost a claim race, defeating the action the user just took (#2396).
+            ...(forceFullWalk && { forceFullWalk: true }),
           },
           INGEST_REDRIVE_DELAY_SECONDS
         );
@@ -464,76 +615,145 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const accessToken = await getValidConnectionDriveAccessToken(connectionId, connection.organizationId);
     const drive = createDriveClient(accessToken);
 
-    // 1) Walk the folder tree (one level per Drive call, recursed). De-dup by driveFileId: a legacy
-    //    multi-parented Drive file surfaces once per parent inside the walked subtree, and a duplicate
-    //    would otherwise double-ingest (two FabFiles for one add) and double-remove (the second
-    //    removeFileFromLake throws NotFoundError, aborting the reconcile mid-prune).
-    let walkedRaw: WalkedDriveFile[];
-    try {
-      walkedRaw = await walkFolder(drive, connection.driveFolderId, remainingMs);
-    } catch (err) {
-      const timedOut = err instanceof DriveWalkTimeBudgetExceededError;
-      if (!timedOut && !isDriveRateLimitError(err)) throw err;
-      // A throttle that outlived the per-call retries, or a walk that ran out of invocation time, is
-      // not a broken sync. Throwing it on would DLQ the connection after two flat SQS redeliveries -
-      // and each of those re-walks the folder from scratch, re-listing every page it already fetched,
-      // which ADDS load to a quota that may already be exhausted. Shed instead: release the claim and
-      // come back later, on the same jittered delay the content-fetch deferral uses - a timeout gets
-      // it too, not because it needs to dodge a quota, but so a folder that keeps outrunning its
-      // invocation budget doesn't spin straight back into the same wall. Both share redriveCount with
-      // the claim-contention deferral above, so a folder that keeps coming back around - for whatever
-      // reason - cannot spin forever.
+    // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
+    //    happened since the stored cursor) whenever the connection already carries one and the caller
+    //    did not force a full walk, otherwise the full recursive folder walk - first sync, an
+    //    invalidated cursor (Drive expires them - isDriveInvalidCursorError), or the manual "Re-sync
+    //    everything" action (drive-sync.ts sets forceFullWalk on its reconnect branch), or the poll
+    //    cron's periodic forced re-walk (driveLakeResyncPoll.FULL_WALK_INTERVAL_MS - the reconcile for
+    //    subtree moves, which Drive's per-file changes feed cannot report). Whichever mode runs,
+    //    `pendingSyncCursor` is only PERSISTED once this run's delta is fully applied with no
+    //    continuation pending (see the two call sites below) - advancing it any earlier would let a
+    //    chain that stops short skip the very changes it never got to ingest, and an incremental run
+    //    that could not resolve every entry drops it outright for the same reason.
+    let syncMode: 'full' | 'incremental' = 'full';
+    let rawChanges: DriveChange[] = [];
+    let pendingSyncCursor: string | undefined;
+
+    /**
+     * Shed this run instead of failing it: a throttle that outlived the per-call retries, or a walk
+     * that ran out of invocation time, is not a broken sync. Throwing it on would DLQ the connection
+     * after two flat SQS redeliveries - and each of those redoes the Drive pull from scratch, which
+     * ADDS load to a quota that may already be exhausted. Come back later instead, on the same
+     * jittered delay the content-fetch deferral uses - a timeout gets it too, not because it needs to
+     * dodge a quota, but so a folder that keeps outrunning its invocation budget doesn't spin straight
+     * back into the same wall. Shares redriveCount with the claim-contention deferral above, so a
+     * chain that keeps coming back around - for whatever reason - cannot spin forever.
+     *
+     * Callers MUST return immediately after awaiting this: the claim is released and the batch settled.
+     */
+    const deferDriveSync = async (
+      phase: 'incremental_pull' | 'folder_walk',
+      reason: 'rate_limited' | 'time_budget_exceeded',
+      err: unknown
+    ) => {
       const delaySeconds = rateLimitBackoffSeconds();
       const canDefer = redriveCount < MAX_INGEST_REDRIVES;
-      logger.warn('[driveLakeIngest] folder walk deferred', {
+      logger.warn('[driveLakeIngest] Drive sync deferred before any diff', {
         connectionId,
         slice,
         redriveCount,
-        reason: timedOut ? 'time_budget_exceeded' : 'rate_limited',
+        phase,
+        reason,
         deferring: canDefer,
         delaySeconds: canDefer ? delaySeconds : undefined,
         error: err instanceof Error ? err.message : String(err),
       });
-      // The walk is the first thing every slice does, so a continuation that dies here produced
+      // This pull is the first thing every slice does, so a continuation that dies here produced
       // nothing: settle its batch rather than leave it `processing` for the reconciler to force-fail,
       // and let the deferred message start a fresh chain.
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       // Release BEFORE enqueuing: the delayed message has to find a 'connected' connection to claim
       // when it lands, or it would just lose the claim and spend a deferral on the wrong problem. An
       // enqueue that then throws falls to the catch below and out to SQS with the claim already
-      // released, so the redelivery can re-walk rather than the connection stranding at 'syncing'.
+      // released, so the redelivery can retry rather than the connection stranding at 'syncing'.
       await releaseClaim(
         canDefer
           ? null
           : // redriveCount is shared with the claim-contention deferral above, so a chain landing here
             // may have spent most of its deferrals on someone else's sync being in flight, not on this -
             // never attribute the full count to one cause the operator cannot verify.
-            `This sync's folder walk did not finish - Google Drive rate-limiting and/or the invocation's ` +
-              `time budget - and gave up after ${MAX_INGEST_REDRIVES} total deferrals without listing the ` +
-              `folder. Nothing was ingested. The next scheduled poll retries it; if it keeps happening, sync ` +
-              `fewer folders on the same schedule.`
+            `This sync never got as far as reading your folder's contents - Google Drive rate-limiting ` +
+              `and/or the invocation's time budget - and gave up after ${MAX_INGEST_REDRIVES} total ` +
+              `deferrals. Nothing was ingested. The next scheduled poll retries it; if it keeps happening, ` +
+              `sync fewer folders on the same schedule.`
       );
       ingestClaimToken = undefined;
       if (canDefer) {
         await sendToQueue(
           Resource.driveLakeIngestQueue.url,
-          { connectionId, redriveCount: redriveCount + 1 },
+          // Carry forceFullWalk across the deferral: a user who asked for "Re-sync everything" must
+          // still get a full walk when the retry lands, not a silent downgrade to incremental.
+          { connectionId, redriveCount: redriveCount + 1, ...(forceFullWalk && { forceFullWalk: true }) },
           delaySeconds
         );
       }
-      return;
+    };
+
+    if (!forceFullWalk && connection.syncCursor) {
+      try {
+        const pulled = await listChanges(drive, connection.syncCursor);
+        syncMode = 'incremental';
+        rawChanges = pulled.changes;
+        pendingSyncCursor = pulled.newStartPageToken;
+      } catch (e) {
+        if (isDriveInvalidCursorError(e)) {
+          logger.info('[driveLakeIngest] stored Drive cursor is invalid; falling back to a full walk', {
+            connectionId,
+          });
+        } else if (isDriveRateLimitError(e)) {
+          // Same shed as a throttled walk below. Deferring leaves syncCursor untouched, so the retry
+          // pulls the same delta from the same point rather than skipping past it.
+          await deferDriveSync('incremental_pull', 'rate_limited', e);
+          return;
+        } else {
+          throw e;
+        }
+      }
     }
-    const walkedIds = new Set<string>();
-    const walked = walkedRaw.filter(f => {
-      if (walkedIds.has(f.id)) return false;
-      walkedIds.add(f.id);
+
+    // De-dup by driveFileId: a legacy multi-parented Drive file surfaces once per parent inside the
+    // walked subtree, and a duplicate would otherwise double-ingest (two FabFiles for one add) and
+    // double-remove (the second removeFileFromLake throws NotFoundError, aborting mid-prune). Only
+    // meaningful in full-walk mode; incremental mode reassigns `walked` below, once its own delta is
+    // known, purely for the cap check and logging - it never populates walkedRaw/seenIds.
+    let walkedRaw: WalkedDriveFile[] = [];
+    if (syncMode === 'full') {
+      // Baseline cursor BEFORE the walk, not after. A file created mid-walk - after its parent folder
+      // was already listed - is in neither the walk's result nor, if the token were taken afterwards,
+      // the first incremental pull: its change record would already sit behind that cursor. On a large
+      // first sync that blind window is minutes wide. Taking it first inverts the error into a harmless
+      // one - the first incremental pull replays some changes this walk already covered, and they diff
+      // out as no-ops (hasDriveFileChanged) against the set this run is about to store.
+      //
+      // Not fatal on failure: the walk still reconciles, the connection just falls back to another full
+      // walk next time instead of going incremental.
+      pendingSyncCursor = await getStartPageToken(drive).catch(e => {
+        logger.warn('[driveLakeIngest] could not establish a Drive changes cursor before a full walk', {
+          connectionId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return undefined;
+      });
+      try {
+        walkedRaw = await walkFolder(drive, connection.driveFolderId, remainingMs);
+      } catch (err) {
+        const timedOut = err instanceof DriveWalkTimeBudgetExceededError;
+        if (!timedOut && !isDriveRateLimitError(err)) throw err;
+        await deferDriveSync('folder_walk', timedOut ? 'time_budget_exceeded' : 'rate_limited', err);
+        return;
+      }
+    }
+    const seenIds = new Set<string>();
+    let walked = walkedRaw.filter(f => {
+      if (seenIds.has(f.id)) return false;
+      seenIds.add(f.id);
       return true;
     });
 
-    // 2) Diff the walk against everything THIS connection has in the lake, keyed by the stable
-    //    driveFileId, and split into ADD (new), UPDATE (same id, moved md5/modifiedTime), and
-    //    REMOVE (in the lake, gone from the folder). The stored set is the connection's own files
-    //    so a re-sync never touches files added by other means.
+    // 2) Diff against everything THIS connection has in the lake, keyed by the stable driveFileId,
+    //    into ADD (new), UPDATE (same id, content moved) and REMOVE (gone from the tree). The stored
+    //    set is the connection's own files so a re-sync never touches files added by other means.
     const datalakeTag = lake.datalakeTag;
     const existingDocs = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, datalakeTag);
     //    One driveFileId can map to SEVERAL stored copies: `main`'s add-only handler had no walk
@@ -556,24 +776,64 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       copies.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
     const newestCopyOf = (driveFileId: string) => existingByDriveId.get(driveFileId)?.[0];
-    const pureAdds = walked.filter(f => !existingByDriveId.has(f.id));
-    const changed = walked.filter(f => {
-      const prior = newestCopyOf(f.id);
-      return prior != null && hasDriveFileChanged(prior, f);
-    });
-    let removed = existingDocs.filter(doc => doc.driveFileId != null && !walkedIds.has(doc.driveFileId));
 
-    // Transient-glitch guard: an EMPTY walk while the lake still holds this connection's files is
-    // far likelier a permission blip or a Drive hiccup than a real empty-out. walkFolder throws on a
-    // listing error (so an empty result is a genuine "no children", not a truncated one), but
-    // pruning an entire lake on one empty pass is too destructive to trust - refuse it. A real
-    // empty-out still reconciles once even one file remains to anchor the walk as trustworthy.
-    if (walked.length === 0 && existingDocs.length > 0) {
-      logger.warn('[driveLakeIngest] folder walk returned empty while lake holds files; skipping prune', {
-        connectionId,
-        existing: existingDocs.length,
+    let pureAdds: WalkedDriveFile[];
+    let changed: WalkedDriveFile[];
+    let removed: (typeof existingDocs)[number][];
+    // Everything currently believed live, by driveFileId - what the cap check and the duplicate-retire
+    // scan below both mean by "still in the folder". A full walk answers this directly (walkedIds);
+    // incremental mode has no fresh listing to read it off, so it is reconstructed from what IS known
+    // (the existing set) adjusted by this run's own delta.
+    let walkedIds: Set<string>;
+
+    if (syncMode === 'incremental') {
+      const classified = await classifyDriveChanges(drive, rawChanges, connection.driveFolderId, newestCopyOf, logger);
+      pureAdds = classified.adds;
+      changed = classified.changed;
+      const removedIds = new Set(classified.removedFileIds);
+      // EVERY stored copy of a removed id, not just the newest - matching the full-walk arm below.
+      // The duplicate-retire sweep in step 4b deliberately skips an id gone from the folder (all of
+      // its copies are supposed to be here), and Drive never mentions a removed id again, so no later
+      // incremental run revisits it either. An older copy missed here would stay a live, searchable
+      // lake member holding content the user deleted from Drive, with nothing left to clean it up.
+      removed = classified.removedFileIds.flatMap(id => existingByDriveId.get(id) ?? []);
+      // An unresolved entry means this run's delta is INCOMPLETE, so do not advance past it: dropping
+      // pendingSyncCursor leaves the stored cursor where it is and the next poll re-pulls the same
+      // window. Re-applying a delta is idempotent; losing one of its changes is not (classifyDriveChanges).
+      if (classified.ambiguous > 0) {
+        logger.warn('[driveLakeIngest] holding the Drive cursor back; some changes could not be resolved', {
+          connectionId,
+          ambiguous: classified.ambiguous,
+        });
+        pendingSyncCursor = undefined;
+      }
+      walkedIds = new Set(existingByDriveId.keys());
+      for (const id of removedIds) walkedIds.delete(id);
+      for (const add of pureAdds) walkedIds.add(add.id);
+      // Log/cap-check stand-in for "what this run saw": the actual delta, not a corpus-wide listing
+      // (there isn't one to report - see walkAndDiffSize's use of existingDocs.length below).
+      walked = [...pureAdds, ...changed];
+    } else {
+      pureAdds = walked.filter(f => !existingByDriveId.has(f.id));
+      changed = walked.filter(f => {
+        const prior = newestCopyOf(f.id);
+        return prior != null && hasDriveFileChanged(prior, f);
       });
-      removed = [];
+      removed = existingDocs.filter(doc => doc.driveFileId != null && !seenIds.has(doc.driveFileId));
+      walkedIds = seenIds;
+
+      // Transient-glitch guard: an EMPTY walk while the lake still holds this connection's files is
+      // far likelier a permission blip or a Drive hiccup than a real empty-out. walkFolder throws on a
+      // listing error (so an empty result is a genuine "no children", not a truncated one), but
+      // pruning an entire lake on one empty pass is too destructive to trust - refuse it. A real
+      // empty-out still reconciles once even one file remains to anchor the walk as trustworthy.
+      if (walked.length === 0 && existingDocs.length > 0) {
+        logger.warn('[driveLakeIngest] folder walk returned empty while lake holds files; skipping prune', {
+          connectionId,
+          existing: existingDocs.length,
+        });
+        removed = [];
+      }
     }
 
     // The batch a previous slice of this chain was filling, if this run is a continuation of one. Only
@@ -917,6 +1177,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // A chain whose last slice happened to consume the remainder exactly lands here, with its
         // batch still open on the previous slice's plan. Settle it rather than leaving it processing.
         if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
+        // Nothing was deferred - this run's delta (if any) is fully applied, so it is safe to advance
+        // past it now. Also the O(1) fast path for an incremental poll with zero relevant changes:
+        // nothing below this point runs.
+        if (pendingSyncCursor) {
+          await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date(), {
+            fullWalk: syncMode === 'full',
+          });
+        }
         await releaseClaim(null);
         return;
       }
@@ -1171,6 +1439,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
               resumeBatchId: batch.id,
               slice: slice + 1,
               claimToken: renewedToken,
+              // Carry the CHAIN's mode forward, not the original payload's flag: syncCursor never
+              // advances mid-chain (see the cursor-persistence gate below), so a fresh read on the
+              // next slice would still see the SAME cursor and could wrongly take the incremental
+              // branch there - silently truncating a full walk (first sync, invalidated cursor, or an
+              // explicit "Re-sync everything") the moment it needs more than one slice (#2396).
+              ...(syncMode === 'full' && { forceFullWalk: true }),
             },
             ...backoff
           );
@@ -1233,6 +1507,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           : rateLimited
             ? `Google Drive is rate-limiting this sync, and it stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files still to ingest. Those files are NOT in the lake yet. The next scheduled poll retries them; if it keeps happening, sync fewer folders on the same schedule.`
             : `Sync stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files left. The next scheduled poll continues from here; split very large folders into subfolders to converge faster.`;
+      // Advance the cursor ONLY on a clean finish (deferred === 0, stoppedShort null): a chain that
+      // hit the slice ceiling still has files it never got to, and advancing past them here would
+      // make the "next scheduled poll continues from here" promise above false - a poll that goes
+      // incremental from an already-advanced cursor would never see them again.
+      if (deferred === 0 && pendingSyncCursor) {
+        await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date(), {
+          fullWalk: syncMode === 'full',
+        });
+      }
       await releaseClaim(stoppedShort);
     } finally {
       await flushReclaimedStorage();

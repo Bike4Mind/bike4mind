@@ -3,6 +3,7 @@
   "dims": 16,
   "corpus": "tiny-comparison (synthetic, NOT a measurement)",
   "capturedAt": "2026-09-08T00:00:00.000Z",
+  "syntheticMatryoshka": true,
   "filesInScope": 7,
   "chunksExcluded": 2,
   "filesExcluded": 1,
@@ -512,7 +513,8 @@
         0.360971,
         0.43252,
         0.309997
-      ]
+      ],
+      "questionHash": "b6876de6ab2f2dbc"
     },
     {
       "id": "q02",
@@ -533,7 +535,8 @@
         -0.289218,
         -0.144808,
         -0.282048
-      ]
+      ],
+      "questionHash": "6be6fc98be57a029"
     },
     {
       "id": "q04",
@@ -554,7 +557,8 @@
         0.094336,
         0.20785,
         -0.071765
-      ]
+      ],
+      "questionHash": "da3d9648b6f188cc"
     },
     {
       "id": "q10",
@@ -575,7 +579,8 @@
         0.340423,
         -0.247334,
         -0.159628
-      ]
+      ],
+      "questionHash": "c760e723e4fb372d"
     },
     {
       "id": "n03",
@@ -596,7 +601,8 @@
         0.331217,
         -0.271363,
         0.115505
-      ]
+      ],
+      "questionHash": "a1c674eb71c085c3"
     }
   ]
 }
