@@ -837,13 +837,18 @@ jobs:
   # holds regardless of deployability. On a deployable docs PR the suites also run in
   # the shards; the duplicate is ~1 min and worth the unconditional guarantee.
   #
-  # Deliberately does NOT need core-build: the help tooling imports only glob/gray-matter
-  # (see loadHelpArticles.ts), so this stays a light, standalone leg that a non-deployable
-  # run can satisfy on its own.
+  # `ingestHelpDatalake.ts` (and its test) now pulls in @bike4mind/common, so this leg
+  # does need the core build after all. `needs: core-build` alone would make this job
+  # inherit core-build's skip on a non-deployable (docs-only) run, defeating the guard
+  # this job exists for - so it stays gated on `docs-changed` via an explicit `if`, and
+  # tolerates core-build having been skipped (falling back to a local build below).
   help-docs:
     name: Help Docs Guards
-    needs: changes
-    if: needs.changes.outputs.docs-changed == 'true'
+    needs: [changes, core-build]
+    if: |
+      always() &&
+      needs.changes.outputs.docs-changed == 'true' &&
+      (needs.core-build.result == 'success' || needs.core-build.result == 'skipped')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
@@ -877,6 +882,20 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
+        continue-on-error: true
+
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
 
       - name: Run help corpus and help-id suites
         run: pnpm --filter @bike4mind/scripts exec vitest run help/__tests__
