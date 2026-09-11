@@ -7,7 +7,8 @@ import path from 'node:path';
  * Guards the CI-wiring gap in #2210: .husky/check-help-content.sh enforces the Help AI chat's
  * "every indexed article has a vector" invariant, but a diff that touches ONLY that file is
  * `deployable=false` (`.husky/**` is on changes-filter's exclude list) AND `docs-changed=false`
- * (docs-paths only covers docs-site/**), so every job gated on either flag skips - and a skipped
+ * (docs-paths covers docs-site/** and packages/scripts/help/**, neither of which matches a
+ * .husky-only diff), so every job gated on either flag skips - and a skipped
  * required check counts as passing. Nothing in CI would ever run the script on a diff shaped
  * exactly like an edit to itself.
  *
