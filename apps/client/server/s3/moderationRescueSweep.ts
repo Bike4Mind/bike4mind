@@ -34,14 +34,29 @@ export async function runModerationRescueSweep({
   const cutoff = new Date(Date.now() - MODERATION_STALE_MS);
 
   // A row stranded on 'scanning' (a claim whose scan crashed before releasing it) can never be
-  // re-claimed by the pending|null CAS, so first return stale claims to 'pending'.
+  // re-claimed by the pending|null CAS, so first return stale claims to 'pending'. Gate on
+  // moderationClaimedAt (stamped when the claim was taken), not updatedAt: timestamps bumps updatedAt
+  // on any write, so an unrelated edit to a scanning row would reset its staleness clock. Fall back
+  // to updatedAt only for legacy rows claimed before moderationClaimedAt existed.
   await FabFile.updateMany(
-    { moderationStatus: 'scanning', updatedAt: { $lt: cutoff } },
+    {
+      moderationStatus: 'scanning',
+      deletedAt: null, // matches missing-or-null; never revive a soft-deleted row
+      $or: [
+        { moderationClaimedAt: { $lt: cutoff } },
+        { moderationClaimedAt: { $exists: false }, updatedAt: { $lt: cutoff } },
+      ],
+    },
     { $set: { moderationStatus: 'pending' } }
   );
 
   const stuck = await FabFile.find(
-    { moderationStatus: 'pending', createdAt: { $lt: cutoff }, filePath: { $exists: true, $nin: [null, ''] } },
+    {
+      moderationStatus: 'pending',
+      deletedAt: null, // matches missing-or-null; a soft-deleted upload is not stranded, skip it
+      createdAt: { $lt: cutoff },
+      filePath: { $exists: true, $nin: [null, ''] },
+    },
     { filePath: 1, userId: 1 }
   )
     .limit(limit)

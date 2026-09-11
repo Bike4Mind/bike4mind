@@ -85,6 +85,30 @@ async function seedPending(filePath: string, mimeType: string) {
   return doc;
 }
 
+async function seedScanning(filePath: string, mimeType: string) {
+  const doc = await FabFile.create({
+    userId: 'user1',
+    fileName: 'f',
+    type: KnowledgeType.FILE,
+    filePath,
+    mimeType,
+    moderationStatus: 'scanning',
+  });
+  // Old createdAt + old moderationClaimedAt, but a FRESH updatedAt: the stale-claim reclaim must key
+  // on moderationClaimedAt (claim age), so a bumped updatedAt must not keep this crashed row stuck.
+  await FabFile.collection.updateOne(
+    { _id: doc._id },
+    {
+      $set: {
+        createdAt: new Date(Date.now() - STALE_AGE_MS),
+        moderationClaimedAt: new Date(Date.now() - STALE_AGE_MS),
+        updatedAt: new Date(),
+      },
+    }
+  );
+  return doc;
+}
+
 describe('runModerationRescueSweep (DB integration)', () => {
   it('retires never-uploaded orphans terminally and does not starve a genuinely-stranded row', async () => {
     // 3 orphans: rows whose presigned upload was abandoned, so the S3 object was never written.
@@ -135,5 +159,18 @@ describe('runModerationRescueSweep (DB integration)', () => {
     const row = await FabFile.findOne({ filePath: 'flaky.txt' }).lean();
     expect(row?.moderationStatus).toBe('pending');
     expect(row?.blockReason).toBeFalsy();
+  });
+
+  it('reclaims a crashed scanning row by claim age (not updatedAt) and rescans it', async () => {
+    // A claim whose scan crashed before releasing it: stuck 'scanning' with an OLD claim stamp but a
+    // FRESH updatedAt. Only a moderationClaimedAt-gated reclaim frees it; an updatedAt-gated one would
+    // leave it stuck forever. Object exists (non-image), so once reclaimed it resolves clean.
+    store.objects.set('crashed.txt', Buffer.from('recovered plain text, not an image'));
+    await seedScanning('crashed.txt', 'text/plain');
+
+    await runModerationRescueSweep({ enabled: true, limit: 5, logger });
+
+    const row = await FabFile.findOne({ filePath: 'crashed.txt' }).lean();
+    expect(row?.moderationStatus).toBe('clean');
   });
 });

@@ -2730,6 +2730,11 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // confirmed-explicit match from a format the scanner structurally couldn't process
     // (e.g. 'unsupported_format'), so ops can tell the two apart without CloudWatch.
     blockReason: { type: String, required: false },
+    // Stamped when a moderation scan claim flips this row pending -> scanning, so the rescue sweep
+    // can reclaim a crashed 'scanning' row by CLAIM age. updatedAt is unusable for that: timestamps
+    // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
+    // while moderationStatus === 'scanning'.
+    moderationClaimedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },

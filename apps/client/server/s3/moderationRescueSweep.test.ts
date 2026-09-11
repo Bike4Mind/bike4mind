@@ -31,7 +31,10 @@ describe('runModerationRescueSweep', () => {
     await runModerationRescueSweep({ enabled: true, limit: 50, logger });
     const [filter, update] = h.updateMany.mock.calls[0];
     expect(filter.moderationStatus).toBe('scanning');
-    expect(filter.updatedAt.$lt).toBeInstanceOf(Date);
+    expect(filter.deletedAt).toBe(null);
+    // Gated on the dedicated claim stamp (with a legacy updatedAt fallback), not updatedAt directly.
+    expect(filter.$or[0].moderationClaimedAt.$lt).toBeInstanceOf(Date);
+    expect(filter.$or[1].updatedAt.$lt).toBeInstanceOf(Date);
     expect(update.$set.moderationStatus).toBe('pending');
   });
 
@@ -40,6 +43,7 @@ describe('runModerationRescueSweep', () => {
     await runModerationRescueSweep({ enabled: true, limit: 50, logger });
     const filter = h.find.mock.calls[0][0];
     expect(filter.moderationStatus).toBe('pending');
+    expect(filter.deletedAt).toBe(null);
     expect(filter.createdAt.$lt).toBeInstanceOf(Date);
     expect(filter.filePath.$exists).toBe(true);
   });

@@ -31,7 +31,7 @@ export function buildKnowledgeModerationDeps(
     claim: async filePath => {
       const claimed = await FabFile.findOneAndUpdate(
         { filePath, moderationStatus: { $in: ['pending', null] } },
-        { $set: { moderationStatus: 'scanning' } },
+        { $set: { moderationStatus: 'scanning', moderationClaimedAt: new Date() } },
         { new: true }
       );
       return claimed ? { _id: claimed._id, id: claimed.id, mimeType: claimed.mimeType } : null;
