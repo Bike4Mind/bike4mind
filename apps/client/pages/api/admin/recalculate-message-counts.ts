@@ -11,14 +11,22 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
 
 /**
  * The spider operations whose handlers settle through `recordSessionOperationalUsage`, and so are
- * the ones a credit pre-flight can size. `messageCount` is a pure recount; `curation` and
- * `embeddings` run through their own handlers and billing paths. Typed against the operation
- * union so a renamed or misspelled member fails the build rather than silently costing nothing.
+ * the ones a credit pre-flight can size, mapped to the session field whose absence means the
+ * handler will still act on that notebook (`server/events/spider.ts:96-99`). The other three
+ * record no operational usage at all: `messageCount` is a pure recount, `curation` publishes to a
+ * handler with no billing path, and the spider generates embeddings inline without recording
+ * usage. Typed against the operation union so a renamed member fails the build rather than
+ * silently costing nothing.
  */
-const SPENDING_SPIDER_OPERATIONS: ReadonlySet<SpiderOperation> = new Set<SpiderOperation>([
-  'summarize',
-  'tags',
-]);
+const SPENDING_SPIDER_OPERATIONS = {
+  summarize: 'summaryAt',
+  tags: 'taggedAt',
+} as const satisfies Partial<Record<SpiderOperation, string>>;
+
+type SpendingSpiderOperation = keyof typeof SPENDING_SPIDER_OPERATIONS;
+
+const isSpendingSpiderOperation = (operation: SpiderOperation): operation is SpendingSpiderOperation =>
+  operation in SPENDING_SPIDER_OPERATIONS;
 
 /**
  * Admin endpoint to trigger Spider job for comprehensive notebook grooming
@@ -60,15 +68,31 @@ const handler = baseApi().post(
 
       // Admin-gated is not credit-gated (#1852): the spider fans summarize/tag out across every
       // notebook this user owns, so an ungated run is the largest operational spend on the
-      // platform. Sized to the operations that actually settle through recordOperationalUsage -
-      // messageCount does no model call, embeddings and curation bill through their own paths.
-      // Skipped on a dry run, which publishes the same events but performs no model calls.
-      const billableOperationCount =
-        totalNotebooks * requestedOperations.filter(operation => SPENDING_SPIDER_OPERATIONS.has(operation)).length;
+      // platform. Skipped on a dry run, which publishes the same events but performs no model
+      // calls.
       if (!dryRun) {
+        // Sized to the work the handler will actually do, not to `totalNotebooks`: it skips an
+        // already-groomed notebook per operation, so pricing a re-run at notebooks x operations
+        // would refuse an 800-notebook account 1600 credits for the five notebooks left to do.
+        // Deduped because the requested list is caller-supplied and a repeat would double-count.
+        const ungroomedCounts = await Promise.all(
+          Array.from(new Set(requestedOperations))
+            .filter(isSpendingSpiderOperation)
+            .map(operation =>
+              sessionRepository.count({
+                userId,
+                $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
+                // `null` matches missing-or-null, which is what the handler's `!session.summaryAt`
+                // test accepts.
+                [SPENDING_SPIDER_OPERATIONS[operation]]: null,
+              })
+            )
+        );
+
         await assertSessionOperationalCredits({
           userId,
-          operationCount: billableOperationCount,
+          requesterId: userId,
+          operationCount: ungroomedCounts.reduce((total, count) => total + count, 0),
           operation: 'notebook grooming',
           logger: req.logger,
         });

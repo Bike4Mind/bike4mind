@@ -21,6 +21,7 @@ const handler = baseApi().post(
     // requester, who may only hold update permission on a shared session.
     await assertSessionOperationalCredits({
       userId: session.userId,
+      requesterId: req.user?.id,
       operationCount: 1,
       operation: 'session tagging',
       logger: req.logger,
