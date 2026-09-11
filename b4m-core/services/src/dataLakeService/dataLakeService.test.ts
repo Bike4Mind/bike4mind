@@ -364,6 +364,42 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
       assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationIds: ['orgB'] }), { db })
     ).rejects.toThrow(/not found/i);
   });
+
+  // #2510: the grant arm must NOT be skipped just because the slug matches a registry id.
+  // disambiguateSlug only reserves the org-less meta-tag (datalake:<slug>), so an ORG-SCOPED lake
+  // may legitimately carry a registry slug; skipping the query for it hands back the synthetic
+  // registry lake in place of the caller's own grant-held lake - a wrong lake, not a denial.
+  it('an org-scoped DB lake carrying a registry slug still resolves via a foreign-org grant', async () => {
+    const shadow = lake({
+      id: 'real-db-id',
+      slug: 'opti-knowledge',
+      createdByUserId: 'other',
+      organizationId: 'orgA',
+    });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+        findBySlugAmongIds: vi
+          .fn()
+          .mockImplementation(async (_s: string, ids: string[]) => (ids.includes(shadow.id) ? shadow : null)),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: shadow.id, role: 'owner' }]),
+        listByLake: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: shadow.id, principalType: 'user', principalId: 'grantee', role: 'owner' }]),
+      },
+    };
+
+    // The Opti tag is held on purpose: it is what would make the fallback resolve and mask the bug.
+    const resolved = await assertLakeAccess(
+      'opti-knowledge',
+      ctx({ userId: 'grantee', organizationIds: ['orgB'], userTags: ['opti'] }),
+      { db }
+    );
+    expect(resolved.id).toBe('real-db-id');
+  });
 });
 
 /**
@@ -478,6 +514,27 @@ describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => 
       assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgA'] }), { db })
     ).resolves.toBe(theirs);
     expect(findBySlugAmongIds).not.toHaveBeenCalled();
+  });
+
+  // #2510: previously uncaught - a transient grants-collection failure propagated straight out of
+  // assertLakeAccess, 500ing a request path (e.g. sessions/create.ts) that had no prior dependency
+  // on that collection. It must degrade like every other optional-adapter read in this file.
+  it('degrades to no grant-held match when the grants query fails, rather than throwing raw', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockRejectedValue(new Error('grants collection unavailable')),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
   });
 });
 
