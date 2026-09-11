@@ -1,6 +1,8 @@
 import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
 import {
   classifyStage,
+  FEEDBACK_LIST_DEFAULT_LIMIT,
+  FEEDBACK_LIST_MAX_LIMIT,
   FEEDBACK_SUBJECTS,
   FeedbackEvents,
   FeedbackStatus,
@@ -42,9 +44,6 @@ import type { FilterQuery } from 'mongoose';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
 
-export const FEEDBACK_LIST_DEFAULT_LIMIT = 20;
-export const FEEDBACK_LIST_MAX_LIMIT = 100;
-
 /**
  * Fields the admin triage table and its CSV export actually read, as an allowlist.
  *
@@ -53,7 +52,7 @@ export const FEEDBACK_LIST_MAX_LIMIT = 100;
  * would ship the per-report diagnostic blob with every row of every page. `contentStored` is
  * required by hydrateFeedbackText to tell an expired report from one that never had text.
  */
-const FEEDBACK_LIST_FIELDS = [
+export const FEEDBACK_LIST_FIELDS = [
   'userId',
   'content',
   'contentStored',

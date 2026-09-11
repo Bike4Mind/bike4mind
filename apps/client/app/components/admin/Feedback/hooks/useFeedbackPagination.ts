@@ -1,36 +1,32 @@
-import { useState, useMemo } from 'react';
-import { IExtendedFeedbackDocument, UseFeedbackPaginationReturn } from '../types';
+import { useCallback, useState } from 'react';
+import { FEEDBACK_LIST_DEFAULT_LIMIT } from '@bike4mind/common';
+import { UseFeedbackPaginationReturn } from '../types';
 
-export const useFeedbackPagination = (
-  filteredAndSortedFeedback: IExtendedFeedbackDocument[]
-): UseFeedbackPaginationReturn => {
+/**
+ * Page cursor for the feedback list.
+ *
+ * Holds only the page and page size: the rows themselves come back already paginated from
+ * GET /api/feedback, so there is nothing to slice here. This hook is declared BEFORE the query
+ * that consumes it, because its values are query inputs rather than results.
+ */
+export const useFeedbackPagination = (): UseFeedbackPaginationReturn => {
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [itemsPerPage, setItemsPerPage] = useState(FEEDBACK_LIST_DEFAULT_LIMIT);
 
-  const totalPages = Math.ceil(filteredAndSortedFeedback.length / itemsPerPage);
-
-  const currentFeedback = useMemo(() => {
-    const indexOfLast = currentPage * itemsPerPage;
-    const indexOfFirst = indexOfLast - itemsPerPage;
-    return filteredAndSortedFeedback.slice(indexOfFirst, indexOfLast);
-  }, [filteredAndSortedFeedback, currentPage, itemsPerPage]);
-
-  const handlePageChange = (newPage: number) => {
+  const handlePageChange = useCallback((newPage: number) => {
     setCurrentPage(newPage);
-  };
+  }, []);
 
-  const handleItemsPerPageChange = (items: number) => {
+  const handleItemsPerPageChange = useCallback((items: number) => {
     setItemsPerPage(items);
     setCurrentPage(1);
-  };
+  }, []);
 
-  return {
-    currentPage,
-    setCurrentPage,
-    currentFeedback,
-    totalPages,
-    handlePageChange,
-    itemsPerPage,
-    handleItemsPerPageChange,
-  };
+  // Filters narrow the result set, so page 7 of the old set may not exist in the new one - which
+  // would otherwise show an empty table with no indication why.
+  const resetPage = useCallback(() => {
+    setCurrentPage(1);
+  }, []);
+
+  return { currentPage, handlePageChange, itemsPerPage, handleItemsPerPageChange, resetPage };
 };

@@ -39,12 +39,28 @@ import { useFeedbackOperations } from './hooks/useFeedbackOperations';
 import { useFeedbackFilters } from './hooks/useFeedbackFilters';
 import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent } from './types';
+import { FEEDBACK_EXPORT_MAX_ROWS, getAllFeedbackForExport } from '@client/app/utils/feedbackAPICalls';
+import { toast } from 'sonner';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { FEEDBACK_ID_PARAM } from '@bike4mind/common';
+import FocusedFeedbackCard from './FocusedFeedbackCard';
+import FeedbackRowLinks from './FeedbackRowLinks';
+import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
 
 const FeedbackTab: React.FC = () => {
   const isMobile = useIsMobile();
+  // Declaration order is the data flow: the page cursor and the filters are INPUTS to the server
+  // query, not results of it. Filtering and paging both moved server-side, so nothing here slices
+  // a local array any more.
+  const { currentPage, handlePageChange, itemsPerPage, handleItemsPerPageChange, resetPage } = useFeedbackPagination();
+
+  const { filters, setSearchTerm, setStatusFilters, setSelectedOrganizations, toggleSortDirection, filterParams } =
+    useFeedbackFilters(resetPage);
+
   const {
-    feedback,
+    feedback: currentFeedback,
     organizations,
+    total,
     loading,
     refreshFeedback,
     handleStatusChange,
@@ -52,24 +68,46 @@ const FeedbackTab: React.FC = () => {
     confirmDeleteFeedback,
     openDeleteFeedbackModal,
     toggleDeleteFeedbackModal,
-  } = useFeedbackOperations();
+  } = useFeedbackOperations({ ...filterParams, page: currentPage, limit: itemsPerPage });
 
-  const {
-    filters,
-    setSearchTerm,
-    setStatusFilters,
-    setSelectedOrganizations,
-    toggleSortDirection,
-    filteredAndSortedFeedback,
-  } = useFeedbackFilters(feedback);
+  const totalPages = Math.max(1, Math.ceil(total / itemsPerPage));
 
-  const { currentPage, currentFeedback, totalPages, handlePageChange, itemsPerPage, handleItemsPerPageChange } =
-    useFeedbackPagination(filteredAndSortedFeedback);
+  // A deep link names one report. It is pinned above the list rather than highlighted in place:
+  // with server-side paging and filtering the linked report is usually not on the current page.
+  const { [FEEDBACK_ID_PARAM]: focusedFeedbackId } = useSearch({ strict: false }) as { feedbackId?: string };
+  const navigate = useNavigate();
+
+  const dismissFocusedFeedback = () => {
+    navigate({
+      to: '/admin',
+      search: previous => ({ ...previous, [FEEDBACK_ID_PARAM]: undefined }),
+      replace: true,
+    });
+  };
 
   const statusOptions = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed];
 
-  const handleExportToCSV = () => {
-    const csvData = filteredAndSortedFeedback.map(feedbackItem => ({
+  // Pages through every match server-side. Exporting `currentFeedback` would silently emit one
+  // page now that the list is paginated, which reads as a complete export of a much smaller
+  // dataset.
+  const handleExportToCSV = async () => {
+    let exported: Awaited<ReturnType<typeof getAllFeedbackForExport>>;
+    try {
+      exported = await getAllFeedbackForExport(filterParams);
+    } catch (error) {
+      console.error('Error exporting feedback:', error);
+      toast.error('Failed to export feedback.', { closeButton: true, position: 'bottom-left' });
+      return;
+    }
+
+    if (exported.truncated) {
+      toast.warning(`Export capped at ${FEEDBACK_EXPORT_MAX_ROWS} rows - narrow the filters for the rest.`, {
+        closeButton: true,
+        position: 'bottom-left',
+      });
+    }
+
+    const csvData = exported.items.map(feedbackItem => ({
       ID: feedbackItem._id,
       Status: feedbackItem.status,
       Username: feedbackItem.username,
@@ -209,7 +247,7 @@ const FeedbackTab: React.FC = () => {
                       </Tooltip>
                       <Tooltip title="Export CSV">
                         <IconButton
-                          disabled={loading || filteredAndSortedFeedback.length === 0}
+                          disabled={loading || total === 0}
                           onClick={handleExportToCSV}
                           color="success"
                           variant="outlined"
@@ -226,14 +264,21 @@ const FeedbackTab: React.FC = () => {
           </Stack>
         </Grid>
 
+        {focusedFeedbackId && (
+          <Grid xs={12}>
+            <FocusedFeedbackCard feedbackId={focusedFeedbackId} onDismiss={dismissFocusedFeedback} />
+          </Grid>
+        )}
+
         <Grid xs={12} mb={0.5} pb={0.7} sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
           <PaginationControls
             currentPage={currentPage}
             onPageChange={handlePageChange}
             totalPages={totalPages}
-            totalItems={filteredAndSortedFeedback.length}
+            totalItems={total}
             itemsPerPage={itemsPerPage}
             onItemsPerPageChange={handleItemsPerPageChange}
+            pageLimitOptions={FEEDBACK_PAGE_SIZE_OPTIONS}
           />
         </Grid>
 
@@ -351,6 +396,7 @@ const FeedbackTab: React.FC = () => {
                                 </Option>
                               ))}
                             </Select>
+                            <FeedbackRowLinks feedbackItem={feedbackItem} />
                             <Tooltip title="Delete" color="danger">
                               <IconButton
                                 size="sm"
@@ -534,6 +580,7 @@ const FeedbackTab: React.FC = () => {
                                 </Option>
                               ))}
                             </Select>
+                            <FeedbackRowLinks feedbackItem={feedbackItem} />
                             <Tooltip title="Delete" color="danger">
                               <IconButton
                                 size="sm"

@@ -30,13 +30,30 @@ export interface FeedbackFilters {
   sortAscending: boolean;
 }
 
-export interface FeedbackState {
-  feedback: IExtendedFeedbackDocument[];
+/**
+ * The filter half of the server query, as GET /api/feedback understands it. Kept separate from
+ * page/limit so a CSV export can reuse the same filters while paging independently.
+ */
+export interface FeedbackListFilterParams {
+  status?: FeedbackStatus[];
+  organization?: string[];
+  search?: string;
+  sort: 'asc' | 'desc';
+}
+
+export type FeedbackListParams = FeedbackListFilterParams & {
+  page: number;
+  limit: number;
+};
+
+/** Response envelope of GET /api/feedback. */
+export interface FeedbackListResponse {
+  items: IExtendedFeedbackDocument[];
+  total: number;
+  page: number;
+  limit: number;
+  /** Distinct organization labels across the caller's whole accessible set, for the filter menu. */
   organizations: string[];
-  loading: boolean;
-  currentPage: number;
-  feedbackToDelete: string | null;
-  openDeleteFeedbackModal: boolean;
 }
 
 // Hook return types
@@ -46,22 +63,25 @@ export interface UseFeedbackFiltersReturn {
   setStatusFilters: React.Dispatch<React.SetStateAction<Record<FeedbackStatus, boolean>>>;
   setSelectedOrganizations: (orgs: string[]) => void;
   toggleSortDirection: () => void;
-  filteredAndSortedFeedback: IExtendedFeedbackDocument[];
+  /** Debounced, server-ready filter query. Feeds both the list and the CSV export. */
+  filterParams: FeedbackListFilterParams;
 }
 
 export interface UseFeedbackPaginationReturn {
   currentPage: number;
-  setCurrentPage: (page: number) => void;
-  currentFeedback: IExtendedFeedbackDocument[];
-  totalPages: number;
   handlePageChange: (newPage: number) => void;
   itemsPerPage: number;
   handleItemsPerPageChange: (items: number) => void;
+  /** Called when a filter changes: the current page number may not exist in the new result set. */
+  resetPage: () => void;
 }
 
 export interface UseFeedbackOperationsReturn {
+  /** The current page of results, already filtered and sorted by the server. */
   feedback: IExtendedFeedbackDocument[];
   organizations: string[];
+  /** Total matching the current filters across all pages - drives pagination and the CSV count. */
+  total: number;
   loading: boolean;
   refreshFeedback: () => Promise<void>;
   handleStatusChange: (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => Promise<void>;
