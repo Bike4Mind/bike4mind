@@ -282,8 +282,11 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
 
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: same reason as OobAlarmTopicEmailSub in dlqAlarms.ts -- the AWS
-    // provider cannot destroy a PendingConfirmation subscription, so retain it in AWS
-    // rather than leaving dangling state if the variable is removed before confirmation.
+    // provider cannot destroy a PendingConfirmation subscription, so retain it rather
+    // than leaving dangling state if the variable is removed before confirmation.
+    // Note: rotating OPS_ALERT_EMAIL is a replace (endpoint is force-new), so the old
+    // subscription is retained rather than unsubscribed -- manually unsubscribe the old
+    // endpoint from the SNS console (us-east-1) after any address change.
     new aws.sns.TopicSubscription(
       'WafOobAlarmTopicEmailSub',
       {
@@ -292,6 +295,12 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
       { provider: wafProviderUsEast1, retainOnDelete: true }
+    );
+  } else {
+    console.warn(
+      `[WARN] OPS_ALERT_EMAIL is unset on stage '${$app.stage}'. ` +
+        `WafOobAlarmTopic will be created with no subscriber -- WafAlarmSlackHandlerDlq alarms ` +
+        `will publish into the void. Set OPS_ALERT_EMAIL in the deploy pipeline variables.`
     );
   }
 
@@ -314,7 +323,7 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       treatMissingData: 'notBreaching',
       dimensions: { QueueName: wafAlarmDlq.name },
       alarmActions: [wafOobAlarmTopic.arn],
-      tags: { Application: 'WafAiRateLimit', Severity: 'Critical', MonitoringType: 'DLQ' },
+      tags: { Application: 'WAF', Severity: 'Critical', MonitoringType: 'DLQ' },
     },
     { provider: wafProviderUsEast1 }
   );
@@ -337,7 +346,7 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       treatMissingData: 'notBreaching',
       dimensions: { QueueName: wafAlarmDlq.name },
       alarmActions: [wafOobAlarmTopic.arn],
-      tags: { Application: 'WafAiRateLimit', Severity: 'High', MonitoringType: 'DLQ' },
+      tags: { Application: 'WAF', Severity: 'High', MonitoringType: 'DLQ' },
     },
     { provider: wafProviderUsEast1 }
   );
