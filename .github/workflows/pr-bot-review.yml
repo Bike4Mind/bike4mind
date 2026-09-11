@@ -378,7 +378,8 @@ jobs:
               prefer editing an existing file over creating a new one. That step
               also refuses outright, pushing nothing at all, if you changed any
               file that configures CI. That is: anything under a REPO-ROOT
-              `.github/`, `.husky/`, `.claude/`, `scripts/`, `infra/` or `patches/`
+              `.github/`, `.husky/`, `.claude/`, `.changeset/`, `scripts/`, `infra/`
+              or `patches/`
               (a nested one like `packages/scripts/` is fine), any `package.json`,
               any of `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`,
               `pnpm-workspace.yaml`, `turbo.json`, `.npmrc` or `.dockerignore`, any
@@ -404,7 +405,7 @@ jobs:
               never end a turn assuming a background agent will report back:
               this run just ends, unreviewed, if you do.
           claude_args: |
-            --model ${{ steps.size_check.outputs.model }}
+            --model "${{ steps.size_check.outputs.model }}"
             # The agent reads untrusted PR and issue text, so it gets no general
             # shell. GitHub access is the official GitHub MCP server, whose tools
             # take typed arguments (owner, repo, pullNumber, body) - there is no
@@ -501,9 +502,12 @@ jobs:
             # a default search path under `$HOME` - a hosted runner puts
             # `/home/runner/.local/bin` first, and every step here resolves `git`, `gh`,
             # `python3` and `jq` by bare name. What closes it is not the PATH but the exec
-            # bit: the agent's write tools create mode 0644, and bash skips a non-executable
-            # match and keeps searching. Stated rather than assumed, because the day a fold
-            # gains a tool that can chmod, this becomes live.
+            # bit: bash skips a non-executable match and keeps searching, and the agent's
+            # write tools create mode 0644. Note the bound precisely - an OVERWRITE
+            # preserves the existing mode, so what closes it is that no already-0755 file
+            # named `git`, `gh`, `python3` or `jq` sits on a `$HOME` PATH entry (all four
+            # resolve under `/usr/bin` on the hosted image). Stated rather than assumed,
+            # because the day a fold gains a tool that can chmod, this becomes live.
             #
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
@@ -746,7 +750,13 @@ jobs:
             # Refused here rather than by the size bound below, which numstat reports
             # as 0 changed lines for a binary however large the rewrite. A fold
             # applies textual review findings, so a staged binary is not one.
-            git -c core.quotePath=false diff --cached --numstat | awk '$1 == "-" { print $3 }'
+            # `core.attributesFile` is `core.excludesFile`'s sibling - another default
+            # path under $HOME with no config entry behind it, so the GIT_CONFIG_* nulling
+            # misses it too. It decides what numstat calls binary, so a planted
+            # `~/.config/git/attributes` holding `* binary` would refuse every fold. The
+            # in-tree `.gitattributes` is unaffected: it is tracked, and blocked above.
+            git -c core.quotePath=false -c core.attributesFile=/dev/null \
+              diff --cached --numstat | awk '$1 == "-" { print $3 }'
           )
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"
@@ -759,7 +769,7 @@ jobs:
           # Size bound, on the same principle: a fold applies review findings, so a
           # sprawling diff means something other than that happened. Counts added
           # plus deleted lines; `-` is numstat's marker for a binary file.
-          CHANGED=$(git diff --cached --numstat |
+          CHANGED=$(git -c core.attributesFile=/dev/null diff --cached --numstat |
             awk '{ n += ($1 == "-" ? 0 : $1) + ($2 == "-" ? 0 : $2) } END { print n + 0 }')
           echo "fold: $CHANGED changed lines staged"
           if [ "$CHANGED" -gt 800 ]; then

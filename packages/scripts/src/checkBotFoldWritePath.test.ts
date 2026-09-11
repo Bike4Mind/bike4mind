@@ -53,7 +53,7 @@ function step(src: string, name: string): string {
   const head = new RegExp(`^ +-\\s+name: ${escaped}(?: \\(.*\\))?$`, 'gm');
   expect([...src.matchAll(head)], `step name is not unique: ${name}`).toHaveLength(1);
   const found = src.match(
-    new RegExp(`^( +)-\\s+name: ${escaped}(?: \\(.*\\))?$[\\s\\S]*?(?=^\\1- |$(?![\\s\\S]))`, 'm')
+    new RegExp(`^( +)-\\s+name: ${escaped}(?: \\(.*\\))?$[\\s\\S]*?(?=^\\1-\\s|$(?![\\s\\S]))`, 'm')
   )?.[0];
   expect(found, `step not found: ${name}`).toBeTruthy();
   return found ?? '';
@@ -83,14 +83,23 @@ function withoutComments(yaml: string): string {
  *
  * Indent is likewise taken from the `run:` line itself by backreference rather than pinned to
  * eight columns: a step at any other nesting is still a step, and pinning the columns made one
- * invisible to the push, `git add` and tree-execution sweeps simultaneously.
+ * invisible to the push, `git add` and tree-execution sweeps simultaneously. `name:` is
+ * OPTIONAL on a step, so the list-item dash may sit on the `run:` line itself - requiring
+ * `run:` to be the first token there blinded all four of those sweeps at once, and prettier
+ * does not normalise the shape away because it has no key to invent.
  */
 function runBodies(src: string): string[] {
   return [
-    ...[...src.matchAll(/^( +)run: [|>][-+]?\d*\n((?:\1 +.*\n|\n)+)/gm)].map(m => m[2]),
-    ...[...src.matchAll(/^ +run: (?![|>][-+]?\d*$)(.*)$/gm)].map(m => m[1]),
+    ...[...src.matchAll(/^( +)(?:- +)?run: [|>][-+]?\d*\n((?:\1 +.*\n|\n)+)/gm)].map(m => m[2]),
+    ...[...src.matchAll(/^ +(?:- +)?run: (?![|>][-+]?\d*$)(.*)$/gm)].map(m => m[1]),
   ].map(withoutComments);
 }
+
+/** Every `git push` invocation in the file, backslash continuations included. */
+const gitPushes = (src: string) =>
+  runBodies(src)
+    .join('\n')
+    .match(/git push(?:[^\n\\]*\\\n)*[^\n]*/g) ?? [];
 
 /**
  * One `run:` body split into commands, each an array of shell words, honouring single quotes,
@@ -151,12 +160,18 @@ function shellCommands(text: string): string[][] {
       started = true;
       continue;
     }
-    if (/\s/.test(char)) {
-      endWord();
-      continue;
-    }
+    // Separators BEFORE whitespace, because a newline is both and the command break is
+    // the stronger reading. With the tests the other way round `\n` took the whitespace
+    // arm and `continue`d, so every line of a `run:` body ran together into one command
+    // whose program was the first word of the body - and a body opening with a data-only
+    // word (`set`, `git`, `echo`) then had everything after it skipped wholesale. A real
+    // tracked script appended inside `Push fold commit` was invisible that way.
     if ('\n;|&(){}`'.includes(char)) {
       endCommand();
+      continue;
+    }
+    if (/\s/.test(char)) {
+      endWord();
       continue;
     }
     word += char;
@@ -251,15 +266,27 @@ function withKeys(src: string, name: string): string[] {
  * line, and an appended `--settings` whose file declares `hooks` is command execution with
  * `Bash` and every write tool denied.
  *
- * `${{ ... }}` collapses to one word because GitHub substitutes it before the action runs, and
- * the two substitutions here (a model id, a tool-list arm) each yield a single word.
+ * GitHub substitutes every `${{ ... }}` before the action runs, so the file's bytes do not
+ * decide the token count at those four positions - the expansion does, and `escapeShellMeta`
+ * (`/[()|&;<>]/g`) touches neither a space nor a `-`. Each one is therefore substituted with a
+ * `expansion` probe rather than assumed to be one word, and the caller runs the same assertions
+ * over a MULTI-WORD probe: that passes only if every expansion sits inside quotes, which is
+ * what actually makes the collapse true. Three of the four were quoted already; the fourth
+ * (`--model`) smuggled a whole `--settings ./x.json` past this pin.
  */
-function claudeArgTokens(src: string): string[] {
+function claudeArgTokens(src: string, expansion = 'EXPANSION'): string[] {
   const block = step(src, 'Run /bot-review').match(/^ {10}claude_args: \|\n((?: {12}.*\n|\n)+)/m)?.[1];
   expect(block, 'no claude_args block').toBeTruthy();
-  const text = withoutComments(block ?? '').replace(/\$\{\{[\s\S]*?\}\}/g, 'EXPANSION');
+  const text = withoutComments(block ?? '').replace(/\$\{\{[\s\S]*?\}\}/g, expansion);
   return [...text.matchAll(/(?:"[^"]*"|'[^']*'|\S)+/g)].map(m => m[0]);
 }
+
+/**
+ * A probe that is several shell words, one of which is a flag that reaches command execution.
+ * Substituted for each `${{ }}` in the block: inside quotes it is one token and changes
+ * nothing; unquoted it becomes separate tokens and `--settings` lands on the flag set.
+ */
+const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
 
 /**
  * The only arguments this job may pass the action. Asserted as a SET, and over the token vector
@@ -595,6 +622,15 @@ describe('bot-fold write path', () => {
     // Single-shot process, so a wakeup can only ever be a lost run. Denied in both arms.
     expect(deny.fold).toContain('ScheduleWakeup');
     expect(deny.review).toContain('ScheduleWakeup');
+
+    // The rest of the deny list, as a set, for the same reason the path specs are: a name
+    // dropped from BOTH arms leaves every surviving assertion here passing. Deny is the side
+    // that decides, so a subtraction here is a widening and has to be a deliberate edit.
+    // `MultiEdit` and `NotebookEdit` are names this CLI does not know, so they deny nothing
+    // today; they are kept because a rename is what would make them live and the cost is nil.
+    const plain = ['Bash', 'MultiEdit', 'NotebookEdit', 'ScheduleWakeup', 'WebFetch', 'WebSearch'];
+    expect(deny.fold.filter(spec => !spec.includes('(')).sort()).toEqual([...plain].sort());
+    expect(deny.review.filter(spec => !spec.includes('(')).sort()).toEqual([...plain, 'Edit', 'Write'].sort());
   });
 
   it('passes the action an allowlisted argument surface and nothing else', () => {
@@ -613,6 +649,12 @@ describe('bot-fold write path', () => {
     expect(step(src, 'Run /bot-review')).toMatch(/^ {8}uses: anthropics\/claude-code-action@v1$/m);
     expect(withKeys(src, 'Run /bot-review').sort()).toEqual(['anthropic_api_key', 'claude_args', 'prompt']);
     assertArgSurface(claudeArgTokens(src));
+    // And again with each `${{ }}` standing for several words, one of them a flag. GitHub
+    // expands these before the action shell-parses the result, so an UNQUOTED expansion is
+    // where the tokenisation stops being the file's to decide - a ternary arm is an ordinary
+    // place to edit and its contents are not pinned anywhere. Quoting is what makes the
+    // one-word reading above true, so it is asserted here rather than assumed.
+    assertArgSurface(claudeArgTokens(src, MULTI_WORD_EXPANSION));
   });
 
   it('sees an argument appended to an existing line, rather than only a new line', () => {
@@ -635,6 +677,14 @@ describe('bot-fold write path', () => {
       expect(injected, 'the injection anchor moved').not.toBe(src);
       expect(() => assertArgSurface(claudeArgTokens(injected)), `not caught: ${suffix}`).toThrow();
     }
+
+    // And the same control for the expansion axis: drop the quotes off any one `${{ }}` and a
+    // multi-word arm reaches the CLI as separate arguments. Fed through the real parser, the
+    // unquoted form yields `extraArgs = {settings: './ci-settings.json'}` - command execution
+    // via a `hooks` block, with `Bash` and every write tool denied.
+    const unquoted = src.replace(/^( {12}--model )"(\$\{\{[^\n]*\}\})"$/m, '$1$2');
+    expect(unquoted, 'the model expansion is no longer quoted or the anchor moved').not.toBe(src);
+    expect(() => assertArgSurface(claudeArgTokens(unquoted, MULTI_WORD_EXPANSION))).toThrow();
   });
 
   it('never runs repo-tracked code out of the checkout', () => {
@@ -666,16 +716,18 @@ describe('bot-fold write path', () => {
       'node "$GITHUB_WORKSPACE/x.js"',
       'npx tsx packages/scripts/src/x.ts',
     ];
-    // Both step SHAPES too. YAML does not care how a list item is spaced, so `-   name:` puts
+    // Every step SHAPE too. YAML does not care how a list item is spaced, so `-   name:` puts
     // the step's keys at column 10 and its body deeper - and every sweep in this file used to
     // key on the six/eight/ten columns this workflow happens to use, so one oddly-indented step
-    // was invisible to all of them at once. Nothing in this repo produces that shape today
-    // (prettier normalises it away), which is exactly why it would not be noticed.
+    // was invisible to all of them at once. `name:` is also OPTIONAL, which puts the dash on the
+    // `run:` line itself; that shape defeated this sweep, the push sweep, the `git add` pin and
+    // the `python3` pin simultaneously, and unlike the odd indent prettier returns it unchanged.
     const shapes = [
       (indicator: string, body: string) =>
         `      - name: Warm the toolchain\n        run: ${indicator}\n          ${body}`,
       (indicator: string, body: string) =>
         `      -   name: Warm the toolchain\n          run: ${indicator}\n            ${body}`,
+      (indicator: string, body: string) => `      - run: ${indicator}\n          ${body}`,
     ];
     for (const shape of shapes) {
       for (const indicator of ['|', '|-', '|+', '>', '>-', '|2']) {
@@ -688,6 +740,28 @@ describe('bot-fold write path', () => {
           expect(checkoutCodeReferences(injected), `not caught under \`run: ${indicator}\`: ${body}`).not.toEqual([]);
         }
       }
+    }
+    // And the one-line forms, named and not, which take no block indicator at all.
+    for (const head of ['      - name: Warm the toolchain\n        run: ', '      - run: ']) {
+      for (const body of shouldBeCaught) {
+        const injected = src.replace(
+          /^ {6}- name: Report skill-fetch failure$/m,
+          `${head}${body}\n      - name: Report skill-fetch failure`
+        );
+        expect(injected, 'the injection anchor moved').not.toBe(src);
+        expect(checkoutCodeReferences(injected), `not caught as a one-line run:: ${body}`).not.toEqual([]);
+      }
+    }
+    // POSITION in the body is the other axis, and the one that mattered most: a newline used
+    // to end a WORD rather than a command, so the lines of a body ran together into a single
+    // command whose program was the body's first word. A body opening `set -euo pipefail` or
+    // `git ...` therefore had everything after it skipped as a data-only command's arguments.
+    // These are injected INSIDE `Push fold commit` - upstream of the path guard, in the step
+    // that holds the push token - which is where it is worth the least to be blind.
+    for (const body of shouldBeCaught) {
+      const injected = src.replace(/^ {10}git add -u$/m, `          git add -u\n          ${body}`);
+      expect(injected, 'the injection anchor moved').not.toBe(src);
+      expect(checkoutCodeReferences(injected), `not caught inside an existing body: ${body}`).not.toEqual([]);
     }
     // Composite actions in this repo are tracked files too, and `uses:` is not a `run:`.
     expect(src).not.toMatch(/uses: \.\//);
@@ -1058,7 +1132,7 @@ describe('bot-fold write path', () => {
     const commands = runBodies(src).join('\n');
     // One push in the job, and the force check is scoped to the invocation rather than to
     // the whole file: `rm -f` elsewhere in the job is not a force-push.
-    const pushes = commands.match(/git push(?:[^\n\\]*\\\n)*[^\n]*/g) ?? [];
+    const pushes = gitPushes(src);
     expect(pushes).toHaveLength(1);
     expect(pushes.join('\n')).not.toMatch(/--force|(?:^|\s)-f(?:\s|$)|\+HEAD/);
     // One ref, and it is the one the PR came from. The literal alone is not enough:
@@ -1086,6 +1160,26 @@ describe('bot-fold write path', () => {
     // the step, plus a file-wide check so a second checkout cannot persist one either.
     expect(step(src, 'Checkout PR head')).toMatch(/^\s*persist-credentials: false$/m);
     expect(src).not.toMatch(/persist-credentials: true/);
+
+    // POSITIVE CONTROL for the sweep, along the axis that defeated it: `name:` is OPTIONAL
+    // on a step, so a second push can be written with the list-item dash on the `run:` line
+    // itself. That shape was invisible to `runBodies` while the identical body under a
+    // `name:` was caught, and prettier leaves it byte-identical - it has no key to invent.
+    const forcePush =
+      'git push --force "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" HEAD:refs/heads/main';
+    const addedSteps = [
+      `      - name: Publish the fold\n        run: |\n          ${forcePush}`,
+      `      - run: |\n          ${forcePush}`,
+      `      - run: ${forcePush}`,
+    ];
+    for (const added of addedSteps) {
+      const injected = src.replace(
+        /^ {6}- name: Report skill-fetch failure$/m,
+        `${added}\n      - name: Report skill-fetch failure`
+      );
+      expect(injected, 'the injection anchor moved').not.toBe(src);
+      expect(gitPushes(injected).length, `a second push was not seen: ${added}`).toBeGreaterThan(1);
+    }
   });
 
   it('gates every bot-review label site on bot-fold too', () => {
