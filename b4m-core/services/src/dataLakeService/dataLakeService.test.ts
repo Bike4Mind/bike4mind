@@ -531,10 +531,17 @@ describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => 
         listByLake: vi.fn().mockResolvedValue([]),
       },
     };
+    const logger = { warn: vi.fn() };
 
     await expect(
-      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db, logger })
     ).rejects.toThrow(/not found/i);
+    // A dropped warn call would go unnoticed - it's the only signal an operator gets that this
+    // degrade path fired at all, since the caller-facing result is identical to "no grant exists".
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[dataLakes] grant-held slug fallback query failed; resolving with no grant reach',
+      expect.any(Error)
+    );
   });
 });
 
