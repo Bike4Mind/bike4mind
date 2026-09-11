@@ -416,8 +416,7 @@ export const buildAccessibleQuery = (
   // (it is the analog of the createdByUserId owner bypass, extended to a transferred/delegated
   // owner-curator-reader). The ids are pre-resolved by the caller from listByPrincipal; an empty
   // list adds no arm, and so does one whose every id is unusable. This covers ONLY persisted grant
-  // rows; the ephemeral tag/entitlement view is
-  // #1673's separate concern.
+  // rows; the ephemeral tag/entitlement view is #1673's separate concern.
   const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.buildAccessibleQuery');
   if (grantedLakeIds.length > 0) nonOwnerArms.push(['grant', { _id: { $in: grantedLakeIds } }]);
 
@@ -603,8 +602,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // extended to a transferred/delegated owner-curator-reader, and it is MEANT to cross orgs).
     // Ids are pre-resolved by the caller from listByPrincipal (grantedLakeReachFor); an empty list
     // adds no arm, and so does one whose every id is unusable. This is what keeps RETRIEVAL in step
-    // with browse - without it a transferred
-    // owner can open a lake but not ground on it.
+    // with browse - without it a transferred owner can open a lake but not ground on it.
     const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.findActiveByUserTagsAndEntitlements');
     if (grantedLakeIds.length > 0) accessArms.push({ _id: { $in: grantedLakeIds } });
 
