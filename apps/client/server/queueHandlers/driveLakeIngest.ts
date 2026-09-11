@@ -34,8 +34,13 @@ import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
 } from '@server/integrations/google/drive/common';
-import { createDriveClient } from '@server/integrations/google/drive/driveClient';
-import { walkFolder, fetchDriveFileContent } from '@server/integrations/google/drive/driveContent';
+import { createDriveClient, isDriveRateLimitError } from '@server/integrations/google/drive/driveClient';
+import {
+  walkFolder,
+  fetchDriveFileContent,
+  DriveWalkTimeBudgetExceededError,
+  type WalkedDriveFile,
+} from '@server/integrations/google/drive/driveContent';
 import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
@@ -57,12 +62,14 @@ const Payload = z.object({
   slice: z.number().int().min(0).default(0),
 });
 
-// A claim loser re-enqueues itself (with a delay) so a GENUINE second sync - files added to the
-// folder while a long run is mid-loop - isn't silently dropped until the next scheduled poll.
-// Bounded so a permanently-losing message can't spin: past this many redrives we give up and let
-// the next real sync pick the files up. Delay x max stays comfortably past the handler's 10-minute
+// A run that cannot proceed re-enqueues itself (with a delay) rather than dropping the work: a claim
+// loser, so a GENUINE second sync - files added to the folder while a long run is mid-loop - isn't
+// silently dropped until the next scheduled poll, and a walk Drive throttled, which defers on the
+// rate-limit backoff below instead of this delay. One counter bounds both, since both mean "this
+// message has come back around" and neither may spin: past this many redrives we give up and let the
+// next real sync pick the files up. Delay x max stays comfortably past the handler's 10-minute
 // in-flight ceiling.
-const MAX_INGEST_REDRIVES = 12;
+export const MAX_INGEST_REDRIVES = 12;
 const INGEST_REDRIVE_DELAY_SECONDS = 90;
 
 // Per-file hard cap. Files are fetched and uploaded ONE at a time (only one buffer is ever live),
@@ -81,8 +88,8 @@ const INGEST_DEADLINE_BUFFER_MS = 90_000;
 
 // Wait before the continuation slice when Drive throttled this one. The jitter is what makes it
 // shedding rather than a reschedule: several connections poll on the same tick against ONE Drive
-// project quota, so a fixed delay would just re-collide them at the new time. Per-call retry inside
-// each Drive call site is separate hardening (#2395); this is the amount the deferral itself needs.
+// project quota, so a fixed delay would just re-collide them at the new time. Shared by both shed
+// points: the throttled content fetch, and the throttled folder walk that has no slice to hand off to.
 const INGEST_RATE_LIMIT_DELAY_SECONDS = 60;
 const INGEST_RATE_LIMIT_JITTER_SECONDS = 30;
 const rateLimitBackoffSeconds = () =>
@@ -461,7 +468,61 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     //    multi-parented Drive file surfaces once per parent inside the walked subtree, and a duplicate
     //    would otherwise double-ingest (two FabFiles for one add) and double-remove (the second
     //    removeFileFromLake throws NotFoundError, aborting the reconcile mid-prune).
-    const walkedRaw = await walkFolder(drive, connection.driveFolderId);
+    let walkedRaw: WalkedDriveFile[];
+    try {
+      walkedRaw = await walkFolder(drive, connection.driveFolderId, remainingMs);
+    } catch (err) {
+      const timedOut = err instanceof DriveWalkTimeBudgetExceededError;
+      if (!timedOut && !isDriveRateLimitError(err)) throw err;
+      // A throttle that outlived the per-call retries, or a walk that ran out of invocation time, is
+      // not a broken sync. Throwing it on would DLQ the connection after two flat SQS redeliveries -
+      // and each of those re-walks the folder from scratch, re-listing every page it already fetched,
+      // which ADDS load to a quota that may already be exhausted. Shed instead: release the claim and
+      // come back later, on the same jittered delay the content-fetch deferral uses - a timeout gets
+      // it too, not because it needs to dodge a quota, but so a folder that keeps outrunning its
+      // invocation budget doesn't spin straight back into the same wall. Both share redriveCount with
+      // the claim-contention deferral above, so a folder that keeps coming back around - for whatever
+      // reason - cannot spin forever.
+      const delaySeconds = rateLimitBackoffSeconds();
+      const canDefer = redriveCount < MAX_INGEST_REDRIVES;
+      logger.warn('[driveLakeIngest] folder walk deferred', {
+        connectionId,
+        slice,
+        redriveCount,
+        reason: timedOut ? 'time_budget_exceeded' : 'rate_limited',
+        deferring: canDefer,
+        delaySeconds: canDefer ? delaySeconds : undefined,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // The walk is the first thing every slice does, so a continuation that dies here produced
+      // nothing: settle its batch rather than leave it `processing` for the reconciler to force-fail,
+      // and let the deferred message start a fresh chain.
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      // Release BEFORE enqueuing: the delayed message has to find a 'connected' connection to claim
+      // when it lands, or it would just lose the claim and spend a deferral on the wrong problem. An
+      // enqueue that then throws falls to the catch below and out to SQS with the claim already
+      // released, so the redelivery can re-walk rather than the connection stranding at 'syncing'.
+      await releaseClaim(
+        canDefer
+          ? null
+          : // redriveCount is shared with the claim-contention deferral above, so a chain landing here
+            // may have spent most of its deferrals on someone else's sync being in flight, not on this -
+            // never attribute the full count to one cause the operator cannot verify.
+            `This sync's folder walk did not finish - Google Drive rate-limiting and/or the invocation's ` +
+              `time budget - and gave up after ${MAX_INGEST_REDRIVES} total deferrals without listing the ` +
+              `folder. Nothing was ingested. The next scheduled poll retries it; if it keeps happening, sync ` +
+              `fewer folders on the same schedule.`
+      );
+      ingestClaimToken = undefined;
+      if (canDefer) {
+        await sendToQueue(
+          Resource.driveLakeIngestQueue.url,
+          { connectionId, redriveCount: redriveCount + 1 },
+          delaySeconds
+        );
+      }
+      return;
+    }
     const walkedIds = new Set<string>();
     const walked = walkedRaw.filter(f => {
       if (walkedIds.has(f.id)) return false;
