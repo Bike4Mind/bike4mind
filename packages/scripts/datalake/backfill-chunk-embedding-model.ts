@@ -26,6 +26,7 @@
 
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import mongoose from 'mongoose';
 import { Resource } from 'sst';
 import { connectDB, fabFileChunkRepository, fabFileRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
@@ -45,6 +46,7 @@ async function main(opts: Options): Promise<number> {
   let stampedFiles = 0;
   let stampedChunks = 0;
   const unresolvedFiles = new Set<string>();
+  const unaddressableFileIds = new Set<string>();
 
   for (;;) {
     const missing = await fabFileChunkRepository.findChunksMissingEmbeddingModel({
@@ -55,10 +57,26 @@ async function main(opts: Options): Promise<number> {
     afterChunkId = missing[missing.length - 1].id;
 
     const fileIds = [...new Set(missing.map(c => c.fabFileId))];
-    const files = await Promise.all(fileIds.map(id => fabFileRepository.findById(id)));
-    const fileEmbeddingModels = new Map(fileIds.map((id, i) => [id, files[i]?.embeddingModel]));
 
-    const { plans, unresolved } = planFileBackfills(missing, fileEmbeddingModels);
+    // `fabFileId` is declared as a plain String, so a legacy chunk can hold a value that cannot
+    // address a row by `_id` (observed on real data: a stringified FabFile document). Handing one
+    // to `findById` throws a CastError that rejects the whole `Promise.all`, and since the cursor
+    // is in-process a rerun restarts on the same page - so a single bad row blocks the entire
+    // backfill permanently rather than costing one file. Same rationale, and the same
+    // `isObjectIdOrHexString` over `isValidObjectId` choice, as `usableObjectIds` in
+    // b4m-core/db-core/src/utils/mongo.ts.
+    const addressableIds = new Set(fileIds.filter(id => mongoose.isObjectIdOrHexString(id)));
+    for (const id of fileIds) if (!addressableIds.has(id)) unaddressableFileIds.add(id);
+
+    // Planning is filtered too, not just the lookup: `planFileBackfills` would otherwise guess a
+    // model from vector width for one of these and hand `stampChunkEmbeddingModel` an id it cannot
+    // write, moving the same crash one step later.
+    const stampable = missing.filter(c => addressableIds.has(c.fabFileId));
+    const lookupIds = [...addressableIds];
+    const files = await Promise.all(lookupIds.map(id => fabFileRepository.findById(id)));
+    const fileEmbeddingModels = new Map(lookupIds.map((id, i) => [id, files[i]?.embeddingModel]));
+
+    const { plans, unresolved } = planFileBackfills(stampable, fileEmbeddingModels);
 
     for (const plan of plans) {
       if (opts.execute) {
@@ -83,9 +101,20 @@ async function main(opts: Options): Promise<number> {
     );
     for (const fileId of unresolvedFiles) console.warn(`  UNRESOLVED ${fileId}`);
     console.warn('These remain unlabeled and will keep falling back to the brute-force scan.');
-    return 1;
   }
-  return 0;
+  if (unaddressableFileIds.size > 0) {
+    console.warn(
+      `\n${unaddressableFileIds.size} chunk fabFileId value(s) are not ObjectIds and cannot address a file. ` +
+        'These need data repair; this script cannot stamp them:'
+    );
+    // Truncated: an unaddressable value is not necessarily short - the ones observed in practice
+    // are a whole serialized document, which would bury the rest of this summary.
+    for (const fileId of unaddressableFileIds) {
+      const shown = fileId.length > 60 ? `${fileId.slice(0, 60)}... (${fileId.length} chars)` : fileId;
+      console.warn(`  UNADDRESSABLE ${JSON.stringify(shown)}`);
+    }
+  }
+  return unresolvedFiles.size > 0 || unaddressableFileIds.size > 0 ? 1 : 0;
 }
 
 const argv = yargs(hideBin(process.argv))

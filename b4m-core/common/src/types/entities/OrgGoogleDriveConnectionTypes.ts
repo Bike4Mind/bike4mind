@@ -96,10 +96,12 @@ export interface IOrgGoogleDriveConnection {
   activeIngestBatchId?: string;
 
   /**
-   * One-time-use companion to `activeIngestBatchId`: the CAS value each slice's adoptSyncClaim call
-   * must present, rotated to a fresh value on every successful adopt/renew. `activeIngestBatchId`
-   * cannot itself serve as that CAS value - it stays fixed for the whole chain (it also names the
-   * batch document to resume) - so two deliveries of one continuation message would otherwise both
+   * The CAS value identifying whoever currently holds the 'syncing' claim: minted by claimForSync,
+   * rotated to a fresh value on every successful adopt/renew, and cleared on every release. Each slice
+   * must present the value it was issued to adoptSyncClaim or renewSyncClaim, and consuming it is what
+   * makes those a real compare-and-set. `activeIngestBatchId` cannot serve as that value - it is absent
+   * until a chain's first renew names a batch, and fixed for the whole chain afterwards (it also names
+   * the batch document to resume) - so two deliveries of one continuation message would otherwise both
    * match it and both win. Only meaningful while status === 'syncing'.
    */
   ingestClaimToken?: string;
@@ -112,6 +114,16 @@ export interface IOrgGoogleDriveConnection {
    * also reconciles by modifiedTime. Advance only after a sync batch is durably created.
    */
   syncCursor?: string;
+
+  /**
+   * When this connection last completed a FULL recursive folder walk (as opposed to an incremental
+   * changes pull). Drive's changes feed is per-FILE: moving a folder mutates only that folder's own
+   * `parents` and emits no records for its descendants, so incremental sync alone never notices a
+   * subtree dragged into or out of the connected root. The poll cron re-forces a full walk once this
+   * goes stale (driveLakeResyncPoll), which is the reconcile behind that gap - and the backstop for
+   * any other change an incremental run could not resolve.
+   */
+  lastFullWalkAt?: Date;
 }
 
 export interface IOrgGoogleDriveConnectionDocument extends IOrgGoogleDriveConnection, IMongoDocument {}
@@ -175,18 +187,28 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findByOrganizationIdAny(organizationId: string): Promise<IOrgGoogleDriveConnectionDocument[]>;
 
   /**
-   * The enabled connection feeding a given lake in a given org, if any (excludes credentials).
+   * The ENABLED connection feeding a given lake in a given org, if any (excludes credentials).
    * organizationId is REQUIRED so a missing tenant scope is a compile error, not a review catch.
+   * `enabled: false` is a real state now that archiving/soft-deleting a lake disables its
+   * connection, so a caller that must still reach the row - anything that revokes the grant,
+   * releases the folder claim, or re-enables - wants findByDataLakeIdAny plus its own org check.
+   * That leaves this one with no production callers today; it survives as the enabled-only
+   * semantic the e2e uses to assert a disabled row really is invisible to the poll's view.
    */
   findByDataLakeId(targetDataLakeId: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * The connection bound to a given lake, whatever its `enabled` state, and deliberately WITHOUT an
-   * org filter - the caller is the lake-purge teardown, which must release the folder claim from
-   * whichever org holds it and cannot re-derive that org once the lake document is gone. A disabled
-   * row still occupies the unique driveFolderId index, so `findByDataLakeId`'s enabled-only view
-   * would leave exactly the strand this exists to prevent. Excludes credentials.
-   * SECURITY: server-side teardown only; never hand the result to a cross-org caller.
+   * org filter. Both of those are load-bearing: the lake-purge teardown runs after the lake's org is
+   * no longer resolvable, and a disabled row still occupies the unique driveFolderId index, so
+   * `findByDataLakeId`'s enabled-only view would leave exactly the strand this exists to prevent;
+   * the lake-lifecycle disable/enable seam and the per-lake disconnect route likewise have to see an
+   * already-disabled row. Excludes credentials.
+   * SECURITY: server-side only; never hand it to a cross-org caller. A caller that answers a tenant
+   * must authorize the CALLER against the owning lake's org first - the drive-connection route does
+   * that in resolveOrgLake via verifyOrgAccess. Comparing the returned row's organizationId to a
+   * server-derived one is a consistency check, not an authorization boundary; on its own it would
+   * hand any org's connection to anyone who can name a lake id.
    */
   findByDataLakeIdAny(targetDataLakeId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
@@ -227,8 +249,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * user, scoped to an org. organizationId is REQUIRED so one org can never overwrite another org's
    * credential. Credential + connectedBy are written unconditionally; status/lastError heal to
    * `connected` only from a non-`syncing` state, so a Re-sync during an in-flight ingest cannot flip
-   * the claim and start a duplicate run (see the model note). SECURITY: `encryptedRefreshToken` must
-   * already be encrypted by the caller (packages/database cannot reach the crypto helpers).
+   * the claim and start a duplicate run (see the model note). `enabled` is re-stamped true as well,
+   * which is the ONLY repair for a lifecycle re-enable that was lost - callers must therefore refuse
+   * a lake that is not draft/active, or this re-enables an archived lake's poll (see the model note
+   * and drive-sync.ts). SECURITY: `encryptedRefreshToken` must already be encrypted by the caller
+   * (packages/database cannot reach the crypto helpers).
    */
   updateCredential(
     id: string,
@@ -243,17 +268,28 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
     update: IGoogleDriveConnectionHealthUpdate
   ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
-  /** Advance the incremental-sync cursor after a sync batch is durably created. */
-  updateSyncCursor(id: string, syncCursor: string, polledAt: Date): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  /**
+   * Advance the incremental-sync cursor after a sync batch is durably created. `fullWalk` also stamps
+   * `lastFullWalkAt`, which is what resets the poll cron's forced-re-walk clock.
+   */
+  updateSyncCursor(
+    id: string,
+    syncCursor: string,
+    polledAt: Date,
+    opts?: { fullWalk?: boolean }
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * Guarded per-connection ingest lock. Atomically flips `status` to 'syncing' (stamping
    * `syncClaimedAt`) iff the connection is idle ('connected') OR its existing 'syncing' claim is
    * STALE (older than the Lambda timeout) - so a process that died mid-sync can't wedge it forever,
    * and a claim never lands OVER a credential_error/needs_reconnect state (which a later release
-   * would erase). Returns whether THIS caller won the claim; exactly one concurrent run proceeds.
+   * would erase). Exactly one concurrent run proceeds.
+   *
+   * Returns the freshly-minted `ingestClaimToken` identifying this claim, or null if the claim was
+   * lost. The winner must carry that token into its own renewSyncClaim, which compare-and-sets on it.
    */
-  claimForSync(id: string): Promise<boolean>;
+  claimForSync(id: string): Promise<string | null>;
 
   /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
@@ -272,18 +308,28 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * Hold the claim across a slice boundary: re-stamps `syncClaimedAt` (so the stale-claim window never
    * elapses mid-chain), records the batch the next slice must present to adopt it, and mints a fresh
    * `ingestClaimToken` for that same slice to present. Guarded on 'syncing', and a real compare-and-set
-   * on `expectedToken` (the token THIS run currently holds for the chain, or omitted on a first slice
-   * that never held one) so a caller that already lost the claim to a reclaim/adopt cannot re-point it
-   * back at a chain nobody else is running. Returns the minted token on success, or null.
+   * on `expectedToken` - the token THIS run holds, minted by its own claimForSync or rotated onto it by
+   * adoptSyncClaim - so a caller that already lost the claim to a reclaim/adopt/disconnect cannot
+   * re-point the connection back at a chain nobody else is running. Required for that reason: it is the
+   * only field that distinguishes the holder, since the batch id is absent on a first slice and fixed
+   * for the whole of a later one. Returns the minted token on success, or null.
    */
-  renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken?: string | null): Promise<string | null>;
+  renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken: string): Promise<string | null>;
 
   /**
-   * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'
-   * and can never clobber a terminal status (e.g. credential_error) set underneath it. The success
-   * path releases via `updateHealth({ status: 'connected' })` instead.
+   * The one way an ingest run ends its own claim - both the failure and the success exit. Moves
+   * 'syncing' -> 'connected' and stamps `lastPolledAt`, guarded so it can never clobber a terminal
+   * status (e.g. credential_error) set underneath it, and compare-and-set on `expectedToken` so a run
+   * that already lost the claim cannot release the NEW owner's - which would flip a live ingest back
+   * to 'connected' and let a poll start a competing walk. Losing that race returns null and is not an
+   * error; the new owner releases when it finishes. `lastError` is required and nullable because both
+   * exits share this method: a string records the failure, null heals.
    */
-  releaseSyncClaim(id: string, lastError?: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  releaseSyncClaim(
+    id: string,
+    expectedToken: string,
+    lastError: string | null
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be

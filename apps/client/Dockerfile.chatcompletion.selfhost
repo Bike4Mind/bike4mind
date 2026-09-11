@@ -32,6 +32,10 @@ COPY --parents **/package.json ./
 # 1a) apps/client's postinstall needs its scripts present before install.
 COPY apps/client/scripts ./apps/client/scripts
 
+# 1b) pnpm hashes every patchedDependencies entry during install, so patches/ must be
+#     present before it runs or the install ENOENTs.
+COPY patches ./patches
+
 # 2) Install the client workspace + all workspace deps INCLUDING devDeps (tsx). No --prod.
 RUN pnpm install --frozen-lockfile --filter @bike4mind/client...
 

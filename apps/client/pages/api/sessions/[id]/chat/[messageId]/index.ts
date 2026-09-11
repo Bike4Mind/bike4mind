@@ -2,7 +2,7 @@ import { questRepository, sessionRepository } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IChatHistoryItem, redactPromptMetaForViewer } from '@bike4mind/common';
+import { canUpdateShareable, IChatHistoryItem, redactPromptMetaForViewer } from '@bike4mind/common';
 
 const handler = baseApi()
   /**
@@ -74,9 +74,9 @@ const handler = baseApi()
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      const userHasAccess = session.userId === userId || session.users?.some(userShare => userShare.userId === userId);
-
-      if (!userHasAccess) {
+      // Update-level, not any-share: rewriting a stored reply is a write to the owner's notebook,
+      // so a read-only share must not reach it. The GET above stays read-level on purpose.
+      if (!canUpdateShareable(session, userId, req.user?.groups ?? [])) {
         return res.status(403).json({ error: 'Not authorized to update this session' });
       }
 

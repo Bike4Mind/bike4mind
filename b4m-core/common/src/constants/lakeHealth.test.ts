@@ -1,10 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, CHARS_PER_TOKEN_SERVE_BOUND, SERVE_CHUNK_CHARS_CEILING } from './chunking';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  CHARS_PER_TOKEN_SERVE_BOUND,
+  CHUNKLESS_STALL_REASONS,
+  SERVE_CHUNK_CHARS_CEILING,
+} from './chunking';
 import {
   resolveLakeHealthPolicy,
   evaluateMemberHealth,
+  selectLakeHealthMembers,
   summarizeLakeHealth,
   findDuplicateMembers,
+  isLeaseHeld,
+  deriveLakeMemoryState,
+  LAKE_MEMORY_EXTRACTION_LEASE_MS,
   type LakeHealthMemberInput,
 } from './lakeHealth';
 import { isMemberIndexingInFlight } from './lakeConvergence';
@@ -451,12 +460,18 @@ describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, no
     ...over,
   });
 
-  it('fails P3 on its proven zero rather than grading unknown', () => {
-    const r = evaluateMemberHealth(stranded(), DEFAULT_POLICY);
-    expect(r.status.fullyVectorized).toBe('fail');
-    expect(r.failed).toContain('fullyVectorized');
-    expect(r.reachableChars).toBe(0);
-    expect(r.measured).toBe(true);
+  // Driven from the subset rather than `stranded()`'s default alone. A file that arrived empty
+  // (`unchunkedPaused`) and one a wave emptied (`rechunkPaused`) are the same halted state by the time
+  // they reach this grader, so they must grade identically - and a loop keeps a future chunk-arm
+  // reason covered without editing this test.
+  it('fails P3 on its proven zero rather than grading unknown, for every chunk-arm reason', () => {
+    for (const chunkStallReason of CHUNKLESS_STALL_REASONS) {
+      const r = evaluateMemberHealth(stranded({ chunkStallReason }), DEFAULT_POLICY);
+      expect(r.status.fullyVectorized).toBe('fail');
+      expect(r.failed).toContain('fullyVectorized');
+      expect(r.reachableChars).toBe(0);
+      expect(r.measured).toBe(true);
+    }
   });
 
   it('is named in the drill-down, and drops the lake off a fully-passing predicate tally', () => {
@@ -486,6 +501,18 @@ describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, no
   it('leaves the vectorize-arm marker alone - it has chunks, so it grades on its real rollups', () => {
     const r = evaluateMemberHealth(stranded({ chunkCount: 0, chunkStallReason: 'vectorizePaused' }), DEFAULT_POLICY);
     expect(r.status.fullyVectorized).toBe('unknown');
+  });
+
+  // The ADMISSION half of the same fix, and inert without it either way round: grading a chunkless
+  // member correctly buys nothing if the selector drops it before the grader sees it, which is why
+  // both key on the same subset. The unmarked row is the control - nothing distinguishes it from an
+  // image or a pending upload, so it stays out.
+  it('admits every chunk-arm reason into the graded set, and still leaves an unmarked chunkless member out', () => {
+    for (const chunkStallReason of CHUNKLESS_STALL_REASONS) {
+      expect(selectLakeHealthMembers([stranded({ chunkStallReason })])).toHaveLength(1);
+    }
+    expect(selectLakeHealthMembers([stranded({ chunkStallReason: 'vectorizePaused' })])).toEqual([]);
+    expect(selectLakeHealthMembers([stranded({ chunkStallReason: null })])).toEqual([]);
   });
 });
 
@@ -753,5 +780,85 @@ describe('findDuplicateMembers', () => {
       { fabFileId: 'e', fileName: 'triple.txt', fileSize: 1 },
     ]);
     expect(result.groups.map(g => g.fileName)).toEqual(['triple.txt', 'pair.txt']);
+  });
+});
+
+describe('isLeaseHeld', () => {
+  const now = new Date('2026-09-06T12:00:00.000Z');
+
+  it('is false when there is no lease timestamp', () => {
+    expect(isLeaseHeld(null, now)).toBe(false);
+    expect(isLeaseHeld(undefined, now)).toBe(false);
+  });
+
+  it('is true for a lease claimed within the lease window', () => {
+    const at = new Date(now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS / 2);
+    expect(isLeaseHeld(at, now)).toBe(true);
+  });
+
+  it('is true for a lease claimed exactly at the edge of the lease window', () => {
+    const at = new Date(now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS);
+    expect(isLeaseHeld(at, now)).toBe(true);
+  });
+
+  it('is false for a lease older than the lease window (a crashed run)', () => {
+    const at = new Date(now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS - 1);
+    expect(isLeaseHeld(at, now)).toBe(false);
+  });
+
+  it('accepts an ISO string the same as a Date', () => {
+    const at = new Date(now.getTime() - 1000).toISOString();
+    expect(isLeaseHeld(at, now)).toBe(true);
+  });
+
+  it('is false for an unparseable string', () => {
+    expect(isLeaseHeld('not-a-date', now)).toBe(false);
+  });
+});
+
+describe('deriveLakeMemoryState', () => {
+  const base = { platformEnabled: true, lakeEnabled: true, building: false, everBuilt: true, stale: false };
+
+  it('returns platform-off when the platform kill-switch is off, regardless of everything else', () => {
+    expect(
+      deriveLakeMemoryState({
+        ...base,
+        platformEnabled: false,
+        lakeEnabled: true,
+        building: true,
+        everBuilt: true,
+        stale: true,
+      })
+    ).toBe('platform-off');
+  });
+
+  it('returns lake-off when the lake itself is disabled, even mid-build with a profile', () => {
+    expect(deriveLakeMemoryState({ ...base, lakeEnabled: false, building: true, everBuilt: true, stale: true })).toBe(
+      'lake-off'
+    );
+  });
+
+  it('returns building when a build is in flight, even for a lake with no profile yet', () => {
+    expect(deriveLakeMemoryState({ ...base, building: true, everBuilt: false })).toBe('building');
+  });
+
+  it('returns never-built when nothing is building and no profile exists yet', () => {
+    expect(deriveLakeMemoryState({ ...base, everBuilt: false })).toBe('never-built');
+  });
+
+  it('returns stale when a profile exists but the lake has synced since it was built', () => {
+    expect(deriveLakeMemoryState({ ...base, everBuilt: true, stale: true })).toBe('stale');
+  });
+
+  it('returns current when a profile exists, is not stale, and nothing is building', () => {
+    expect(deriveLakeMemoryState(base)).toBe('current');
+  });
+
+  it('returns building even when the existing profile is stale (building outranks stale)', () => {
+    expect(deriveLakeMemoryState({ ...base, building: true, everBuilt: true, stale: true })).toBe('building');
+  });
+
+  it('returns never-built ahead of stale when no profile exists yet', () => {
+    expect(deriveLakeMemoryState({ ...base, everBuilt: false, stale: true })).toBe('never-built');
   });
 });

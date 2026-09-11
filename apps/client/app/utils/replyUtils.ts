@@ -1,3 +1,5 @@
+import { THINK_CLOSE_TAG, THINK_OPEN_TAG, visibleReplyText } from '@bike4mind/common';
+
 export function extractReplies(messageData: { reply?: string | null; replies?: string[] | undefined }) {
   // Prefer the authoritative array when present, because the server streams into replies[0]
   const sourceReplies =
@@ -12,14 +14,9 @@ export function extractReplies(messageData: { reply?: string | null; replies?: s
   for (const part of sourceReplies) {
     if (!part || !part.trim()) continue;
 
-    // Strip <think> ... </think>
-    let cleaned = part;
-    if (cleaned.includes('<think>') && cleaned.includes('</think>')) {
-      const thinkEndIndex = cleaned.lastIndexOf('</think>');
-      cleaned = cleaned.substring(thinkEndIndex + '</think>'.length).trim();
-    } else if (cleaned.startsWith('<think>') && !cleaned.includes('</think>')) {
-      cleaned = '';
-    }
+    // Shared with the TTFVT latency metric, which must consider text "seen" only once this
+    // renders it - see visibleReplyText in @bike4mind/common.
+    const cleaned = visibleReplyText(part);
 
     if (!cleaned) continue;
 
@@ -52,13 +49,13 @@ export function extractThinking(messageData: { reply?: string | null; replies?: 
   const thinkingParts = initialReplies
     .filter(r => r && r.trim()) // Remove empty or null replies
     .map(reply => {
-      if (reply.includes('<think>') && reply.includes('</think>')) {
-        const thinkStartIndex = reply.indexOf('<think>');
-        const thinkEndIndex = reply.indexOf('</think>');
-        return reply.substring(thinkStartIndex + '<think>'.length, thinkEndIndex).trim();
+      if (reply.includes(THINK_OPEN_TAG) && reply.includes(THINK_CLOSE_TAG)) {
+        const thinkStartIndex = reply.indexOf(THINK_OPEN_TAG);
+        const thinkEndIndex = reply.indexOf(THINK_CLOSE_TAG);
+        return reply.substring(thinkStartIndex + THINK_OPEN_TAG.length, thinkEndIndex).trim();
       }
-      if (reply.startsWith('<think>') && !reply.includes('</think>')) {
-        return reply.substring('<think>'.length).trim();
+      if (reply.startsWith(THINK_OPEN_TAG) && !reply.includes(THINK_CLOSE_TAG)) {
+        return reply.substring(THINK_OPEN_TAG.length).trim();
       }
       return ''; // No thinking content in this reply
     })

@@ -1,20 +1,25 @@
 import {
+  type AttachmentLakeAccess,
   CHUNK_STALL_REASONS,
   CHUNKLESS_STALL_REASONS,
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   type DataLakeMembershipFileCounts,
+  effectiveTagPrefixArm,
   FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
   IFabFileVersion,
+  type LakeMembershipMemberRow,
   FabFileSourceType,
   KnowledgeType,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
+  UNCATEGORIZED_TAG_SUFFIX,
+  type CitableFabFileFields,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -22,10 +27,16 @@ import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
-import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
+import {
+  buildFabFileSearchQuery,
+  buildLakeArms,
+  buildOwnershipConditions,
+  escapeRegex,
+} from '../../queries/fabFileSearchQuery';
 import {
   buildDataLakeMembershipFilter,
   buildDataLakeMembershipQuery,
+  buildDataLakePrefixOnlyMembershipFilter,
   buildLacksContentPrefixTagFilter,
   buildNoOtherLakeMetaTagFilter,
 } from '../../queries/dataLakeLifecycleScope';
@@ -36,6 +47,43 @@ import {
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
 const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
+
+/**
+ * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
+ * (`findDataLakeMembershipMembers`) and the per-name sibling lookup
+ * (`findLakeMemberSiblingsByFileName`). One declaration because the two feed the SAME pure grouping:
+ * a field projected by one and not the other sends the identity refinement down a weaker tier on
+ * whichever path forgot it, with no type error and no visible failure - the admission checkpoint
+ * would just quietly stop distinguishing two `README.md` files that the health report does.
+ *
+ * Shape is pinned by `LakeMembershipMemberRow`.
+ */
+function lakeMembershipMemberProjection(scope: DataLakeMembershipScope): Record<string, unknown> {
+  return {
+    _id: 0,
+    fabFileId: { $toString: '$_id' },
+    fileName: 1,
+    // $ifNull collapses ABSENT to null here on purpose: at this layer both mean "no
+    // fingerprint", and the pure summarizer refuses to prove identity from either (see
+    // isFingerprint). The tri-state distinction matters in the datastore, not in this report.
+    serverTextHash: { $ifNull: ['$serverTextHash', null] },
+    fileSize: { $ifNull: ['$fileSize', null] },
+    createdAt: { $ifNull: ['$createdAt', null] },
+    // Neither arm carries an ownership conjunct for a registry lake, so a same-name group can
+    // span contributors. The repair arm gates deletion on that; without it here the payload
+    // cannot express the gate.
+    userId: { $ifNull: [{ $toString: '$userId' }, null] },
+    // The two stronger source-identity signals (#2238). Null on the doors that record neither,
+    // which is the file-name tier this report used before they existed.
+    relativePath: { $ifNull: ['$relativePath', null] },
+    driveFileId: { $ifNull: ['$driveFileId', null] },
+    // Which arm admitted this member. The meta-tag is authoritative when present; everything
+    // else reaching the caller's $match did so through the prefix arm.
+    arm: {
+      $cond: [{ $in: [scope.datalakeTag, { $ifNull: ['$tags.name', []] }] }, 'meta-tag', 'prefix'],
+    },
+  };
+}
 
 /**
  * Trim, then drop prefixes that cannot be anchored into a meaningful regex. A blank entry
@@ -131,6 +179,25 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
+   * The first `limit` chunks of one file as TEXT ONLY, ascending by `_id` (insertion order, which
+   * bulkInsert preserves - there is no chunkIndex on the schema).
+   *
+   * Exists because `findByFabFileId` is unbounded and returns whole documents INCLUDING `vector`,
+   * which is the overwhelming bulk of a chunk row. The inconsistency detector (#2242) needs prose and
+   * nothing else, over a bounded sample, so it gets a read that cannot accidentally pull embeddings
+   * into app memory. Deliberately per-file rather than batched: one `$in` across a lake with a `$push`
+   * would accumulate every chunk before any cap applied, which is the opposite of bounded.
+   */
+  async findChunkTextSample(fabFileId: string, limit: number): Promise<string[]> {
+    const rows = await this.fabFileChunkModel
+      .find({ fabFileId }, { text: 1, _id: 0 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return rows.map(row => (row as { text?: string }).text ?? '').filter(Boolean);
+  }
+
+  /**
    * One deterministic page of vector-bearing chunks for the given files, ascending by `_id`.
    * Vectorless chunks are filtered at the DB layer and only the fields semantic search needs
    * are projected; `.lean()` skips Mongoose hydration.
@@ -212,6 +279,17 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return rows.map(r => r._id);
   }
 
+  async findFabFileIdsWithChunks(fabFileIds: string[]): Promise<Set<string>> {
+    if (fabFileIds.length === 0) return new Set();
+    // Same shape as findUnderChunkedFabFileIds: $match on the id set, $group to distinct fabFileId,
+    // both served by the { fabFileId: 1, _id: 1 } index. No chunk content is read.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string }>([
+      { $match: { fabFileId: { $in: fabFileIds } } },
+      { $group: { _id: '$fabFileId' } },
+    ]);
+    return new Set(rows.map(r => r._id));
+  }
+
   /**
    * The file's vectorize rollup, computed in ONE pass over its chunks (the fetch is unavoidable -
    * `vector` is in no index - so it must not be paid twice per batch):
@@ -246,6 +324,14 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       { $project: { _id: 0, terminalChunkCount: 1, embeddedChunkCount: 1, embeddedCharCount: 1 } },
     ]);
     return agg ?? { terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 };
+  }
+
+  async findVectorlessChunkIds(fabFileId: string): Promise<string[]> {
+    const docs = await this.fabFileChunkModel
+      .find({ fabFileId, 'vector.0': { $exists: false } })
+      .select({ _id: 1 })
+      .lean();
+    return docs.map(d => String(d._id));
   }
 
   async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
@@ -594,6 +680,35 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toObject());
   }
 
+  async findAccessibleInIds(
+    ids: string[],
+    access: { userId: string; userGroups?: string[] },
+    lakeAccess?: AttachmentLakeAccess
+  ) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    // Lake arms mirror `getAccessibleFiles` (the attachment door): a file the caller can reach ONLY
+    // through data-lake membership must resolve here too, or this predicate would be narrower than
+    // the door that admitted the file and silently drop lake-only images. Same builder, same
+    // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
+    const lakeArms = buildLakeArms({
+      lakeMemberships: lakeAccess?.lakeMemberships,
+      dataLakeTags: lakeAccess?.dataLakeTags,
+      dataLakeTagPrefixes: lakeAccess?.dataLakeTagPrefixes,
+    });
+    const result = await this.fabFileModel.find({
+      _id: { $in: convertIds(validIds) },
+      // owner + user-share + group-share (buildOwnershipConditions) + global-read + lake arms - the
+      // shares-aware equivalent of the CASL FabFile read rule for callers with no req.ability.
+      $or: [
+        ...buildOwnershipConditions(access.userId, { userGroups: access.userGroups }),
+        { isGlobalRead: true },
+        ...lakeArms.map(arm => ({ $and: [arm, { archivedAt: null }] })),
+      ],
+    });
+    return result.map(d => d.toObject());
+  }
+
   /**
    * Metadata-only fetch for a set of ids. The heavy fields AND the URL-bearing
    * ones are projected out (see METADATA_ONLY_PROJECTION), so a caller that only
@@ -657,18 +772,44 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     await this.fabFileModel.deleteMany({ _id: { $in: ids } });
   }
 
-  async getAccessibleFiles(fabFileIds: string[], scope: Record<string, unknown>) {
+  /**
+   * Files matching `scope` (the caller's CASL read ability) OR any lake arm named by
+   * `lakeAccess` - so an attached file the caller can reach only through lake membership still
+   * resolves, not just files they own or were shared. Lake arms are built by `buildLakeArms`, the
+   * same builder retrieval uses, so the two doors can never disagree about what a lake arm matches.
+   *
+   * `archivedAt: null` is ANDed onto the LAKE ARMS ONLY, never at top level: `scope` already
+   * reflects the caller's real ability and has no `archivedAt` filter of its own (an owner's own
+   * archived file must stay reachable here, exactly as before), while an archived lake's members
+   * must stop resolving through the new arm the moment the lake is archived - otherwise archiving a
+   * lake would stop retrieval, browse and counting but not inline delivery of a file the caller does
+   * not own.
+   *
+   * Absent or empty `lakeAccess` reproduces the byte-identical legacy query.
+   */
+  async getAccessibleFiles(fabFileIds: string[], scope: Record<string, unknown>, lakeAccess?: AttachmentLakeAccess) {
     // Filter out invalid ObjectIds to prevent BSONError crashes
     const validIds = fabFileIds.filter(id => mongoose.Types.ObjectId.isValid(id));
 
-    // const accessible = accessibleBy(ability, Permission.update).ofType(FabFile);
-    const filter = {
-      _id: {
-        $in: convertIds(validIds),
-      },
-      ...scope,
-      // ...accessible,
-    };
+    const lakeArms = buildLakeArms({
+      lakeMemberships: lakeAccess?.lakeMemberships,
+      dataLakeTags: lakeAccess?.dataLakeTags,
+      dataLakeTagPrefixes: lakeAccess?.dataLakeTagPrefixes,
+    });
+
+    const filter = lakeArms.length
+      ? {
+          $and: [
+            { _id: { $in: convertIds(validIds) } },
+            { $or: [scope, ...lakeArms.map(arm => ({ $and: [arm, { archivedAt: null }] }))] },
+          ],
+        }
+      : {
+          _id: {
+            $in: convertIds(validIds),
+          },
+          ...scope,
+        };
     return await super.find(filter, { content: 0 });
   }
 
@@ -676,6 +817,29 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findAllByIds(ids: string[]) {
     const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
     return result.map(d => d.toJSON());
+  }
+
+  /**
+   * Existence only, nothing hydrated. See IFabFileRepository.findExistingIdsByIds for why this is not
+   * `findAllByIds`: that one builds a full mongoose document per id to answer the same question.
+   */
+  async findExistingIdsByIds(ids: string[]): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsByIds') } })
+      .select('_id')
+      .lean<{ _id: unknown }[]>();
+    return docs.map(d => String(d._id));
+  }
+
+  /** The citability projection only - see IFabFileRepository.findCitableFieldsByIds. */
+  async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsByIds') } })
+      .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt')
+      .lean<({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]>();
+    // `.lean()` skips the `id` virtual, so map it explicitly rather than leaning on toJSON (which
+    // would defeat the projection by hydrating the document first).
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));
   }
 
   async findByIdAndUserId(id: string, userId: string) {
@@ -719,6 +883,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ batchId, deletedAt: null });
     return result.map(d => d.toJSON());
+  }
+
+  async claimIndexNotification(fabFileId: string, channel: string): Promise<boolean> {
+    // `$ne` in the filter + `$push` in the update, atomically: a concurrent/redelivered caller for
+    // the same (fabFileId, channel) pair loses the race on the filter once the first caller's push
+    // commits, so at most one claim ever succeeds per channel.
+    const res = await this.fabFileModel.updateOne(
+      { _id: fabFileId, 'dispatchedNotifications.channel': { $ne: channel } },
+      { $push: { dispatchedNotifications: { channel, at: new Date() } } }
+    );
+    return res.modifiedCount === 1;
   }
 
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
@@ -1393,6 +1568,163 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
+   * Top content tags for a lake by document count (#1292) - the tag tree read as a topic map.
+   * Same membership + liveness filter as computeDataLakeStats, so a lake's topic list is scoped
+   * identically to its own count and browse rather than by a second, independently-written
+   * predicate (see lakeScope's docblock in knowledgeBaseCount for the parity bug that mistake
+   * caused once already).
+   *
+   * Excludes every signal that made a file a MEMBER rather than describing what it is ABOUT:
+   *  - the `datalake:` meta-tag namespace (NOT_META_TAG, shared with the tag-count surfaces above);
+   *  - for a prefix-arm lake, the bare fileTagPrefix with no suffix - `acme:` alone identifies the
+   *    lake, not a topic within it (mirrors buildLacksContentPrefixTagFilter's same distinction);
+   *  - and `<prefix>uncategorized`, which the write doors (createDataLakeFallbackTagger,
+   *    addFileToDataLake, the backfill migration) stamp on every prefix-arm member carrying no
+   *    other content tag. It means "nothing else covers this file" - a membership placeholder, and
+   *    typically the MODAL tag on a lake, so leaving it in would rank it first and hand the model
+   *    "untagged" as the corpus's leading topic.
+   */
+  async countDataLakeTopicTags(scope: DataLakeMembershipScope, limit = 15): Promise<{ tag: string; count: number }[]> {
+    const bareMembershipPrefix = effectiveTagPrefixArm(scope);
+    const tagFilter = bareMembershipPrefix
+      ? {
+          $and: [
+            { tagNames: NOT_META_TAG },
+            { tagNames: { $nin: [bareMembershipPrefix, `${bareMembershipPrefix}${UNCATEGORIZED_TAG_SUFFIX}`] } },
+          ],
+        }
+      : { tagNames: NOT_META_TAG };
+
+    return this.fabFileModel.aggregate([
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        },
+      },
+      // Dedupe a document's own tag array before unwinding - a file carrying the same tag name
+      // twice (e.g. imported from two sources) must count as ONE document for that topic, not two.
+      // `tags` is [Object] with no sub-schema and legacy rows carry elements with a missing or
+      // non-string `name` (see pullTagsByFabFileId's own $ifNull note above) - filtered out here
+      // rather than surfaced as a spurious "null" topic.
+      {
+        $project: {
+          tagNames: {
+            $setUnion: [
+              {
+                $map: {
+                  input: { $filter: { input: '$tags', as: 't', cond: { $eq: [{ $type: '$$t.name' }, 'string'] } } },
+                  as: 't',
+                  in: '$$t.name',
+                },
+              },
+              [],
+            ],
+          },
+        },
+      },
+      { $unwind: '$tagNames' },
+      { $match: tagFilter },
+      { $group: { _id: '$tagNames', count: { $sum: 1 } } },
+      { $sort: { count: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: { tag: '$_id', count: 1, _id: 0 } },
+    ]);
+  }
+
+  /**
+   * Whole-lake indexing health as five scalars (#1292) - what a corpus-shape answer needs, without
+   * hydrating a row per member to produce them.
+   *
+   * Deliberately NOT `findDataLakeHealthMembers`, and the difference is correctness, not only cost.
+   * That read exists to feed the per-member evaluator, so its `$match` admits only members that
+   * produced chunks (or that the kill switch stopped): a file whose EXTRACTION failed before
+   * chunking is invisible to it, and a caller counting failures from its rows reports "0 failed"
+   * for a lake that has real ones. This runs on the same membership + liveness predicate as
+   * `computeDataLakeStats`, so every live member is in scope and a pre-chunk failure counts.
+   *
+   * The bucket definitions track `evaluateMemberHealth` (@bike4mind/common/constants/lakeHealth),
+   * which is the owner of what these words mean - keep them in step:
+   *  - `fullyVectorizedFiles` keys on `embeddedChunkCount`, the count of vector-bearing ROWS, and
+   *    NOT `vectorizedChunkCount`, which also counts an oversized un-embeddable chunk as done. A
+   *    file the evaluator grades `unknown` (legacy rows with the count absent) is not counted as
+   *    vectorized here either, which is why `inFlightFiles` ships alongside: without it an
+   *    unmeasured member is indistinguishable from a broken one.
+   *  - `failedFiles` is `error` being a NON-EMPTY string, matching the evaluator's `hasError`.
+   *    A legacy `error: ''` row is not a failure, and `{ $ne: null }` would have called it one.
+   */
+  async summarizeDataLakeIndexingHealth(scope: DataLakeMembershipScope): Promise<{
+    chunkedFiles: number;
+    fullyVectorizedFiles: number;
+    failedFiles: number;
+    inFlightFiles: number;
+    totalChunks: number;
+    totalEmbeddedChunks: number;
+  }> {
+    const hasChunks = { $gt: [{ $ifNull: ['$chunkCount', 0] }, 0] };
+    // `$type` rather than a null compare: `error` is a free-form field and a legacy row can carry a
+    // non-string value, which `{ $ne: null }` would read as a failure.
+    const hasError = {
+      $and: [{ $eq: [{ $type: '$error' }, 'string'] }, { $gt: [{ $strLenCP: { $ifNull: ['$error', ''] } }, 0] }],
+    };
+    // The BSON-type aliases, NOT `$type: 'number'`: the aggregation `$type` returns the concrete
+    // alias ('double', 'int', ...) and never the query-operator's 'number' umbrella, so comparing
+    // against 'number' is false for every row - which reads as "no member is measured" and reports
+    // a fully-indexed lake as 0 fully vectorized. `$isNumber` would say this in one word but has no
+    // precedent in this codebase's DocumentDB-compatible pipelines.
+    const embeddedMeasured = { $in: [{ $type: '$embeddedChunkCount' }, ['double', 'int', 'long', 'decimal']] };
+    const fullyVectorized = {
+      $and: [hasChunks, embeddedMeasured, { $gte: ['$embeddedChunkCount', { $ifNull: ['$chunkCount', 0] }] }],
+    };
+    const count = (cond: unknown) => ({ $sum: { $cond: [cond, 1, 0] } });
+
+    const [agg] = await this.fabFileModel.aggregate<{
+      chunkedFiles: number;
+      fullyVectorizedFiles: number;
+      failedFiles: number;
+      inFlightFiles: number;
+      totalChunks: number;
+      totalEmbeddedChunks: number;
+    }>([
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          chunkedFiles: count(hasChunks),
+          fullyVectorizedFiles: count(fullyVectorized),
+          failedFiles: count(hasError),
+          // Chunked, not failed, and not yet provably complete - the population a "not fully
+          // indexed" answer must not silently fold into either of the other two buckets.
+          inFlightFiles: count({ $and: [hasChunks, { $not: [hasError] }, { $not: [fullyVectorized] }] }),
+          totalChunks: { $sum: { $ifNull: ['$chunkCount', 0] } },
+          totalEmbeddedChunks: { $sum: { $ifNull: ['$embeddedChunkCount', 0] } },
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+
+    return (
+      agg ?? {
+        chunkedFiles: 0,
+        fullyVectorizedFiles: 0,
+        failedFiles: 0,
+        inFlightFiles: 0,
+        totalChunks: 0,
+        totalEmbeddedChunks: 0,
+      }
+    );
+  }
+
+  /**
    * Per-member health rollups for a lake (#1666): the raw numbers the pure predicate evaluator
    * (`summarizeLakeHealth` in @bike4mind/common) grades. Reads only FabFile documents - never the
    * chunk collection - so a lake with a million chunks still costs an O(members) file scan. Same
@@ -1492,6 +1824,78 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           embeddedCharCount: { $ifNull: ['$embeddedCharCount', null] },
         },
       },
+    ]);
+  }
+
+  /**
+   * Per-member membership facts (#2245). See the interface doc for why this is a third read.
+   *
+   * The `$match` is deliberately WIDER than findDataLakeHealthMembers': no chunk-bearing conjunct,
+   * because a chunkless copy of a document is precisely the duplicate an owner wants to remove.
+   * Filtering it out would report a lake with two generations of the same file as clean.
+   */
+  async findDataLakeMembershipMembers(
+    scope: DataLakeMembershipScope,
+    limit = 25_000
+  ): Promise<LakeMembershipMemberRow[]> {
+    return this.fabFileModel.aggregate([
+      {
+        // buildDataLakeMembershipQuery, NOT a spread - the prefix arm is itself a top-level `$or`,
+        // and spreading would drop it and grade every file in the install as a member.
+        $match: buildDataLakeMembershipQuery(scope, {
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        }),
+      },
+      // Deterministic order before the bound, so which members a very large lake reports on is
+      // reproducible across refreshes rather than jittering - a plan an owner reviewed has to be
+      // comparable to the next one.
+      { $sort: { _id: 1 } },
+      { $limit: limit + 1 },
+      { $project: lakeMembershipMemberProjection(scope) },
+    ]);
+  }
+
+  async findLakeMemberSiblingsByFileName(
+    scope: DataLakeMembershipScope,
+    fileName: string,
+    excludeFabFileId?: string | null,
+    limit = 50
+  ): Promise<LakeMembershipMemberRow[]> {
+    // An empty name matches nothing by design: `buildDuplicateGroups` skips a nameless member, so a
+    // lookup on one would fetch a set no caller can group. Guarded here rather than trusted, because
+    // an unguarded `fileName: ''` is a plain tag-range scan of the whole lake.
+    if (!fileName) return [];
+    // An id that cannot address a row is a caller bug, and the safe direction is "no siblings": the
+    // admission check is report-only, so no offer costs nothing, while skipping the exclusion below
+    // would report the admitted member as its own duplicate. `usableObjectIds` warns as it drops.
+    // A caller that passes NO id wants the whole group and is not affected.
+    const [excludeId] = usableObjectIds(excludeFabFileId ? [excludeFabFileId] : [], 'findLakeMemberSiblingsByFileName');
+    if (excludeFabFileId && !excludeId) return [];
+    return this.fabFileModel.aggregate([
+      {
+        // Same membership + liveness predicate as the lake-wide scan above, plus the name. The
+        // `fileName` equality is what the { 'tags.name', fileName, deletedAt } index serves; without
+        // it this is a tag-range fetch on the ingestion hot path.
+        $match: buildDataLakeMembershipQuery(scope, {
+          fileName,
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        }),
+      },
+      // The candidate is normally already a member by the time the post-chunk checkpoint runs, and
+      // detectSameIdentityAdmission requires it to be absent - left in, it reports a member as its
+      // own duplicate. Excluded in the pipeline rather than by the caller so no caller can forget.
+      ...(excludeId ? [{ $match: { _id: { $ne: convertId(excludeId) } } }] : []),
+      // NEWEST first, unlike the lake-wide scan's `_id`-ascending order: this set is bounded per
+      // name, so a truncation must keep the generations a decision is actually about. The pure
+      // grouping re-sorts anyway (byNewestFirst), which is what makes the bound safe rather than
+      // merely tidy.
+      { $sort: { createdAt: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: lakeMembershipMemberProjection(scope) },
     ]);
   }
 
@@ -1677,6 +2081,28 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * One page of file ids that DECLARE vectorized chunks (`vectorizedChunkCount > 0`), ascending by
+   * `_id` for cursor paging - the #2583 detection sweep's candidate list. Pair with
+   * `fabFileChunkRepository.findFabFileIdsWithChunks` to find which of these have zero chunk rows
+   * behind that count.
+   */
+  async findFileIdsWithPositiveVectorizedCount(
+    options: { limit?: number; afterFileId?: string } = {}
+  ): Promise<{ id: string; fileName?: string }[]> {
+    const { limit = 500, afterFileId } = options;
+    const docs = await this.fabFileModel
+      .find({
+        vectorizedChunkCount: { $gt: 0 },
+        ...(afterFileId ? { _id: { $gt: afterFileId } } : {}),
+      })
+      .select({ _id: 1, fileName: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => ({ id: String(d._id), fileName: d.fileName }));
+  }
+
   /** Stamp all four recomputed chunk-derived rollups together - the health backfill's phase-2 write. */
   async setChunkRollups(
     id: string,
@@ -1848,6 +2274,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 vectorized: false,
                 vectorizedChunkCount: 0,
                 error: null,
+                // Same rule as `error` above, for the marker the stranded-vectorize sweep selects
+                // on (buildStrandedVectorizeScanFilter). A file that stranded and is now being
+                // re-chunked has no chunks left for that sweep to rescue, and the only other place
+                // the marker is cleared is the resume path - which is reachable only for an
+                // already-chunked file. Leaving it set would have the sweep re-enqueue this file on
+                // every pass until it finishes chunking again, duplicating the wave's own send and
+                // spending a CHUNK_RESCUE_MAX_PER_RUN slot each time.
+                vectorizeEnqueueFailedAt: null,
                 // The two machine-written pipeline markers, and NOT `notes` (#2016). `notes` is the
                 // owner's own text: blanking it here silently deleted whatever they had typed on
                 // every "Rebuild passages" wave and every per-file reprocess. Clearing these two is
@@ -1973,6 +2407,64 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         counts[scope.datalakeTag] = {
           total: row?.[`s${j}`]?.[0]?.n ?? 0,
           uncategorized: row?.[`u${j}`]?.[0]?.n ?? 0,
+        };
+      });
+    });
+    return counts;
+  }
+
+  /**
+   * Per-lake membership split into its two disjoint arms. `metaCount` reuses the plain meta-tag
+   * arm; `prefixOnlyCount` reuses `buildDataLakePrefixOnlyMembershipFilter`, which already
+   * excludes files also carrying the meta-tag, so the two never double-count a file. A lake with
+   * no usable prefix arm (fallback/registry lakes, or one with no creator to anchor to) reports
+   * `prefixOnlyCount: 0` rather than running a query with nothing to match.
+   *
+   * Batched the same way `countDataLakeFilesByMembership` is (chunked `$facet`s at
+   * LAKE_COUNT_CONCURRENCY): this is handed the identical `membershipScopes` array in the same
+   * `Promise.all`, so an unchunked fan-out here would compete for the same bounded connection pool
+   * that method was chunked to protect.
+   */
+  async countDataLakeFilesByMembershipArm(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, { metaCount: number; prefixOnlyCount: number }>> {
+    if (scopes.length === 0) return {};
+    const counts: Record<string, { metaCount: number; prefixOnlyCount: number }> = {};
+    const chunkStarts = Array.from(
+      { length: Math.ceil(scopes.length / LAKE_COUNT_CHUNK) },
+      (_, i) => i * LAKE_COUNT_CHUNK
+    );
+    await mapBounded(chunkStarts, LAKE_COUNT_CONCURRENCY, async i => {
+      const chunk = scopes.slice(i, i + LAKE_COUNT_CHUNK);
+      const exclusions = { deletedAt: null, archivedAt: null, status: { $ne: 'pending' } as const };
+      const branches = chunk.map(scope => {
+        const prefixOnlyFilter = buildDataLakePrefixOnlyMembershipFilter(scope);
+        return {
+          scope,
+          metaFilter: { 'tags.name': scope.datalakeTag, ...exclusions },
+          prefixOnlyFilter: prefixOnlyFilter ? { ...prefixOnlyFilter, ...exclusions } : null,
+        };
+      });
+      // Synthetic branch keys, same reason as countDataLakeFilesByMembership: a facet field name
+      // may not contain '.' or start with '$', and datalakeTag is a user-derived string.
+      const orFilters = branches.flatMap(branch =>
+        branch.prefixOnlyFilter ? [branch.metaFilter, branch.prefixOnlyFilter] : [branch.metaFilter]
+      );
+      const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
+        { $match: { $or: orFilters } },
+        {
+          $facet: Object.fromEntries(
+            branches.flatMap((branch, j) => [
+              [`m${j}`, [{ $match: branch.metaFilter }, { $count: 'n' }]],
+              ...(branch.prefixOnlyFilter ? [[`p${j}`, [{ $match: branch.prefixOnlyFilter }, { $count: 'n' }]]] : []),
+            ])
+          ),
+        },
+      ]);
+      branches.forEach((branch, j) => {
+        counts[branch.scope.datalakeTag] = {
+          metaCount: row?.[`m${j}`]?.[0]?.n ?? 0,
+          prefixOnlyCount: branch.prefixOnlyFilter ? (row?.[`p${j}`]?.[0]?.n ?? 0) : 0,
         };
       });
     });
@@ -2354,6 +2846,17 @@ const FabFileVersionSchema = new Schema<IFabFileVersion>(
   { _id: false }
 );
 
+// One entry per completion-notification channel that has claimed this file (#2027 introduced it
+// for 'slack'). `_id: false` for the same reason as FabFileVersionSchema above - entries are
+// addressed by `channel`, not by their own ObjectId.
+const DispatchedNotificationSchema = new Schema<{ channel: string; at: Date }>(
+  {
+    channel: { type: String, required: true },
+    at: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
   {
     userId: { type: String, required: true },
@@ -2399,6 +2902,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     vectorized: { type: Boolean, default: false },
     embeddingModel: { type: String, required: false },
     chunkEmbeddingModelStampedAt: { type: Date, required: false },
+    vectorizeEnqueueFailedAt: { type: Date, required: false, default: null },
 
     system: { type: Boolean, default: false },
     systemPriority: { type: Number, default: 999 },
@@ -2434,7 +2938,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from
-    // the client-supplied byte hash in `contentHash`.
+    // `contentHash` - which is NOT one consistent hash domain: the attachment door hashes the raw
+    // uploaded buffer, while the URL door (#2027) hashes extracted text, and both write the same
+    // field. A file added once as an attachment and once as a link is therefore not caught as a
+    // duplicate by `contentHash` alone.
     serverTextHash: { type: String },
     batchId: { type: String },
     relativePath: { type: String },
@@ -2453,6 +2960,9 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
+    // Per-channel claim guard for a completion notification (#2027 introduced it for 'slack') -
+    // see IFabFile's field doc.
+    dispatchedNotifications: { type: [DispatchedNotificationSchema], default: undefined },
 
     ...ShareableDocumentSchema,
   },
@@ -2514,6 +3024,21 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // callers, only the userId equality.
 FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
+// Same-identity admission (#2238): findLakeMemberSiblingsByFileName, one name's members within one
+// lake, run PER ADMITTED FILE on the ingestion hot path. `fileName` appears above only inside a
+// compound TEXT index, which cannot serve an equality predicate, so without this one the best plan
+// is the `{ 'tags.name', archivedAt, deletedAt }` tag range plus an in-memory name filter - fine at
+// a few hundred members and not fine on a widely-shared tag, which is the connector-scale lake this
+// check exists for.
+//
+// `tags.name` leads for the same reason it leads on the two lake indexes above: the meta-tag arm and
+// the prefix arm both bound on it, and some callers filter on nothing else.
+//
+// Pre-built by 20260907000000_ensure-fabfile-tagname-filename-index rather than left to autoIndex:
+// prod runs DocumentDB, where the build takes a foreground lock, and autoIndex would take it lazily
+// on a cold boot of whichever Lambda touches this collection first.
+FabFileSchema.index({ 'tags.name': 1, fileName: 1, deletedAt: 1 });
+
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
 
@@ -2537,6 +3062,14 @@ FabFileSchema.index({ driveConnectionId: 1, deletedAt: 1, status: 1 });
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
 // sweep is a collection scan, since almost every file has chunkCount > 0.
 FabFileSchema.index({ status: 1, chunkCount: 1, deletedAt: 1, createdAt: 1 });
+
+// Stranded-vectorize rescue sweep (buildStrandedVectorizeScanFilter). Partial, because the stamp
+// is set only by a failed vectorize enqueue: the index then holds the handful of broken files
+// rather than an entry per file, and the sweep never scans the collection to find nothing.
+FabFileSchema.index(
+  { vectorizeEnqueueFailedAt: 1 },
+  { partialFilterExpression: { vectorizeEnqueueFailedAt: { $type: 'date' } } }
+);
 
 // Batch file queries
 FabFileSchema.index({ batchId: 1 });

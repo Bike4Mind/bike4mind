@@ -571,7 +571,11 @@ export class SlackEvent {
         return { shouldProcess: false, reason: 'Bot mention in message event (will be handled by app_mention)' };
       }
 
-      if (agentCommandPattern && agentCommandPattern.test(this.text)) {
+      // Trimmed: agentCommandPattern is always `^`-anchored (both the built-in `@<agent>` form and
+      // any caller-widened pattern), so a message with leading whitespace - easy to produce on
+      // mobile Slack - would otherwise fail this untrimmed match even when the caller's own cheap
+      // pre-check (which does trim) already decided the message looks like a command.
+      if (agentCommandPattern && agentCommandPattern.test(this.text.trim())) {
         passesBasicChecks = true;
       }
     }

@@ -1,4 +1,5 @@
 import {
+  agentRepository,
   questMasterPlanRepository,
   questRepository,
   sessionRepository,
@@ -81,6 +82,7 @@ const handler = baseApi()
               sessions: sessionRepository,
               projects: projectRepository,
               fabFiles: fabFileRepository,
+              agents: agentRepository,
             },
             // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
             // and it is only needed when files are actually attached.

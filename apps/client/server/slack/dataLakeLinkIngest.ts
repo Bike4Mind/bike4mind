@@ -1,4 +1,4 @@
-import { FabFileSourceType, type IFabFileDocument } from '@bike4mind/common';
+import { FabFileSourceType, isDuplicateFabFileError, type IFabFileDocument } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import {
   authorizeLakeForWrite,
@@ -23,11 +23,18 @@ import {
  * redirect hop, not just the URL the user pasted), which matters more here than anywhere else in
  * the app: these URLs arrive from whoever can type in a Slack channel.
  *
- * KNOWN GAP - no dedup. The FILE path hashes the downloaded buffer and checks
- * `findByContentHashesInDataLake`, but here the fetch happens INSIDE the service, so there are no
- * bytes to hash before the row exists. Re-adding the same link therefore adds a second copy. Not
- * worked around by hashing the URL instead: the same URL legitimately yields different content over
- * time, so a URL match is not a content match and would refuse honest re-adds of updated pages.
+ * Per-lake dedup: `createFabFileByUrl` hashes the fetched `textContent` and, given a
+ * `checkDuplicate` adapter (bound in `dataLakeIngestDeps.ts` to `findByContentHashesInDataLake`,
+ * scoped to this lake's tag), throws `DuplicateFabFileError` BEFORE creating a row on a match -
+ * never a second HTTP fetch, never a created-then-discarded FabFile. Deliberately NOT keyed on the
+ * URL itself: the same URL legitimately yields different content over time, so a URL match is not
+ * a content match and would refuse honest re-adds of updated pages.
+ *
+ * KNOWN GAP, same as the FILE path (`dataLakeFileIngest.ts`) - per-lake dedup has a short blind
+ * window. `createFabFile` leaves `status` at its `pending` default and
+ * `findByContentHashesInDataLake` filters `status: { $ne: 'pending' }`, so the same content
+ * re-added in a SECOND message before the S3 ObjectCreated event completes the first copy will
+ * land twice. Skip-not-replace semantics mean the worst case is a duplicate row, not data loss.
  */
 
 /** Parameters for `fabFilesService.createFabFileByUrl`, narrowed to what this path supplies. */
@@ -35,6 +42,15 @@ export interface CreateLakeLinkParams {
   url: string;
   tags: Array<{ name: string; strength: number }>;
   provenance: { sourceType: FabFileSourceType; sourceMetadata: Record<string, unknown> };
+  /**
+   * Forwarded to `createFabFile`'s own tag gate, which `createFabFileByUrl` relays verbatim.
+   * Same requirement and same reason as the FILE path's field - see
+   * `CreateLakeFileParams.administeredOrgIds`. Declared here too rather than on one path only,
+   * because FILE and LINK must not diverge on who is allowed to write.
+   */
+  administeredOrgIds: string[];
+  /** Scopes the dedup check to THIS lake - the same tag `resolveLakeTags`/`tags` were built from. */
+  datalakeTag: string;
 }
 
 export interface SlackLinkIngestDeps extends LakeAuthzDeps {
@@ -49,12 +65,23 @@ export interface SlackLinkIngestParams {
   /** Slack origin recorded on the created file so a lake editor can audit where it came from. */
   channel: string;
   messageTs: string;
+  /** The Slack workspace this message arrived on - see `notifySlackIndexingComplete.ts`. */
+  teamId: string;
+  /** The Slack app this message arrived on, stamped alongside `teamId` - see the same doc. */
+  apiAppId: string;
 }
 
 export type SlackLinkIngestRefusal = LakeWriteRefusalReason | 'no_link' | 'link_rejected' | 'link_fetch_failed';
 
 export type SlackLinkIngestOutcome =
-  | { ok: true; lakeName: string; fileName: string; sourceUrl: string }
+  | {
+      ok: true;
+      lakeName: string;
+      fileName: string;
+      sourceUrl: string;
+      /** True when the content already lived in this lake and nothing new was created (skip-not-replace). */
+      duplicate: boolean;
+    }
   | { ok: false; reason: SlackLinkIngestRefusal; message: string };
 
 /**
@@ -80,7 +107,7 @@ export async function ingestSlackLinkIntoLake(
   params: SlackLinkIngestParams,
   deps: SlackLinkIngestDeps
 ): Promise<SlackLinkIngestOutcome> {
-  const { actor, lakeSlug, link, channel, messageTs } = params;
+  const { actor, lakeSlug, link, channel, messageTs, teamId, apiAppId } = params;
 
   const mockRefusal = refuseMockActor(actor, lakeSlug, deps);
   if (mockRefusal) return mockRefusal;
@@ -110,7 +137,7 @@ export async function ingestSlackLinkIntoLake(
   // Authorization first: resolve + write-gate the lake before anything is fetched.
   const authorized = await authorizeLakeForWrite(actor, lakeSlug, deps);
   if (!authorized.ok) return authorized;
-  const { lake, datalakeTag } = authorized;
+  const { lake, datalakeTag, ctx } = authorized;
 
   const tags = await resolveLakeTags(datalakeTag, deps);
   const recordedUrl = sanitizeUrlForRecord(link);
@@ -123,14 +150,34 @@ export async function ingestSlackLinkIntoLake(
         sourceType: FabFileSourceType.SLACK,
         // `sourceUrl` alongside the Slack origin: for a link the message is where it was ASKED for
         // and the URL is where the content actually came from, and an auditor needs both.
-        sourceMetadata: { channel, messageTs, sourceUrl: recordedUrl },
+        sourceMetadata: { channel, messageTs, sourceUrl: recordedUrl, teamId, apiAppId },
       },
+      administeredOrgIds: ctx.administeredOrgIds ?? [],
+      datalakeTag,
     });
 
-    return { ok: true, lakeName: lake.name, fileName: fabFile.fileName, sourceUrl: recordedUrl };
+    return {
+      ok: true,
+      lakeName: lake.name,
+      fileName: fabFile.fileName,
+      sourceUrl: recordedUrl,
+      duplicate: false,
+    };
   } catch (err) {
     // Split on error CLASS, as everywhere else on this path, and deliberately NOT on the message.
     //
+    // A duplicate is reported as a SUCCESS (skip-not-replace), never a refusal - checked first
+    // since it is the one class that isn't an error condition for the user.
+    if (isDuplicateFabFileError(err)) {
+      return {
+        ok: true,
+        lakeName: lake.name,
+        fileName: err.fetchedTitle,
+        sourceUrl: recordedUrl,
+        duplicate: true,
+      };
+    }
+
     // A BadRequestError here is createFabFile's own content-level validation (unsupported type,
     // over MaxFileSize), which is safe and useful to repeat back to the user.
     //

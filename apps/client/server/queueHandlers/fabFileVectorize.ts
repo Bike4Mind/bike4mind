@@ -1,4 +1,4 @@
-import { SupportedEmbeddingModelSchema } from '@bike4mind/common';
+import { FabFileSourceType, SupportedEmbeddingModelSchema } from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -37,9 +37,10 @@ import {
 import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
-  isBatchComplete,
+  completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
+import { notifySlackIndexingComplete } from '@server/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
@@ -117,9 +118,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // fanned out before it flipped. Placed AFTER the already-vectorized guard above so a completed
   // file is never touched, and before the embedding work (user work short-circuits in
   // isConvergenceHalted before any settings read). Unlike a chunk message, a dropped vectorize
-  // message does NOT auto-resume - fabFileChunk is its only producer and it early-returns on an
-  // already-chunked file - so flag the file so the abandoned, chunked-but-unvectorized state is
-  // enumerable and reprocessable (POST /api/files/reprocess re-drives it and clears the note).
+  // message does NOT auto-resume - not because a chunk message could not resume it (any redelivery
+  // for an already-chunked file does, via resumeVectorizeEnqueue in fabFileChunk) but because
+  // nothing produces one: the only automatic producer is the stranded sweep, and it selects on
+  // vectorizeEnqueueFailedAt (buildStrandedVectorizeScanFilter), which this branch never stamps.
+  // So flag the file, to keep the abandoned, chunked-but-unvectorized state enumerable and
+  // reprocessable (POST /api/files/reprocess re-drives it and clears the note).
   if (
     await isConvergenceHalted(
       { origin: payload.origin, lakeId: payload.lakeId },
@@ -512,6 +516,37 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         vectorizeStatus: 'complete',
       }).catch(err => logger.error(`Error notifying vectorize-complete for ${fabFileId}: ${err}`));
 
+      // #2027: same non-fatal shape as the websocket push above - a failed or skipped Slack post
+      // must never fail or retry vectorization, which already persisted vectorized:true. Claimed
+      // BEFORE sending, unlike the websocket push above: a redelivered or concurrent completion
+      // message for this file must post the "finished indexing" reply at most once, not every time.
+      // Gated on sourceType up front: notifySlackIndexingComplete no-ops for non-Slack files anyway,
+      // and sourceType/sourceMetadata/tags never change during vectorization, so existingFabFile
+      // (fetched once, above) is used instead of the fabFile re-fetched for the chunkCount rollup.
+      //
+      // TRADEOFF, deliberate: claiming before sending makes this AT-MOST-ONCE, not
+      // at-least-once - a successful claim followed by a failed send (network error, Slack
+      // outage, the WebClient timeout above) is indistinguishable from a delivered notification
+      // in `dispatchedNotifications`: no retry, no queryable owed-state, no repair short of
+      // hand-editing that field. Chosen deliberately: a duplicate "now searchable" reply is a
+      // worse user-facing failure than a silent miss, and the miss is logged (the inner catch
+      // below) so it is at least observable. Claiming AFTER a successful send instead would trade
+      // this for a WORSE failure mode: it would reopen the exact concurrent-redelivery double-post
+      // this claim exists to prevent, since two concurrent invocations would both reach `sendMessage`
+      // before either claims. Not applied for that reason.
+      if (existingFabFile.sourceType === FabFileSourceType.SLACK) {
+        try {
+          const claimedSlackNotification = await fabFileRepository.claimIndexNotification(fabFileId, 'slack');
+          if (claimedSlackNotification) {
+            await notifySlackIndexingComplete(existingFabFile, logger).catch(err =>
+              logger.error(`Error sending the Slack indexing-complete notification for ${fabFileId}: ${err}`)
+            );
+          }
+        } catch (err) {
+          logger.error(`Error claiming the Slack indexing-complete notification for ${fabFileId}: ${err}`);
+        }
+      }
+
       // Track batch progress if file belongs to a data lake batch.
       // Atomic claim gates the increment so a redelivered "complete" message is a no-op.
       if (fabFile.batchId) {
@@ -526,12 +561,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'vectorizedFiles');
             await finalizeBatchIfComplete(batch, logger);
 
-            const isComplete = isBatchComplete(batch);
             await sendToClient(userId, Resource.websocket.managementEndpoint, {
               action: 'data_lake_batch_progress',
               batchId: fabFile.batchId,
               vectorizedFiles: batch?.vectorizedFiles ?? 1,
-              status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+              status: completedBatchStatus(batch),
             });
           }
         } catch (error) {
@@ -602,15 +636,24 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           failedFiles: 1,
           processingFailedFiles: 1,
         });
+        // updateFileStatus stamped failureCounted: false with the status; raise it only once the
+        // guarded $inc above has actually landed, so revertFileFailure can attribute a decrement to
+        // this entry rather than spending another file's failure. Advisory - see fabFileChunk.ts.
+        if (batch) {
+          await dataLakeBatchRepository
+            .markFailureCounted(existingFabFile.batchId, fabFileId, true)
+            .catch(markErr =>
+              logger.error(`Failed to record the charged failure counters on ${fabFileId}: ${markErr}`)
+            );
+        }
         await finalizeBatchIfComplete(batch, logger);
 
-        const isComplete = isBatchComplete(batch);
         await sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'data_lake_batch_progress',
           batchId: existingFabFile.batchId,
           failedFiles: batch?.failedFiles ?? 1,
           processingFailedFiles: batch?.processingFailedFiles ?? 1,
-          status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+          status: completedBatchStatus(batch),
         });
       } catch (innerErr) {
         logger.error(`Error reporting batch failure: ${innerErr}`);

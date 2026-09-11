@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/agents",
-  "version": "0.20.3",
+  "version": "1.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -44,6 +44,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/observability": "workspace:*",

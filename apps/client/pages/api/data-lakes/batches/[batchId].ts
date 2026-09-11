@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
@@ -52,7 +53,7 @@ const recomputeLakeAfterTerminal = async (
   }
 };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET: batch status
   .get(async (req: Request, res) => {
@@ -68,6 +69,7 @@ const handler = baseApi()
   })
   // PUT: update batch status
   .put(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const userId = req.user.id;
     const { batchId } = req.query as { batchId: string };
 
@@ -107,6 +109,7 @@ const handler = baseApi()
   })
   // DELETE: cancel batch
   .delete(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const userId = req.user.id;
     const { batchId } = req.query as { batchId: string };
 

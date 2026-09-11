@@ -1,4 +1,10 @@
-import { IDataLakeRepository, IFabFileRepository, ITagRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IDataLakeRepository,
+  IFabFileRepository,
+  ITagRepository,
+  IUserDocument,
+  LakeAuditPrincipal,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import {
@@ -55,6 +61,23 @@ interface TagUpdateAdapters {
    * same reason the audit repos are.
    */
   logger?: LakeConfigAuditAdapters['logger'];
+  /**
+   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
+   * `lakeConfigAuditPrincipal`. Rides on the actor handed to recomputeLakeStats, so a key-driven
+   * rename that flips a draft lake to active names the key rather than the human it acts for,
+   * matching every other audited config-write door (#1917).
+   */
+  auditPrincipal?: LakeAuditPrincipal;
+  /**
+   * Called only when the rename matches a candidate lake's `fileTagPrefix` on either side (a
+   * possible join or leave) - mirrors the same callback on `fabFileService/toggleTags`. No
+   * manage-rights gate is needed here (see the doc above: this call only ever touches files
+   * `userId` owns), but API-key SCOPE is a separate axis - a `files:write`-only key should not be
+   * able to walk a file into or out of a lake any more than `files/tags/toggle.ts` lets it via a
+   * meta-tag. Optional so every other caller of this service (which has nothing to do with lakes)
+   * is unaffected.
+   */
+  assertWriteScope?: () => void;
 }
 
 /**
@@ -81,7 +104,7 @@ interface TagUpdateAdapters {
  * lakes' stats.
  */
 export const update = async (userId: string, params: TagUpdateParams, adapters: TagUpdateAdapters) => {
-  const { db, logger } = adapters;
+  const { db, logger, auditPrincipal, assertWriteScope } = adapters;
   const { id, ...rest } = secureParameters(params, tagUpdateSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -113,6 +136,22 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   // edit still carries `name` and must not touch a single file; but `foo` -> `Foo` is a real
   // rename, because the files store the old casing.
   const renaming = newName !== undefined && newName !== tag.name;
+
+  // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name on
+  // both sides of the rename can never touch one - skip the lake lookup for the common case.
+  // Resolved and gated BEFORE the file rewrite below, not alongside the recompute after it: this
+  // service is not transactional, and a 403 raised after the files were already renamed would
+  // report failure while leaving the join/leave applied.
+  const affectedLakes =
+    renaming && (tag.name.includes(':') || newName.includes(':'))
+      ? (await loadPrefixArmCandidateLakes([userId], { db })).filter(
+          lake =>
+            couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix) ||
+            couldMatchTagPrefixArmLoosely(newName, lake.fileTagPrefix)
+        )
+      : [];
+
+  if (affectedLakes.length > 0) assertWriteScope?.();
 
   if (renaming) {
     const colliders = (await db.tags.findAllByUserId(userId)).filter(
@@ -150,22 +189,16 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
 
   await db.tags.update(buildData);
 
-  // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name on
-  // both sides of the rename can never touch one - skip the lake lookup for the common case.
-  if (renaming && (tag.name.includes(':') || newName.includes(':'))) {
-    const candidateLakes = await loadPrefixArmCandidateLakes([userId], { db });
+  if (affectedLakes.length > 0) {
     // Either the OLD name mattered to a lake's prefix (a possible leave) or the NEW one does (a
     // possible join) - recompute covers both directions without needing to know which files
     // actually crossed the boundary, matching tagService/remove's reasoning. Independent
     // per-lake recomputes, so run them concurrently rather than one at a time.
-    const affectedLakes = candidateLakes.filter(
-      lake =>
-        couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix) ||
-        couldMatchTagPrefixArmLoosely(newName, lake.fileTagPrefix)
-    );
     // See tagService/remove: the tag owner is the principal, and the rung stays `system`.
     await Promise.all(
-      affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false } }))
+      affectedLakes.map(lake =>
+        recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false, auditPrincipal } })
+      )
     );
   }
 

@@ -144,11 +144,26 @@ describe('resolveLakeTransferAuthority', () => {
     expect(resolveLakeTransferAuthority(lake(), creator).allowed).toBe(true);
   });
 
-  it('leaves a PERSONAL lake unaffected by the membership rule - there is no org to belong to', () => {
+  it('refuses a PERSONAL lake to its own owner - the picker offers nobody, so neither may the gate', () => {
+    // listLakeOwnershipCandidates returns an empty candidate set for an org-less lake, so a
+    // non-admin transfer of one has no product path. Allowing it here meant the API accepted any
+    // user id the caller happened to know - and since #2495 an owner grant also carries the lake's
+    // systemPrompt into that user's system messages.
     const personal = lake({ organizationId: undefined });
     expect(
       resolveLakeTransferAuthority(personal, { userId: 'creator', isAdmin: false, organizationIds: [] }).allowed
+    ).toBe(false);
+    // isOwner still reports the fact; only the authorization changes.
+    expect(
+      resolveLakeTransferAuthority(personal, { userId: 'creator', isAdmin: false, organizationIds: [] }).isOwner
     ).toBe(true);
+  });
+
+  it('still allows a platform admin to transfer a PERSONAL lake (superuser, the one live path)', () => {
+    const personal = lake({ organizationId: undefined });
+    expect(resolveLakeTransferAuthority(personal, { userId: 'root', isAdmin: true, organizationIds: [] }).allowed).toBe(
+      true
+    );
   });
 
   it('exempts a platform admin, who belongs to no org in particular', () => {

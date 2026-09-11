@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_OR_SHARE_SCOPES, assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -33,7 +34,7 @@ const TransferOwnershipInput = z.object({
  * the service enforces the narrower transfer authorization (platform admin, current effective owner,
  * or an admin of the lake's org - the orphaned-creator succession path) and validates the new owner.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
@@ -55,18 +56,20 @@ const handler = baseApi()
     return res.json({ data });
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertDataLakeShareScope(req);
     const { id } = req.query;
     const { newOwnerUserId } = TransferOwnershipInput.parse(req.body);
     const ctx = await toAccessContext(req);
 
     // Resolve + access-gate the lake first, so a caller who can't even see it gets a not-found
-    // (no existence leak). The service then applies the stricter transfer authorization.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // (no existence leak). The service then applies the stricter transfer authorization, to the
+    // grants this gate already read rather than a second copy of them.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const result = await dataLakeService.transferLakeOwnership(actor, lake.id, newOwnerUserId, {
+    const result = await dataLakeService.transferLakeOwnership(actor, lake, grants, newOwnerUserId, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,

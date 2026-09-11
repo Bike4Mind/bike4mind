@@ -9,6 +9,7 @@ import {
   IScopedSettingsRepository,
   IUserDocument,
   KnowledgeType,
+  LakeAuditPrincipal,
   isImageServeable,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
@@ -71,18 +72,45 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
       etag?: string;
     }>;
   };
+  /**
+   * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
+   * does). It cannot be read off the user document, so omitting it drops the two org rungs of
+   * `canManageLake` from `reconcileLakeTags`' join gate - making this write strictly narrower than
+   * the route gate in front of it. Same adapter, for the same reason, as `createFabFile`'s.
+   */
+  administeredOrgIds?: string[];
+  /**
+   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
+   * `lakeConfigAuditPrincipal`. Rides on the actor into `reconcileLakeTags`' stats recompute, so a
+   * key-driven tag write that flips a draft lake to active attributes the config-change row to the
+   * key rather than to the human it acts for, matching every other audited config-write door
+   * (#1917).
+   */
+  auditPrincipal?: LakeAuditPrincipal;
+  /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
+  assertWriteScope?: () => void;
 }
 
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, logger, storage }: UpdateFabFileAdapters
+  { db, logger, storage, administeredOrgIds, auditPrincipal, assertWriteScope }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
-  const fabFile = await db.fabFiles.shareable.findAccessibleById(user, id);
+  // Update-level, not read-level: a read share authorizes viewing this file, never rewriting its
+  // bytes, tags or metadata. Unlike findAccessibleById this returns a hydrated document, and the
+  // `{ ...fabFile }` spread below would copy Mongoose internals instead of the fields - so
+  // normalize first, as updateDocumentSharing does for the same reason.
+  const found = await db.fabFiles.shareable.findUpdateAccessById(user, id);
 
-  if (!fabFile) throw new NotFoundError('Invalid ID');
+  if (!found) throw new NotFoundError('Invalid ID');
+
+  const fabFile = (
+    typeof (found as { toJSON?: unknown }).toJSON === 'function'
+      ? (found as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : found
+  ) as IFabFileDocument;
 
   if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
     const mimeType = params.mimeType ?? fabFile.mimeType;
@@ -118,12 +146,16 @@ export const updateFabFile = async (
   }
 
   // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
-  // why. Resolved (and gated) BEFORE the write below, applied after it.
+  // why. Resolved (and gated) BEFORE the write below, applied after it. This actor also widens
+  // what an org admin can do beyond the join gate itself: content tags under an org lake's prefix
+  // that were previously force-carried become droppable, and a manageable prefix-arm join now
+  // lands in `joins` rather than `statsOnlyJoins` - which can flip a draft lake to active. Both
+  // follow from the same fix and are wanted, but the activation is one-way.
   const lakeTags =
     params.tags === undefined
       ? undefined
       : await reconcileLakeTags(
-          { userId: user.id, isAdmin: !!user.isAdmin },
+          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [], auditPrincipal },
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,
@@ -134,6 +166,7 @@ export const updateFabFile = async (
             // Already in hand, so the admission contract grades this file on the target its chunks
             // WERE built with instead of re-fetching it or predicting from policy.
             fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+            assertWriteScope,
           }
         );
 

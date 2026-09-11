@@ -1,6 +1,15 @@
+import type { LakeAuditPrincipal } from '@bike4mind/common';
 import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { lakeConfigAuditDb } from './lakeConfigAuditDb';
+
+/**
+ * A `ManageActor` that has to SAY what it attributes to, even if the answer is `undefined`.
+ * Required-but-nullable rather than optional, so an actor literal built at a call site cannot
+ * silently omit the field: omitting it is what recorded a key-driven auto-activate as the human
+ * (see `lakeConfigAuditPrincipal` for which callers have a principal to name).
+ */
+export type AttributedActor = dataLakeService.ManageActor & { auditPrincipal: LakeAuditPrincipal | undefined };
 
 /**
  * Rebuild the persisted stats of every lake named by a `datalake:` meta-tag in `tagNames` - for
@@ -50,11 +59,11 @@ export const recomputeStatsForLakeTags = async (
      * event or storage webhook with no user at all. Omitted, a draft -> active flip records under
      * a `system` principal, which is the honest answer rather than an invented one.
      *
-     * A `ManageActor` rather than the bare pair, so a route under `baseApi()` can carry
-     * `auditPrincipal` and have a key-driven flip recorded as the KEY instead of its owning human
+     * An `AttributedActor` rather than the bare pair, so a route under `baseApi()` carries
+     * `auditPrincipal` and has a key-driven flip recorded as the KEY instead of its owning human
      * (see `lakeConfigAuditPrincipal`).
      */
-    actor?: dataLakeService.ManageActor;
+    actor?: AttributedActor;
   }
 ): Promise<void> => {
   // Concurrent, not sequential: the lakes are independent and share no state, so a bulk delete

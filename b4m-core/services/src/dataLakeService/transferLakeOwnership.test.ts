@@ -3,8 +3,12 @@ import { DATA_LAKES, type IDataLakeAccessGrantDocument, type IDataLakeDocument }
 import { transferLakeOwnership } from './transferLakeOwnership';
 import type { LakeTransferActor } from './lakeOwnershipCandidates';
 
+// Org-scoped by default: a PERSONAL lake is not transferable at all except by a platform admin
+// (resolveLakeTransferAuthority), so an org-less default would make every mechanical test below
+// assert against a refusal instead of the grant writes they exist to cover. Pass
+// `organizationId: undefined` explicitly for the personal cases.
 const lake = (over: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
-  ({ id: 'lake1', createdByUserId: 'creator', organizationId: undefined, ...over }) as IDataLakeDocument;
+  ({ id: 'lake1', createdByUserId: 'creator', organizationId: 'org1', ...over }) as IDataLakeDocument;
 
 const activeGrant = (over: Partial<IDataLakeAccessGrantDocument>): IDataLakeAccessGrantDocument =>
   ({
@@ -29,15 +33,26 @@ const makeAdapters = (
   return {
     upsertGrant,
     update,
+    // The resolved (lake, grants) pair the API route reads from its access gate and hands to the
+    // service, spread into each call below so the real argument order stays visible at the call site.
+    lakeArgs: [
+      over.lakeDoc === undefined ? lake() : over.lakeDoc,
+      (over.grants ?? []).map(g => ({ principalType: g.principalType, principalId: g.principalId, role: g.role })),
+    ] as const,
     adapters: {
       db: {
-        dataLakes: { findById: vi.fn(async () => (over.lakeDoc === undefined ? lake() : over.lakeDoc)), update },
-        dataLakeAccessGrants: {
-          listByLake: vi.fn(async () => over.grants ?? []),
-          upsertGrant,
-        },
+        dataLakes: { update },
+        dataLakeAccessGrants: { upsertGrant },
         users: { findById: vi.fn(async () => (over.userExists === false ? null : ({ id: 'newOwner' } as never))) },
-        organizations: { findById: vi.fn(async () => (over.org === undefined ? null : over.org)) },
+        organizations: {
+          // Default roster carries every principal the tests below hand a lake to, so the org
+          // membership check is not what any of them are exercising.
+          findById: vi.fn(async () =>
+            over.org === undefined
+              ? { userId: 'billing', adminUserIds: [], users: [{ userId: 'creator' }, { userId: 'newOwner' }] }
+              : over.org
+          ),
+        },
       },
     } as never,
   };
@@ -49,28 +64,56 @@ const owner: LakeTransferActor = { userId: 'creator', isAdmin: false, organizati
 
 describe('transferLakeOwnership', () => {
   it('refuses a fallback (registry) lake - it has no document to hang a grant on', async () => {
-    const { adapters } = makeAdapters({ lakeDoc: lake({ id: DATA_LAKES[0].id }) });
-    await expect(transferLakeOwnership(owner, DATA_LAKES[0].id, 'newOwner', adapters)).rejects.toThrow(
+    const { adapters, lakeArgs } = makeAdapters({ lakeDoc: lake({ id: DATA_LAKES[0].id }) });
+    await expect(transferLakeOwnership(owner, ...lakeArgs, 'newOwner', adapters)).rejects.toThrow(
       /built into the platform/i
     );
   });
 
   it('rejects an actor who is neither admin, effective owner, nor an admin of the lake org', async () => {
-    const { adapters, upsertGrant } = makeAdapters();
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters();
     await expect(
-      transferLakeOwnership({ userId: 'stranger', isAdmin: false, organizationIds: [] }, 'lake1', 'newOwner', adapters)
+      transferLakeOwnership(
+        { userId: 'stranger', isAdmin: false, organizationIds: [] },
+        ...lakeArgs,
+        'newOwner',
+        adapters
+      )
     ).rejects.toThrow(/do not have permission to transfer/i);
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
+  it('personal lake: refuses a non-admin owner, and says what would unblock them', async () => {
+    // The picker offers no candidates for an org-less lake, so the write path must not stay broader:
+    // otherwise anyone holding a user id could hand that user a lake - and with it, since #2495, the
+    // lake's systemPrompt into their system messages on any turn that retrieves from it.
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters({ lakeDoc: lake({ organizationId: undefined }) });
+    await expect(transferLakeOwnership(owner, ...lakeArgs, 'newOwner', adapters)).rejects.toThrow(
+      /personal data lake cannot be transferred/i
+    );
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('personal lake: a platform admin may still transfer it', async () => {
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters({ lakeDoc: lake({ organizationId: undefined }) });
+    const result = await transferLakeOwnership(
+      { userId: 'root', isAdmin: true, organizationIds: [] },
+      ...lakeArgs,
+      'newOwner',
+      adapters
+    );
+    expect(result.newOwnerUserId).toBe('newOwner');
+    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'newOwner', role: 'owner' }));
+  });
+
   it('rejects a new owner that does not exist', async () => {
-    const { adapters } = makeAdapters({ userExists: false });
-    await expect(transferLakeOwnership(owner, 'lake1', 'ghost', adapters)).rejects.toThrow(/could not be found/i);
+    const { adapters, lakeArgs } = makeAdapters({ userExists: false });
+    await expect(transferLakeOwnership(owner, ...lakeArgs, 'ghost', adapters)).rejects.toThrow(/could not be found/i);
   });
 
   it('transfers by granting the new owner and demoting the prior (fallback) creator to curator', async () => {
-    const { adapters, upsertGrant, update } = makeAdapters();
-    const result = await transferLakeOwnership(owner, 'lake1', 'newOwner', adapters);
+    const { adapters, lakeArgs, upsertGrant, update } = makeAdapters();
+    const result = await transferLakeOwnership(owner, ...lakeArgs, 'newOwner', adapters);
 
     expect(upsertGrant).toHaveBeenCalledWith(
       expect.objectContaining({ principalType: 'user', principalId: 'newOwner', role: 'owner' })
@@ -92,11 +135,13 @@ describe('transferLakeOwnership', () => {
     // The grants above have already moved ownership, so throwing here would report a failure that
     // did not happen and invite a retry of a finished operation - but a silent swallow would leave
     // the stamp quietly naming an older, smaller edit.
-    const { adapters, update } = makeAdapters();
+    const { adapters, lakeArgs, update } = makeAdapters();
     update.mockRejectedValueOnce(new Error('mongo down'));
     const logger = { warn: vi.fn() };
 
-    await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', { ...adapters, logger } as never)).resolves.toEqual({
+    await expect(
+      transferLakeOwnership(owner, ...lakeArgs, 'newOwner', { ...adapters, logger } as never)
+    ).resolves.toEqual({
       newOwnerUserId: 'newOwner',
       demotedUserIds: ['creator'],
     });
@@ -107,14 +152,16 @@ describe('transferLakeOwnership', () => {
   });
 
   it('reports a stamp that matched no document, which resolves null instead of throwing', async () => {
-    // `BaseModel.update` is a findOneAndUpdate: a lake deleted between this function's opening
-    // findById and the final stamp write resolves NULL rather than throwing, so the catch never sees
-    // it. Without the result check that failure is completely silent.
-    const { adapters, update } = makeAdapters();
+    // `BaseModel.update` is a findOneAndUpdate: a lake deleted between the route's access gate,
+    // where this lake was resolved, and the final stamp write resolves NULL rather than throwing, so
+    // the catch never sees it. Without the result check that failure is completely silent.
+    const { adapters, lakeArgs, update } = makeAdapters();
     update.mockResolvedValueOnce(null as never);
     const logger = { warn: vi.fn() };
 
-    await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', { ...adapters, logger } as never)).resolves.toEqual({
+    await expect(
+      transferLakeOwnership(owner, ...lakeArgs, 'newOwner', { ...adapters, logger } as never)
+    ).resolves.toEqual({
       newOwnerUserId: 'newOwner',
       demotedUserIds: ['creator'],
     });
@@ -127,12 +174,12 @@ describe('transferLakeOwnership', () => {
   it('still reports the failed stamp when no logger is wired, rather than going silent', async () => {
     // `logger` is optional on the adapters, so a caller that omits it must not turn a swallowed
     // failure into no output at all - the only other symptom is a stamp naming an older, smaller edit.
-    const { adapters, update } = makeAdapters();
+    const { adapters, lakeArgs, update } = makeAdapters();
     update.mockRejectedValueOnce(new Error('mongo down'));
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     try {
-      await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', adapters)).resolves.toEqual({
+      await expect(transferLakeOwnership(owner, ...lakeArgs, 'newOwner', adapters)).resolves.toEqual({
         newOwnerUserId: 'newOwner',
         demotedUserIds: ['creator'],
       });
@@ -148,20 +195,20 @@ describe('transferLakeOwnership', () => {
   it('does not write the lake at all when the actor has no id to attribute', async () => {
     // The stamp write exists only to record WHO; with nobody to record it must not cost a round
     // trip, and it must not clear a prior stamp that WAS attributable.
-    const { adapters, update } = makeAdapters();
-    await transferLakeOwnership({ userId: '', isAdmin: true, organizationIds: [] }, 'lake1', 'newOwner', adapters);
+    const { adapters, lakeArgs, update } = makeAdapters();
+    await transferLakeOwnership({ userId: '', isAdmin: true, organizationIds: [] }, ...lakeArgs, 'newOwner', adapters);
 
     expect(update).not.toHaveBeenCalled();
   });
 
   it('demotes a PRIOR owner-grant holder (not the creator) when ownership was already transferred once', async () => {
-    const { adapters, upsertGrant } = makeAdapters({
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters({
       grants: [activeGrant({ principalId: 'prevOwner', role: 'owner' })],
     });
     // prevOwner is the current effective owner and may transfer onward.
     const result = await transferLakeOwnership(
-      { userId: 'prevOwner', isAdmin: false, organizationIds: [] },
-      'lake1',
+      { userId: 'prevOwner', isAdmin: false, organizationIds: ['org1'] },
+      ...lakeArgs,
       'newOwner',
       adapters
     );
@@ -170,8 +217,8 @@ describe('transferLakeOwnership', () => {
   });
 
   it('is a no-op demotion when transferring to the current sole owner', async () => {
-    const { adapters, upsertGrant } = makeAdapters();
-    const result = await transferLakeOwnership(owner, 'lake1', 'creator', adapters);
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters();
+    const result = await transferLakeOwnership(owner, ...lakeArgs, 'creator', adapters);
     expect(result.demotedUserIds).toEqual([]);
     // Only the owner upsert runs; nobody is demoted to curator.
     expect(upsertGrant).toHaveBeenCalledTimes(1);
@@ -179,17 +226,17 @@ describe('transferLakeOwnership', () => {
   });
 
   it('org lake: refuses a new owner who is not a member of the owning org', async () => {
-    const { adapters } = makeAdapters({
+    const { adapters, lakeArgs } = makeAdapters({
       lakeDoc: lake({ organizationId: 'org1' }),
       org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'creator' }] },
     });
-    await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', adapters)).rejects.toThrow(
+    await expect(transferLakeOwnership(owner, ...lakeArgs, 'newOwner', adapters)).rejects.toThrow(
       /must belong to the organization/i
     );
   });
 
   it('org lake: allows an org admin to transfer to an org member (orphaned-creator succession)', async () => {
-    const { adapters, upsertGrant } = makeAdapters({
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters({
       lakeDoc: lake({ organizationId: 'org1', createdByUserId: 'departed' }),
       org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'newOwner' }] },
     });
@@ -199,13 +246,13 @@ describe('transferLakeOwnership', () => {
       administeredOrgIds: ['org1'],
       organizationIds: ['org1'],
     };
-    const result = await transferLakeOwnership(orgAdmin, 'lake1', 'newOwner', adapters);
+    const result = await transferLakeOwnership(orgAdmin, ...lakeArgs, 'newOwner', adapters);
     expect(result.newOwnerUserId).toBe('newOwner');
     expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'newOwner', role: 'owner' }));
   });
 
   it('consent guard (B4): forbids an org admin from transferring the lake to THEMSELVES', async () => {
-    const { adapters, upsertGrant } = makeAdapters({
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters({
       lakeDoc: lake({ organizationId: 'org1', createdByUserId: 'departed' }),
       org: { userId: 'billing', adminUserIds: ['orgAdmin'], users: [{ userId: 'orgAdmin' }] },
     });
@@ -215,7 +262,7 @@ describe('transferLakeOwnership', () => {
       administeredOrgIds: ['org1'],
       organizationIds: ['org1'],
     };
-    await expect(transferLakeOwnership(orgAdmin, 'lake1', 'orgAdmin', adapters)).rejects.toThrow(
+    await expect(transferLakeOwnership(orgAdmin, ...lakeArgs, 'orgAdmin', adapters)).rejects.toThrow(
       /cannot transfer a data lake to themselves/i
     );
     expect(upsertGrant).not.toHaveBeenCalled();
@@ -224,21 +271,30 @@ describe('transferLakeOwnership', () => {
   it('org lake: refuses an owner who has left the owning org, even holding the owner grant', async () => {
     // Lake grants are not revoked on org departure, so the grant alone must not authorize a write
     // that hands the lake on (and, through the picker, discloses the org's roster).
-    const { adapters, upsertGrant } = makeAdapters({
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters({
       lakeDoc: lake({ organizationId: 'org1' }),
       org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'newOwner' }] },
     });
     await expect(
-      transferLakeOwnership({ userId: 'creator', isAdmin: false, organizationIds: [] }, 'lake1', 'newOwner', adapters)
+      transferLakeOwnership(
+        { userId: 'creator', isAdmin: false, organizationIds: [] },
+        ...lakeArgs,
+        'newOwner',
+        adapters
+      )
     ).rejects.toThrow(/do not have permission to transfer/i);
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
   it('a platform admin MAY transfer a lake to themselves (superuser, exempt from the consent guard)', async () => {
-    const { adapters, upsertGrant } = makeAdapters({ lakeDoc: lake({ createdByUserId: 'someoneElse' }) });
+    // A personal lake, which only a platform admin may transfer at all - so this covers the consent
+    // guard's admin exemption without also dragging in the org roster check on the recipient.
+    const { adapters, lakeArgs, upsertGrant } = makeAdapters({
+      lakeDoc: lake({ createdByUserId: 'someoneElse', organizationId: undefined }),
+    });
     const result = await transferLakeOwnership(
       { userId: 'root', isAdmin: true, organizationIds: [] },
-      'lake1',
+      ...lakeArgs,
       'root',
       adapters
     );
@@ -248,11 +304,11 @@ describe('transferLakeOwnership', () => {
 
   it('the current owner MAY transfer to themselves (no-op-ish; exempt from the consent guard)', async () => {
     // Owner authorized as effective owner, not via the org-admin rung, so the guard does not apply.
-    const { adapters } = makeAdapters({
+    const { adapters, lakeArgs } = makeAdapters({
       lakeDoc: lake({ organizationId: 'org1', createdByUserId: 'creator' }),
       org: { users: [{ userId: 'creator' }] },
     });
-    const result = await transferLakeOwnership(owner, 'lake1', 'creator', adapters);
+    const result = await transferLakeOwnership(owner, ...lakeArgs, 'creator', adapters);
     expect(result.newOwnerUserId).toBe('creator');
   });
 });

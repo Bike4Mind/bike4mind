@@ -4,7 +4,6 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { setupSamlStrategy } from '@server/auth/auth';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { AuthenticateOptions } from '@node-saml/passport-saml/lib/types';
-import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 
 const handler = baseApi({ auth: false }).get(async (req, res) => {
   const { idp } = req.query;
@@ -14,7 +13,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   }
 
   try {
-    const identityProvider = await identityProviderRepository.findById(idp);
+    const identityProvider = await identityProviderRepository.findByIdWithSecrets(idp);
 
     if (!identityProvider || !identityProvider.isActive) {
       throw new NotFoundError('Identity provider not found or inactive');
@@ -26,6 +25,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     const strategyName = setupSamlStrategy({
       _id: identityProvider.id,
+      emailDomain: identityProvider.emailDomain,
       samlConfig: identityProvider.samlConfig,
     });
 
@@ -37,11 +37,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       relayState.set('redirectTo', req.query.redirectTo);
     }
 
+    // RelayState carries a caller-supplied redirectTo and is never logged.
     console.log('Starting SAML authentication for IDP:', identityProvider.id);
-    // Truncate: RelayState now carries redirectTo, which can be a long embedded
-    // URL (e.g. /oauth/authorize?...). Matches LOG_URL_TRUNCATE_LENGTH usage in
-    // the rest of the OAuth/SAML flow.
-    console.log('RelayState being set:', relayState.toString().substring(0, LOG_URL_TRUNCATE_LENGTH) + '...');
 
     passport.authenticate(strategyName, <AuthenticateOptions>{
       successRedirect: undefined,

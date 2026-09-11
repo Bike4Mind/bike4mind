@@ -20,10 +20,25 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 
-import { PassportOAuthStateStore } from './passportOAuthStateStore';
+import { PassportOAuthStateStore, OAUTH_NONCE_HASH_REQ_KEY } from './passportOAuthStateStore';
+import { STATE_NONCE_COOKIE_NAME } from './oauthFlowCookie';
 import type OAuth2Strategy from 'passport-oauth2';
+import { createHash } from 'crypto';
 
-const mockReq = {} as Request;
+// A request with headers but no nonce cookie. verify() always opts into
+// browser-binding (it passes readStateNonceHash(req)), so this fails closed -
+// used by the rejection cases, which trip on signature/expiry/audience/missing
+// before the nonce check anyway.
+const mockReq = { headers: {} } as Request;
+
+// A matched flow-start/callback pair for the happy path: store() embeds this
+// hash as the token's `nh` claim; the callback request carries the nonce whose
+// sha256 is that hash, so verify()'s browser-binding check passes.
+const NONCE = 'a'.repeat(64);
+const NONCE_HASH = createHash('sha256').update(NONCE).digest('hex');
+const nonceStoreReq = (extra: Record<string, unknown> = {}) =>
+  ({ headers: {}, [OAUTH_NONCE_HASH_REQ_KEY]: NONCE_HASH, ...extra }) as unknown as Request;
+const nonceVerifyReq = { headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${NONCE}` } } as unknown as Request;
 
 function callStore(
   s: PassportOAuthStateStore,
@@ -106,8 +121,8 @@ describe('PassportOAuthStateStore', () => {
 
   describe('verify()', () => {
     it('accepts a valid round-trip token', async () => {
-      const { token } = await callStore(store, mockReq);
-      const { err, ok, info } = await callVerify(store, mockReq, token!);
+      const { token } = await callStore(store, nonceStoreReq());
+      const { err, ok, info } = await callVerify(store, nonceVerifyReq, token!);
       expect(err).toBeNull();
       expect(ok).toBe(true);
       expect(info).toBeDefined();
@@ -115,11 +130,18 @@ describe('PassportOAuthStateStore', () => {
 
     it('round-trips an embedded redirectTo through store → verify', async () => {
       const redirectTo = '/oauth/authorize?client_id=abc&redirect_uri=https%3A%2F%2Fapp';
-      const reqWithRedirect = { query: { redirectTo } } as unknown as Request;
-      const { token } = await callStore(store, reqWithRedirect);
-      const { ok, info } = await callVerify(store, mockReq, token!);
+      const { token } = await callStore(store, nonceStoreReq({ query: { redirectTo } }));
+      const { ok, info } = await callVerify(store, nonceVerifyReq, token!);
       expect(ok).toBe(true);
       expect((info as { redirectTo?: string }).redirectTo).toBe(redirectTo);
+    });
+
+    it('rejects a valid token when the browser nonce cookie is absent (cross-browser)', async () => {
+      const { token } = await callStore(store, nonceStoreReq());
+      const { err, ok, info } = await callVerify(store, mockReq, token!);
+      expect(err).toBeNull();
+      expect(ok).toBe(false);
+      expect((info as { code: string }).code).toBe('state_invalid');
     });
 
     it('rejects a tampered token', async () => {

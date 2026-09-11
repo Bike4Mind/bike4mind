@@ -1,4 +1,5 @@
 import { ZodError } from 'zod';
+import type { IFabFileDocument } from './types/entities/FabFileTypes';
 
 // ---------- HTTP errors (canonical location) ----------
 
@@ -98,6 +99,29 @@ export class ConflictError extends HTTPError {
   }
 }
 
+/**
+ * Thrown by `BaseRepository.updateGuarded` when a version-guarded write matches no document because a
+ * concurrent writer advanced the doc's `__v` since this caller read it - a lost optimistic-concurrency
+ * race. Extends ConflictError so an uncaught one surfaces as a retryable 409 rather than a 500; a
+ * caller that can re-read and re-apply should catch it. Uses the `.name` fallback guard below for the
+ * same cross-module-realm reason as `isChunkClaimLostError`.
+ */
+export class ConcurrencyConflictError extends ConflictError {
+  constructor(
+    public readonly modelName: string,
+    additionalInfo?: Record<string, unknown>
+  ) {
+    super(`Concurrent modification of ${modelName}: the document changed since it was read`, additionalInfo);
+    this.name = 'ConcurrencyConflictError';
+  }
+}
+
+export function isConcurrencyConflictError(err: unknown): err is ConcurrencyConflictError {
+  return Boolean(
+    err && (err instanceof ConcurrencyConflictError || (err as Error).name === 'ConcurrencyConflictError')
+  );
+}
+
 /** 502: an upstream we depend on failed. The caller's request was well-formed. */
 export class BadGatewayError extends HTTPError {
   constructor(
@@ -159,6 +183,41 @@ export function isChunkClaimLostError(err: unknown): err is ChunkClaimLostError 
 
 export function isZodError(err: unknown): err is ZodError {
   return Boolean(err && (err instanceof ZodError || (err as ZodError).name === 'ZodError'));
+}
+
+/**
+ * Thrown by `createFabFileByUrl` (`@bike4mind/services`) when the adapter-supplied `checkDuplicate`
+ * finds a live match for the fetched content's hash, BEFORE any row is created - so a caller that
+ * dedupes never strands a row the way a create-then-check ordering would. A thrown error rather
+ * than a changed return type: every other caller (the web URL door, the proposal-admission door)
+ * never supplies `checkDuplicate` and so can never see this thrown, keeping their contract exactly
+ * as it was before this existed. Lives here (not in `@bike4mind/services`) for the same reason
+ * `ChunkClaimLostError` does: thrown in one package, caught in another, so it needs one canonical
+ * module identity rather than a per-caller `instanceof` that can miss across module realms.
+ */
+export class DuplicateFabFileError extends Error {
+  constructor(
+    /** The already-live FabFile this fetch's content hash matches. */
+    public readonly existing: IFabFileDocument,
+    /** The title resolved for THIS attempt - what the caller should name the skip. */
+    public readonly fetchedTitle: string
+  ) {
+    // Generic on purpose: this class is thrown for ANY `checkDuplicate` caller, not only the Slack
+    // data-lake path - a "data lake" specific message here would misdescribe a future caller that
+    // dedupes against something else. Callers that need lake-specific wording build it themselves
+    // (see `dataLakeLinkIngest.ts`'s catch, which never reads this message).
+    super('Duplicate content already exists');
+    this.name = 'DuplicateFabFileError';
+  }
+}
+
+/**
+ * Same cross-package-boundary concern as `isChunkClaimLostError` above: a bare `instanceof` against
+ * `DuplicateFabFileError` can miss if `@bike4mind/common` is ever resolved as two distinct module
+ * realms. Falls back to `.name`, which the constructor above always sets.
+ */
+export function isDuplicateFabFileError(err: unknown): err is DuplicateFabFileError {
+  return Boolean(err && (err instanceof DuplicateFabFileError || (err as Error).name === 'DuplicateFabFileError'));
 }
 
 // ---------- MCP permission errors ----------

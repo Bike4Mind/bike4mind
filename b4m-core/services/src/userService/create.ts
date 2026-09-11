@@ -8,10 +8,14 @@ export async function hashPassword(password: string): Promise<string> {
 // Creates a user with the given username and email, and any of the
 // other properties in the given record.  If a password is provided,
 // it should be plaintext; it will be hashed and stored.
+//
+// `email` may be omitted to create an emailless account - the same shape an OAuth
+// signup with no provider-verified email produces (see verifyCallback's create path).
+// Such an account cannot receive a login one-time code until it adds an address.
 export async function createUser(
   params: {
     username: string;
-    email: string;
+    email?: string | null;
     name?: string;
     record?: Partial<IUser>;
     tags?: Array<string>;
@@ -35,7 +39,7 @@ export async function createUser(
   const existing = await db.users.findByUsernameOrEmail(username, email);
 
   if (existing) {
-    const type = existing.email === email ? 'Email' : 'Username';
+    const type = email && existing.email === email ? 'Email' : 'Username';
     throw new Error(`${type} already in use`);
   }
 
@@ -65,7 +69,7 @@ export async function createUser(
     // record shape). Passwordless-first: defaults to false.
     hasUsablePassword: record?.hasUsablePassword ?? false,
     username,
-    email,
+    email: email ?? null,
     // Normalize to [] (never null): a null tags list makes tag-gated UI (e.g.
     // useAccessibleModels) unable to distinguish "no tags" from "not loaded".
     tags: tags ?? [],

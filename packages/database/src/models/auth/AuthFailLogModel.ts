@@ -174,12 +174,26 @@ class AuthFailLogRepository extends BaseRepository<IAuthFailLogDocument> {
   }
 
   /**
-   * Get failed login attempts for a specific user
+   * Get failed login attempts for a specific user.
+   *
+   * `userEmail` is optional: an account created via OAuth without a provider-verified
+   * email has no address on file. Matching on `{ email: undefined }` would compile to
+   * `{ email: null }` and pull in every emailless record, i.e. other users' failures,
+   * so an absent email drops out of the `$or` instead.
    */
-  async getUserFailedLogins(userEmail: string, username: string, since: Date): Promise<IAuthFailLogDocument[]> {
+  async getUserFailedLogins(
+    userEmail: string | null | undefined,
+    username: string,
+    since: Date
+  ): Promise<IAuthFailLogDocument[]> {
+    const identityMatch: Array<Record<string, string>> = [{ username }];
+    if (userEmail) {
+      identityMatch.push({ email: userEmail });
+    }
+
     return this.model
       .find({
-        $or: [{ email: userEmail }, { username: username }],
+        $or: identityMatch,
         createdAt: { $gte: since },
       })
       .sort({ createdAt: -1 });

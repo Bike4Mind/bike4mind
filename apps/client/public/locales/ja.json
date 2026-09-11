@@ -68,7 +68,6 @@
     "no_valid_emails_error": "有効なメールアドレスを入力してください",
     "send_referral": "紹介を送る",
     "send_referral_success": "紹介が成功しました！",
-    "send_referral_skipped": "{{count}} 招待をスキップしました — そのメールアドレスはすでにアカウントがあります。",
     "send_referral_failed": "{{count}} 件の招待を送信できませんでした。もう一度お試しください。",
     "send_referral_error": "紹介の送信に失敗しました。もう一度お試しください。",
     "slack_notification_default": "USER_NAME:USER_IDユーザーによってFRIEND_EMAILへ送られた紹介"

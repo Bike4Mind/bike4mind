@@ -1,5 +1,11 @@
 # @bike4mind/memory
 
+## 0.2.0
+
+### Minor Changes
+
+- [#2688](https://github.com/Bike4Mind/bike4mind/pull/2688) [`a9e9214`](https://github.com/Bike4Mind/bike4mind/commit/a9e9214c5864b364e630b918d976a719b8737f01) Thanks [@onoya](https://github.com/onoya)! - keep disagreeing lake claims and date every recalled fact
+
 ## 0.1.0
 
 ### Minor Changes

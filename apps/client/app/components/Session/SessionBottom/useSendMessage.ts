@@ -373,6 +373,7 @@ export function useSendMessage({
       currentUser,
       effectiveCredits,
       enforceCredits,
+      selectedModel: model,
     });
     if (errorMessage) {
       console.error(errorMessage);

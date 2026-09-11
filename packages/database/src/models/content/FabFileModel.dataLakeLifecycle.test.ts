@@ -207,6 +207,213 @@ describe('FabFile data lake lifecycle membership', () => {
     });
   });
 
+  describe('countDataLakeTopicTags (#1292)', () => {
+    it('counts content tags on lake members only, most-frequent first', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne(
+        { _id: rows.metaTagged._id },
+        { $set: { tags: [{ name: DATALAKE_TAG }, { name: 'oncology' }, { name: 'oncology' }] } }
+      );
+      await FabFile.updateOne(
+        { _id: rows.prefixOwned._id },
+        { $set: { tags: [{ name: 'acme:report' }, { name: 'oncology' }, { name: 'radiology' }] } }
+      );
+      // Retags this row with no lake-membership tag at all, so it drops out of the $match
+      // entirely - its 'oncology' tag must not contribute despite the identical name.
+      await FabFile.updateOne({ _id: rows.unrelated._id }, { $set: { tags: [{ name: 'oncology' }] } });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      // 'acme:report' and 'radiology' tie at count 1; the sort's _id tiebreaker orders them
+      // alphabetically, which is why 'acme:report' precedes 'radiology' below.
+      expect(topics).toEqual([
+        { tag: 'oncology', count: 2 },
+        { tag: 'acme:report', count: 1 },
+        { tag: 'radiology', count: 1 },
+      ]);
+    });
+
+    it('excludes the datalake: meta-tag itself - a membership signal, not a topic', async () => {
+      await seedLakeRows();
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain(DATALAKE_TAG);
+    });
+
+    it('excludes a bare fileTagPrefix tag with no suffix, but keeps a real prefixed topic tag', async () => {
+      // 'acme:' alone identifies the lake, the same way a bare prefix is excluded from the tag
+      // tree elsewhere (buildLacksContentPrefixTagFilter). 'acme:report' has a suffix, so it IS a
+      // real topic and must survive.
+      await makeFile({ fileName: 'bare.txt', userId: CREATOR, tags: [{ name: 'acme:' }] });
+      await seedLakeRows(); // contributes prefixOwned, tagged 'acme:report'
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain('acme:');
+      expect(topics.map(t => t.tag)).toContain('acme:report');
+    });
+
+    it('excludes the <prefix>uncategorized placeholder - it means "untagged", not a topic', async () => {
+      // The write doors (createDataLakeFallbackTagger, addFileToDataLake, the backfill migration)
+      // stamp this on every prefix-arm member carrying no other content tag, so it is typically the
+      // MODAL tag on a lake. Left in, it sorts first and hands the model "untagged" as the corpus's
+      // leading topic - the guess-or-refusal outcome this tool exists to prevent.
+      for (const n of [1, 2, 3]) {
+        await makeFile({
+          fileName: `placeholder${n}.txt`,
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'acme:uncategorized' }],
+        });
+      }
+      await makeFile({
+        fileName: 'real.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: 'oncology' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain('acme:uncategorized');
+      expect(topics).toEqual([{ tag: 'oncology', count: 1 }]);
+    });
+
+    it('caps the returned tags at `limit`, highest count first', async () => {
+      await makeFile({
+        fileName: 'many-tags.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: 'a' }, { name: 'b' }, { name: 'c' }, { name: 'd' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope, 3);
+
+      expect(topics).toHaveLength(3);
+    });
+
+    it('ignores a legacy tag element with a missing or non-string name rather than reporting it as a topic', async () => {
+      // `tags` is [Object] with no sub-schema, and legacy rows are known to carry elements with a
+      // missing or non-string `name` (six other call sites in this file guard the same shape).
+      await makeFile({
+        fileName: 'legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, {}, { name: 42 }, { name: 'oncology' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics).toEqual([{ tag: 'oncology', count: 1 }]);
+    });
+  });
+
+  describe('summarizeDataLakeIndexingHealth (#1292)', () => {
+    it('counts a pre-chunk extraction failure, which the chunk-bearing health read cannot see', async () => {
+      await makeFile({
+        fileName: 'broken.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 0,
+        error: 'extraction failed',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // findDataLakeHealthMembers' $match admits only chunk-bearing members, so a caller counting
+      // failures from its rows reports "0 failed" for a lake that has a real one.
+      expect(health.failedFiles).toBe(1);
+      expect(health.chunkedFiles).toBe(0);
+    });
+
+    it('does not read a legacy empty-string error as a failure', async () => {
+      await makeFile({
+        fileName: 'fine.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+        error: '',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // Matches evaluateMemberHealth's hasError (a NON-EMPTY string). `{ $ne: null }` calls this broken.
+      expect(health.failedFiles).toBe(0);
+      expect(health.fullyVectorizedFiles).toBe(1);
+    });
+
+    it('keys "fully vectorized" on embeddedChunkCount, not vectorizedChunkCount', async () => {
+      // vectorizedChunkCount also counts an oversized un-embeddable chunk as done, which is why the
+      // shared evaluator grades P3 on embeddedChunkCount instead. This row is NOT fully vectorized.
+      await makeFile({
+        fileName: 'oversized.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 4,
+        vectorizedChunkCount: 4,
+        embeddedChunkCount: 2,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health.fullyVectorizedFiles).toBe(0);
+      expect(health.inFlightFiles).toBe(1);
+      expect(health.totalEmbeddedChunks).toBe(2);
+    });
+
+    it('keeps an unmeasured legacy member in flight rather than calling it broken', async () => {
+      await makeFile({
+        fileName: 'legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 3,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health).toMatchObject({
+        chunkedFiles: 1,
+        fullyVectorizedFiles: 0,
+        inFlightFiles: 1,
+        failedFiles: 0,
+        totalChunks: 3,
+      });
+    });
+
+    it('scopes to lake members only, on the same predicate as computeDataLakeStats', async () => {
+      await makeFile({
+        fileName: 'member.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+      });
+      await makeFile({
+        fileName: 'outsider.txt',
+        userId: STRANGER,
+        tags: [{ name: 'unrelated' }],
+        chunkCount: 9,
+        embeddedChunkCount: 9,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health.chunkedFiles).toBe(1);
+      expect(health.totalChunks).toBe(2);
+    });
+
+    it('returns zeroes for a lake with no members rather than undefined', async () => {
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health).toEqual({
+        chunkedFiles: 0,
+        fullyVectorizedFiles: 0,
+        failedFiles: 0,
+        inFlightFiles: 0,
+        totalChunks: 0,
+        totalEmbeddedChunks: 0,
+      });
+    });
+  });
+
   // #1040: the single-lake browse (fabFileRepository.search with lakeMembership +
   // restrictToDataLake, what GET /api/data-lakes/:id/articles runs) must agree with
   // computeDataLakeStats above about who is a member - a file only reached through a share or a
@@ -381,6 +588,126 @@ describe('FabFile data lake lifecycle membership', () => {
         restrictToDataLake: true,
       });
       expect(result.data.map(f => f.fileName)).toEqual(['weird-owned.txt']);
+    });
+  });
+
+  describe('getAccessibleFiles - lake membership arm (#1576)', () => {
+    const VIEWER = 'u-viewer-not-creator';
+
+    it('a non-owner reaches a meta-tagged member and a creator-owned prefix-only member, never a colliding-prefix stranger', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { lakeMemberships: [scope] }
+      );
+
+      expect(result.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
+    });
+
+    it('two lakes sharing a prefix under different creators never cross on the attachment door either', async () => {
+      await seedLakeRows();
+      const otherCreator = 'u-other-creator-attach';
+      const otherPrefixOwned = await makeFile({
+        fileName: 'other-prefix-owned-attach.txt',
+        userId: otherCreator,
+        tags: [{ name: 'acme:other-report-attach' }], // same prefix as `scope`, different creator
+      });
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [otherPrefixOwned._id.toString()],
+        viewerCaslScope,
+        { lakeMemberships: [scope] } // only the ORIGINAL creator's arm, not `otherCreator`'s
+      );
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('a file matching both the CASL scope and a lake arm is returned once, not duplicated', async () => {
+      const rows = await seedLakeRows();
+      const creatorCaslScope = { userId: CREATOR };
+
+      const result = await fabFileRepository.getAccessibleFiles([rows.prefixOwned._id.toString()], creatorCaslScope, {
+        lakeMemberships: [scope],
+      });
+
+      expect(result).toHaveLength(1);
+    });
+
+    it("an archived lake member is not returned through the lake arm, while the caller's OWN archived file still is", async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { archivedAt: new Date() } });
+      const ownArchived = await makeFile({
+        fileName: 'own-archived.txt',
+        userId: VIEWER,
+        tags: [],
+        archivedAt: new Date(),
+      });
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), ownArchived._id.toString()],
+        viewerCaslScope,
+        { lakeMemberships: [scope] }
+      );
+
+      expect(result.map(f => f.fileName)).toEqual(['own-archived.txt']);
+    });
+
+    it('forwards the dataLakeTags bucket: a non-owner reaches a meta-tagged member by tag alone', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { dataLakeTags: [DATALAKE_TAG] }
+      );
+
+      // The exact meta-tag arm only: prefix-owned.txt carries no datalake: tag, so this bucket
+      // alone must not reach it, and no stranger carries the tag either.
+      expect(result.map(f => f.fileName)).toEqual(['meta.txt']);
+    });
+
+    it('forwards the dataLakeTagPrefixes bucket, which is UNANCHORED - it reaches prefix matches the caller does not own', async () => {
+      const rows = await seedLakeRows();
+      const viewerCaslScope = { userId: VIEWER };
+
+      const result = await fabFileRepository.getAccessibleFiles(
+        [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds],
+        viewerCaslScope,
+        { dataLakeTagPrefixes: ['acme:'] }
+      );
+
+      // Pinning the widest arm this door can be handed. Unlike a `lakeMemberships` scope, the
+      // prefix bucket carries NO creator conjunct, so every acme:-tagged file matches regardless
+      // of owner - which is why it is only ever supplied for a registry lake on an access-gated
+      // path, and why lakeMembershipsFrom's `owned` allow-list must keep registry scopes out of
+      // lakeMemberships. A regression that widened this bucket's source would show up here.
+      expect(result.map(f => f.fileName).sort()).toEqual([
+        'prefix-group.txt',
+        'prefix-owned.txt',
+        'prefix-shared.txt',
+        'unrelated.txt',
+      ]);
+    });
+
+    it('an absent lakeAccess, or one with empty buckets, reproduces the byte-identical legacy result set', async () => {
+      const rows = await seedLakeRows();
+      const creatorCaslScope = { userId: CREATOR };
+      const ids = [rows.metaTagged._id.toString(), rows.prefixOwned._id.toString(), ...rows.strangerIds];
+
+      const withoutLakeAccess = await fabFileRepository.getAccessibleFiles(ids, creatorCaslScope);
+      const withEmptyBuckets = await fabFileRepository.getAccessibleFiles(ids, creatorCaslScope, {});
+
+      const names = (rows: typeof withoutLakeAccess) => rows.map(f => f.fileName).sort();
+      // CREATOR owns both member files outright, so ownership alone (no lake arm) already
+      // reaches them - this pins that adding the parameter changes nothing when it's unused.
+      expect(names(withoutLakeAccess)).toEqual(['meta.txt', 'prefix-owned.txt']);
+      expect(names(withEmptyBuckets)).toEqual(names(withoutLakeAccess));
     });
   });
 

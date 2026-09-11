@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
@@ -14,6 +16,13 @@ const h = vi.hoisted(() => ({
     chunkCount: 0,
     createdAt: { $lt: cutoff },
   })),
+  // Spied so a test can assert the sweep passes BOTH cutoffs, matching buildScanFilter above.
+  buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({
+    vectorizeEnqueueFailedAt: { $lt: cutoff },
+  })),
+  // A getter, so a test can make the RESOURCE READ itself fault - which is the thing that used to be
+  // swallowed once per candidate. Defaults to the working url.
+  queueResourceThrows: false,
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -61,17 +70,25 @@ vi.mock('@bike4mind/services', () => ({
       }),
   },
 }));
-vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
+vi.mock('sst', () => ({
+  Resource: {
+    get fabFileChunkQueue() {
+      if (h.queueResourceThrows) throw new Error('Resource "fabFileChunkQueue" is not linked');
+      return { url: 'http://elasticmq/fabFileChunkQueue' };
+    },
+  },
+}));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-// Only the filter is stubbed; buildChunkRescueMessage stays real so the payload shape this sweep
-// sends is asserted against the shared producer, not a local copy of it. Spreading the actual
+// Only the filters are stubbed; buildChunkRescueMessage stays real so the payload shape this
+// sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
 // module also keeps the cutoff constants real, which the cutoff assertions below depend on.
 vi.mock('./chunkScan', async importActual => ({
   ...(await importActual<typeof import('./chunkScan')>()),
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
+  buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
 }));
 
-import { runChunkRescueSweep } from './chunkRescueSweep';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 
 type Candidate = { _id: string; userId: string; batchId?: string; tags?: { name: string; strength: number }[] };
 
@@ -79,6 +96,22 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 /** The sweep only ever calls info/error on it; the real Logger's surface is irrelevant here. */
 const SELF_HOST_LIMIT = 50;
 const runSweep = (limit = SELF_HOST_LIMIT) => runChunkRescueSweep({ limit, logger: logger as never });
+
+/**
+ * Makes each send hold open across a macrotask so overlapping ones are actually observable: an
+ * immediately-resolving stub would report a peak of 1 even for an unbounded fan-out.
+ */
+const trackSendConcurrency = () => {
+  let inFlight = 0;
+  let peak = 0;
+  h.sendToQueue.mockImplementation(async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    inFlight -= 1;
+  });
+  return () => peak;
+};
 
 const limitSpy = vi.fn();
 const withCandidates = (candidates: Candidate[]) => {
@@ -231,6 +264,165 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+
+  it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+    // The bound is what keeps the per-file catch affordable (see the ENQUEUE_CONCURRENCY docblock),
+    // so it is worth pinning as a number: a sequential loop peaks at 1 and an unbounded
+    // Promise.all over the whole pass peaks at 25, and both leave every other assertion green.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+    const peak = trackSendConcurrency();
+
+    await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
+
+    expect(peak()).toBe(10);
+  });
+});
+
+describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () => {
+  const runRescue = () => runStrandedVectorizeRescue(logger as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.queueResourceThrows = false;
+    h.sendToQueue.mockResolvedValue(undefined);
+    withCandidates([]);
+  });
+
+  it('lets an unlinked queue fail the pass ONCE rather than per candidate', async () => {
+    // The resource read used to sit inside the per-file `try`, so a config fault was caught once per
+    // candidate: up to CHUNK_SCAN_BATCH identical error lines a minute on the 60s tick, `sent` stuck
+    // at 0, and the summary log gated on `sent > 0` so nothing aggregate fired. A hard misconfiguration
+    // was indistinguishable from ordinary SQS throttling. Hoisted above the fan-out, it escapes to the
+    // driver's catch.
+    h.queueResourceThrows = true;
+    withCandidates([
+      { _id: 'ff1', userId: 'u1' },
+      { _id: 'ff2', userId: 'u2' },
+      { _id: 'ff3', userId: 'u3' },
+    ]);
+
+    await expect(runRescue()).rejects.toThrow(/not linked/);
+
+    // Not once per file, which is the whole point.
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('runs regardless of auto-chunk', async () => {
+    // These files are already chunked, so the setting has nothing left to gate - and no other
+    // sweep can see them, since this one selects on the vectorize failure stamp.
+    h.getSettingsValue.mockResolvedValue(false);
+    withCandidates([{ _id: 'ff9', userId: 'u9' }]);
+
+    await expect(runRescue()).resolves.toBe(1);
+
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff9',
+      userId: 'u9',
+    });
+  });
+
+  it('selects on the stranded cutoff with the per-pass cap', async () => {
+    await runRescue();
+
+    expect(h.buildStrandedFilter).toHaveBeenCalledTimes(1);
+    const [cutoff, staleClaimBefore] = h.buildStrandedFilter.mock.calls[0];
+    expect(cutoff).toBeInstanceOf(Date);
+    expect(staleClaimBefore).toBeInstanceOf(Date);
+    expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
+    expect(limitSpy).toHaveBeenCalledWith(50);
+  });
+
+  it('sends every file unstamped, batch or not', async () => {
+    // Unlike the un-chunked sweep, these files are already chunked: the handler's halt branch runs
+    // above the already-chunked resume, so a stamped message would route a healthy file into a
+    // paused-marker write over its own committed passages. Must match the hosted twin.
+    withCandidates([
+      { _id: 'ff1', userId: 'u1', batchId: 'b1' },
+      { _id: 'ff2', userId: 'u2' },
+    ]);
+
+    await expect(runRescue()).resolves.toBe(2);
+
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff1',
+      userId: 'u1',
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff2',
+      userId: 'u2',
+    });
+  });
+
+  it('a failed send costs only itself, and the reported count is what was sent', async () => {
+    // This is the last pass of the scheduled task, so a rejection escaping the loop would abandon
+    // every candidate behind it AND fail the whole tick.
+    withCandidates([
+      { _id: 'ff1', userId: 'u1' },
+      { _id: 'ff2', userId: 'u2' },
+      { _id: 'ff3', userId: 'u3' },
+    ]);
+    h.sendToQueue.mockImplementation(async (_url: unknown, msg: { fabFileId: string }) => {
+      if (msg.fabFileId === 'ff2') throw new Error('SQS throttled');
+    });
+
+    await expect(runRescue()).resolves.toBe(2);
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('stranded-vectorize re-enqueue failed for ff2'));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('re-enqueued 2 file(s)'));
+  });
+
+  it('stays quiet when there is nothing to rescue', async () => {
+    await expect(runRescue()).resolves.toBe(0);
+
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('attempts every candidate across concurrency waves, not just the first wave', async () => {
+    // The fan-out runs in fixed-size waves; an off-by-one in the slice window would silently drop
+    // the tail of a full pass, which is indistinguishable from "the backlog was small" in the logs.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+
+    await expect(runRescue()).resolves.toBe(25);
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+
+  it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+    // This pass shares the 60s non-reentrant tick with runChunkRescueSweep, so its sends are
+    // bounded for the same reason that sweep's are - and must stay bounded, since a sequential loop
+    // (peak 1) or an unbounded Promise.all (peak 25) both keep every other assertion here green.
+    withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+    const peak = trackSendConcurrency();
+
+    await expect(runRescue()).resolves.toBe(25);
+
+    expect(peak()).toBe(10);
+  });
+});
+
+describe('the scheduled task isolates the two passes', () => {
+  // Source-shape guard: main.ts registers the task inside an unexported boot closure, so the
+  // chaining is unreachable from a behavioural test. The regression is silent - dropping either
+  // catch type-checks and only shows up as a stranded backlog that stops draining whenever the
+  // un-chunked pass's FabFile.find throws.
+  it('wraps both sweep calls in their own catch', async () => {
+    const src = await readFile(resolve(__dirname, 'main.ts'), 'utf8');
+    // runChunkRescueSweep now takes the options object (limit + logger), not a bare logger - only
+    // its own call site's shape differs from runStrandedVectorizeRescue's.
+    const calls: [string, RegExp][] = [
+      ['runChunkRescueSweep', /await runChunkRescueSweep\(\{[^}]*logger: bootLogger[^}]*\}\)(\.catch)?/],
+      ['runStrandedVectorizeRescue', /await runStrandedVectorizeRescue\(bootLogger\)(\.catch)?/],
+    ];
+    for (const [fn, pattern] of calls) {
+      const call = src.match(pattern);
+      expect(call, `${fn} call site vanished - move or delete this guard with it`).not.toBeNull();
+      expect(call![1], `${fn} must not reject out of the tick and skip the other pass`).toBe('.catch');
+    }
   });
 });
 

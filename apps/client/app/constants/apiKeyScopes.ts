@@ -121,6 +121,32 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     ],
   },
   {
+    value: ApiKeyScope.DATALAKE_READ,
+    label: 'Data Lakes: Read',
+    description: 'List and browse data lakes the key owner can already reach',
+    endpoints: ['GET /api/data-lakes', 'GET /api/data-lakes/:id'],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_QUERY,
+    label: 'Data Lakes: Query',
+    description:
+      'Run a retrieval query against a lake, and read lakes to support it. Spends credits - not part of the Read-only preset',
+    endpoints: ['POST /api/data-lakes/semantic-search', 'POST /api/data-lakes/rlm-answer'],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_WRITE,
+    label: 'Data Lakes: Write',
+    description: 'Create and update lakes, and attach, retag, or remove their files',
+    endpoints: ['POST /api/data-lakes', 'PUT /api/data-lakes/:id', 'POST /api/data-lakes/:id/files/:fabFileId'],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_SHARE,
+    label: 'Data Lakes: Share',
+    description:
+      'Change who can reach a lake - its visibility and its ownership. Not implied by write: grant only to keys that must re-share',
+    endpoints: ['POST /api/data-lakes/:id/visibility', 'POST /api/data-lakes/:id/transfer-ownership'],
+  },
+  {
     value: ApiKeyScope.OVERWATCH_READ,
     label: 'Overwatch: Read',
     description:
@@ -156,7 +182,7 @@ export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SC
  * pairing handshake) and must stay outside every allowlist. Listed explicitly so
  * the coverage test in apiKeyScopes.test.ts can tell "deliberately unmintable"
  * from "someone added an enum value and forgot to register it" - the failure mode
- * that left the `datalake:*` scopes impossible to mint.
+ * that once left the `datalake:*` scopes impossible to mint.
  */
 export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.ADMIN,

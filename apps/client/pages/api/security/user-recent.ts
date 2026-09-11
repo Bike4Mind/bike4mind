@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { authFailLogRepository } from '@bike4mind/database';
+import { clampedIntParam } from '@server/utils/dateParam';
 
 /**
  * GET /api/security/user-recent
@@ -12,17 +13,24 @@ import { authFailLogRepository } from '@bike4mind/database';
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { limit?: string; hours?: string }>(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '5', 10), 50); // cap at 50
-    const hours = Math.min(parseInt(req.query.hours || '24', 10), 168); // cap at 7 days
+    // Bounded at both ends so the arithmetic below cannot overflow into an Invalid Date, which
+    // would cast against the Date-typed `createdAt` filter in getUserFailedLogins.
+    const hours = clampedIntParam('hours', req.query.hours, 24, 1, 168); // cap at 7 days
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
     const user = req.user;
-    if (!user || !user.email || !user.username) {
-      return res.status(401).json({ error: 'User not authenticated or missing required fields' });
+    // Only the session itself is a 401. An emailless account (OAuth signup with no
+    // provider-verified email) is fully authenticated, and its own security view must
+    // not read as a session error - the lookup just runs on username alone.
+    if (!user || !user.username) {
+      return res.status(401).json({ error: 'User not authenticated' });
     }
 
     // Only expose usernames belonging to the current user to avoid leaking
     // other users' identifiers that were targeted from the same IP
-    const userIdentifiers = new Set([user.username.toLowerCase(), user.email.toLowerCase()]);
+    const userIdentifiers = new Set(
+      [user.username, user.email].filter((v): v is string => !!v).map(v => v.toLowerCase())
+    );
 
     const userFailedLogins = await authFailLogRepository.getUserFailedLogins(user.email, user.username, since);
 
@@ -64,7 +72,7 @@ const handler = baseApi().get(
       items: recentEvents,
       since,
       user: {
-        email: user.email,
+        email: user.email ?? null,
         username: user.username,
       },
     });

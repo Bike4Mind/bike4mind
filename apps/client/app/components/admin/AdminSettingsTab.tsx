@@ -1,5 +1,6 @@
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { settingsMap, SETTING_TABS, API_SERVICE_GROUPS, Category, CATEGORY_ICONS } from '@bike4mind/common';
+import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import {
   Checkbox,
   FormControl,
@@ -25,6 +26,7 @@ import {
 import React, { useCallback, useMemo, useState } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 
 import AdminLogoUpload from './AdminLogoUpload';
 import { McpServerName } from '@bike4mind/common';
@@ -532,6 +534,10 @@ const AdminSettingsTab: React.FC = () => {
               );
             })}
           </Stack>
+
+          {/* The measured counterpart to this group's throughput levers. Scoped to this group
+              rather than the AI category: it only makes sense next to the numbers it advises on. */}
+          {groupId === API_SERVICE_GROUPS.DATA_LAKE_COST.id && <EmbeddingProviderLimits />}
         </CardContent>
       </Card>
     );
@@ -554,6 +560,11 @@ const AdminSettingsTab: React.FC = () => {
 
         {/* Operations Model component for the AI category */}
         {category === 'AI' && <AdminOperationsModelSetting />}
+
+        {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
+            seven of the nine scope-capable settings are AI, and the panel lists all nine wherever
+            it renders. */}
+        {category === 'AI' && <ScopedOverridesByScope />}
 
         {/* Logo Upload for the Branding category - shown when there's no
             search or the search matches the logoSettings definition */}

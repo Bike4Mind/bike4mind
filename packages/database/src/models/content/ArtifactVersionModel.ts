@@ -109,7 +109,8 @@ export class ArtifactVersionRepository extends BaseRepository<IArtifactVersionDo
     super(model);
   }
 
-  // Override update method to handle MongoDB _id properly
+  // Override update to accept `id` or `_id`. Last-writer-wins like BaseRepository.update; no guarded
+  // variant is exposed (no artifact-version caller opts in).
   async update(
     data: Partial<IArtifactVersionDocument>,
     options?: Record<string, unknown>
@@ -117,21 +118,11 @@ export class ArtifactVersionRepository extends BaseRepository<IArtifactVersionDo
     if (!data.id && !data._id) {
       throw new Error('id or _id is required');
     }
-
-    const id = data.id || data._id;
-    const query = this.model.findByIdAndUpdate(
-      id, // This is the MongoDB _id
-      { $set: data },
-      { new: true, ...options }
+    return this._plainUpdate<IArtifactVersionDocument>(
+      { _id: data.id || data._id },
+      data as Record<string, unknown>,
+      options
     );
-    // Only attach an explicit session when one is set; .session(null) overrides
-    // transactionAsyncLocalStorage propagation and silently breaks atomicity.
-    if (this._txn) {
-      query.session(this._txn);
-    }
-    const result = await query;
-
-    return result?.toJSON() as unknown as IArtifactVersionDocument | null;
   }
 
   async findByArtifactId(artifactId: string) {

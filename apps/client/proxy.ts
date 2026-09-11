@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
 import type { NextRequest } from 'next/server';
 
 // Blocks path traversal and null-byte injection before reaching the ISR cache layer (#7190)
@@ -117,23 +118,11 @@ export function proxy(request: NextRequest) {
 
   // Optional self-host Pyodide mirror (PYODIDE_BASE_URL) for offline Python artifacts. When set to
   // a non-self origin, its pyodide.js loads via script-src and its wasm/data assets fetch via
-  // connect-src, so the origin is allow-listed in both. Same validation as NEXT_PUBLIC_BLOG_HOST
-  // (parse to a single origin, reject whitespace/';', warn+omit on misconfig); http is allowed too
-  // since a LAN mirror may not have TLS. The default CDN origin is already listed on both lists.
-  const rawPyodideBase = process.env.PYODIDE_BASE_URL;
-  let pyodideHost = '';
-  if (rawPyodideBase) {
-    try {
-      if (/[\s;]/.test(rawPyodideBase)) throw new Error('contains whitespace or ";"');
-      const u = new URL(rawPyodideBase);
-      if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error(`must be http(s) (got ${u.protocol})`);
-      pyodideHost = ` ${u.origin}`;
-    } catch (e) {
-      console.warn(
-        `[csp] ignoring invalid PYODIDE_BASE_URL "${rawPyodideBase}": ${e instanceof Error ? e.message : String(e)}`
-      );
-    }
-  }
+  // connect-src, so the origin is allow-listed in both. The default CDN origin is already listed
+  // on both lists here. Resolution/validation is shared with /api/pyodide-sandbox, which must
+  // allow-list the SAME origin in the sandbox CSP - see pyodideDistribution.ts.
+  const mirrorOrigin = resolvePyodideMirrorOrigin(process.env.PYODIDE_BASE_URL);
+  const pyodideHost = mirrorOrigin ? ` ${mirrorOrigin}` : '';
 
   const cspHeader = `
     default-src 'self';
