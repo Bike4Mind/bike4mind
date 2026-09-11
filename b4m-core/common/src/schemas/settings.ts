@@ -3425,8 +3425,13 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
-    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // A scan budget an org/owner may tighten below the platform ceiling. No Lake rung (#2624): one
+    // search is not scoped to one lake - resolveRetrievalLakeScope hands the scan EVERY lake the
+    // caller can reach as a single dataLakeTags array and the scan walks that whole set in one pass,
+    // so there is no single lakeId for a narrower rung to key on. The rung was declared here
+    // speculatively and no caller ever resolved it, so a Lake-scoped override was silently inert.
+    // Reinstating it needs per-lake sub-budgets in the scan first, not just this line.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -3438,7 +3443,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // Same rungs, and the same reason for no Lake rung, as dataLakeSearchMaxFiles above (#2624).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalCharBudget: makeNumberSetting({
     key: 'forcedRetrievalCharBudget',
@@ -3490,8 +3496,9 @@ export const settingsMap = {
     order: 5,
     // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
     // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
-    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
-    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on. The
+    // same turned out to be true of dataLakeSearchMaxFiles/MaxChunks below, which were believed to
+    // scan one lake at a time and do not: they lost their Lake rung in #2624.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchResultTokenBudget: makeNumberSetting({
@@ -3589,10 +3596,11 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 9,
-    // Organization/Owner only, no Lake rung - deliberately matching kbSearchMinRelevancePct rather
-    // than dataLakeSearchMaxChunks. A forced-retrieval turn scans an uncapped SET of lakes into one
-    // pool with one top score, so there is no single lake for a narrower rung to key on, and the
-    // relative floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
+    // Organization/Owner only, no Lake rung - the altitude every retrieval-budget setting settles
+    // at, kbSearchMinRelevancePct and dataLakeSearchMaxFiles/MaxChunks (#2624) included, and for
+    // the same reason. A forced-retrieval turn scans an uncapped SET of lakes into one pool with
+    // one top score, so there is no single lake for a narrower rung to key on, and the relative
+    // floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalMinSimilarityPct: makeNumberSetting({
