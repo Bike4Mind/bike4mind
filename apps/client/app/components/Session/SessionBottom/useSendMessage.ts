@@ -728,6 +728,8 @@ export function useSendMessage({
 
         return await handleCommand(commandHandlers, {
           userId,
+          username: currentUser?.username,
+          userEmail: currentUser?.email ?? undefined,
           command,
           params,
           currentSession: notebook,

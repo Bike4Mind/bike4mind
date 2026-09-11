@@ -27,6 +27,12 @@ const ALL_COMMANDS: CommandSuggestion[] = [
     example: 'A sunset over mountains',
   },
   {
+    command: '/feedback',
+    description: 'Send the team feedback about this conversation',
+    template: '/feedback what-is-on-your-mind',
+    example: 'retrieval keeps missing my uploaded specs',
+  },
+  {
     command: '/blog-publish',
     description: 'Publish content to your blog [ADMIN ONLY]',
     template: '/blog-publish optional-title-here',
