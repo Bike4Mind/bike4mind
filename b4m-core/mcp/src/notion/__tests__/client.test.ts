@@ -80,7 +80,7 @@ describe('notionRequest', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('clamps an oversized Retry-After to the 60s ceiling', async () => {
+  it('clamps an oversized Retry-After to the retry ceiling', async () => {
     mockFetch
       .mockResolvedValueOnce(mockResponse(429, { message: 'rate limited' }, { 'retry-after': '120' }))
       .mockResolvedValueOnce(mockResponse(200, { id: 'page-1' }));
@@ -90,7 +90,7 @@ describe('notionRequest', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
     // Not the 1s exponential fallback an out-of-range header used to trigger
-    await vi.advanceTimersByTimeAsync(59_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
     // ...and not the full 120s Notion asked for either
