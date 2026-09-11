@@ -192,6 +192,13 @@ async function resolveFallbackLake(
  * only reserves the org-less meta-tag, so an ORG-SCOPED lake may legitimately carry a registry
  * slug - exactly the foreign-org shape this arm serves - and skipping the query there resolves the
  * synthetic registry lake in place of the caller's own grant-held lake.
+ *
+ * A registry-slug match DOES change behavior on failure, though: degrading to no reach here
+ * would return null, and resolveLakeAccessWithGrants's `??` chain would then fall through to
+ * resolveFallbackLake and silently resolve the WRONG lake (the generic registry fallback)
+ * instead of the caller's own - a 200 with the wrong content, not an error. So a slug colliding
+ * with a DATA_LAKES id/slug rethrows on a grants-query failure instead of degrading; every other
+ * slug still degrades to no reach as before.
  */
 const resolveGrantHeldLakeBySlug = async (
   slug: string,
@@ -209,6 +216,9 @@ const resolveGrantHeldLakeBySlug = async (
     dataLakeAccessGrants,
     false
   ).catch(err => {
+    // See the doc comment above: a slug matching a DATA_LAKES id/slug would otherwise fall
+    // through to resolveFallbackLake and silently resolve the wrong lake on this failure.
+    if (DATA_LAKES.some(dl => dl.id === slug || dl.slug === slug)) throw err;
     logger?.warn?.('[dataLakes] grant-held slug fallback query failed; resolving with no grant reach', err);
     return { grantedLakeIds: [], orgGrantedLakes: {} };
   });
