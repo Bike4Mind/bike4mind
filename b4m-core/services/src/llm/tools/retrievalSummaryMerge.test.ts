@@ -333,4 +333,30 @@ describe('mergeRetrievalSummary', () => {
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
     });
   });
+
+  describe('answerability', () => {
+    const probe = {
+      topScore: 0.88,
+      candidatesAboveFloor: 4,
+      floor: 0.75,
+      scanTruncated: false,
+      probedAt: new Date('2026-09-11T00:00:00.000Z'),
+    };
+
+    it('preserves a backfilled probe against a later runtime write that knows nothing about it', () => {
+      // The real hazard: this function returns an object literal, so a field with no case here is
+      // dropped. A regenerate on an already-replayed quest would silently erase the measurement.
+      const merged = mergeRetrievalSummary(base({ answerability: probe }), base({ surfaces: ['knowledgeBaseSearch'] }));
+      expect(merged?.answerability).toEqual(probe);
+    });
+
+    it('stays absent on turns that were never replayed', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'answerability' in merged).toBe(false);
+    });
+
+    it('accepts the probe from either side, since only one writer ever sets it', () => {
+      expect(mergeRetrievalSummary(base(), base({ answerability: probe }))?.answerability).toEqual(probe);
+    });
+  });
 });
