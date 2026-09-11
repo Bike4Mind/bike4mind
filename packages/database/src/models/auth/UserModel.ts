@@ -302,11 +302,16 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.map(d => d.toJSON());
   }
 
-  async findByUsernameOrEmail(username: string, email: string) {
+  async findByUsernameOrEmail(username: string, email?: string | null) {
     const escapedUsername = escapeRegExp(username);
-    const query = {
-      $or: [{ username: { $regex: `^${escapedUsername}$`, $options: 'i' } }, { email }],
-    };
+    // Emailless accounts exist (OAuth signup with no provider-verified email), so a caller
+    // with only a username must not turn this clause into `{ email: null }` - that would
+    // match every account that has no email.
+    const identity: Array<Record<string, unknown>> = [{ username: { $regex: `^${escapedUsername}$`, $options: 'i' } }];
+    if (email) {
+      identity.push({ email });
+    }
+    const query = { $or: identity };
 
     const result = await this.model.findOne(query).collation({ locale: 'en', strength: 2 }).select('+password');
 

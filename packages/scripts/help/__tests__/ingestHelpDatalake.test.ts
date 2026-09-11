@@ -2,6 +2,26 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// ingestHelpDatalake.ts imports these packages, which resolve only through their built
+// dist/. The Help Docs Guards CI job runs this suite standalone with no core build (that
+// is deliberate - it must also run on a docs-only PR, where the core-build job is gated
+// off), so a real import here fails to resolve and the whole file errors at collection.
+// Same fix, same reason as vectorize-help-content.test.ts.
+//
+// The fab-pipeline symbols are only used by the module's own embedding-service builder,
+// which these tests bypass via injected `deps.embed`. countCodePoints is mirrored rather
+// than stubbed because chunk charLength is derived from it.
+vi.mock('@bike4mind/common', () => ({
+  countCodePoints: (text: string) => [...text].length,
+  KnowledgeType: { TEXT: 'TEXT' },
+}));
+vi.mock('@bike4mind/fab-pipeline', () => ({
+  EmbeddingFactory: vi.fn(),
+  getProviderFromModel: vi.fn(),
+  resolveEmbeddingConfig: vi.fn(),
+}));
+
 import {
   HELP_DATALAKE_SLUG,
   HELP_DATALAKE_TAG,

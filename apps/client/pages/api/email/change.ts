@@ -122,6 +122,11 @@ const handler = baseApi({ auth: true })
                 const brand = process.env.APP_NAME || '';
                 const logoUrl = getLogoUrl();
                 const verificationLink = `${generateVerificationLink(token).replace('/verify-email', '/verify-change')}`;
+                // An emailless account (OAuth signup with no provider-verified email) uses this
+                // same flow to add its first address, so there is no "from" address to name.
+                const intro = user.email
+                  ? `You requested to change your email address from <strong>${user.email}</strong> to <strong>${pendingNewEmail}</strong>.`
+                  : `You requested to add <strong>${pendingNewEmail}</strong> as the email address on your account.`;
 
                 const emailBody = `
       <!DOCTYPE html>
@@ -163,9 +168,9 @@ const handler = baseApi({ auth: true })
           <body>
             <div class="content">
               ${buildEmailLogoImg(brand, logoUrl)}
-              <h2>Confirm Email Address Change</h2>
+              <h2>${user.email ? 'Confirm Email Address Change' : 'Confirm Your Email Address'}</h2>
               <p>Hello ${user.username},</p>
-              <p>You requested to change your email address from <strong>${user.email}</strong> to <strong>${pendingNewEmail}</strong>.</p>
+              <p>${intro}</p>
               <p>To confirm this change, please click the button below:</p>
               <p><a href="${verificationLink}" class="button" style="display: inline-block; padding: 12px 24px; background-color: #1a82e2; color: #ffffff; text-decoration: none; border-radius: 4px; margin: 20px 0;">Confirm Email Change</a></p>
               <p>Or copy and paste this link into your browser:</p>
@@ -180,7 +185,7 @@ const handler = baseApi({ auth: true })
       `;
                 pendingEmails.push({
                   to: pendingNewEmail,
-                  subject: 'Confirm Your Email Address Change',
+                  subject: user.email ? 'Confirm Your Email Address Change' : 'Confirm Your Email Address',
                   body: emailBody,
                 });
               },
