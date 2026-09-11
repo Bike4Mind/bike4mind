@@ -179,7 +179,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     }
 
     try {
-      await sendToQueue(Resource.driveLakeIngestQueue.url, { connectionId });
+      // A reconnect of an EXISTING connection (byFolder matched, claimedByThisRequest false) is the
+      // "Re-sync" button on a folder that already has a syncCursor - the explicit "re-sync everything"
+      // action (#2396), so it bypasses the cursor and forces a full walk. A brand-new connection has no
+      // cursor yet regardless, so forceFullWalk is a no-op there and omitted for clarity.
+      await sendToQueue(
+        Resource.driveLakeIngestQueue.url,
+        claimedByThisRequest ? { connectionId } : { connectionId, forceFullWalk: true }
+      );
     } catch (e) {
       // The connection row is what holds the GLOBAL driveFolderId claim, so an enqueue that fails
       // after we created it (SQS unavailable/throttled, an IAM denial, an unregistered queue) would
