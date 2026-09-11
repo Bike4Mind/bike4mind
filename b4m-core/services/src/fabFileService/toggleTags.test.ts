@@ -589,6 +589,36 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     });
   });
 
+  // Pins the API-key scope gate itself, not just the manage-rights gate above: the route's own
+  // scope check never sees this tag (it carries no `datalake:` prefix), so `assertWriteScope` is
+  // the ONLY thing standing between a caller with no data-lake scope and joining a lake this way.
+  it('calls assertWriteScope on a prefix-arm join, and propagates its refusal', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
+    const assertWriteScope = vi.fn();
+
+    await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] }, { assertWriteScope });
+    expect(assertWriteScope).toHaveBeenCalledTimes(1);
+
+    assertWriteScope.mockClear();
+    assertWriteScope.mockImplementation(() => {
+      throw new Error('missing scope');
+    });
+    await expect(run(adapters, { ids: ['f1'], tags: ['lk:invoices'] }, { assertWriteScope })).rejects.toThrow(
+      'missing scope'
+    );
+  });
+
+  it('does not call assertWriteScope when a colon-bearing tag resolves to no prefix-arm lake', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([]); // no candidate lakes to match
+    const assertWriteScope = vi.fn();
+
+    await run(adapters, { ids: ['f1'], tags: ['other:tag'] }, { assertWriteScope });
+
+    expect(assertWriteScope).not.toHaveBeenCalled();
+  });
+
   // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
   // stats recompute's activation side effect also flips a draft lake to active - a one-way
   // publication change a mere file-share recipient must not be able to force onto a lake they do

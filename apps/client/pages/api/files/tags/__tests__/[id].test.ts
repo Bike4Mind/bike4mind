@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   update: vi.fn().mockResolvedValue({ id: 't1' }),
   remove: vi.fn().mockResolvedValue({ id: 't1', name: 'invoices', filesUpdated: 2 }),
+  assertDataLakeWriteScope: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the sibling toggle test).
@@ -40,6 +41,9 @@ vi.mock('@bike4mind/database', () => ({
   // failure, not a silent undefined, and the file reports zero tests rather than a failed one.
   lakeConfigChangeEventRepository: { __repo: 'lakeConfigChangeEvents' },
   adminSettingsRepository: { __repo: 'adminSettings' },
+}));
+vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+  assertDataLakeWriteScope: h.assertDataLakeWriteScope,
 }));
 
 import handler from '../[id]';
@@ -152,6 +156,20 @@ describe('PUT /api/files/tags/[id]', () => {
     }
     expect(h.update).not.toHaveBeenCalled();
   });
+
+  // A rename can walk a file into or out of a lake via its fileTagPrefix content-tag arm, with no
+  // meta-tag in the payload for the route to see - tagService is the only side that can detect it,
+  // hence the callback rather than a route-level assert (see dataLakeScopes.ts).
+  it('threads an assertWriteScope callback that gates the API key when tagService detects a prefix-arm match', async () => {
+    const { res } = makeRes();
+
+    await call({ method: 'PUT', query: { id: 't1' }, body: { id: 't1', name: 'receipts' }, user: { id: 'u1' } }, res);
+
+    const [, , adapters] = h.update.mock.calls[0];
+    expect(h.assertDataLakeWriteScope).not.toHaveBeenCalled();
+    adapters.assertWriteScope();
+    expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('DELETE /api/files/tags/[id]', () => {
@@ -227,5 +245,18 @@ describe('DELETE /api/files/tags/[id]', () => {
     await call({ method: 'DELETE', query: { id: 't1' }, user: { id: 'u1' } }, res);
 
     expect(h.remove.mock.calls[0][2].auditPrincipal).toBeUndefined();
+  });
+
+  // Same reason as the rename above: a delete can walk a file out of a lake via the prefix-arm
+  // content-tag signal, invisible to the route.
+  it('threads an assertWriteScope callback that gates the API key when tagService detects a prefix-arm match', async () => {
+    const { res } = makeRes();
+
+    await call({ method: 'DELETE', query: { id: 't1' }, user: { id: 'u1' } }, res);
+
+    const [, , adapters] = h.remove.mock.calls[0];
+    expect(h.assertDataLakeWriteScope).not.toHaveBeenCalled();
+    adapters.assertWriteScope();
+    expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
   });
 });

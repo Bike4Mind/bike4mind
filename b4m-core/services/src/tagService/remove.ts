@@ -38,6 +38,15 @@ interface TagRemoveAdapters {
    * matching every other audited config-write door (#1917).
    */
   auditPrincipal?: LakeAuditPrincipal;
+  /**
+   * Called only when the tag being deleted matches a candidate lake's `fileTagPrefix` (a possible
+   * membership leave) - mirrors the same callback on `fabFileService/toggleTags`. Manage-rights
+   * needs no gate here (see the doc above: this call only ever touches files `userId` owns), but
+   * API-key SCOPE is a separate axis - a `files:write`-only key should not be able to walk a file
+   * out of a lake any more than `files/tags/toggle.ts` lets it walk one in. Optional so every other
+   * caller of this service (which has nothing to do with lakes) is unaffected.
+   */
+  assertWriteScope?: () => void;
 }
 
 /**
@@ -58,7 +67,7 @@ interface TagRemoveAdapters {
  * the bulk strip below does NOT do on its own is recompute the affected lakes' stats.
  */
 export const remove = async (userId: string, params: TagRemoveParams, adapters: TagRemoveAdapters) => {
-  const { db, logger, auditPrincipal } = adapters;
+  const { db, logger, auditPrincipal, assertWriteScope } = adapters;
   const { id } = secureParameters(params, tagRemoveSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -71,6 +80,19 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
     throw new BadRequestError('Tag Service - Delete: a data lake membership tag cannot be deleted here');
   }
 
+  // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name can never
+  // be one - skip the lake lookup entirely for the common plain-tag case. Resolved and gated BEFORE
+  // the write below (not after, alongside the recompute) so a denied key never sees the strip
+  // applied - this call is not transactional, and a 403 that follows the mutation would report
+  // failure while leaving the file evicted from the lake.
+  const affectedLakes = tag.name.includes(':')
+    ? (await loadPrefixArmCandidateLakes([userId], { db })).filter(lake =>
+        couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix)
+      )
+    : [];
+
+  if (affectedLakes.length > 0) assertWriteScope?.();
+
   // Files first, tag document second. This order converges under retry: if the delete below fails,
   // the document still names the tag, so re-running the same request finds the stragglers. The
   // reverse order strands them - the name is gone from the only record that could locate them.
@@ -78,11 +100,7 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
 
   await db.tags.delete(tag.id);
 
-  // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name can never
-  // be one - skip the lake lookup entirely for the common plain-tag case.
-  if (tag.name.includes(':')) {
-    const candidateLakes = await loadPrefixArmCandidateLakes([userId], { db });
-    const affectedLakes = candidateLakes.filter(lake => couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix));
+  if (affectedLakes.length > 0) {
     // Recomputes even for a lake where a surviving sibling tag kept some files members - harmless
     // (the aggregate re-derives the true count either way), and cheaper than re-deriving per file
     // which of these lakes actually lost a member. Independent per-lake recomputes, so run them
