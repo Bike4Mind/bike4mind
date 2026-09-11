@@ -66,12 +66,157 @@ function withoutComments(yaml: string): string {
     .join('\n');
 }
 
-/** Every `run:` body in the file, both the block-scalar and the single-line form, uncommented. */
+/**
+ * Every `run:` body in the file, uncommented.
+ *
+ * YAML spells a block scalar seven ways and an earlier version of this helper read two of
+ * them: `run: >` and `run: >-` came back as the bare indicator character, and `|-`, `|+` and
+ * `|2` came back as nothing at all, so a step written in any of those styles was invisible to
+ * every assertion below while `ci.yml` already uses `>-` elsewhere in this repo. The indicator
+ * is therefore `[|>][-+]?\d*`, and the single-line arm's lookahead has to exclude the same set
+ * or a block header reads as a one-line body.
+ */
 function runBodies(src: string): string[] {
   return [
-    ...[...src.matchAll(/^ {8}run: \|\n((?: {10}.*\n|\n)+)/gm)].map(m => m[1]),
-    ...[...src.matchAll(/^ {8}run: (?!\|)(.*)$/gm)].map(m => m[1]),
+    ...[...src.matchAll(/^ {8}run: [|>][-+]?\d*\n((?: {10}.*\n|\n)+)/gm)].map(m => m[1]),
+    ...[...src.matchAll(/^ {8}run: (?![|>][-+]?\d*$)(.*)$/gm)].map(m => m[1]),
   ].map(withoutComments);
+}
+
+/**
+ * One `run:` body split into commands, each an array of shell words, honouring single quotes,
+ * double quotes, backslash escapes and `$( )` nesting. Word-splitting has to be quote-aware or
+ * the path guard's own `grep -E '^(\.github|...)/'` patterns read as commands.
+ */
+function shellCommands(text: string): string[][] {
+  const commands: string[][] = [];
+  const stack: string[] = [];
+  let words: string[] = [];
+  let word = '';
+  let started = false;
+  const endWord = () => {
+    if (started) {
+      words.push(word);
+      word = '';
+      started = false;
+    }
+  };
+  const endCommand = () => {
+    endWord();
+    if (words.length) commands.push(words);
+    words = [];
+  };
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const quote = stack[stack.length - 1];
+    if (quote === "'") {
+      word += char;
+      if (char === "'") stack.pop();
+      continue;
+    }
+    if (char === '\\' && text[i + 1]) {
+      word += char + text[++i];
+      started = true;
+      continue;
+    }
+    if (char === '$' && text[i + 1] === '(') {
+      endCommand();
+      stack.push('$(');
+      i++;
+      continue;
+    }
+    if (quote === '$(' && char === ')') {
+      endCommand();
+      stack.pop();
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"') stack.pop();
+      word += char;
+      started = true;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      stack.push(char);
+      word += char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      endWord();
+      continue;
+    }
+    if ('\n;|&(){}`'.includes(char)) {
+      endCommand();
+      continue;
+    }
+    word += char;
+    started = true;
+  }
+  endCommand();
+  return commands;
+}
+
+/** Shell keywords and `VAR=value` prefixes, which sit in front of the program rather than being it. */
+const SHELL_PREFIX =
+  /^(if|then|elif|else|fi|for|while|until|do|done|case|esac|in|!|time|command|env|local|return|exit)$/;
+
+/**
+ * Commands whose path arguments are DATA and never a program. This is the whole of the
+ * allowlist deliberately: the assertion below is "a job step may not run repo-tracked code",
+ * and an enumeration of INTERPRETERS is the wrong side of that to enumerate - every tracked
+ * root script in this repo is mode 100755, so `./scripts/install-hooks.sh` names no
+ * interpreter at all, and neither do `make`, `.` or an interpreter reached through `$VAR`.
+ * Inverting it means a new command has to be justified here before it may be handed a path.
+ */
+const DATA_ONLY_COMMANDS =
+  /^(git|gh|jq|echo|printf|rm|mv|cp|mkdir|touch|sha256sum|cut|tr|head|tail|wc|sort|uniq|sed|grep|test|\[|\[\[|mktemp|date|basename|dirname|read|export|set|shift|unset|true|false|emit|count_since)$/;
+
+const unquoteWord = (word: string) => word.replace(/(^|[^\\])['"]/g, '$1');
+
+/** A reference into the checkout: `./x`, `../x`, `dir/file`, or `$GITHUB_WORKSPACE`. */
+const referencesCheckout = (text: string) =>
+  /(?:^|[\s"'=(:])(?:\.{1,2}\/|[A-Za-z0-9_.@-]+\/[A-Za-z0-9_.@/-])/.test(` ${text}`) || /GITHUB_WORKSPACE/.test(text);
+
+/**
+ * Every place a `run:` body hands a checkout path to something that is not a known data-only
+ * reader - as the program itself, or as an argument. Returns a description per hit so a
+ * failure names the offending command.
+ */
+function checkoutCodeReferences(src: string): string[] {
+  const hits: string[] = [];
+  for (const body of runBodies(src)) {
+    const commands = shellCommands(body);
+    // `eval` and `source` turn a data read into code, so in a body that uses either, no
+    // command's path argument can be assumed to be data - `eval "$(cat scripts/env.sh)"`
+    // executes a tracked file through two commands that are individually harmless.
+    const turnsDataIntoCode = commands.some(words => /^(eval|source|\.)$/.test(unquoteWord(words[0] ?? '')));
+    for (const words of commands) {
+      let rest = words;
+      while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || SHELL_PREFIX.test(rest[0]))) {
+        rest = rest.slice(1);
+      }
+      if (!rest.length) continue;
+      const [program, ...args] = rest;
+      const name = unquoteWord(program);
+      if (referencesCheckout(name)) {
+        hits.push(`program is a checkout path: ${words.join(' ')}`);
+        continue;
+      }
+      if (DATA_ONLY_COMMANDS.test(name) && !turnsDataIntoCode) continue;
+      if (args.some(arg => referencesCheckout(unquoteWord(arg)))) {
+        hits.push(`${name} is given a checkout path: ${words.join(' ')}`);
+      }
+    }
+  }
+  return hits;
+}
+
+/** The value of a step's single-line `if:`, trimmed. */
+function ifLine(src: string, name: string): string {
+  const value = step(src, name).match(/^ {8}if: (?![|>])(.*)$/m)?.[1];
+  expect(value, `${name}: no single-line if:`).toBeTruthy();
+  return (value ?? '').trim();
 }
 
 /** The value of a `--allowedTools` / `--disallowedTools` flag, unquoted, in file order. */
@@ -158,6 +303,75 @@ function runStagedGuards(src: string, files: StagedFile[]): { status: number; ou
   }
 }
 
+/**
+ * Runs the `posted` measurement, lifted verbatim out of the committed YAML, against fixture API
+ * responses, and returns what it wrote to `$GITHUB_OUTPUT`.
+ *
+ * This is the antecedent of the whole write path - the mint, the push, the path guard and the
+ * size bound are all downstream of `posted == 'true'` - and it was previously asserted only
+ * where it is READ. Four one-token edits inside the step make it unconditionally true while
+ * every consumer gate stays correctly spelled, so it has to be executed rather than matched.
+ * `gh` is a stub on PATH, so the real `count_since`, the real string time compare and the real
+ * fail-closed arms all run.
+ */
+function runPostedCheck(
+  src: string,
+  fixture: { since?: string; reviews?: number; inline?: number; issue?: number; apiStatus?: number }
+): string {
+  const body = withoutComments(step(src, 'Verify a review was actually posted')).match(
+    /^ {8}run: [|>][-+]?\d*\n((?: {10}.*\n|\n)+)/m
+  )?.[1];
+  expect(body, 'could not lift the posted measurement out of its step').toBeTruthy();
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-fold-posted-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    // argv is `api --paginate <path> --jq <selector>`, so $3 is the endpoint.
+    fs.writeFileSync(
+      path.join(bin, 'gh'),
+      [
+        '#!/bin/sh',
+        'if [ "$FAKE_GH_STATUS" -ne 0 ]; then echo "api error" >&2; exit "$FAKE_GH_STATUS"; fi',
+        'case "$3" in',
+        '  */pulls/*/reviews) n=$FAKE_REVIEWS ;;',
+        '  */pulls/*/comments) n=$FAKE_INLINE ;;',
+        '  */issues/*/comments) n=$FAKE_ISSUE ;;',
+        '  *) n=0 ;;',
+        'esac',
+        'i=0; while [ "$i" -lt "$n" ]; do echo "id$i"; i=$((i + 1)); done',
+      ].join('\n'),
+      { mode: 0o755 }
+    );
+    const outputs = path.join(dir, 'outputs');
+    fs.writeFileSync(outputs, '');
+    const run = spawnSync('bash', ['-c', body ?? ''], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+        GITHUB_OUTPUT: outputs,
+        GH_TOKEN: 'stub',
+        BOT_REVIEW_LOGIN: 'claude[bot]',
+        REPO: 'owner/repo',
+        PR: '1',
+        SINCE: fixture.since ?? '2026-01-01T00:00:00Z',
+        FAKE_REVIEWS: String(fixture.reviews ?? 0),
+        FAKE_INLINE: String(fixture.inline ?? 0),
+        FAKE_ISSUE: String(fixture.issue ?? 0),
+        FAKE_GH_STATUS: String(fixture.apiStatus ?? 0),
+      },
+    });
+    const written = fs.readFileSync(outputs, 'utf8');
+    const posted = written.match(/^posted=(\S*)$/m)?.[1];
+    expect(posted, `no posted= emitted (${run.stdout}${run.stderr})`).toBeTruthy();
+    return posted ?? '';
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe('bot-fold write path', () => {
   const src = fs.readFileSync(WORKFLOW, 'utf8');
 
@@ -173,14 +387,20 @@ describe('bot-fold write path', () => {
     const denied = toolFlagValues(src, 'disallowedTools');
     expect(denied).toHaveLength(1);
     const deny = toolListModes(denied[0]);
-    expect(deny.condition).toMatch(/env\.FOLD_MODE == 'true'/);
+    // By VALUE, not by substring. `toMatch` cannot tell a live condition from
+    // `env.FOLD_MODE == 'true' || github.event.label.name != 'zzz'`, which still contains
+    // every character it looks for and is unconditionally true - so every ordinary
+    // `bot-review` run would select the fold arm and hand file-write tools to an agent
+    // reading untrusted public comment text. This is the same reasoning `ifConjuncts`
+    // states, applied to the antecedent the two tool lists actually branch on.
+    expect(deny.condition.trim()).toBe("env.FOLD_MODE == 'true'");
     expect(deny.fold).toContain('Bash');
     expect(deny.review).toContain('Bash');
 
     const allowed = toolFlagValues(src, 'allowedTools');
     expect(allowed).toHaveLength(1);
     const allow = toolListModes(allowed[0]);
-    expect(allow.condition).toMatch(/env\.FOLD_MODE == 'true'/);
+    expect(allow.condition.trim()).toBe("env.FOLD_MODE == 'true'");
     expect(allow.fold).not.toContain('Bash');
     expect(allow.review).not.toContain('Bash');
   });
@@ -252,7 +472,7 @@ describe('bot-fold write path', () => {
     // `_runner_file_commands` files ($GITHUB_PATH / $GITHUB_ENV, i.e. command execution
     // in every later step), the private bot-review skill, and the action's transcript.
     expect(pathSpecs.filter(spec => spec.startsWith('Edit(')).sort()).toEqual(
-      ['Edit(.git/**)', 'Edit(.github/**)', 'Edit(/${{ runner.temp }}/**)'].sort()
+      ['Edit(.claude/**)', 'Edit(.git/**)', 'Edit(.github/**)', 'Edit(/${{ runner.temp }}/**)'].sort()
     );
     // Read fences asserted on BOTH arms. The step's own comment says both branches are
     // spelled out in full by design, so every edit here is a both-arms edit, and a
@@ -275,15 +495,36 @@ describe('bot-fold write path', () => {
     // A tracked file run from the tree is code execution in THIS run, and the push
     // step's path guard cannot reach it: the guard only gates what gets COMMITTED, and
     // on a run that posts no review it does not run at all.
-    // Matches an interpreter followed by any path-shaped argument, over both `run:`
-    // forms - a single-line `run: bash ./install-hooks.sh` is invisible to a
-    // block-scalar-only sweep, which is how the previous version of this assertion
-    // (a check for the string GITHUB_WORKSPACE, which appears nowhere in the file)
-    // managed to pass while constraining nothing.
-    const interpretedPath =
-      /(?:^|[\s|;&(])(?:bash|sh|zsh|source|python3?|node|npx|pnpm|yarn|ruby|perl)\s+(?:-\S+\s+)*(?:\.?\/|[A-Za-z0-9_.@-]+\/|\$\{?GITHUB_WORKSPACE)/;
-    for (const body of runBodies(src)) {
-      expect(body).not.toMatch(interpretedPath);
+    expect(checkoutCodeReferences(src)).toEqual([]);
+
+    // POSITIVE CONTROL. This assertion has now been wrong twice - once vacuously (a check
+    // for a string that appears nowhere in the file) and once by reading 2 of YAML's 7
+    // `run:` scalar forms and only interpreter-led invocations. So it proves itself: every
+    // shape below is injected into a copy of the workflow and has to be caught, across
+    // every block-scalar style. Add to this list rather than trusting the regex.
+    const shouldBeCaught = [
+      'bash ./scripts/check-no-control-bytes.sh',
+      './scripts/install-hooks.sh',
+      './dev --check',
+      '. ./scripts/env.sh',
+      'source scripts/env.sh',
+      'make -f build/Makefile ci',
+      'eval "$(cat scripts/env.sh)"',
+      'RUNNER=node ; $RUNNER scripts/codegen.js',
+      'exec 3< scripts/x.sh; bash <&3',
+      'python3 .github/scripts/redact-review-transcript.py a b c',
+      'node "$GITHUB_WORKSPACE/x.js"',
+      'npx tsx packages/scripts/src/x.ts',
+    ];
+    for (const indicator of ['|', '|-', '|+', '>', '>-', '|2']) {
+      for (const body of shouldBeCaught) {
+        const injected = src.replace(
+          /^ {6}- name: Report skill-fetch failure$/m,
+          `      - name: Warm the toolchain\n        run: ${indicator}\n          ${body}\n      - name: Report skill-fetch failure`
+        );
+        expect(injected, 'the injection anchor moved').not.toBe(src);
+        expect(checkoutCodeReferences(injected), `not caught under \`run: ${indicator}\`: ${body}`).not.toEqual([]);
+      }
     }
     // Composite actions in this repo are tracked files too, and `uses:` is not a `run:`.
     expect(src).not.toMatch(/uses: \.\//);
@@ -325,6 +566,52 @@ describe('bot-fold write path', () => {
     expect(hashGate).toMatch(/^ {12}exit 0$/m);
     // And it has to run before the redactor, not after it.
     expect(transcript.indexOf('-z "$SKILL_SHA"')).toBeLessThan(transcript.indexOf('git show HEAD:'));
+
+    // Reading the program out of the commit authenticates the PROGRAM, not the INTERPRETER's
+    // STARTUP. CPython's `site` imports `usercustomize` from `$HOME/.local/lib/pythonX.Y/
+    // site-packages` before it reads stdin, and an imported `.py` needs no execute bit, so a
+    // 0644 file the agent wrote there executes ahead of the redactor - with this step's env,
+    // which carries SKILL_FILE - on exactly the `posted != 'true'` branch where nothing else
+    // in the job inspects anything. `$HOME` cannot be write-fenced (the checkout is under it
+    // on a hosted runner), so the bound is here. `-E` does NOT cover this.
+    expect(step(src, 'Redact and upload review transcript')).toMatch(/^ {10}PYTHONNOUSERSITE: '1'$/m);
+  });
+
+  it('uploads the redacted transcript and only when redaction succeeded', () => {
+    // The workflow closed this route; the test never covered it. Repointing `path:` at
+    // `steps.bot_review.outputs.execution_file` publishes the RAW transcript - the private
+    // b4m-devtools skill in the clear, as a world-downloadable artifact on a public repo -
+    // and `if: always()` publishes it on exactly the runs where the hash gate refused. Both
+    // are one-line edits that defeat the redaction design without touching the redactor.
+    const dest = step(src, 'Redact and upload review transcript').match(/^ {10}DEST: (.*)$/m)?.[1];
+    expect(dest, 'the transcript step declares no DEST').toBeTruthy();
+    const upload = step(src, 'Upload review transcript');
+    expect(upload.match(/^ {10}path: (.*)$/m)?.[1]).toBe(dest);
+    expect(upload).not.toMatch(/execution_file/);
+    expect(ifLine(src, 'Upload review transcript')).toBe("always() && steps.transcript.outputs.uploadable == 'true'");
+  });
+
+  it('measures a posted review from the API, fail-closed', () => {
+    // Executed, not matched. `posted` is the antecedent of the entire write path - the mint,
+    // the push, the path guard and the size bound are all downstream of it - and four
+    // one-token edits inside the step (`-gt 0` -> `-ge 0`, either `emit false` -> `emit true`,
+    // dropping the outcome conjunct from the `if:`) make it unconditionally true while every
+    // consumer gate stays correctly spelled. Nothing else in the repo can see that.
+    expect(runPostedCheck(src, {})).toBe('false');
+    expect(runPostedCheck(src, { reviews: 1 })).toBe('true');
+    expect(runPostedCheck(src, { inline: 3 })).toBe('true');
+    expect(runPostedCheck(src, { issue: 1 })).toBe('true');
+    // No watermark means no way to tell this run's review from an older one: not posted.
+    expect(runPostedCheck(src, { since: '', reviews: 5 })).toBe('false');
+    // An API failure must not read as a review. This is the arm that turns a transient
+    // outage into a push on a run that reviewed nothing.
+    expect(runPostedCheck(src, { apiStatus: 1, reviews: 5 })).toBe('false');
+    // And the measurement has to happen on the runs that need measuring - a step-level
+    // gate that skips it leaves `posted` empty, which the consumers read as not-posted,
+    // but one that WIDENS it lets a size-guard-skipped run be measured as reviewed.
+    expect(ifLine(src, 'Verify a review was actually posted')).toBe(
+      "always() && (steps.bot_review.outcome == 'success' || steps.bot_review.outcome == 'failure')"
+    );
   });
 
   it('runs git after the agent with no config the agent could have planted', () => {
@@ -402,6 +689,15 @@ describe('bot-fold write path', () => {
       "steps.review_posted.outputs.posted == 'true'",
       "(steps.push_token.outcome != 'success' || steps.fold_push.outcome != 'success')",
     ]);
+    // The one reachable hole the gate cross-product had: every other fold reporter is
+    // `!cancelled()` and `Report incomplete review` needs the complement of `posted`, so a
+    // cancellation after the review landed commented nothing while `Remove re-review label`
+    // (`always()`) consumed the label anyway.
+    expect(ifConjuncts(src, 'Report cancelled fold')).toEqual([
+      'cancelled()',
+      "env.FOLD_MODE == 'true'",
+      "steps.review_posted.outputs.posted == 'true'",
+    ]);
     expect(ifConjuncts(src, 'Report fold no-op')).toEqual([
       '!cancelled()',
       "env.FOLD_MODE == 'true'",
@@ -443,10 +739,19 @@ describe('bot-fold write path', () => {
       'pnpm-workspace.yaml',
       'turbo.json',
       '.npmrc',
+      '.dockerignore',
       'Dockerfile',
+      // Suffixed variants: these are tracked and used to pass a basename-exact arm whose
+      // refusal string, guard comment and agent prompt all promised they did not.
+      'apps/client/Dockerfile.chatcompletion',
+      'apps/client/Dockerfile.chatcompletion.selfhost',
+      'selfhost/ws-gateway/Dockerfile',
       'apps/client/tools/helper.sh',
+      // The category, not the five names that happen to be tracked today.
       'dev',
       'sst-dev-fast',
+      'some-new-root-script',
+      'LICENSE',
     ];
     const allowed = [
       'apps/client/app/components/Foo.tsx',
