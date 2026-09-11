@@ -14,6 +14,10 @@ import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@client/config/activities';
 import { ProjectSessionsRequestBody } from '../../../../types/api';
 import { SessionEvents } from '@server/utils/eventBus';
+import {
+  filterSessionIdsByOperationalCredits,
+  OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
+} from '@server/utils/sessionOperationalCreditPreflight';
 
 const handler = baseApi()
   .get(
@@ -72,8 +76,21 @@ const handler = baseApi()
         );
       });
 
+      // Iterates the RESOLVED sessions rather than the request's raw id list: `addSessions`
+      // returns one row per distinct notebook, so the same id sent twice no longer queues (and
+      // pays for) two identical summaries.
+      // Attaching a notebook to a project is free; only the summary it triggers costs credits, and
+      // this fan-out is already best-effort (Promise.allSettled). So a refusal skips the queueing
+      // rather than failing the attach - the client types this response as ISessionDocument[],
+      // leaving the warning log as where a skipped summary surfaces (#1852).
+      const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
+        operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
+        operation: 'session summarization',
+        logger: req.logger,
+      });
+
       await Promise.allSettled(
-        sessionIds.map(async (sessionId: string) => {
+        sessions.map(async session => {
           logEvent(
             {
               userId: req.user.id,
@@ -81,13 +98,14 @@ const handler = baseApi()
               metadata: {
                 projectId: id,
                 projectName: project.name,
-                contentId: sessionId,
+                contentId: session.id,
                 contentType: 'session',
               },
             },
             { ability: req.ability }
           );
-          await SessionEvents.Summarize.publish({ sessionId: sessionId, callTagging: true, trigger: 'project' });
+          if (!summarizableSessionIds.has(session.id)) return;
+          await SessionEvents.Summarize.publish({ sessionId: session.id, callTagging: true, trigger: 'project' });
         })
       );
 

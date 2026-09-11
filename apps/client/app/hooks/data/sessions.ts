@@ -41,6 +41,7 @@ import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
 export function useDeleteAllSessions(options: { onSuccess?: () => void } = {}) {
@@ -677,13 +678,15 @@ export const useSummarizeSession = () => {
       const result = await generateSessionSummary(sessionId);
       return result;
     },
-    onError: (_, sessionId) => {
+    onError: (error, sessionId) => {
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
       const sessionName = formatSessionTitle(session?.name);
 
       // Clear the job status on error
       endJob(sessionId, 'summarize');
-      toast.error(`Failed to start summarizing "${sessionName}"`);
+      // A credit refusal names the balance and the remediation; the generic message would
+      // send the user hunting for a bug that isn't there.
+      toast.error(getInsufficientCreditsMessage(error) ?? `Failed to start summarizing "${sessionName}"`);
     },
   });
 };
@@ -704,13 +707,13 @@ export const useUpdateSessionTags = () => {
       const result = await generateSessionTags(sessionId);
       return result;
     },
-    onError: (_, sessionId) => {
+    onError: (error, sessionId) => {
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
       const sessionName = formatSessionTitle(session?.name);
 
       // Clear the job status on error
       endJob(sessionId, 'generateTags');
-      toast.error(`Failed to start generating tags for "${sessionName}"`);
+      toast.error(getInsufficientCreditsMessage(error) ?? `Failed to start generating tags for "${sessionName}"`);
     },
   });
 };

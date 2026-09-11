@@ -32,6 +32,21 @@ function handleAxiosError(error: AxiosError<ErrorResponse>) {
 }
 
 /**
+ * The server's own explanation for a 422 tagged `insufficient_credits` - which balance ran out,
+ * how much it was short by, and whether the remediation is buying credits or asking an org admin
+ * to raise a per-member cap. None of that survives a caller's generic "request failed" toast, and
+ * it is the only actionable part of the refusal.
+ *
+ * Returns undefined for every other error, so a caller keeps its own message: `?? fallback`.
+ */
+export function getInsufficientCreditsMessage(error: unknown): string | undefined {
+  if (!isAxiosError(error)) return undefined;
+  const data = error.response?.data as (ErrorResponse & { errorCode?: string }) | undefined;
+  if (data?.errorCode !== 'insufficient_credits') return undefined;
+  return data.error || data.message || undefined;
+}
+
+/**
  * Get a generic error message for production environments.
  */
 export function getProductionErrorMessage(error: unknown): string {
