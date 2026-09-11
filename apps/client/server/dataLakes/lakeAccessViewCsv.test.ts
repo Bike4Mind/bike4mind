@@ -10,16 +10,18 @@ const baseView = (over: Partial<LakeAccessView> = {}): LakeAccessView => ({
   history: [],
   historyTruncated: false,
   candidateCapPressure: { turnsWithSignal: 0, turnsAtCap: 0 },
+  supersessionPressure: { turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
   ...over,
 });
 
 describe('lakeAccessViewToCsv', () => {
-  it('emits four labeled sections with headers', () => {
+  it('emits five labeled sections with headers', () => {
     const csv = lakeAccessViewToCsv(baseView());
     expect(csv).toContain('# Members and grants');
     expect(csv).toContain('# Access channels');
     expect(csv).toContain('# Candidate-cap pressure');
+    expect(csv).toContain('# Supersession pressure');
     expect(csv).toContain('# Access history');
     // Every field is quoted (shared escapeCsvCell), headers included.
     expect(csv).toContain('"principalType","principalId","principalName","role","status"');
@@ -139,6 +141,7 @@ describe('lakeAccessViewToCsv', () => {
             principalKind: 'user',
             principalId: 'u1',
             readCount: 2,
+            noResultCount: 0,
             firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
             lastAccessedAt: new Date('2026-08-02T00:00:00.000Z'),
             surfaces: ['chat-kb-search'],
@@ -180,6 +183,7 @@ describe('lakeAccessViewToCsv', () => {
             principalId: 'u2',
             principalName: 'Bob',
             readCount: 5,
+            noResultCount: 0,
             firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
             lastAccessedAt: new Date('2026-08-10T00:00:00.000Z'),
             surfaces: ['chat-kb-search', 'data-lake-semantic-search'],
@@ -197,6 +201,52 @@ describe('lakeAccessViewToCsv', () => {
     expect(csv).toContain('access history truncated to the most recent window');
     expect(csv).toContain('"historyWindowStartsAt","2026-08-01T00:00:00.000Z"');
     expect(csv).toContain('# NOTE: readCount and firstAccessedAt below cover only the truncated window');
+  });
+
+  it('exports the supersession section even when nothing was reported, with the reason', () => {
+    const csv = lakeAccessViewToCsv(baseView());
+    // A section that vanished at zero would be indistinguishable from a lake whose reads suppressed
+    // nothing - and here the two are genuinely different: the collapse ships admin-gated OFF.
+    expect(csv).toContain('"turnsWithSignal","turnsWithSuppression","filesSuppressed","lastSuppressedAt"');
+    expect(csv).toContain('"0","0","0",""');
+    expect(csv).toContain('turnsWithSignal 0 means not reported');
+  });
+
+  it('renders reported supersession counters with the last-suppressed date', () => {
+    const csv = lakeAccessViewToCsv(
+      baseView({
+        supersessionPressure: {
+          turnsWithSignal: 9,
+          turnsWithSuppression: 4,
+          filesSuppressed: 11,
+          lastSuppressedAt: new Date('2026-08-09T00:00:00.000Z'),
+        },
+      })
+    );
+    expect(csv).toContain('"9","4","11","2026-08-09T00:00:00.000Z"');
+  });
+
+  it('exports noResultCount beside readCount, labeled as the narrower signal it is', () => {
+    const csv = lakeAccessViewToCsv(
+      baseView({
+        history: [
+          {
+            principalKind: 'user',
+            principalId: 'u3',
+            readCount: 0,
+            noResultCount: 4,
+            firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
+            lastAccessedAt: new Date('2026-08-02T00:00:00.000Z'),
+            surfaces: ['forced-retrieval'],
+          },
+        ],
+      })
+    );
+    expect(csv).toContain('"readCount","noResultCount","firstAccessedAt"');
+    // readCount 0 with a nonzero noResultCount is the row this split exists to make representable:
+    // someone queried the lake four times and it answered none of them.
+    expect(csv).toContain('"user","u3","","","","0","4"');
+    expect(csv).toContain('# NOTE: readCount counts reads that returned content');
   });
 
   it('adds no truncation signal when the history was not capped', () => {

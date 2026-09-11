@@ -111,6 +111,79 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(Object.prototype.hasOwnProperty.call(stored as object, 'candidateCapReached')).toBe(false);
     });
 
+    it('round-trips filesSupersededCollapsed, including the meaningful zero', async () => {
+      const suppressed = await repo.record(baseInput({ surface: 'forced-retrieval', filesSupersededCollapsed: 3 }));
+      expect(suppressed.filesSupersededCollapsed).toBe(3);
+
+      // `0` is an assertion in its own right - the collapse RAN and suppressed nothing - so a
+      // truthiness check in record() would be a silent data loss, exactly as it would for
+      // candidateCapReached: false above.
+      const ranClean = await repo.record(baseInput({ surface: 'forced-retrieval', filesSupersededCollapsed: 0 }));
+      expect(ranClean.filesSupersededCollapsed).toBe(0);
+    });
+
+    it('omits the filesSupersededCollapsed path entirely when the caller supplies none', async () => {
+      const event = await repo.record(baseInput());
+      // Absent, NOT 0: the collapse is admin-gated and ships off, so most rows never ran it, and
+      // recording those as 0 would claim a corpus was checked for superseded generations when it
+      // never was.
+      const stored = await LakeAccessEventModel.findById(event.id).lean();
+      expect(Object.prototype.hasOwnProperty.call(stored as object, 'filesSupersededCollapsed')).toBe(false);
+    });
+
+    it.each([
+      ['negative', -1],
+      ['fractional', 1.5],
+      ['NaN', Number.NaN],
+      ['Infinity', Number.POSITIVE_INFINITY],
+    ])('drops a %s filesSupersededCollapsed rather than failing the whole audit write', async (_label, value) => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      // The event itself must still land: losing one diagnostic field is survivable, losing the
+      // row that records who read the lake is not. A schema `min: 0` would have thrown instead.
+      const event = await repo.record(baseInput({ principalId: 'bob', filesSupersededCollapsed: value }));
+      expect(event.principalId).toBe('bob');
+      expect(event.filesSupersededCollapsed).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('filesSupersededCollapsed'));
+      warnSpy.mockRestore();
+    });
+
+    /**
+     * The zero row (#2604) end to end: forced retrieval records a turn that searched a lake scope
+     * and had nothing clear the similarity floor. Its `resolvedLakeIds` is the scope searched, not
+     * lakes reversed from returned files - there are none to reverse.
+     */
+    it('persists a zero row: servedNothing with a scope, no ids, and both counts at zero', async () => {
+      const event = await repo.record(
+        baseInput({
+          surface: 'forced-retrieval',
+          resolvedLakeIds: ['lake-a'],
+          fileIds: [],
+          chunkIds: [],
+          servedNothing: true,
+        })
+      );
+      expect(event.servedNothing).toBe(true);
+      expect(event.resolvedLakeIds).toEqual(['lake-a']);
+      expect(event.returnedChunkCount).toBe(0);
+      expect(event.returnedFileCount).toBe(0);
+      // No scores: nothing was injected, so there is no chunk for a score to be aligned to. The
+      // turn's own promptMeta.retrieval carries the near-miss topScore instead.
+      expect(event.scores).toBeUndefined();
+    });
+
+    it('leaves servedNothing absent on an ordinary row, and stores an explicit false as absent too', async () => {
+      const ordinary = await repo.record(baseInput({ chunkIds: ['c1'] }));
+      const storedOrdinary = await LakeAccessEventModel.findById(ordinary.id).lean();
+      expect(Object.prototype.hasOwnProperty.call(storedOrdinary as object, 'servedNothing')).toBe(false);
+
+      // Unlike the two tri-state fields above, `false` here carries nothing absence does not - the
+      // flag says how the row was WRITTEN, so absent is safely read as false and a second spelling
+      // of "an ordinary row" would only invite a consumer to distinguish them.
+      const explicitFalse = await repo.record(baseInput({ chunkIds: ['c1'], servedNothing: false }));
+      const storedFalse = await LakeAccessEventModel.findById(explicitFalse.id).lean();
+      expect(Object.prototype.hasOwnProperty.call(storedFalse as object, 'servedNothing')).toBe(false);
+    });
+
     it('is absent updatedAt - an audit row that reports being updated is a lie', async () => {
       const event = await repo.record(baseInput());
       expect((event as unknown as { updatedAt?: Date }).updatedAt).toBeUndefined();

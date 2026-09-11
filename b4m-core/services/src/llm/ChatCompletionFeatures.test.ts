@@ -2595,6 +2595,167 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
 });
 
 /**
+ * The two audit signals that were computed and then dropped (#2604): the supersession-collapse
+ * count, and the row for a turn that searched a lake and served nothing. Both are only ever
+ * observable in the recorded payload, so every assertion here reads the actual `record()` input
+ * rather than the returned messages.
+ */
+describe('KnowledgeRetrievalFeature access-event audit: supersession count + zero rows (#2604)', () => {
+  const OWNER = 'u1';
+  const LAKE = {
+    id: 'lakeZ',
+    slug: 'z',
+    name: 'Lake Z',
+    fileTagPrefix: 'z:',
+    datalakeTag: 'datalake:z',
+    createdByUserId: OWNER,
+    status: 'active',
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a retention read before calling record(), so the call lands one
+  // microtask after getContextMessages returns - same flush the sibling audit block uses.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
+  const recordedInput = () => record.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+
+  /**
+   * A unit vector whose cosine against the query [1, 0] IS `score`. The absolute floor defaults to
+   * 75%, so a 0.1 fixture starves the turn without touching any setting - the exit under test.
+   */
+  const vectorScoring = (score: number) => [score, Math.sqrt(1 - score * score)];
+
+  /** Two generations of one document: same file name, so the collapse groups them on the name tier. */
+  const generation = (id: string, createdAt: string) => ({
+    id,
+    fileName: 'Protocol.pdf',
+    tags: [{ name: 'datalake:z' }],
+    vectorized: true,
+    embeddingModel: 'text-embedding-ada-002',
+    chunkCount: 1,
+    vectorizedChunkCount: 1,
+    createdAt: new Date(createdAt),
+  });
+
+  const makeCtx = (opts: { files: Array<Record<string, unknown>>; collapseEnabled?: boolean; score?: number }) => {
+    const vector = vectorScoring(opts.score ?? 1);
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: OWNER, tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({ data: opts.files, hasMore: false, total: opts.files.length }),
+        },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) =>
+            Promise.resolve(ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `content of ${id}`, vector })))
+          ),
+        },
+        dataLakes: {
+          findActiveByUserTags: vi.fn().mockResolvedValue([]),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
+        },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (key: string) =>
+            key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined
+          ),
+        },
+        lakeAccessEvents: { record },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, retrievalTags?: string[]) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      retrievalTags
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the protocol say'
+    );
+    await flushAsync();
+    return messages;
+  };
+
+  const twoGenerations = [generation('old', '2024-01-01'), generation('new', '2025-01-01')];
+
+  beforeEach(() => record.mockClear());
+
+  it('records the suppression count on a grounded turn when the collapse ran', async () => {
+    await run(makeCtx({ files: twoGenerations, collapseEnabled: true }));
+    // 1, not 2: the count is what LEFT the ranking, and the winning generation stayed in it.
+    expect(recordedInput()).toMatchObject({ filesSupersededCollapsed: 1, fileIds: ['new'] });
+  });
+
+  it('omits the suppression count entirely when the collapse did not run', async () => {
+    await run(makeCtx({ files: twoGenerations, collapseEnabled: false }));
+    // Undefined, NOT 0. The collapse is admin-gated and off here, so nothing examined this corpus
+    // for superseded generations - and it holds two, which a persisted 0 would deny. This is the
+    // whole reason the write site reads `collapseRan` rather than `supersession.count`.
+    //
+    // Asserted on the VALUE, not on key absence: the payload carries the key with an explicit
+    // `undefined`, and `record()` is where the omit-vs-store decision is made and pinned (see
+    // LakeAccessEventModel.test.ts, which asserts the stored document has no such path).
+    expect(recordedInput()).toBeDefined();
+    expect(recordedInput()?.filesSupersededCollapsed).toBeUndefined();
+  });
+
+  it('records 0, not absence, when the collapse ran over a corpus with nothing to suppress', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], collapseEnabled: true }));
+    expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
+  });
+
+  it('writes a zero row when the corpus was searched and nothing cleared the similarity floor', async () => {
+    const ctx = makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1 });
+    const messages = await run(ctx, ['datalake:z']);
+
+    const input = recordedInput();
+    expect(input).toMatchObject({
+      surface: 'forced-retrieval',
+      servedNothing: true,
+      // The scope that was SEARCHED - there is no returned file whose tags could be reversed here.
+      resolvedLakeIds: ['lakeZ'],
+      fileIds: [],
+      chunkIds: [],
+      queryText: 'what does the protocol say',
+      questId: 'quest1',
+      sessionId: 'session1',
+    });
+    // No scores array: nothing was injected, so there is no chunk for a score to be aligned to.
+    expect(input).not.toHaveProperty('scores');
+    // The turn still abstains exactly as before - this row is instrumentation, not behaviour.
+    expect(messages).toHaveLength(1);
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalled();
+  });
+
+  /**
+   * The narrowing that makes attributing to the whole scope honest. Without `lakeScoped` the lake
+   * was one of several mixed sources behind a question that was not about it, and counting a starve
+   * against it is the same category error the grounded write refuses via allowFullScopeFallback.
+   */
+  it('writes no zero row when the session is not scoped to the lake', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1 }));
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('does not mark an ordinary grounded row as having served nothing', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')] }), ['datalake:z']);
+    // The grounded write never mentions the flag at all, so key absence is the real assertion here.
+    expect(recordedInput()).not.toHaveProperty('servedNothing');
+    expect(recordedInput()?.fileIds).toEqual(['only']);
+  });
+});
+
+/**
  * The session-altitude skip. Guards the composition that makes it safe: a personal-file notebook
  * stops grounding against unrelated lakes, while a lake session keeps its lake. Both directions are
  * asserted because the failing direction (never skipping) is silently today's behavior.

@@ -8,6 +8,7 @@ import type {
 import {
   aggregateAccessHistory,
   aggregateCandidateCapPressure,
+  aggregateSupersessionPressure,
   assembleLakeAccessView,
   classifyGrantStatus,
   deriveAccessChannels,
@@ -119,6 +120,122 @@ describe('aggregateAccessHistory', () => {
 
   it('empty input yields no rows', () => {
     expect(aggregateAccessHistory([])).toEqual([]);
+  });
+
+  // The zero row (#2604): forced retrieval records a turn that searched the lake and had nothing
+  // clear the similarity floor. It is a search, not a read, and the whole point of splitting the
+  // counters is that it must not report content leaving the lake.
+  it('counts a zero row toward noResultCount, never readCount', () => {
+    const rows = aggregateAccessHistory([
+      event({ principalId: 'u1', surface: 'forced-retrieval' }),
+      event({ principalId: 'u1', surface: 'forced-retrieval', servedNothing: true }),
+      event({ principalId: 'u1', surface: 'forced-retrieval', servedNothing: true }),
+    ]);
+    expect(rows[0].readCount).toBe(1);
+    expect(rows[0].noResultCount).toBe(2);
+  });
+
+  // The row shape a lake owner most needs to see: someone queried this lake repeatedly and it never
+  // answered. A principal whose only rows are zero rows must still appear, at readCount 0.
+  it('keeps a principal whose every search came back empty, at readCount 0', () => {
+    const rows = aggregateAccessHistory([
+      event({ principalId: 'starved', surface: 'forced-retrieval', servedNothing: true }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ principalId: 'starved', readCount: 0, noResultCount: 1 });
+  });
+
+  /**
+   * An empty search is still this principal touching the lake, so it belongs in the activity
+   * window and the surfaces set - only the READ count excludes it. Ends on the zero row's own
+   * timestamp so a guard that skipped zero rows entirely fails here rather than passing.
+   */
+  it('lets a zero row move the activity window and the surfaces set', () => {
+    const t0 = new Date('2026-08-10T00:00:00Z');
+    const t1 = new Date('2026-08-12T00:00:00Z');
+    const rows = aggregateAccessHistory([
+      event({ principalId: 'u1', surface: 'data-lake-semantic-search', createdAt: t0 }),
+      event({ principalId: 'u1', surface: 'forced-retrieval', createdAt: t1, servedNothing: true }),
+    ]);
+    expect(rows[0].lastAccessedAt).toEqual(t1);
+    expect(rows[0].firstAccessedAt).toEqual(t0);
+    expect(rows[0].surfaces).toEqual(['data-lake-semantic-search', 'forced-retrieval']);
+  });
+
+  /**
+   * The reason `servedNothing` is a stored flag rather than a zero-count test. A
+   * data-lake-public-browse row is a catalog-metadata read: it returns LAKES, so it carries neither
+   * a chunk nor a file id and both counts sit at zero - exactly the shape a derived predicate would
+   * have misread. Every event in this file's fixture has that shape, which is the point.
+   */
+  it('does not mistake a content-less browse row for a zero row', () => {
+    const rows = aggregateAccessHistory([
+      event({ principalId: 'u1', surface: 'data-lake-public-browse', returnedChunkCount: 0, returnedFileCount: 0 }),
+    ]);
+    expect(rows[0].readCount).toBe(1);
+    expect(rows[0].noResultCount).toBe(0);
+  });
+});
+
+describe('aggregateSupersessionPressure', () => {
+  it('counts reported rows in both directions and sums the files suppressed', () => {
+    const t0 = new Date('2026-08-10T00:00:00Z');
+    const t1 = new Date('2026-08-11T00:00:00Z');
+    const t2 = new Date('2026-08-12T00:00:00Z');
+    // Ends on the MIDDLE timestamp so a dropped max guard on lastSuppressedAt changes the result
+    // rather than passing by fixture coincidence.
+    const pressure = aggregateSupersessionPressure([
+      event({ filesSupersededCollapsed: 2, createdAt: t0 }),
+      event({ filesSupersededCollapsed: 3, createdAt: t2 }),
+      event({ filesSupersededCollapsed: 0, createdAt: t2 }),
+      event({ filesSupersededCollapsed: 1, createdAt: t1 }),
+    ]);
+    expect(pressure).toEqual({
+      turnsWithSignal: 4,
+      turnsWithSuppression: 3,
+      filesSuppressed: 6,
+      lastSuppressedAt: t2,
+    });
+  });
+
+  // The distinction the tri-state exists for, and it is the COMMON case here rather than an edge:
+  // the collapse is admin-gated and ships off, so most rows report nothing at all. Counting those
+  // as "ran, suppressed nothing" would report a corpus as duplicate-free that was never examined.
+  it('a row that does not report the field raises neither counter', () => {
+    const pressure = aggregateSupersessionPressure([event({}), event({ filesSupersededCollapsed: 0 })]);
+    expect(pressure.turnsWithSignal).toBe(1);
+    expect(pressure.turnsWithSuppression).toBe(0);
+  });
+
+  it('an all-unreported window is zeroed with no lastSuppressedAt, not reported as duplicate-free', () => {
+    const pressure = aggregateSupersessionPressure([event({}), event({})]);
+    expect(pressure).toEqual({ turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 });
+    expect(pressure.lastSuppressedAt).toBeUndefined();
+  });
+
+  // record() refuses to persist any of these, so they cover a row that reached the collection by
+  // another door (a script, a migration, the raw driver). This projection SUMS, so one bad row must
+  // not be able to NaN the window or decrement it below what was actually suppressed.
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['a negative', -3],
+    ['a fraction', 1.5],
+  ])('ignores %s rather than corrupting the sum', (_label, bad) => {
+    const pressure = aggregateSupersessionPressure([
+      event({ filesSupersededCollapsed: bad }),
+      event({ filesSupersededCollapsed: 4 }),
+    ]);
+    expect(pressure.turnsWithSignal).toBe(1);
+    expect(pressure.filesSuppressed).toBe(4);
+  });
+
+  it('empty input yields the zero pressure', () => {
+    expect(aggregateSupersessionPressure([])).toEqual({
+      turnsWithSignal: 0,
+      turnsWithSuppression: 0,
+      filesSuppressed: 0,
+    });
   });
 });
 
@@ -356,6 +473,43 @@ describe('assembleLakeAccessView', () => {
     // A projection of rows already in hand: a second listByLake would double this lake's audit read
     // cost on every view assembly for a field derivable from the events already fetched.
     expect(spies.listByLakeEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('projects supersession pressure over the same sliced window as the history', async () => {
+    const older = new Date('2026-08-12T00:00:00Z');
+    const middle = new Date('2026-08-13T00:00:00Z');
+    const newer = new Date('2026-08-14T00:00:00Z');
+    // Same probe-row setup as the cap-pressure test above: the third event is sliced off before
+    // aggregation, so its 5 must NOT reach filesSuppressed - the two aggregates have to describe
+    // the same window as the history rows beside them.
+    const events = [
+      event({ principalId: 'u1', createdAt: newer, filesSupersededCollapsed: 2 }),
+      event({ principalId: 'u1', createdAt: middle, filesSupersededCollapsed: 0 }),
+      event({ principalId: 'u1', createdAt: older, filesSupersededCollapsed: 5 }),
+    ];
+    const { adapters } = makeAdapters({ events, users: [{ id: 'u1', name: 'Alice' }] });
+    const view = await assembleLakeAccessView(lakeDoc(), {
+      ...(adapters as object),
+      historyLimit: 2,
+      now: NOW,
+    } as never);
+
+    expect(view.supersessionPressure).toEqual({
+      turnsWithSignal: 2,
+      turnsWithSuppression: 1,
+      filesSuppressed: 2,
+      lastSuppressedAt: newer,
+    });
+  });
+
+  it('reports a lake whose reads never ran the collapse as unreported, not as duplicate-free', async () => {
+    const { adapters } = makeAdapters({ events: [event({ principalId: 'u1' })], users: [{ id: 'u1', name: 'Alice' }] });
+    const view = await assembleLakeAccessView(lakeDoc(), adapters);
+    expect(view.supersessionPressure).toEqual({
+      turnsWithSignal: 0,
+      turnsWithSuppression: 0,
+      filesSuppressed: 0,
+    });
   });
 
   it('reports a lake whose reads never measured the cap as unreported, not as cap-free', async () => {

@@ -14,8 +14,8 @@ const iso = (d: Date | null | undefined): string => (d ? new Date(d).toISOString
 
 /**
  * Render an assembled access view as a sectioned CSV compliance artifact - a metadata block plus
- * four labeled blocks (members & grants, access channels, candidate-cap pressure, access history)
- * in one downloadable file.
+ * five labeled blocks (members & grants, access channels, candidate-cap pressure, supersession
+ * pressure, access history) in one downloadable file.
  * Sectioned rather than one wide sparse table because the audience is human compliance review in a
  * spreadsheet; each block keeps its own header so every column is meaningful. A blank line separates
  * blocks. Static section labels are raw `#` comments; every value that could carry user input goes
@@ -113,12 +113,43 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
   );
   lines.push('');
 
+  lines.push('# Supersession pressure (older document generations withheld from ranking on reads of this lake)');
+  // Exported even at zero, and for the same reason as the block above: a vanishing section cannot be
+  // told apart from a lake whose reads suppressed nothing.
+  lines.push(
+    '# NOTE: turnsWithSignal counts reads whose surface actually ran the collapse - turnsWithSignal 0 means not reported (it is admin-gated and off by default), which is not the same as nothing being suppressed'
+  );
+  lines.push(
+    '# NOTE: suppression is recoverable - a withheld generation leaves the ranking, not the lake, and is still retrievable by id or name'
+  );
+  lines.push(
+    '# NOTE: filesSuppressed sums per turn, so one stale document suppressed on ten reads counts ten; it measures ranking slots reclaimed, not how many stale documents the lake holds'
+  );
+  if (view.historyTruncated) {
+    lines.push('# NOTE: these counts cover only the truncated window above, not all time');
+  }
+  lines.push(row(['turnsWithSignal', 'turnsWithSuppression', 'filesSuppressed', 'lastSuppressedAt']));
+  lines.push(
+    row([
+      view.supersessionPressure.turnsWithSignal,
+      view.supersessionPressure.turnsWithSuppression,
+      view.supersessionPressure.filesSuppressed,
+      iso(view.supersessionPressure.lastSuppressedAt),
+    ])
+  );
+  lines.push('');
+
   lines.push('# Access history (who actually read the lake)');
   // Unconditional, exported populated or empty: only instrumented retrieval surfaces emit events and
   // events age out on their retention TTL, so this section is a lower bound. Without the note an
   // empty section reads as "nobody touched it" - a claim this file cannot support.
   lines.push(
     '# NOTE: covers reads through instrumented retrieval surfaces within the audit retention window - a lower bound; an empty section is not proof that no one read this lake'
+  );
+  // Without this the two columns read as one number split in half. They are not: readCount is every
+  // instrumented surface, noResultCount only the one surface that records its own empty outcome.
+  lines.push(
+    '# NOTE: readCount counts reads that returned content; noResultCount counts searches that returned nothing, which only forced retrieval on a lake-scoped session records - so it is a lower bound and 0 is not proof that every search succeeded'
   );
   if (view.historyTruncated) {
     // readCount/firstAccessedAt are window-scoped when truncated - label them so, never as all-time.
@@ -132,6 +163,7 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
       'onBehalfOfUserId',
       'onBehalfOfName',
       'readCount',
+      'noResultCount',
       'firstAccessedAt',
       'lastAccessedAt',
       'surfaces',
@@ -146,6 +178,7 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
         h.onBehalfOfUserId,
         h.onBehalfOfName,
         h.readCount,
+        h.noResultCount,
         iso(h.firstAccessedAt),
         iso(h.lastAccessedAt),
         h.surfaces.join(';'),

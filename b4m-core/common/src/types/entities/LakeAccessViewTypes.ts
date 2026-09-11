@@ -118,11 +118,57 @@ export interface LakeAccessHistoryEntry {
   /** Set when a system/agent principal read on a human's behalf, so the human stays findable. */
   onBehalfOfUserId?: string;
   onBehalfOfName?: string;
+  /**
+   * Reads that actually SERVED content. Excludes zero rows - the audit trail now also records a
+   * forced-retrieval turn that searched this lake and had nothing clear the similarity floor (see
+   * the PRODUCT DECISION block in LakeAccessEventTypes.ts), and counting one of those as a read
+   * would report content leaving the lake when none did. Those land in `noResultCount` instead.
+   */
   readCount: number;
+  /**
+   * Searches of this lake by this principal that returned nothing at all. A principal can appear
+   * here with `readCount: 0`: they queried the lake repeatedly and it never answered.
+   *
+   * A LOWER bound and a NARROWER population than `readCount`: only forced retrieval writes a zero
+   * row, and only for a session scoped to this lake. Present but 0 therefore means "no recorded
+   * empty search", never "every search of this lake succeeded".
+   */
+  noResultCount: number;
+  /** Newest event of EITHER kind - a search that served nothing is still this principal touching
+   * the lake, and a "last read" that ignored it would under-report recent activity. */
   lastAccessedAt: Date;
   firstAccessedAt: Date;
   /** The distinct surfaces this principal read through (semantic search, chat KB, forced, ...). */
   surfaces: LakeAccessSurface[];
+}
+
+/**
+ * How much of this lake's ranking the supersession collapse reclaimed - projected from
+ * `ILakeAccessEvent.filesSupersededCollapsed` over the SAME event window as `history`.
+ *
+ * `turnsWithSignal` carries the honesty, exactly as it does for `LakeCandidateCapPressure`: the
+ * collapse is admin-gated and ships default-off, and only forced retrieval reports it at all, so
+ * `turnsWithSuppression: 0` on its own cannot distinguish "the collapse found nothing to suppress"
+ * from "the collapse never ran". Rows predating the field, rows from surfaces that do not report
+ * it, and rows from turns where the collapse was off all raise NEITHER counter. Presentation
+ * surfaces must show both numbers, or say "not reported" when `turnsWithSignal` is 0.
+ *
+ * Attribution is APPROXIMATE for the same reason `LakeCandidateCapPressure`'s is: the collapse runs
+ * over a turn's whole candidate set across every lake in scope, while the row attributes it to the
+ * lakes that turn grounded on. Read it as "turns that read this lake suppressed N", never "this
+ * lake suppressed N".
+ */
+export interface LakeSupersessionPressure {
+  /** Reads in the window whose surface ran the collapse and reported its count either way. */
+  turnsWithSignal: number;
+  /** Of those, the reads where the collapse actually suppressed at least one file. */
+  turnsWithSuppression: number;
+  /** Files suppressed across the window, summed. Not a distinct-document count: one document
+   * suppressed on ten turns contributes ten, because the quantity being measured is ranking slots
+   * reclaimed per turn, not how many stale documents the lake holds. */
+  filesSuppressed: number;
+  /** Newest read in the window that suppressed something; absent when `turnsWithSuppression` is 0. */
+  lastSuppressedAt?: Date;
 }
 
 /**
@@ -187,6 +233,10 @@ export interface LakeAccessView {
   /** Candidate-cap pressure over the same window as `history` - always present (the counters carry
    * the "nothing reported" state themselves), qualified by `historyTruncated` the same way. */
   candidateCapPressure: LakeCandidateCapPressure;
+  /** Supersession-collapse pressure over the same window as `history` - always present (the
+   * counters carry the "nothing reported" state themselves), qualified by `historyTruncated` the
+   * same way. */
+  supersessionPressure: LakeSupersessionPressure;
   /** When the view was assembled - the instant grant expiry (`status`) was resolved against. */
   generatedAt: Date;
 }

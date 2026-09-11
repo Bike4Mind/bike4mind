@@ -11,11 +11,28 @@ import { IMongoDocument } from './common';
 // SCOPE: this module is the event shape and vocabulary. The write path lives on
 // LakeAccessEventModel.record(); the retrieval surfaces call it via recordLakeAccessEvent.
 //
-// PRODUCT DECISION: a query that returns zero lake content is not recorded at all, even though
-// the query itself happened - every retrieval surface skips the write on an empty/unattributable
-// result (see each call site's own guard). This trail answers "what was read", not "what was
-// asked" - a principal probing a lake's contents with queries that happen to match nothing leaves
-// no row here. Revisit if that gap ever needs closing; it is deliberate, not an oversight.
+// PRODUCT DECISION, amended: most surfaces still record nothing for a query that returns zero lake
+// content - they skip the write on an empty/unattributable result (see each call site's own
+// guard), so for them this trail answers "what was read", not "what was asked".
+//
+// FORCED RETRIEVAL is the one exception, and it is narrow on purpose: it writes a ZERO ROW on
+// exactly one exit, the turn that searched its resolved lake scope and had no chunk clear the
+// similarity floor. Without that row "how often did this lake serve nothing" is unanswerable here,
+// because a starved turn and a turn that never ran are both equally absent - and the starve is the
+// outcome a lake owner most needs counted, being the one their own corpus can fix. Every other
+// empty forced-retrieval exit (no reachable lake, no readable document, nothing vectorized, an
+// outage) still records nothing: those are access/config/health states rather than evidence about
+// the lake's coverage, and `promptMeta.retrieval` already separates them per turn.
+//
+// A ZERO ROW IS NOT THE SAME CLAIM AS EVERY OTHER ROW HERE. It records an ATTEMPT AGAINST A SCOPE,
+// not a read: its `resolvedLakeIds` is the scope that was searched, since there are no returned
+// files to reverse into lakes. It carries `servedNothing: true` - read that flag, never a
+// zero-count test - and any consumer that counts rows as reads must exclude or label it (see
+// `assembleLakeAccessView`, which does).
+// One consequence to be deliberate about: a probing query that matches nothing now DOES leave a
+// row, and on a lake that opted into query-text logging it leaves the query text too. That is the
+// point (an unanswered question is the most actionable thing a lake owner can see), but it is a
+// widening of what this collection holds, not just of how many rows it holds.
 
 /** Who performed the retrieval. Flat fields (not a nested object), mirroring
  * MemoryLedgerEventModel's principalKind/principalId shape. */
@@ -148,6 +165,50 @@ export interface ILakeAccessEvent {
    * never "this lake caused the cap".
    */
   candidateCapReached?: boolean;
+  /**
+   * How many older document generations the supersession collapse suppressed before ranking (see
+   * `dataLakeService/supersession.ts`) - content that was in scope and servable, withheld from the
+   * ranking only because the same lake holds a newer generation of it.
+   *
+   * Tri-state, with the same trap as `candidateCapReached` above:
+   * - `N > 0` - N candidate files left the ranking;
+   * - `0`     - the collapse RAN over this turn's candidates and suppressed nothing;
+   * - ABSENT  - the collapse did not run (it is admin-gated and ships default-off), the surface
+   *   does not report it (every surface but forced retrieval today), or the row predates the
+   *   field. NEVER read absent as `0`; that claims the corpus was checked for superseded
+   *   generations when it never was.
+   *
+   * A COUNT, never a set. The only other live instrument for this collapse is the semantic-search
+   * envelope's `superseded`, whose `collapsed[]` is a SAMPLE capped at that module's `SAMPLE_CAP` -
+   * cross-check this against its `collapsed_files` count, never against that array's length.
+   *
+   * ATTRIBUTION IS APPROXIMATE, exactly as `candidateCapReached`'s is: the collapse runs over the
+   * turn's whole candidate set across every lake in scope, while the row attributes it to the
+   * lakes the turn actually grounded on. The honest reading is "a turn that read this lake
+   * suppressed N", never "this lake suppressed N".
+   */
+  filesSupersededCollapsed?: number;
+  /**
+   * TRUE on a ZERO ROW: this event records a retrieval that ran against the lake scope and returned
+   * nothing at all, rather than a read of content. See the PRODUCT DECISION block above for which
+   * surface writes one and why.
+   *
+   * ABSENT on every ordinary row, and unlike `candidateCapReached` above, absent here IS safely
+   * read as `false`: the flag says how the row was written, not what a surface did or did not
+   * measure, and no zero row predates the field. Do not copy that leniency to the tri-state fields
+   * around it.
+   *
+   * `servedNothing` rather than the better-reading `servedNoContent`: this model's corpus-leak guard
+   * rejects any schema path matching /text|content|body|snippet|passage/, and the guard is worth
+   * more than the nicer name. It holds exactly one exception today; keep it that way.
+   *
+   * WHY A STORED FLAG AND NOT `returnedChunkCount === 0 && returnedFileCount === 0`: that pair is
+   * already produced by real, non-empty rows. `data-lake-public-browse` records a catalog-metadata
+   * read - lake names and descriptions - which returns lakes rather than files and so carries
+   * neither a chunk nor a file id. Deriving "served nothing" from the counts would silently
+   * reclassify every browse row ever written.
+   */
+  servedNothing?: boolean;
   surface: LakeAccessSurface;
   /**
    * The turn this retrieval happened during, for joining this audit row back to its Quest. A
@@ -192,6 +253,13 @@ export interface RecordLakeAccessEventInput {
   /** See `ILakeAccessEvent.candidateCapReached` - tri-state. Omit it entirely on a surface that
    * does not measure its candidate stage; passing `false` asserts full candidate coverage. */
   candidateCapReached?: boolean;
+  /** See `ILakeAccessEvent.filesSupersededCollapsed` - tri-state. Omit it on a surface that does
+   * not run the collapse; passing `0` asserts the collapse ran and found nothing. A non-integer,
+   * negative or non-finite value is dropped by `record()` rather than persisted. */
+  filesSupersededCollapsed?: number;
+  /** See `ILakeAccessEvent.servedNothing`. Pass `true` ONLY from a surface deliberately recording
+   * its own empty outcome; omit it on every content-serving write. */
+  servedNothing?: boolean;
   surface: LakeAccessSurface;
   /** See `ILakeAccessEvent.questId`'s doc comment - diagnostic join key, not authorization data. */
   questId?: string;
