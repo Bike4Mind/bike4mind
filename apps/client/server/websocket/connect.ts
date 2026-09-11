@@ -44,7 +44,7 @@ function extractToken(event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEv
  * ticket (rejecting replay/expiry) and resolves the minting session's userId +
  * tokenVersion so the caller re-runs the same tokenVersion kill-switch the JWT
  * path enforces. Returns null when no ticket query param is present so the
- * caller can fall through to the legacy token/header paths during rollout.
+ * caller can fall through to the CLI header path.
  */
 async function resolveWebTicket(
   event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEvent

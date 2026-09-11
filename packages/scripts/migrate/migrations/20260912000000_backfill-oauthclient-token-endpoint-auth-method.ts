@@ -15,6 +15,14 @@ const LOG = '[backfill-oauthclient-token-endpoint-auth-method]';
  * Scoped to `{ $exists: false }` so it only touches un-classified legacy rows: a client already
  * classified (e.g. the preview `none` public client the seeder provisions explicitly) is left alone.
  * Idempotent - a re-run finds nothing once the field is populated.
+ *
+ * PRECONDITION (deploy runbook, not enforceable from the diff): a legacy client that was registered
+ * with a secret but authenticates PKCE-only would be wrongly stamped confidential here and then fail
+ * its next code exchange with 401. Minting a secret is not the same as presenting one, and that is
+ * only answerable against the live `oauthclients` collection. Before this runs, audit it and set
+ * `tokenEndpointAuthMethod: 'none'` explicitly on any PKCE-only client; the `$exists: false` guard
+ * then leaves those rows untouched. Run this ahead of promoting the token-endpoint code so there is
+ * no window where the hardened handler is live but legacy rows are still un-classified.
  */
 const migration: MigrationFile = {
   id: 20260912000000,
