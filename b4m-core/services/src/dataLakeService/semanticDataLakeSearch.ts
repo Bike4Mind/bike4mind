@@ -423,12 +423,15 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
  * knob widens topK to KB_SEARCH_MAX_RESULTS. A book-length PDF clears either routinely. So this
  * is a guard for CONTESTED slots, not a fix for severe single-document crowding.
  *
- * Cost: this widens the ANN backends' own request size and the ranked pool's memory footprint. On
- * Atlas the request size is not the whole bill - FabFileModel's vector stage derives
- * `numCandidates` from `limit * 10`, so a 3x limit is also a 3x widening of the index's internal
- * exploration, which is the larger term. The SCAN path reads no more rows than it already would
- * (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here only changes
- * how many of the chunks it was scanning anyway survive into `ranked`). So this is a knob that
+ * Cost: this widens the ANN backends' own request size and the ranked pool's memory footprint,
+ * and on Atlas that is very nearly the whole bill. It does NOT widen the index's internal
+ * exploration in practice: FabFileModel's vector stage takes `numCandidates` as
+ * `max(limit * 10, fileIds.length * 50, 100)`, and past a handful of files the per-file term
+ * already dominates a tripled `limit * 10` (at topK 6, 180 vs. 200 from four files; at topK 10,
+ * 300 vs. 300 from six), so the max moves by zero. The SCAN path reads no more rows than it
+ * already would (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here
+ * only changes how many of the chunks it was scanning anyway survive into `ranked`). So this is a
+ * knob that
  * trades ANN query work and a little CPU for diversity, not scan cost, and it is a constant rather
  * than a setting until an operator has a reason to want a different one.
  */
@@ -450,20 +453,20 @@ const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
  * search_knowledge_base promises the first passage back before any budget applies). Membership is
  * the cap's business; presentation order stays strictly best-first.
  *
- * That prefix is the second thing bounding what the cap can do, and it is worth stating exactly.
- * This trims to `topK`, but the chat KB path asks for a topK WIDER than the count it serves:
- * `resolvePassageCeiling` decides what is served, while topK is floored at
- * KB_SEARCH_CANDIDATE_FLOOR and widened to KB_SEARCH_MAX_RESULTS by either adaptive knob - so the
- * default config asks for 6 and serves 5, and a configured minimum-relevance alone asks for 10 and
- * still serves 5. A promoted chunk (one the uncapped top-K would not have held) scores at or below
- * every chunk it displaced, so the re-sort above lands promotions in the TAIL. With P promotions
- * and `served` slots actually read, min(P, topK - served) of them fall past the last slot anyone
- * reads and only max(0, P - (topK - served)) reach the caller. At the default 6/5 that means a cap
- * which promotes exactly one chunk is invisible; it takes two before the first one is served.
- * Closing that gap means enforcing at the served count rather than at topK, which is the caller's
- * number to supply - not something this function can widen its way out of.
+ * That prefix is why `topK` here has to be the count the caller actually SERVES, and a caller
+ * that ranks wider than it serves must run this pass again at its own served count. A promoted
+ * chunk (one the uncapped top-K would not have held) scores at or below every chunk it displaced,
+ * so the re-sort above lands promotions in the TAIL - exactly the slots a shorter prefix never
+ * reads. Enforcing at a topK wider than the prefix therefore makes the cap invisible until it
+ * promotes more than the difference, rather than merely weaker. The chat KB path is that caller
+ * (`resolvePassageCeiling` decides what it serves, while its topK is floored at
+ * KB_SEARCH_CANDIDATE_FLOOR and widened to KB_SEARCH_MAX_RESULTS by either adaptive knob, so it
+ * ranks 6 and serves 5 by default, and ranks 10 and still serves 5 under a relevance floor), and
+ * it closes the gap by re-running this at `ceiling` - see the second cap pass in
+ * knowledgeBaseSearch/index.ts. Callers whose topK IS their served count need no second pass.
  *
- * This is the ONLY place the cap is enforced, but not the only place it changes: the candidate
+ * This is the only place the cap is IMPLEMENTED (the KB path's second pass calls straight back
+ * here), but not the only place it changes: the candidate
  * streams feeding the merge are widened to `topK * DIVERSITY_CANDIDATE_POOL_FACTOR` when the cap
  * can bind, because each of them is bounded independently and a stream that stopped at topK would
  * have discarded the other documents' chunks before the cap could promote them. Enforcement here,
@@ -472,7 +475,11 @@ const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
  * whatever reached it: a document that fills the widened pool by itself is one the cap cannot
  * touch at all. See `DIVERSITY_CANDIDATE_POOL_FACTOR` for why it is sized that way regardless.
  */
-function capChunksPerFile(candidates: SemanticChunkResult[], topK: number, maxPerFile: number): SemanticChunkResult[] {
+export function capChunksPerFile(
+  candidates: SemanticChunkResult[],
+  topK: number,
+  maxPerFile: number
+): SemanticChunkResult[] {
   if (maxPerFile <= 0) return candidates;
 
   const takenPerFile = new Map<string, number>();
@@ -1054,18 +1061,21 @@ async function rankChunksForFiles(args: {
     // hits and, with no scan fallback, would silently contribute zero results.
     //
     // But zero raw hits ALONE cannot mean "not indexed", because the query is bounded by
-    // similarity RANK (`limit: topK`), not by a score threshold. At most `topK` files can appear
-    // in `filesWithHits`, so in any file set larger than topK most ready files are absent from it
+    // similarity RANK (`limit: candidatePoolK`), not by a score threshold. At most that many files
+    // can appear in `filesWithHits`, so in any larger file set most ready files are absent from it
     // for the entirely correct reason that they did not rank. Rebucketing on absence alone
     // therefore rescans nearly every file and makes the ANN path's benefit `topK / fileCount` -
     // it shrinks as a lake grows, which is backwards from the point of the index.
     //
-    // Saturation separates the two cases. If the backend returned a full `topK`, it had at least
-    // that many indexed candidates and handed back its best: absence is a ranking outcome, and
-    // rescanning it would defeat the index. If it returned FEWER than asked, it exhausted what it
-    // has indexed and still came up short, so absence is real evidence of missing content and the
-    // per-file fallback is warranted. A corpus genuinely smaller than topK also lands here, and a
-    // full scan of something that small is the cheap, safe answer.
+    // Saturation separates the two cases, and it is keyed on the limit this query actually ASKED
+    // for - `candidatePoolK`, which the per-document cap widens above topK - never on topK itself.
+    // If the backend filled that request it had at least that many indexed candidates and handed
+    // back its best: absence is a ranking outcome, and rescanning it would defeat the index. If it
+    // returned FEWER than asked, it exhausted what it has indexed and still came up short, so
+    // absence is real evidence of missing content and the per-file fallback is warranted. A corpus
+    // genuinely smaller than the request also lands here, and a full scan of something that small
+    // is the cheap, safe answer. Comparing against topK while asking for a wider pool would read
+    // an under-filled response as saturated and silently drop the rescue for the cap's own users.
     //
     // Out-of-scope hits are subtracted first. A hit whose parent file is not in this query's set
     // (deleted parent, index content from another lake) proves nothing about how deeply THIS file
@@ -1083,10 +1093,10 @@ async function rankChunksForFiles(args: {
     // load-bearing there and stays, leaving self-host at the old `topK / fileCount` ceiling until
     // a signal that actually confirms residency exists. Atlas's analogue is transient rather than
     // permanent - during a bulk backfill mongot's indexing lag can exceed
-    // VECTOR_SEARCH_READY_LAG_MS and the already-indexed files will saturate topK while the
+    // VECTOR_SEARCH_READY_LAG_MS and the already-indexed files will fill the request while the
     // lagging ones wait - which self-heals within one lag window and is accepted.
     const annUsableHits = annResult.hitsReturned - annResult.hitsSkippedUnknownFile;
-    const annSaturated = canUseAtlas && annUsableHits >= topK;
+    const annSaturated = canUseAtlas && annUsableHits >= candidatePoolK;
     const missedFiles = annSaturated ? [] : annEligible.filter(f => !annResult.filesWithHits.has(f.id));
     if (missedFiles.length > 0) {
       logger?.warn?.('[semanticSearch] ANN vector search returned no hits for ready files, scanning them instead', {
@@ -1095,7 +1105,7 @@ async function rankChunksForFiles(args: {
         fileCount: missedFiles.length,
         hitsReturned: annResult.hitsReturned,
         hitsUsable: annUsableHits,
-        limit: topK,
+        limit: candidatePoolK,
       });
       scanEligible = [...scanEligible, ...missedFiles];
       annEligible = annEligible.filter(f => annResult.filesWithHits.has(f.id));

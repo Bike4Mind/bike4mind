@@ -2862,6 +2862,61 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
     });
   }
 
+  /**
+   * This tool ranks 6 and serves 5 by default, so the engine's own cap pass (enforced at ITS topK)
+   * lands promotions in slots nobody reads - a promoted chunk scores at or below everything it
+   * displaced, so the re-sort puts it last. These pin the second pass at the served ceiling.
+   */
+  describe('per-document cap at the SERVED count (dataLakeSearchMaxChunksPerFile)', () => {
+    /**
+     * What the engine hands back at topK 6 with the cap already applied there: one document owns
+     * the top five, and the cap's single promotion from a second document sits in slot 6 - past
+     * the five this tool serves.
+     */
+    const crowdedTopK = [
+      ...Array.from({ length: 5 }, (_, i) => ({
+        chunkId: `a${i}`,
+        fileId: 'fileA',
+        fileName: 'Doc A.pdf',
+        fileTags: [],
+        chunkText: `passage body a${i}`,
+        score: 0.9 - i / 1000,
+      })),
+      {
+        chunkId: 'b0',
+        fileId: 'fileB',
+        fileName: 'Doc B.pdf',
+        fileTags: [],
+        chunkText: 'passage body b0',
+        score: 0.5,
+      },
+    ];
+
+    beforeEach(() => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: crowdedTopK,
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+    });
+
+    it('serves the promoted chunk that the engine top-K parked past the ceiling', async () => {
+      const out = await runWith({}, contextWithKbSettings({ dataLakeSearchMaxChunksPerFile: '2' }));
+
+      // Five passages as always - the cap redistributes membership, it never shrinks the set.
+      expect(passageCount(out)).toBe(5);
+      expect(out).toContain('**Doc B**');
+    });
+
+    it('leaves the served set alone with the cap off, so the case above is the cap and not the slice', async () => {
+      const out = await runWith({}, contextWithKbSettings({}));
+
+      expect(passageCount(out)).toBe(5);
+      expect(out).not.toContain('**Doc B**');
+    });
+  });
+
   describe('relevance threshold (kbSearchMinRelevancePct, #1955)', () => {
     beforeEach(() => {
       invalidateSettingsCache();

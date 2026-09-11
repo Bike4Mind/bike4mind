@@ -32,6 +32,7 @@ import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
 import { describeSearchLimitations, isPartialSearch } from '../../../../dataLakeService/retrievalUnavailable';
 import {
+  capChunksPerFile,
   comparedNoPassages,
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -650,11 +651,22 @@ async function trySemanticKbSearch(
       };
     }
 
+    // Re-enforce the per-document cap at the count actually SERVED. The engine applies it at its
+    // own topK, which this tool deliberately ranks WIDER than `ceiling` (KB_SEARCH_CANDIDATE_FLOOR,
+    // and KB_SEARCH_MAX_RESULTS once either adaptive knob is on). A promoted chunk scores at or
+    // below every chunk it displaced, so promotions land in the tail of that top-K - exactly the
+    // slots a `ceiling`-wide prefix never reads. Without this second pass a cap that promotes
+    // fewer than `topK - ceiling` chunks is invisible on this path rather than merely weaker: one
+    // chunk at the default 6-ranked/5-served, five under a relevance floor that widens topK to 10.
+    // Free where it cannot help - a token budget already makes `ceiling` equal topK, and the cap
+    // off returns the list untouched - and it never shrinks the set (capChunksPerFile backfills).
+    const servedCandidates = capChunksPerFile(search.results, ceiling, budgets.maxChunksPerFile);
+
     // Bound by token budget (the primary lever once configured), with the passage ceiling as a
     // safety rail - replaces the old flat `.slice(0, maxResults)`. Ordering matters: this MUST run
     // before emitSemanticCitables and before fileHits/lakeIds/chunkIds below, or the audit trail and
     // the model's citations would include passages the model never actually saw.
-    const bound = await boundPassagesByTokenBudget(search.results, {
+    const bound = await boundPassagesByTokenBudget(servedCandidates, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
       // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
@@ -678,7 +690,9 @@ async function trySemanticKbSearch(
         // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
         // `ceiling` was never admissible in the first place (a model-supplied max_results
         // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did.
+        // overstates what the budget actually did. Still measured off `search.results`: the cap
+        // pass above returns its input untouched when the cap is off, so it is not a ceiling
+        // bound of its own.
         droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,
@@ -785,7 +799,10 @@ async function tryScopedSemanticKbSearch(
       };
     }
 
-    const bound = await boundPassagesByTokenBudget(search.results, {
+    // Same served-count re-enforcement as the lake-wide arm above; see its comment for why.
+    const servedCandidates = capChunksPerFile(search.results, ceiling, budgets.maxChunksPerFile);
+
+    const bound = await boundPassagesByTokenBudget(servedCandidates, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
       // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
@@ -805,7 +822,9 @@ async function tryScopedSemanticKbSearch(
         // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
         // `ceiling` was never admissible in the first place (a model-supplied max_results
         // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did.
+        // overstates what the budget actually did. Still measured off `search.results`: the cap
+        // pass above returns its input untouched when the cap is off, so it is not a ceiling
+        // bound of its own.
         droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,

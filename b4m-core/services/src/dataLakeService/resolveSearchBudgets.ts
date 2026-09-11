@@ -43,7 +43,10 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
    */
   kbMinRelevance: number;
   /**
-   * Most chunks one source document may contribute to the served top-K; `0` = no cap. Declared
+   * Most chunks one source document may contribute to a search's top-K; `0` = no cap. Enforced
+   * at whatever count the CALLER serves, which is not always the topK it asked for: the engine
+   * applies it at its own topK, and a caller that ranks wider than it serves (the chat KB tool)
+   * applies it a second time at its served ceiling. Declared
    * REQUIRED here even though `SemanticSearchBudgets` has it optional: the intersection narrows it,
    * so a resolution path that forgot to set it fails to compile instead of silently ignoring an
    * operator's configured cap - the failure mode a purely optional field would have hidden.

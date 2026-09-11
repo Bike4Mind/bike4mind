@@ -3466,9 +3466,10 @@ export const settingsMap = {
       'itself does not grow (that is bounded separately), but the vector-search backends are ' +
       'asked for that many more matches, and a larger in-memory ranking pool costs some CPU. 2-3 ' +
       'is the useful range; 1 serves one passage per document, which suits a corpus of many short ' +
-      'documents and starves a question whose answer spans one long one. On the chat ' +
-      'knowledge-base path the effect is damped further: that tool ranks more passages than it ' +
-      'serves, so a cap that displaces only one chunk can leave the served answer unchanged.',
+      'documents and starves a question whose answer spans one long one. The chat knowledge-base ' +
+      'path ranks more passages than it serves, so it applies the cap a second time at the count ' +
+      'it actually serves - otherwise the spread-out picks, which are by definition the lowest-' +
+      'scoring ones admitted, would land in the passages that path discards.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 11,

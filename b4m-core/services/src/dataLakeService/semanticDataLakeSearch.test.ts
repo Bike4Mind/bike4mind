@@ -1800,6 +1800,46 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     );
   });
 
+  // The per-document cap widens the ANN request to topK * DIVERSITY_CANDIDATE_POOL_FACTOR, so
+  // "did the backend fill what we asked for" has to be measured against THAT limit, not topK. A
+  // response landing between the two reads as saturated on a topK comparison and silently
+  // suppresses the rescue - a regression the widening itself introduces, not a pre-existing one.
+  it('reads a response short of the WIDENED limit as unsaturated when the per-document cap is on', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('covered'), annFile('unranked')],
+      scanChunks: chunkRows('unranked', 3),
+      // A full topK of 2, but well short of the 6 (topK 2 x 3) this capped query actually asked
+      // for: the backend exhausted its index, so 'unranked' is absent for a real reason.
+      annHits: [
+        { id: 'covered-c0', fabFileId: 'covered', text: 'ann hit', score: 0.95 },
+        { id: 'covered-c1', fabFileId: 'covered', text: 'ann hit', score: 0.94 },
+      ],
+    });
+
+    const result = await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        vectorSearchEnabled: true,
+        topK: 2,
+        budgets: { maxChunksPerFile: 1 },
+        logger: logger as never,
+      },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.chunksScanned).toBe(3);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('returned no hits for ready files'),
+      expect.objectContaining({ fileCount: 1, hitsReturned: 2, hitsUsable: 2, limit: 6 })
+    );
+    // The rescued file reaching the served top-K is the point of not suppressing it; comparing
+    // against topK instead serves ['covered', 'covered'].
+    expect(result.results.map(r => r.fileId)).toEqual(['unranked', 'covered']);
+  });
+
   it('does not read a full response as saturated when every hit was out of scope', async () => {
     const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
       files: [annFile('ready')],
